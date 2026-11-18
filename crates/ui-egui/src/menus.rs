@@ -1176,7 +1176,7 @@ fn selection_frozen(app: &SoundApp) -> bool {
     soundcraft_engine::cmd::all_frozen(&app.engine, &app.engine.target_tracks())
 }
 
-/// No ML job running (desktop; the web app has no ML).
+/// No ML job running.
 fn ml_idle(app: &SoundApp) -> bool {
     app.ml.running.is_none()
 }

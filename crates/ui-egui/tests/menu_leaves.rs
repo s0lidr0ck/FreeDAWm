@@ -237,6 +237,6 @@ fn the_ui_layer_items_are_clickable_in_their_context() {
     app.run("track.new", json!({"name": "Lead Vox"})).unwrap();
     assert_eq!(state(&app, "Make Harmony…"), Ok(()));
     // Without the desktop file picker, Import › Reference… cannot ask for its file.
-    let web = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
-    assert!(state(&web, "Reference...").is_err_and(|w| w.contains("file picker")));
+    let bare = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    assert!(state(&bare, "Reference...").is_err_and(|w| w.contains("file picker")));
 }

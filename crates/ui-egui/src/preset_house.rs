@@ -20,7 +20,7 @@ use soundcraft_dsp::PluginInfo;
 use soundcraft_model::{Insert, ModuleId, TrackId};
 use std::path::PathBuf;
 
-/// The folder of a plug-in's user presets (`None`: no preset folder, e.g. the web build).
+/// The folder of a plug-in's user presets (`None`: no preset folder, e.g. a bare app).
 pub fn user_dir(app: &SoundApp, plugin: &str) -> Option<PathBuf> {
     app.preset_dir.as_ref().map(|d| d.join(crate::preset_folder_name(plugin)))
 }

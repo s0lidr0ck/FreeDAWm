@@ -120,7 +120,7 @@ const STALE_SECONDS: f64 = 2.0;
 
 impl SoundApp {
     /// The Library folder in use: the one the preferences name, else the settings folder. `None`
-    /// without either (the web build, tests).
+    /// without either (a bare app, tests).
     pub fn library_root(&self) -> Option<PathBuf> {
         let chosen = self.ui.library_dir.trim();
         if chosen.is_empty() { self.library_default.clone() } else { Some(PathBuf::from(chosen)) }
@@ -145,7 +145,7 @@ impl SoundApp {
     }
 }
 
-/// The Juke presets in the Library (none on the web).
+/// The Juke presets in the Library (none without a Library folder).
 fn juke_presets(app: &SoundApp) -> Vec<(String, PathBuf)> {
     app.juke_kits.user_presets()
 }
@@ -494,7 +494,7 @@ mod tests {
     fn the_library_folder_moves_every_place_presets_are_kept() {
         let (a, b) = (scratch("root-a"), scratch("root-b"));
         let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
-        // No folder at all (the web, a test): what was set by hand stays.
+        // No folder at all (a bare app): what was set by hand stays.
         app.preset_dir = Some(a.join("mine"));
         app.apply_library_dir();
         assert_eq!(app.preset_dir, Some(a.join("mine")));

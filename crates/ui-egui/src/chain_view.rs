@@ -43,8 +43,8 @@ const PLUS_H: f32 = 18.0;
 const MAX_KNOBS: usize = 4;
 
 /// The processor share module `module` of track `track` took in the last block, as a line for
-/// a tooltip (`"\n2.4 % of a processor core"`); empty when nothing was measured (stopped, the
-/// web build, a module that did not run).
+/// a tooltip (`"\n2.4 % of a processor core"`); empty when nothing was measured (stopped, a
+/// module that did not run).
 pub(crate) fn module_load(app: &SoundApp, track: soundcraft_model::TrackId, module: soundcraft_model::ModuleId) -> String {
     let snap = app.preview_meters.clone().or_else(|| app.player.as_ref().filter(|_| app.meters_live()).map(|p| p.meters()));
     let load = snap.as_ref().and_then(|s| s.tracks.get(&track)).and_then(|m| m.modules.iter().find(|x| x.module == module)).map_or(0.0, |m| m.load);

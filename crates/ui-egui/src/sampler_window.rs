@@ -66,37 +66,18 @@ pub fn drop_target(app: &mut SoundApp, ctx: &egui::Context, r: Rect, t: TrackId)
     }
 }
 
-/// An audio file dropped on a sampler target whose bytes the shell has to read itself (in the
-/// browser, files arrive by name and are read asynchronously). Hand the bytes to
-/// [`SoundApp::load_sample_bytes`].
-#[derive(Debug, Clone)]
-pub struct SampleRead {
-    pub track: TrackId,
-    pub file: egui::DroppedFileHandle,
-    /// The Juke pad slot `(pad, layer, robin)` it was dropped on (`None`: the track's sampler).
-    pub kit: Option<(usize, usize, usize)>,
-}
-
-impl SampleRead {
-    /// The dropped file's name.
-    pub fn name(&self) -> String {
-        self.file.path().file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string()
-    }
-}
-
 impl SoundApp {
     /// Takes this frame's dropped files: audio dropped on an instrument track or a Sampler window
     /// loads into that track's sampler (the sampler becomes its instrument); on a Juke sample cell,
-    /// several files fill its row from there (one per round-robin). A file with a full
-    /// path loads straight away; one without (the browser) waits in [`SoundApp::take_sample_reads`]
-    /// for the shell to read. Everything else is returned for the shell to open or import.
+    /// several files fill its row from there (one per round-robin). Everything else is returned
+    /// for the shell to open or import.
     pub fn take_dropped_files(&mut self, ctx: &egui::Context) -> Vec<egui::DroppedFileHandle> {
         let (files, pos) = ctx.input(|i| (i.raw.dropped_files.clone(), i.pointer.latest_pos()));
         if files.is_empty() {
             return files;
         }
         // Drum takes on a Juke pad card, or elsewhere in a Juke window (a cell there loads
-        // into itself instead); files with full paths only (the browser's are read later).
+        // into itself instead); files with full paths only.
         if let Some(p) = pos
             && files.iter().all(|f| f.path().is_absolute())
         {
@@ -126,17 +107,14 @@ impl SoundApp {
             }
             let kit = kit.map(|(pad, layer, robin)| (pad, layer, robin + claimed));
             claimed += 1;
-            if f.path().is_absolute() {
-                let path = f.path().to_string_lossy().into_owned();
-                let r = match kit {
-                    Some((pad, layer, robin)) => self
-                        .run("mix.kit_sample_load", json!({"track": track.0, "pad": pad + 1, "layer": layer + 1, "robin": robin + 1, "path": path})),
-                    None => self.run("mix.sampler_load", json!({"track": track.0, "path": path})),
-                };
-                self.sample_loaded(track, kit, &path, r);
-            } else {
-                self.sample_reads.push(SampleRead { track, file: f, kit });
-            }
+            let path = f.path().to_string_lossy().into_owned();
+            let r = match kit {
+                Some((pad, layer, robin)) => {
+                    self.run("mix.kit_sample_load", json!({"track": track.0, "pad": pad + 1, "layer": layer + 1, "robin": robin + 1, "path": path}))
+                }
+                None => self.run("mix.sampler_load", json!({"track": track.0, "path": path})),
+            };
+            self.sample_loaded(track, kit, &path, r);
         }
         rest
     }
@@ -229,25 +207,6 @@ impl SoundApp {
             (Some((t, _)), None) => Some((*t, None)),
             _ => None,
         }
-    }
-
-    /// Dropped files waiting for the shell to read their bytes.
-    pub fn take_sample_reads(&mut self) -> Vec<SampleRead> {
-        std::mem::take(&mut self.sample_reads)
-    }
-
-    /// Loads a dropped file's bytes (or reports why they could not be read) into its track's
-    /// sampler, as one undo step.
-    pub fn load_sample_bytes(&mut self, read: &SampleRead, bytes: Result<Vec<u8>, String>) {
-        let name = read.name();
-        let r = bytes.and_then(|b| {
-            match read.kit {
-                Some(slot) => soundcraft_engine::io::load_kit_bytes(&mut self.engine, read.track, slot, &name, &b),
-                None => soundcraft_engine::io::load_sampler_bytes(&mut self.engine, read.track, &name, &b),
-            }
-            .map_err(|e| e.to_string())
-        });
-        self.sample_loaded(read.track, read.kit, &name, r);
     }
 
     fn sample_loaded(&mut self, track: TrackId, kit: Option<(usize, usize, usize)>, what: &str, r: Result<serde_json::Value, String>) {

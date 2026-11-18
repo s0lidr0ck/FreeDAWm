@@ -766,7 +766,7 @@ fn deliver_foot(app: &mut SoundApp, ui: &mut Ui, host: &Host, preview_r: Rect, d
 }
 
 /// `filesDropped`: an audio file onto a reference row loads that slot; anywhere else the first
-/// empty slot, then the selected one; then the Reference tab shows. (No file drop on the web.)
+/// empty slot, then the selected one; then the Reference tab shows.
 fn file_drop(app: &mut SoundApp, ui: &Ui, host: &Host, st: &mut Editor, ed: Rect, rows: [Rect; 4]) {
     let (files, at) = ui.input(|i| (i.raw.dropped_files.clone(), i.pointer.hover_pos()));
     let Some(at) = at.filter(|p| ed.contains(*p)) else { return };

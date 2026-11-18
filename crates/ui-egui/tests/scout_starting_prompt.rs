@@ -62,7 +62,7 @@ fn save_writes_the_prompt_as_markdown() {
     let r = app.run("ui.scout.starting_prompt_save", json!({"path": path.to_string_lossy()})).unwrap();
     assert_eq!(r["chars"].as_u64().unwrap() as usize, expected.chars().count());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
-    // Without a path or a save dialog (tests, web): nothing is written, nothing fails.
+    // Without a path or a save dialog (tests): nothing is written, nothing fails.
     let r = app.run("ui.scout.starting_prompt_save", json!({})).unwrap();
     assert!(r["path"].is_null());
     // A folder that can't be written is an error, not a crash.

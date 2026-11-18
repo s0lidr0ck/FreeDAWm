@@ -739,14 +739,13 @@ impl Default for UiState {
     }
 }
 
-/// Host services (file dialogs, Scout's Claude call) injected by the app; absent in tests and on
-/// the web.
+/// Host services (file dialogs, Scout's Claude call) injected by the app; absent in tests.
 #[derive(Default)]
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn(&str, &[&str]) -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str, &str) -> Option<String>>>,
     pub pick_folder: Option<Box<dyn Fn(&str) -> Option<String>>>,
-    /// Sends a Scout question to Claude, streaming the answer back (native only).
+    /// Sends a Scout question to Claude, streaming the answer back.
     pub ask_claude: Option<scout::ask::AskClaude>,
     /// The Anthropic API key, masked ("sk-ant-…a1b2"), or `None` without one. Never the key.
     pub api_key_status: Option<scout::ask::KeyStatus>,
@@ -1025,7 +1024,7 @@ pub struct SoundApp {
     /// When the recent sessions were last checked for existence, which list, and the result.
     recent_checked: Option<(f64, Vec<String>, Vec<bool>)>,
     pub player: Option<Player>,
-    /// Hardware MIDI input's rings (lent to each player; native only: `None` on the web).
+    /// Hardware MIDI input's rings (lent to each player).
     pub midi_hub: Option<std::sync::Arc<soundcraft_playback::midi_in::MidiHub>>,
     /// The MIDI input ports (`midi_devices`): the system's once the host sets
     /// `use_system_midi`, or a test's fake.
@@ -1188,7 +1187,6 @@ pub struct SoundApp {
     pub kit_import_targets: Vec<(egui::Rect, TrackId, Option<usize>)>,
     /// This frame's places a dragged browser card can land (see `browser::drop`).
     pub(crate) plugin_drop_targets: Vec<browser::drop::Registered>,
-    sample_reads: Vec<sampler_window::SampleRead>,
     synthetic_grace: u32,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_shots: Vec<control::PendingShot>,
@@ -1397,7 +1395,6 @@ impl SoundApp {
             kit_drop_targets: Vec::new(),
             kit_import_targets: Vec::new(),
             plugin_drop_targets: Vec::new(),
-            sample_reads: Vec::new(),
             synthetic_grace: 0,
             control_rx: None,
             pending_shots: Vec::new(),

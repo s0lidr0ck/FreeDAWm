@@ -451,9 +451,6 @@ fn settings(app: &mut SoundApp, ui: &mut Ui) {
                 app.scout.key_status = None;
             }
         });
-        if !can_store {
-            ui.label(RichText::new(ask::WEB_HINT).font(regular(11.0)).color(t.text_dim));
-        }
         ui.horizontal(|ui| {
             ui.label(RichText::new("Model").font(regular(12.0)).color(t.text));
             ui.add(egui::TextEdit::singleline(&mut app.ui.scout_model).desired_width(200.0).hint_text(ask::DEFAULT_MODEL));

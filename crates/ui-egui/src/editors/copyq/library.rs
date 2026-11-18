@@ -21,7 +21,7 @@ pub(crate) struct Entry {
     pub profile: Arc<Profile>,
 }
 
-/// The library folder (`None` where there is no preset folder: the web).
+/// The library folder (`None` where there is no preset folder).
 pub(crate) fn dir(preset_dir: Option<&Path>) -> Option<PathBuf> {
     preset_dir.map(|d| d.join(FOLDER))
 }

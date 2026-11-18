@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 pub struct BrowserDebug {
     /// Cards built (drawn) on the last frame: only the visible rows build theirs.
     pub cards_built: usize,
-    /// How long the last frame of the panel took, in milliseconds (0 on the web).
+    /// How long the last frame of the panel took, in milliseconds.
     pub panel_ms: f32,
     /// While a card is dragged: the place under the pointer it would land on.
     pub drop_hover: Option<super::drop::DropTarget>,
@@ -244,7 +244,6 @@ pub(crate) fn browser_panel(app: &mut SoundApp, ui: &mut Ui) {
     } else {
         let kind = kind_of(tab_now);
         chips(app, ui, &catalog, kind);
-        // (The web build hosts no plugins: its hosts report an empty scan, so this never shows.)
         if (!app.browser_hosts.0 || !app.browser_hosts.1) && app.plugin_scan.is_none() {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("VST3 and CLAP plugins are not scanned yet.").color(t.text_dim).font(regular(11.0)));

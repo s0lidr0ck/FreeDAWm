@@ -163,8 +163,7 @@ fn capture_stems(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
     Ok(json!({"started": true}))
 }
 
-/// Each frame: a finished Capture per stem re-reads the library (desktop only: the web build has
-/// no Capture per stem).
+/// Each frame: a finished Capture per stem re-reads the library.
 pub(crate) fn poll(app: &mut SoundApp) {
     let done = app.scout.profiles.stems.as_ref().and_then(|rx| match rx.try_recv() {
         Ok(r) => Some(r),

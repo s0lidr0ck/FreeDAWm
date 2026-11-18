@@ -230,7 +230,7 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
             })
             .collect()
     });
-    // Cmd and Ctrl are separate keys only on macOS (asked at runtime so the web build in a Mac browser agrees).
+    // Cmd and Ctrl are separate keys only on macOS.
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     // Typing over the plugin browser goes to its search field, not to the single-key commands.
     let over_browser = app

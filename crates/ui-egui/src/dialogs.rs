@@ -447,8 +447,6 @@ pub struct Dialogs {
     pub dirs: crate::user_files::UserDirs,
     /// Runs once the session has been saved from `SaveChanges`.
     after_save: Option<(String, Value)>,
-    /// A session the browser read while the open one had changes, waiting for `SaveChanges`.
-    pending_session: Option<(String, Vec<u8>)>,
 }
 
 impl Dialogs {
@@ -626,12 +624,7 @@ impl Dialogs {
             "session.save" | "session.save_as" | "session.save_copy" => Dialog::PathPrompt {
                 cmd: if id == "session.save_copy" { id } else { "session.save_as" }.into(),
                 title: "Save Session As".into(),
-                // The browser has no folders: the name becomes the bundle file's name.
-                path: if home.is_empty() {
-                    format!("{name}.{}", soundcraft_engine::io::bundle_extension_for(e.path.as_deref().unwrap_or_default()))
-                } else {
-                    format!("{home}/{name}/{name}.{}", soundcraft_model::SESSION_EXTENSION)
-                },
+                path: format!("{home}/{name}/{name}.{}", soundcraft_model::SESSION_EXTENSION),
                 key: "path".into(),
             },
             "transport.varispeed" => {
@@ -757,7 +750,7 @@ impl Dialogs {
 /// When `id` would close a session with unsaved changes, ask first; true when the question is
 /// open instead. A take in progress is stopped first, so it counts as a change.
 pub fn ask_to_save(app: &mut SoundApp, id: &str, params: &Value) -> bool {
-    if !matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "file.import_dawproject" | "app.quit" | OPEN_PENDING)
+    if !matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "file.import_dawproject" | "app.quit")
         || soundcraft_engine::find_command(id).is_some_and(|c| (c.enabled)(&app.engine).is_err())
     {
         return false;
@@ -778,34 +771,6 @@ pub fn run_or_ask(app: &mut SoundApp, id: &str, params: Value) -> Result<Value, 
         return Ok(Value::Null);
     }
     app.run(id, params)
-}
-
-/// What `SaveChanges` carries on with to open the session the browser read.
-const OPEN_PENDING: &str = "ui.open_pending_session";
-
-/// Opens a session the browser read as bytes (picked or dropped), asking first when the open one
-/// has changes. The read finishes later than the pick, so the question is asked only now.
-pub fn open_session_bytes(app: &mut SoundApp, name: String, bytes: Vec<u8>) {
-    if crate::bounce::refuses_session_switch(app) {
-        return;
-    }
-    app.dialogs.pending_session = Some((name, bytes));
-    if !ask_to_save(app, OPEN_PENDING, &json!({})) {
-        open_pending_session(app);
-    }
-}
-
-fn open_pending_session(app: &mut SoundApp) {
-    let Some((name, bytes)) = app.dialogs.pending_session.take() else { return };
-    if crate::bounce::refuses_session_switch(app) {
-        return;
-    }
-    let _ = app.run("transport.stop", json!({}));
-    app.ui.status = match soundcraft_engine::io::open_session_bytes(&mut app.engine, &name, &bytes) {
-        Ok(missing) if missing.is_empty() => format!("Opened {name}"),
-        Ok(missing) => format!("Opened {name} ({} missing media)", missing.len()),
-        Err(e) => e.to_string(),
-    };
 }
 
 /// A path prompt for any command whose parameters start with a required `path` or `dir` (plus
@@ -1660,7 +1625,6 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
     if esc || ctx.memory(|m| m.data.get_temp::<bool>(egui::Id::new("dlg_cancel")).unwrap_or(false)) {
         keep = false;
         app.dialogs.after_save = None;
-        app.dialogs.pending_session = None;
         ctx.memory_mut(|m| m.data.remove::<bool>(egui::Id::new("dlg_cancel")));
     }
     if let Some(then) = save_first {
@@ -1730,12 +1694,8 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
     }
 }
 
-/// Runs a dialog's command, or what `SaveChanges` carries on with.
+/// Runs a dialog's command (also what `SaveChanges` carries on with).
 fn run_then(app: &mut SoundApp, cmd: &str, params: Value) -> Result<Value, String> {
-    if cmd == OPEN_PENDING {
-        open_pending_session(app);
-        return Ok(Value::Null);
-    }
     app.run(cmd, params)
 }
 

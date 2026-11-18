@@ -148,7 +148,6 @@ pub fn start(app: &mut SoundApp, id: &str, params: &Value) -> Result<Value, Stri
         log::warn!("the open's worker thread could not start; loading inline");
         work(req, Arc::clone(&shared), tx)();
     }
-    // The browser has no threads: the load runs now, and the window shows the plugin phase.
     app.open = Some(OpenJob {
         id: id.to_string(),
         name,

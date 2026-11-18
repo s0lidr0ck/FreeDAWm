@@ -73,7 +73,7 @@ pub struct MonitorUi {
     pub draft: Option<Draft>,
 }
 
-/// The `Monitor Profiles` folder of the Library in use (none on the web or in a bare test app).
+/// The `Monitor Profiles` folder of the Library in use (none in a bare test app).
 pub fn dir(app: &SoundApp) -> Option<PathBuf> {
     app.dialogs.dirs.root.as_deref().map(lib::dir_in)
 }
