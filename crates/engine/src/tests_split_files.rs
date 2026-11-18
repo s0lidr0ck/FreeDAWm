@@ -232,14 +232,11 @@ fn the_vocal_tools_hear_only_the_split_piece() {
     let job = crate::vocal::next_job(&e, Some(piece.id), 0).unwrap();
     assert!(matches!(job, crate::vocal::VocalJob::Analyse { clip, .. } if clip == piece.id));
     // Clean Vocal (and the other ML tools) render the clip's range.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let ml = crate::ml::prepare(&e, "ml.clean", &json!({"clip": piece.id.0})).unwrap();
-        assert_eq!(ml.parts.len(), 1);
-        assert_eq!(ml.parts[0].audio[0].len(), n);
-        let stems = crate::ml::prepare(&e, "ml.separate", &json!({"clip": piece.id.0})).unwrap();
-        assert_eq!(stems.parts[0].audio[0].len(), n);
-    }
+    let ml = crate::ml::prepare(&e, "ml.clean", &json!({"clip": piece.id.0})).unwrap();
+    assert_eq!(ml.parts.len(), 1);
+    assert_eq!(ml.parts[0].audio[0].len(), n);
+    let stems = crate::ml::prepare(&e, "ml.separate", &json!({"clip": piece.id.0})).unwrap();
+    assert_eq!(stems.parts[0].audio[0].len(), n);
     // Tempo detection over the clip hears its range.
     let src = crate::tempo_detect::TempoSource { tracks: vec![vox], range: piece.range(), clips: vec![piece.id], mix: false };
     assert_eq!(crate::tempo_detect::source_audio(e.session(), &src).len(), n);

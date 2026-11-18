@@ -3,7 +3,7 @@
 //! or between frames → [`install`]) and keeping the clips' edits on their notes when an analysis
 //! changes (a changed Clean Vocal Amount, a reload that analyses slightly differently).
 //!
-//! The engine spawns no threads (it stays wasm-clean): the host runs jobs where it can.
+//! The engine spawns no threads: the host runs jobs where it can.
 
 use crate::{Engine, EngineError, Result};
 use serde::{Deserialize, Serialize};
@@ -378,7 +378,7 @@ pub enum VocalDone {
 }
 
 impl VocalJob {
-    /// Does the work (worker thread, or between frames on wasm); stops promptly once `cancel`
+    /// Does the work (on the host's worker thread); stops promptly once `cancel`
     /// is set.
     pub fn run(self, cancel: &AtomicBool) -> std::result::Result<VocalDone, VocalError> {
         match self {

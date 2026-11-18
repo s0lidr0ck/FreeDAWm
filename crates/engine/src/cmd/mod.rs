@@ -82,7 +82,6 @@ pub mod midi_wide;
 pub mod midi_writers;
 mod mix;
 pub mod mix_view;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod ml;
 pub mod modulator;
 pub mod multisample;
@@ -334,7 +333,6 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(vocal::specs());
         v.extend(vocal_studio::specs());
         v.extend(comp::specs());
-        #[cfg(not(target_arch = "wasm32"))]
         v.extend(ml::specs());
         v
     })

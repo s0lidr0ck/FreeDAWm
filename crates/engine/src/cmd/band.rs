@@ -96,7 +96,6 @@ const SCALES: [&str; 2] = ["major", "minor"];
 /// MS `newSection`'s names, by how many sections there are.
 const NEW_SECTION_NAMES: [&str; 8] = ["Verse", "Chorus", "Bridge", "Intro", "Outro", "Pre-chorus", "Solo", "Tag"];
 /// Largest MIDI file read for chord import.
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_MIDI_BYTES: u64 = 16 * 1024 * 1024;
 /// Largest feel presets file read.
 const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
@@ -559,7 +558,7 @@ fn settings(e: &mut Engine, p: &Value) -> Result<Value> {
 }
 
 fn band_folder(e: &Engine, cmd: &str) -> Result<PathBuf> {
-    e.band_user_folder().map(Path::to_path_buf).ok_or_else(|| bad(cmd, "there is no user Band folder (none is set, and the web build has none)"))
+    e.band_user_folder().map(Path::to_path_buf).ok_or_else(|| bad(cmd, "there is no user Band folder (none is set)"))
 }
 
 fn feel_preset_save(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -738,14 +737,8 @@ fn slot_preset(m: &MusicianSlot, k: usize) -> MusicianPreset {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn save_preset(dir: &Path, p: &BandPreset, replace: bool) -> std::result::Result<(), String> {
     soundcraft_band::band_preset::save_band_preset(dir, p, replace)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn save_preset(_: &Path, _: &BandPreset, _: bool) -> std::result::Result<(), String> {
-    Err("the web build has no user Band folder".into())
 }
 
 fn preset_save(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -1181,14 +1174,8 @@ fn song_factory(e: &mut Engine, p: &Value) -> Result<Value> {
     .inspect(|_| show_lane_rulers(e))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn read_midi(path: &str) -> Result<Vec<u8>> {
     crate::io::read_file_max(path, MAX_MIDI_BYTES)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn read_midi(_: &str) -> Result<Vec<u8>> {
-    Err(crate::EngineError::Unsupported("importing MIDI chords on the web build".into()))
 }
 
 fn chords_import(e: &mut Engine, p: &Value) -> Result<Value> {

@@ -11,12 +11,6 @@
 //! the track. With no scan cache yet, `FREEDAWM_SCAN_HELPER=<target>/release/freedawm-scan.exe`
 //! makes the tool scan first (out of process, as the app does), which writes the cache.
 
-#[cfg(target_arch = "wasm32")]
-fn main() {
-    println!("midi_cleanup_ab: desktop only");
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::process::ExitCode {
     match desktop::run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -27,7 +21,6 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod desktop {
     use serde_json::{Value, json};
     use soundcraft_engine::Engine;

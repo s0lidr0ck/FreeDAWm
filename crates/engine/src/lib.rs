@@ -35,12 +35,10 @@ pub mod midi_record;
 pub mod midi_script;
 pub mod midi_shared;
 pub mod midi_stretch;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml;
 pub mod module_record;
 pub mod monitor_capture;
 pub mod monitor_profiles;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod movie_export;
 pub mod musicxml;
 pub mod note_index;
@@ -75,7 +73,6 @@ pub use soundcraft_model as model;
 pub fn shutdown_plugin_hosts() {
     soundcraft_vst3_host::shutdown();
     // The song engines' servers FreeDAWm started (Generate Song) stop with it.
-    #[cfg(not(target_arch = "wasm32"))]
     soundcraft_ml::engine_server::shutdown_all();
 }
 
@@ -349,8 +346,7 @@ impl Default for Engine {
 impl Engine {
     pub fn new(mut session: Session) -> Self {
         install_panic_hook();
-        // Mend's model worker (idle until a Mend exists; the browser build has none).
-        #[cfg(not(target_arch = "wasm32"))]
+        // Mend's model worker (idle until a Mend exists).
         soundcraft_ml::live::start();
         crate::cmd::module_ceiling::prepare_states(&mut session);
         crate::midi_cleanup::refresh(&mut session);
@@ -406,10 +402,10 @@ impl Engine {
         self.band_lib.clone().unwrap_or_else(soundcraft_band::library::embedded_library)
     }
 
-    /// Sets the user's Band folder (`<config dir>/Band`) and loads the Library from it. `None`, and
-    /// every folder on wasm (there is none there), means the embedded Library alone.
+    /// Sets the user's Band folder (`<config dir>/Band`) and loads the Library from it. `None` means
+    /// the embedded Library alone.
     pub fn set_band_user_folder(&mut self, dir: Option<std::path::PathBuf>) {
-        self.band_folder = if cfg!(target_arch = "wasm32") { None } else { dir };
+        self.band_folder = dir;
         self.reload_band_library();
     }
 

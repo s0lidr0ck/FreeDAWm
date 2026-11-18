@@ -57,11 +57,11 @@ fn source_ids(modules: &[&Insert]) -> BTreeSet<SourceId> {
 
 /// Writes the audio `modules` play beside the preset at `path`, in `<stem>_samples/`, and returns
 /// the preset's `samples` entry. Audio that is not loaded is left out (the module then loads
-/// without it). The web build, which saves by download, writes none.
+/// without it).
 pub(super) fn write_samples(e: &Engine, path: &str, modules: &[&Insert]) -> Result<Value> {
     let mut out = Map::new();
     let ids = source_ids(modules);
-    if ids.is_empty() || cfg!(target_arch = "wasm32") {
+    if ids.is_empty() {
         return Ok(Value::Object(out));
     }
     let file = Path::new(path);

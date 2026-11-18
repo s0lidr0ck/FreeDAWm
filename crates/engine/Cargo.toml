@@ -29,9 +29,6 @@ zip.workspace = true
 miniz_oxide.workspace = true
 quick-xml.workspace = true
 craft-docpath.workspace = true
-
-# Local ML audio (ONNX Runtime, DeepFilterNet): desktop only, the web app has none.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 soundcraft-ml.workspace = true
 
 [dev-dependencies]

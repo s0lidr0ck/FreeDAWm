@@ -132,7 +132,6 @@ pub type Separator<'a> = &'a dyn Fn(Vec<Vec<f32>>, u32) -> Result<Vec<(String, V
 
 /// The best stem separation the installed models allow, as Separate Stems opens with
 /// ([`soundcraft_ml::pipeline::SepModel::best_installed`]): HTDemucs when no RoFormer is installed.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn best_separation_model() -> crate::ml::SepModel {
     use crate::ml::{ModelStatus, SepModel, list_models, models_dir};
     let models = list_models(&models_dir());
@@ -140,7 +139,6 @@ pub fn best_separation_model() -> crate::ml::SepModel {
 }
 
 /// The session's stem separation with `model`.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn separate_with(model: crate::ml::SepModel, audio: Vec<Vec<f32>>, rate: u32) -> Result<Vec<(String, Vec<Vec<f32>>)>, String> {
     use crate::ml::{Cancel, Ctx, Device, JobKind, Quality};
     let job = soundcraft_ml::Job {

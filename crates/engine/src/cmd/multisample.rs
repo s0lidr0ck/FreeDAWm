@@ -1393,9 +1393,7 @@ fn save(e: &mut Engine, p: &Value) -> Result<Value> {
     let notes: Vec<u8> = held.iter().map(|h| h.0).collect::<BTreeSet<_>>().into_iter().collect();
     let folder = path.with_extension("");
     crate::file_access::check_write(&path).map_err(EngineError::Io)?;
-    if !cfg!(target_arch = "wasm32") {
-        crate::io::make_dir(&folder)?;
-    }
+    crate::io::make_dir(&folder)?;
     let params: BTreeMap<&str, f32> = ins.params.iter().map(|(k, v)| (k.as_str(), *v)).collect();
     let release = ins.params.get("release").copied().unwrap_or(250.0) / 1000.0;
     let mut text = format!(

@@ -195,16 +195,9 @@ fn session_audio(e: &Engine, cmd: &str, p: &Value, from: &str) -> Result<(Vec<Ve
 }
 
 fn capture(e: &mut Engine, p: &Value) -> Result<Value> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // Per-stem capture separates with the best model installed, as Separate Stems does.
-        let model = lib::best_separation_model();
-        capture_with_model(e, p, &|a, r| lib::separate_with(model, a, r), model.id())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        capture_with(e, p, &|_, _| Err("stem separation is not available on the web build".to_string()))
-    }
+    // Per-stem capture separates with the best model installed, as Separate Stems does.
+    let model = lib::best_separation_model();
+    capture_with_model(e, p, &|a, r| lib::separate_with(model, a, r), model.id())
 }
 
 /// `scout.profile_capture` with the separator given (tests pass a fake one).

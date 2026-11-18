@@ -38,11 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.sources.clear();
             s.videos.clear();
             let text = s.to_json().map_err(|err| EngineError::Io(err.to_string()))?;
-            if cfg!(target_arch = "wasm32") {
-                crate::io::write_file(&file.to_string_lossy(), text.as_bytes())?;
-            } else {
-                crate::io::replace_file(&file.with_extension(crate::io::SESSION_TMP_EXTENSION), &file, text.as_bytes())?;
-            }
+            crate::io::replace_file(&file.with_extension(crate::io::SESSION_TMP_EXTENSION), &file, text.as_bytes())?;
             Ok(json!({"path": file}))
         }),
         cmd!(noundo "session.revert", "Revert Session to Saved...", ["File"], None, "{}", |e| if e.path.is_some() { Ok(()) } else { Err("the session has not been saved".into()) }, |e, p| open_through_job(e, "session.revert", p)),
@@ -258,7 +254,7 @@ fn export_dawproject(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let file = std::path::PathBuf::from(&path);
     crate::file_access::check_write(&file).map_err(EngineError::Io)?;
-    if !cfg!(target_arch = "wasm32") && crate::io::path_taken(&file) && !bool_or(p, "replace", false) {
+    if crate::io::path_taken(&file) && !bool_or(p, "replace", false) {
         return Err(bad(id, format!("{path} already exists: pass `replace: true` to replace it")));
     }
     let session = e.session_arc();
@@ -273,14 +269,8 @@ fn export_dawproject(e: &mut Engine, p: &Value) -> Result<Value> {
     }))
 }
 
-/// Writes the archive beside `file` and renames it into place (the browser: delivered as a download).
+/// Writes the archive beside `file` and renames it into place.
 fn write_dawproject(s: &Session, file: &std::path::Path) -> Result<crate::dawproject::export::Exported> {
-    let fail = |e: String| EngineError::Io(format!("{}: {e}", file.display()));
-    if cfg!(target_arch = "wasm32") {
-        let (w, done) = crate::dawproject::export::export(s, std::io::Cursor::new(Vec::new())).map_err(fail)?;
-        crate::io::write_file(&file.to_string_lossy(), &w.into_inner())?;
-        return Ok(done);
-    }
     crate::io::write_streamed(file, |w| crate::dawproject::export::export(s, w))
 }
 

@@ -1515,22 +1515,18 @@ fn append_wav_chunk(out: &mut Out, chunk: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Where a bounce is written: its part file, or memory in the browser, which has no file system.
+/// Where a bounce is written: its part file.
 enum Out {
     File(std::io::BufWriter<std::fs::File>),
-    Memory(std::io::Cursor<Vec<u8>>),
 }
 
 impl Out {
     fn create(part: &Path) -> std::io::Result<Out> {
-        if cfg!(target_arch = "wasm32") {
-            return Ok(Out::Memory(std::io::Cursor::new(Vec::new())));
-        }
         Ok(Out::File(std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(part)?)))
     }
 
     /// Puts the finished file at `path` and returns its size: the part file is synced and renamed
-    /// over it; in the browser the bytes are delivered ([`write_file`]).
+    /// over it.
     fn complete(self, part: &Path, path: &Path) -> Result<u64> {
         match self {
             Out::File(out) => {
@@ -1542,11 +1538,6 @@ impl Out {
                 });
                 replace_with(part, path, synced).map(|()| len)
             }
-            Out::Memory(m) => {
-                let bytes = m.into_inner();
-                write_file(&path.to_string_lossy(), &bytes)?;
-                Ok(bytes.len() as u64)
-            }
         }
     }
 }
@@ -1555,20 +1546,12 @@ impl std::io::Write for Out {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Out::File(f) => f.write(buf),
-            Out::Memory(m) => {
-                // A long bounce may not fit in the browser's memory: fail instead of aborting.
-                let end = usize::try_from(m.position()).unwrap_or(usize::MAX).saturating_add(buf.len());
-                let v = m.get_mut();
-                v.try_reserve(end.saturating_sub(v.len())).map_err(|_| std::io::ErrorKind::OutOfMemory)?;
-                m.write(buf)
-            }
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Out::File(f) => f.flush(),
-            Out::Memory(_) => Ok(()),
         }
     }
 }
@@ -1577,7 +1560,6 @@ impl std::io::Seek for Out {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         match self {
             Out::File(f) => f.seek(pos),
-            Out::Memory(m) => m.seek(pos),
         }
     }
 }
@@ -2144,13 +2126,7 @@ pub fn sanitize_name(n: &str) -> String {
 
 /// Save the session to `path` (a `.fdawm` file, or the `.scraft` it was opened from). Audio that only exists in memory is written
 /// as 32-bit float WAV into `Audio Files/` next to it. Returns how many audio files were written.
-///
-/// In the browser there are no folders: the session and all its audio go out as one bundle file
-/// (`<name>.fdawmz`, see [`session_bundle`]) through the host's delivery hook ([`set_deliver`]).
 pub fn save_session(e: &mut Engine, path: &str) -> Result<usize> {
-    if cfg!(target_arch = "wasm32") {
-        return save_session_bundle(e, path);
-    }
     let (fresh, written, p) = write_session(e.session(), path, false, e.copy_imported_audio)?;
     // Keep the in-memory document in sync (paths, unsaved flags) without an undo step.
     *e.session_mut() = fresh;
@@ -2913,25 +2889,8 @@ pub const BUNDLE_EXTENSIONS: [&str; 2] = [BUNDLE_EXTENSION, LEGACY_BUNDLE_EXTENS
 const MAX_BUNDLE_ENTRIES: usize = 10_000;
 const MAX_BUNDLE_BYTES: u64 = 1 << 30;
 
-/// Hands a finished file (name, bytes) to the person on a host without a filesystem: the web app
-/// installs one that starts a download. Native builds write files and never install it.
-pub type DeliverHook = fn(&str, &[u8]) -> std::result::Result<(), String>;
-
-static DELIVER: std::sync::OnceLock<DeliverHook> = std::sync::OnceLock::new();
-
-/// Install the delivery hook (once, at start-up of the web app).
-pub fn set_deliver(h: DeliverHook) {
-    let _ = DELIVER.set(h);
-}
-
-/// Write one output file: to `path` natively; in the browser, delivered under its file name.
-/// Without this, every export on the web failed with «operation not supported on this platform».
+/// Write one output file to `path`.
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
-    if cfg!(target_arch = "wasm32") {
-        let deliver = DELIVER.get().ok_or_else(|| EngineError::Io("saving files is not available in this build".into()))?;
-        let name = Path::new(path).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or("Untitled");
-        return deliver(name, bytes).map_err(EngineError::Io);
-    }
     crate::file_access::check_write(path).map_err(EngineError::Io)?;
     std::fs::write(path, bytes).map_err(|err| EngineError::Io(format!("{path}: {err}")))
 }
@@ -2980,23 +2939,6 @@ pub fn session_bundle(session: &Session) -> Result<(Vec<u8>, Session)> {
 pub fn bundle_extension_for(name: &str) -> &'static str {
     let legacy = Path::new(name).extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case(LEGACY_BUNDLE_EXTENSION));
     if legacy { LEGACY_BUNDLE_EXTENSION } else { BUNDLE_EXTENSION }
-}
-
-/// Save as a bundle named after `path`'s file name, delivered through the host ([`write_file`]).
-fn save_session_bundle(e: &mut Engine, path: &str) -> Result<usize> {
-    let stem = Path::new(path).file_stem().and_then(|x| x.to_str()).filter(|x| !x.is_empty()).map(str::to_string);
-    let mut s = e.session().clone();
-    if let Some(stem) = stem {
-        s.name = stem;
-    }
-    let (bytes, fresh) = session_bundle(&s)?;
-    let file = format!("{}.{}", sanitize_name(&fresh.name), bundle_extension_for(path));
-    write_file(&file, &bytes)?;
-    let written = fresh.sources.iter().filter(|x| fresh.pool.get(x.id).is_some()).count();
-    *e.session_mut() = fresh;
-    e.path = Some(file);
-    e.mark_clean();
-    Ok(written)
 }
 
 /// Open a session from bytes (the browser has no paths): a bundle ([`session_bundle`]) or a bare
