@@ -69,7 +69,7 @@ synth). There is no piano, and only the synth answers the sustain pedal and pitc
 | Per-device timing offset | ● | ◐ | ● | ● | **Works**: 0–100 ms per input port in Setup › MIDI Input Devices (per computer): its messages are placed that much earlier, heard and recorded |
 | Virtual ports from other apps; network and Bluetooth MIDI | ● | ● | ● | ● | **Partial**: whatever the system shows as an ordinary port. **Not planned here**: a virtual port of FreeDAWm's own (midir can make one on macOS and Linux, not Windows) needs the system's MIDI service (CoreMIDI, the ALSA sequencer) and another program to connect to it to develop against; the build machine has neither |
 | MIDI 2.0 devices | ○ | ○ | ● | ◐ | **Not planned here**: the MIDI library in use (midir 0.11) speaks MIDI 1.0 only; MIDI 2.0 needs the systems' own UMP interfaces (CoreMIDI's, Windows MIDI Services, ALSA's UMP) and a MIDI 2.0 device to develop against |
-| MIDI in the browser | ○ | ○ | ○ | ○ | **Not planned here**: the owner has stopped work on the browser build (2026-11-17); its menus leave the MIDI windows out |
+| MIDI in the browser | ○ | ○ | ○ | ○ | **Not planned here**: the owner removed the browser build (2026-11-18) |
 | A take recorded on another computer arrives on the track | ○ | ○ | ○ | ○ | **Works** (remote recorder; the take arrives after the pass, not as a live stream) |
 
 ## B. What a track listens to, and hearing yourself
@@ -250,7 +250,7 @@ Found while reading; none was reproduced by playing. Paths are under `crates/`.
 | 20 | **Fixed.** New MIDI tracks and the tracks a MIDI file import makes listen to every MIDI input, as new instrument tracks do, and a MIDI track's strip shows its real input. Test: `engine/tests/midi_recording.rs`. Commit `91059d3`. | `engine/src/cmd/track.rs`; `engine/src/io.rs`; `ui-egui/src/mix_window.rs` |
 | 21 | **Fixed.** MIDI export writes what plays: muted clips are left out, notes outside a clip's trimmed window too, and a note running past its clip's end ends there. Test: `engine/tests/midi_recording.rs`. Commit `b34b914`. | `engine/src/io.rs` (`export_midi`) |
 | 22 | **Partly fixed.** MIDI Merge is read now (record modes); QuickPunch by the recording-audio work. The input filter is read now (Setup › MIDI Input Devices). Still stored and unread: TrackPunch, Destructive Record, MIDI Thru (Options), MIDI live mode, MIDI studio, the second set of device flags (beat clock is read now: clock and timecode out). Commit `68d0dc0`. | `engine/src/cmd/options.rs:22-59`; `engine/src/cmd/setup_more.rs:30-107` |
-| 23 | **Fixed.** Musical Typing and MIDI Input Devices are left out of the web build's menus. Test: `ui-egui/tests/menu_bar.rs` (`live_midi_windows_are_desktop_only`). Commit `352090a`. | `ui-egui/src/menubar.txt` |
+| 23 | **Fixed.** Musical Typing and MIDI Input Devices are left out of the web build's menus. Commit `352090a`. Moot since the browser build was removed (2026-11-18); its `[desktop]` menu marker and test went with it. | `ui-egui/src/menubar.txt` |
 
 ## Suggested order of work
 
@@ -318,9 +318,6 @@ editing data, 8–14; scale lock on input and a chord track that shapes input, 6
 to a free performance, 8–12; MIDI 2.0 (Logic, partly Cubase), 6–10. A programmable input
 transformer is Logic's and Cubase's and belongs in the last section, as does Pro Tools' wait for
 note.
-
-**Outside the comparison:** Web MIDI for the browser build (6–10 h) would give that build live
-input, which none of the four offers.
 
 **Where FreeDAWm is already level or ahead:** the input path is allocation-free and lock-free
 end to end; several ports and channels record to several tracks in one pass; stuck-note handling
@@ -537,3 +534,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-17 | minor | Commits noted on the third pass's rows (SysEx, hosted instruments' outputs, clip MIDI effects) |
 | 2026-11-17 | minor | SysEx shown, moved, retyped, added and deleted in the MIDI Event List, and played to VST3 instruments as data events |
 | 2026-11-18 | minor | The Scale MIDI effect follows the chord lane |
+| 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |

@@ -241,7 +241,7 @@ pitch-preserving stretch can instead reserve the render's source and record how 
 meanwhile (`Session::live_stretch`), the mixer reading the original through the stretcher until
 the render's audio is in (`engine::stretch_jobs`: the job, `install`, renders kept for undo and
 redo, a save renders what is still live). The app's worker (`ui-egui/src/stretch_worker.rs`) makes the render on a thread and swaps it in; the
-app turns deferral on (not the web build, which has no threads, nor the CLI). Left: grain
+app turns deferral on (not the CLI). Left: grain
 alignment (point 4); hearing a warp marker while it is dragged (it is heard from the release).
 
 **Changing the session rate: the design (round three, built 2026-11-17 but for the progress window).** A command
@@ -333,7 +333,7 @@ editing, 8–12; skipping plug-ins on silent tracks, 5–8; realtime safety (plu
 
 **Where FreeDAWm is already level or ahead:** gapless looping, uninterrupted playback while
 editing, the breadth of delay compensation, formats read, clip gain envelopes with conversion to
-automation, freeze up to a chosen module, built-in vocal tuning heard live, and the browser build.
+automation, freeze up to a chosen module, and built-in vocal tuning heard live.
 
 ## Sources
 
@@ -349,6 +349,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |
 | 2026-11-18 | minor | a hosted Clip Effects module's own editor window and its full state per clip slot |
 | 2026-11-18 | minor | realtime priority for the audio thread and its workers, shown in System Usage |
 | 2026-11-18 | minor | large playback buffer with a small live path: not built in round four, what is needed noted |

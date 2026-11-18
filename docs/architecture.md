@@ -21,7 +21,7 @@ L3  mix                                         (the mix engine)
 L4  engine      playback                        (commands, undo, I/O · audio devices)
 L5  automation                                  (MCP server, control-channel client)
 L6  ui-egui                                     (the user interface)
-    apps: freedawm (desktop) · freedawm-cli · soundcraft-web (wasm)
+    apps: freedawm (desktop) · freedawm-cli
 ```
 
 ## The document

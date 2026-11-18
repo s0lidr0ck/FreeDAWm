@@ -49,7 +49,7 @@ about 28, and none to about 20.
   every command; a mix analyser that asks an AI model for advice and draws it on the EQ; local
   models for karaoke, drum splitting, text-to-MIDI and whole-song generation; a build-your-own
   room reverb and impulse capture of gear; a resonance suppressor and a masking EQ in the box;
-  a browser build; lyric-writing tools with a teleprompter.
+  lyric-writing tools with a teleprompter.
 
 Four controls promise a signature feature and do nothing: the Object/Bed switch and the Renderer
 window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
@@ -175,9 +175,9 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Rez, Manners, Lull's guard, Shale | **Works** | A resonance suppressor; an EQ that reduces masking between bands by itself; a gate that listens to the source it should ignore; a drum gate that learns bleed, links across the kit's microphones and can send its hits as MIDI |
 | LevelUp | **Works** | Loudness-matched before-and-after listening by a linked pair of inserts, with reference tracks and a preview of what streaming services do to the level |
 | Lyric tools | **Works** | Rhymes, synonyms and stress checks offline; alternative lines; a teleprompter; timed lyrics from a recording |
-| Browser build | **Not planned here** (the owner: no further work) | The same app in a web page: playback, editing, built-in effects, save and export as downloads; the session is kept in the browser between visits, said on the page, with Export and Clear (270aee2). Recording dropped by the owner (no one will use the browser build); no hardware MIDI, third-party plug-ins, models or networking |
+| Browser build | **Not planned here** (removed by the owner, 2026-11-18) | There was a web-page version (playback, editing, built-in effects, save and export as downloads, the session kept between visits). The owner removed it: nobody would use it in a browser. FreeDAWm is a desktop app |
 | Its own video decoders | **Works** | H.264, ProRes and Motion JPEG without system codecs; its own ProRes encoder writes the movie export |
-| Open source, five platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows, FreeBSD and the web. English only; little work on screen readers |
+| Open source, four platforms | **Works** | MIT or Apache-2.0 (the Windows build with ASIO is GPLv3). Linux, macOS, Windows and FreeBSD (the browser build was removed, 2026-11-18). English only; little work on screen readers |
 | Take recovery and safety by tooling | **Works** | A running take is recovered after a crash; ten backups per session; the build refuses code that can panic outside tests. A hosted plug-in runs inside the app and can bring it down, unless it is a CLAP or VST3 plug-in and Preferences › Mixing › Run CLAP and VST3 plug-ins in their own process is on (off by default; see the design notes) |
 
 ## Things that promise more than they do
@@ -188,7 +188,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | 2 | Track widths of 2nd- to 7th-order Ambisonics can be chosen; the panner fills the first four channels and leaves the rest silent | `dsp/src/pan.rs:268-279` | **Done** (a2e9845): the panner encodes every order the track carries (ACN, SN3D, to 7th order in the DSP), so 2nd and 3rd order are filled; the mixer carries at most 16 channels, so 4th to 7th order are no longer offered and are refused by the commands that make tracks, busses and outputs. The decoder to speakers is still first order |
 | 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` | **Another section's**: punch modes are the recording work in [section 2](02-recording-audio.md); QuickPunch landed there (4b98b7f) |
 | 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` | **Done; claim partly wrong** (8fac425): these were already off the menu bar (the 2026-10 menus clean-up); agents and scripts still reach them, and their descriptions now end "stored only: nothing in FreeDAWm reads this setting yet". The video sync offset is not one of them: the Video track and window read it (it has no window of its own) |
-| 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (b5ef0ca): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23), which left them out of the web build's menus (352090a) |
+| 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (b5ef0ca): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23), which left them out of the web build's menus (352090a). The browser build itself was removed (2026-11-18) |
 | 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can. The encrypted local link is **done** too (4d3e275, below), and a PC's first pairing proves both keys with the code, never sending it (30e56ba, below); the window and the prompt say so |
 | 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` | **Done** (3b781d6): Bounce to Movie uses both |
 
@@ -228,7 +228,7 @@ workflow (specialist; revisit if users ask; both since built in part: the field-
 
 **4. Build on what only FreeDAWm has (≈ 40–65 h).** Recording in the browser build, with
 sessions kept between visits (12–18): sessions kept **done** (270aee2), recording **dropped by the owner**
-(the browser build will not be used; design kept below); talkback and encrypted local links for remote recording
+(the browser build will not be used; then the whole browser build was removed, 2026-11-18); talkback and encrypted local links for remote recording
 (10–16): **done** (4d3e275, see the design notes below for what was built and what remains); isolate hosted plug-ins in their own process so a crash cannot take the session (16–28,
 and the scan helper is a start; **first steps built** (3b77990, and round three): CLAP, a
 Preferences option off by default, the helper shipped in every package; see below); a first-run tour (4–6): **done** (a689967), seven cards opened once on the first start (no settings saved yet) and again from FreeDAWm › Tour of FreeDAWm.
@@ -243,37 +243,9 @@ same pass as the items above; these are the starting points.
   `RangeRender`. A `release.*` command family (add, move, remove, set, render) and a page that
   shows the songs in a row with their integrated loudness, true peak and the album's. Export:
   one file per song plus one continuous file with a cue sheet; DDP later.
-- *Sessions kept in the browser build (built, 270aee2).* The origin-private file system (OPFS),
-  through a small script in the page (`window.freedawmStore`): `session.json`, `meta.json` and
-  `Audio Files/<source>-<fingerprint>.wav`, each audio file written once
-  (`io::session_store_parts`), the session 3 s after a change and never while the transport
-  rolls, audio before the session that points at it, unused files removed after. The next visit
-  opens it (`io::open_session_parts`, the bundle opener's own path) instead of the demo; `?demo`
-  and `?empty` still start fresh. A notice at the bottom right says "Kept in this browser only"
-  (or why not: no OPFS, a failed write), with Export (a `.fdawmz` download) and Clear. Not run in
-  a browser here: the Rust side builds for wasm and its parts are tested natively
-  (`io` tests); the script and the page need a browser (Chrome, Edge, Firefox; Safari before 18
-  lacks `createWritable`, and the notice then says the session is not kept).
-- *Recording in the browser build (dropped by the owner, 2026-11-17: the browser build will not be
-  used).* The in-memory take writer it needed is in (c4c24e1, kept). Tried in headless Chromium
-  before it was dropped, the browser build did not start: `std::time::Instant` panics in a browser
-  and the disk cache makes one when the first session is sent (and its output asked for 32
-  channels where a page has 2, so there was no sound). Both were fixed in a patch kept aside with
-  the recording wiring, which worked there (a take landed and was kept across a reload). The
-  design as written: The parts, in order: (1) the page:
-  `getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl:
-  false}})` asked on the first Record (the browser asks the person; a refusal or no device is
-  said plainly on the Record button and the status line, and Record stays refused, as now), an
-  `AudioWorklet` that posts its 128-frame blocks over a `MessagePort` (a `SharedArrayBuffer` ring
-  needs cross-origin isolation the host cannot be assumed to give); (2) the player: an external
-  input feed (`Player` takes an `InputFeed` the page pushes into, as the desktop's input callback
-  does), so monitoring and capture run in the same output callback as on the desktop; (3) the
-  recorder: wasm has no threads and no files, so the take writer runs a step a frame from the UI
-  thread into memory, and a finished take lands as a pooled source (kept by the store like any
-  other); (4) latency from `AudioContext.baseLatency` + `outputLatency` for the output and the
-  worklet's block for the input, taken off as the desktop's reported latencies are. Steps 2 and 3
-  change `crates/playback/src/record.rs` and the UI's take landing, shared with the desktop
-  recorder; they were left for a pass of their own.
+- *The browser build (removed by the owner, 2026-11-18).* It kept the session between visits in
+  the browser's private file system (270aee2); recording in it was designed and then dropped
+  (2026-11-17). Both designs are in this file's history before the removal.
 - *Encrypted local link (built, 4d3e275; owner-approved UDP port).* The internet path's QUIC
   (TLS 1.3, iroh) on the local network: a UDP socket on the network port's number beside the TCP
   listener, with no relays, no address lookup and no router port mapping, so nothing leaves the
@@ -543,3 +515,4 @@ includes a feature should be checked before being quoted.
 | 2026-11-18 | minor | Step Sequencer row: melodic step sequences |
 | 2026-11-18 | minor | Note Expression row: per-note expression built |
 | 2026-11-18 | minor | Round four: Time Warp by dragging a bar line on the Tempo ruler |
+| 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |

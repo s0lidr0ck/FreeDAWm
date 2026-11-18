@@ -59,8 +59,8 @@ jobs as a check, without making a release.
 
 No Intel Mac build: ONNX Runtime (the `ort` crate's prebuilt library, used by the ML features)
 has no `x86_64-apple-darwin` binaries. Linux builds on Ubuntu 24.04 because that library needs
-the C++ runtime of GCC 13 or newer. The x86, ARM64, aarch64 and riscv64 builds, Flatpak,
-FreeBSD and the web build that the upstream pipeline made are not part of the free workflow;
+the C++ runtime of GCC 13 or newer. The x86, ARM64, aarch64 and riscv64 builds, Flatpak and
+FreeBSD that the upstream pipeline made are not part of the free workflow;
 their scripts below still work by hand.
 
 ### First launch of unsigned builds
@@ -83,8 +83,8 @@ FreeDAWm plays and records through [cpal](https://github.com/RustAudio/cpal): Co
 macOS, WASAPI on Windows, PipeWire on Linux (the default when it runs; its "All sources" input
 records any source, picked in I/O Setup, see `crates/playback/src/pw.rs`), ALSA on Linux and
 FreeBSD (PulseAudio through its ALSA plugin), JACK on Linux as another audio system (PipeWire through pipewire-jack; FreeDAWm lists
-each sound card and connects its ports itself, see `crates/playback/src/jack.rs`), and WebAudio
-in the browser.
+each sound card and connects its ports itself, see `crates/playback/src/jack.rs`). There is no
+browser build (removed in November 2026).
 
 - **Linux** builds need the ALSA, PipeWire and JACK headers (`libasound2-dev`,
   `libpipewire-0.3-dev`, `libjack-jackd2-dev` and `pkg-config` on Ubuntu). The binary links
@@ -103,8 +103,6 @@ in the browser.
   manifests grant `--socket=pulseaudio` (PipeWire's pulse server answers on it). JACK is the
   runtime's own libjack, PipeWire's, reached through `--filesystem=xdg-run/pipewire-0`. No raw
   ALSA devices.
-- **Web**: browsers start audio only after a user gesture, so the first click in the page may be
-  needed before sound plays. The web build has no recording.
 
 ### macOS
 
@@ -204,14 +202,6 @@ GitHub has no FreeBSD runners, so the `freebsd` job builds inside a FreeBSD 14.3
 a `/usr/local`-style tree (binaries, desktop entry, MIME type, metainfo, icons, docs) as a
 `.tar.gz`. Install with `tar -xzf freedawm-*-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local`.
 `.github/workflows/freebsd.yml` builds and tests the workspace there on every push to `main`.
-
-### Web
-
-`packaging/web/package.sh` runs `trunk build --release` in `apps/soundcraft-web` (output in
-`dist/web`, `public_url = "./"`) and zips the site with sample `_headers` and `.htaccess` files and
-the hosting guide. `apps/soundcraft-web` runs the same `SoundApp` as the desktop app on the
-synthesised demo session, rendering with wgpu (WebGPU, or WebGL2 with `?webgl`) and playing
-through WebAudio.
 
 ## Signing (not set up)
 

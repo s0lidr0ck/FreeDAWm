@@ -49,7 +49,7 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3", "fla
 rusty_mp3 = "1.0.5"
 rusty-opus = "1.0.2"
 rustfft = "6"
-# Session bundles (one file holding a session and its audio, for the browser): stored entries only.
+# Session bundles (one file holding a session and its audio): stored entries only.
 zip = { version = "9", default-features = false }
 miniz_oxide = "0.8"
 # DAWproject import/export: project.xml (pure Rust, MIT).

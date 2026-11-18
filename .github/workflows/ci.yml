@@ -1,5 +1,5 @@
 # The pull-request gate: `cargo xtask ci` (fmt check, clippy -D warnings, the workspace tests,
-# the asset and layering checks and the WebAssembly check) on Linux, plus a build-and-test of the
+# the asset and layering checks) on Linux, plus a build-and-test of the
 # workspace on macOS and Windows.
 #
 # No secrets. Release builds are in release.yml.
@@ -60,7 +60,7 @@ jobs:
 
       - name: Rust toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy
           rustup default "$RUST_TOOLCHAIN"
 
       - uses: Swatinem/rust-cache@v2

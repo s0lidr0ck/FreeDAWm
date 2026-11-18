@@ -256,8 +256,8 @@ Loudness Meter and Phase Meter). All three are in place.
 | Modulators (LFO, envelope) for any parameter | ○ | ◐ | ○ | ● | **Works**: up to 8 per track (an insert's menu › Modulators…): an LFO (sine, triangle, saw, square, random; 0.01–40 Hz or locked to the bar, 4 bars to 1/32) or an envelope follower (attack, release; the track's signal entering the inserts), each moving up to 8 plug-in parameters by -100 to 100 % of their range in the plug-in's own taper, around the stored or automated value. The plug-ins that take sample-accurate changes get the movement every 64 samples, others once a block. Not verified by listening. Tests: `mix/tests/modulators.rs`, `engine` `modulators_are_added_set_aimed_and_removed` |
 | Rack with parallel, mid/side or band splits; macro knobs | ○ | ● | ○ | ◐ | **Partial**: every insert's wet/dry mix runs one effect in parallel with its own dry signal; a rack with parallel chains, mid/side or band splits and macro knobs is not built (a module hosting chains; design below, about 14–22 h). Chains are a straight line of up to 32 |
 | Console channel strip | ● | ● | ○ | ● | **Not planned here**: the owner keeps the hidden stock EQ and compressor hidden, and Channel Strip is the two together (it still loads from old sessions) |
-| Processor load shown per effect | ◐ | ● | ◐ | ◐ | **Works**: each module's share of a processor core in the last block (`ModuleMeter::load`), shown on hovering its chain tile or its insert slot; none on the web build. Test: `module_meters` `a_running_module_reports_its_processor_load` |
-| Works in the browser build | — | — | — | — | **Partial**: Mend passes audio through; no user presets. The rest is not planned here: the owner has stopped work on the browser build |
+| Processor load shown per effect | ◐ | ● | ◐ | ◐ | **Works**: each module's share of a processor core in the last block (`ModuleMeter::load`), shown on hovering its chain tile or its insert slot. Test: `module_meters` `a_running_module_reports_its_processor_load` |
+| Works in the browser build | — | — | — | — | **Not planned here**: the owner removed the browser build (2026-11-18) |
 
 ## Bugs found on the way
 
@@ -424,3 +424,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-17 | minor | Designs for the modulators, impulse-response editing and a rack; what is left of oversampling, IR editing and the rack stated |
 | 2026-11-18 | minor | Round four: Vault's impulse response reversed, trimmed and stretched |
 | 2026-11-18 | minor | Round four: Dist's 8x oversampling for the hard clippers, off by default |
+| 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |

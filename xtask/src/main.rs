@@ -1,4 +1,4 @@
-//! `cargo xtask <ci|layers|assets|parity|wasm>` — repository gates; `fidelity-inputs` and
+//! `cargo xtask <ci|layers|assets|parity>` — repository gates; `fidelity-inputs` and
 //! `fidelity-refs <engine>` make the local FireStation fidelity audio; `band-refs [name…]` makes the
 //! band's C++ reference events; `fs-tables <engine>` converts an engine's C++ table headers to Rust;
 //! `ml-models` exports and installs the local-ML models (see `ml_models.rs`); `ml-publish` packs
@@ -64,7 +64,7 @@ const LAYERS: &[(&str, u8)] = &[
 /// Standalone format crates: no workspace dependencies at all (publishable on their own).
 const STANDALONE: &[&str] = &["time", "audio-io", "midi", "video", "dsp"];
 const UI_CRATES: &[&str] = &["craft-ui", "egui", "eframe", "winit", "egui_kittest", "rfd", "egui-wgpu", "egui_glow"];
-const EXEMPT: &[&str] = &["soundcraft", "soundcraft-cli", "soundcraft-scan", "soundcraft-web", "xtask"];
+const EXEMPT: &[&str] = &["soundcraft", "soundcraft-cli", "soundcraft-scan", "xtask"];
 
 fn layers() -> Result<(), String> {
     let out =
@@ -146,42 +146,6 @@ fn parity() -> Result<(), String> {
     cargo(&["run", "-q", "-p", "soundcraft-cli", "--", "parity", "--write", "docs/parity-checklist.md"])
 }
 
-/// Crates that must compile for the web.
-const WASM: &[&str] = &[
-    "soundcraft-time",
-    "soundcraft-audio-io",
-    "soundcraft-midi",
-    "soundcraft-video",
-    "soundcraft-dsp",
-    "soundcraft-band",
-    "soundcraft-vocal",
-    "soundcraft-model",
-    "soundcraft-mix",
-    "soundcraft-engine",
-    "soundcraft-playback",
-    "soundcraft-automation",
-    "soundcraft-ui-egui",
-];
-
-fn wasm() -> Result<(), String> {
-    let mut args = vec!["check", "--target", "wasm32-unknown-unknown"];
-    for c in WASM {
-        args.push("-p");
-        args.push(c);
-    }
-    if root().join("apps/soundcraft-web/Cargo.toml").exists() {
-        args.push("-p");
-        args.push("soundcraft-web");
-    }
-    // No rustc wrapper: web-sys's rustc command line (~47k characters of `--cfg feature=...`)
-    // passes Windows's 32k limit. Cargo hands it over as an `@argfile`, but sccache (0.18) expands
-    // the file and spawns rustc with the full line, which fails with os error 206 ("The filename
-    // or extension is too long"). An empty RUSTC_WRAPPER overrides `build.rustc-wrapper`.
-    let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    cmd.args(&args).env("RUSTC_WRAPPER", "").env_remove("CARGO_BUILD_RUSTC_WRAPPER");
-    run_cargo(&mut cmd, &args)
-}
-
 /// `cargo test --workspace`, plus the test-harness arguments in `XTASK_TEST_ARGS` (split on
 /// whitespace) if set: CI uses it to skip timing tests the hosted runners can't keep.
 fn test_workspace() -> Result<(), String> {
@@ -201,7 +165,6 @@ fn ci() -> Result<(), String> {
         ("test", Box::new(test_workspace)),
         ("assets", Box::new(assets)),
         ("layers", Box::new(layers)),
-        ("wasm", Box::new(wasm)),
     ];
     let mut summary = Vec::new();
     for (name, f) in &steps {
@@ -225,7 +188,6 @@ fn main() -> ExitCode {
         Some("layers") => layers(),
         Some("assets") => assets(),
         Some("parity") => parity(),
-        Some("wasm") => wasm(),
         Some("build-asio") => asio::run(args.get(1..).unwrap_or(&[])),
         Some("version") => version::run(args.get(1..).unwrap_or(&[])),
         Some("ico") => ico::run(args.get(1..).unwrap_or(&[])),
@@ -238,7 +200,7 @@ fn main() -> ExitCode {
         Some("ml-publish") => ml_publish::run(&root(), args.get(1..).unwrap_or(&[])),
         Some("kit-package") => kit_package::run(&root(), args.get(1..).unwrap_or(&[])),
         _ => {
-            Err("usage: cargo xtask <ci|layers|assets|parity|wasm|build-asio|version|fidelity-inputs|fidelity-refs <engine>|band-refs [--library <dir>] [name…]|browser-thumbs [id…]|fs-tables <engine>|ml-models [--scripts DIR] [--venv DIR] [--models DIR] [--force] [ids…] | ml-models --copy-from DIR [--models DIR] | ml-publish [--models DIR] [--out DIR] [--base-url URL] [ids…] | kit-package <folder> [--id ID] [--out DIR] [--base-url URL]>"
+            Err("usage: cargo xtask <ci|layers|assets|parity|build-asio|version|fidelity-inputs|fidelity-refs <engine>|band-refs [--library <dir>] [name…]|browser-thumbs [id…]|fs-tables <engine>|ml-models [--scripts DIR] [--venv DIR] [--models DIR] [--force] [ids…] | ml-models --copy-from DIR [--models DIR] | ml-publish [--models DIR] [--out DIR] [--base-url URL] [ids…] | kit-package <folder> [--id ID] [--out DIR] [--base-url URL]>"
                 .into())
         }
     };
