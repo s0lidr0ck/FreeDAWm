@@ -497,6 +497,8 @@ where
             *config,
             move |data: &[T], info: &cpal::InputCallbackInfo| {
                 crate::mark_audio_thread();
+                // Realtime priority for the capture thread too, asked for once.
+                soundcraft_mix::rt::promote_capture_thread();
                 // The reported input latency: from capture until this callback.
                 let at = info.timestamp();
                 if let Some(d) = at.callback.checked_duration_since(at.capture) {

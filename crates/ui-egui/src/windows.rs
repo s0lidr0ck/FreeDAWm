@@ -332,9 +332,16 @@ fn disk_usage(app: &mut SoundApp, ctx: &egui::Context) {
 
 fn system_usage(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_system_usage;
-    win(ctx, &mut open, "System Usage", vec2(320.0, 140.0), |ui| {
+    win(ctx, &mut open, "System Usage", vec2(360.0, 170.0), |ui| {
         ui.label(format!("UI frame time: {:.1} ms", app.frame_ms));
         ui.label(format!("Audio: {}", app.player.as_ref().map_or("no engine".to_string(), |p| format!("{} @ {} Hz", p.device_name, p.device_rate))));
+        // Whether the audio thread and its workers got realtime priority (asked for when the
+        // device starts; refused priority still plays, at ordinary priority).
+        let rt = soundcraft_mix::rt::status();
+        ui.label(rt.label());
+        if let Some(hint) = rt.hint() {
+            ui.label(egui::RichText::new(hint).small().color(Tokens::current().text_dim));
+        }
         let plugins: usize = app.engine.session().tracks.iter().map(|t| t.mixer.inserts.len()).sum();
         ui.label(format!("Active plugin instances: {plugins}"));
         ui.label(format!("Tracks: {}", app.engine.session().tracks.len()));

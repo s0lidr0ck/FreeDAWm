@@ -87,6 +87,7 @@ mod modulate;
 mod monitor;
 mod prepare;
 mod rpn;
+pub mod rt;
 pub use live_midi::{HeldNotes, LIVE_MIDI_CAPACITY, LiveEvent, LiveMidi, MAX_MIDI_PORTS, MidiFilter, port_id};
 pub use prepare::{BuiltinPrep, Prepared, PreparedClipFx, PreparedStrip, RetiredStrips, StripRoom};
 pub mod scout;
@@ -4783,7 +4784,13 @@ fn run_strips<T: Send>(work: &mut [T], f: impl Fn(&mut T) + Sync + Send) {
     if work.len() >= 4 {
         // The workers render on behalf of this thread: on the audio thread, they are it too.
         let audio = on_audio_thread();
-        work.par_iter_mut().for_each(|w| as_audio_thread(audio, || f(w)));
+        let mut run = move || work.par_iter_mut().for_each(|w| as_audio_thread(audio, || f(w)));
+        // For the audio thread, on the realtime workers when there are any; offline renders
+        // keep the ordinary pool (at ordinary priority).
+        match rt::pool().filter(|_| audio) {
+            Some(pool) => pool.install(run),
+            None => run(),
+        }
     } else {
         work.iter_mut().for_each(f);
     }
@@ -7860,6 +7867,31 @@ mod audio_thread_tests {
         })
         .join()
         .unwrap()
+    }
+
+    /// The threads the strip jobs ran on, run from a thread that is (or is not) the audio thread.
+    fn threads_of_strips(audio: bool) -> Vec<String> {
+        std::thread::spawn(move || {
+            if audio {
+                mark_audio_thread();
+            }
+            let mut work = vec![String::new(); 64];
+            run_strips(&mut work, |w| {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                *w = std::thread::current().name().unwrap_or("").to_string();
+            });
+            work
+        })
+        .join()
+        .unwrap()
+    }
+
+    #[test]
+    fn strips_for_the_audio_thread_run_on_the_realtime_workers_and_offline_ones_do_not() {
+        rt::start_test_workers();
+        assert!(threads_of_strips(true).iter().all(|n| n.starts_with("freedawm-rt-")), "{:?}", threads_of_strips(true));
+        assert!(threads_of_strips(false).iter().all(|n| !n.starts_with("freedawm-rt-")), "a bounce keeps the ordinary pool");
+        assert_eq!(rt::status().workers, rt::Priority::On);
     }
 
     #[test]
@@ -11671,6 +11703,46 @@ mod tests {
         assert!(a[0].iter().any(|x| x.abs() > 1e-3), "the returns are heard");
         let workers = aux_workers().lock().unwrap().len();
         assert!(workers > 1 || rayon::current_num_threads() < 2, "auxes of one rank ran on {workers} worker(s)");
+    }
+
+    /// The realtime worker pool renders the audio thread's strips: the mix is bit for bit the
+    /// one rendered offline on the ordinary pool.
+    #[test]
+    fn the_realtime_workers_render_the_same_mix_as_the_ordinary_pool() {
+        let (mut s, t) = session_with_dc(0.5, 48_000);
+        s.edit.click = false;
+        for k in 0..6 {
+            let b = s.add_bus(&format!("fx{k}"), ChannelFormat::Stereo);
+            let a = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+            let tr = s.track_mut(a).unwrap();
+            tr.mixer.input = Route::Bus(b);
+            tr.mixer.add_module(Insert::new(if k % 2 == 0 { "fs_reverb" } else { "fs_delay" }), None).unwrap();
+            s.track_mut(t).unwrap().mixer.sends[k] =
+                Some(soundcraft_model::SendSlot { level_db: -6.0, ..soundcraft_model::SendSlot::new(Route::Bus(b)) });
+        }
+        for _ in 0..5 {
+            let n = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+            s.track_mut(n).unwrap().mixer.add_module(Insert::new("fs_sat"), None).unwrap();
+        }
+        let render = |s: &Session| {
+            let mut eng = MixEngine::new(48_000.0, 512);
+            let mut out = vec![vec![0.0f32; 512]; 2];
+            let mut all = Vec::new();
+            for k in 0..20i64 {
+                eng.render(s, k * 512, 512, &mut out);
+                all.extend(out.iter().flatten().map(|x| x.to_bits()));
+            }
+            all
+        };
+        let offline = render(&s);
+        rt::start_test_workers();
+        let live = std::thread::spawn(move || {
+            mark_audio_thread();
+            render(&s)
+        })
+        .join()
+        .unwrap();
+        assert!(offline == live, "the realtime workers change nothing in the mix");
     }
 
     /// Renders `blocks` blocks of 512 backwards from `end` (play order: the first block is the

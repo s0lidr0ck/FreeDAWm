@@ -3879,6 +3879,9 @@ where
     let mut scratch = vec![0.0f32; 8192 * frame];
     let chunk = scratch.len();
     let (failed, guard, gone) = (Arc::clone(fault), Arc::clone(shared), Arc::clone(fault));
+    // The realtime workers the audio thread renders strips on (made once, here on the control
+    // thread; a no-op after the first device and in the browser).
+    soundcraft_mix::rt::start_workers();
     #[cfg(not(target_arch = "wasm32"))]
     let (rate, mut timing) = (f64::from(config.sample_rate), Timing::new(config.buffer_size));
     guarded_build(move || {
@@ -3886,6 +3889,8 @@ where
             *config,
             move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
                 mark_audio_thread();
+                // Realtime priority, asked for once on this thread (see `soundcraft_mix::rt`).
+                soundcraft_mix::rt::promote_audio_thread();
                 #[cfg(not(target_arch = "wasm32"))]
                 let started = std::time::Instant::now();
                 for out in data.chunks_mut(chunk) {
