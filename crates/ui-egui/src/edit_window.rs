@@ -2804,6 +2804,14 @@ fn draw_automation(painter: &egui::Painter, s: &Session, track: &Track, p: &Auto
     };
     let line: Vec<Pos2> = pts.iter().map(|(x, y)| pos2(*x, *y)).collect();
     painter.add(Shape::line(line, Stroke::new(1.5, t.automation_line)));
+    // Automation inside clips: over each clip with a lane for `p`, the lane as it plays there.
+    for c in clip_automation_lines(s, track, p, tl, lane) {
+        painter.rect_filled(Rect::from_x_y_ranges(c.x0..=c.x1, lane.y_range()), 0.0, t.accent.gamma_multiply(0.08));
+        painter.add(Shape::line(c.line, Stroke::new(2.0, t.accent)));
+        for pt in c.points {
+            painter.circle(pt, 3.0, Color32::from_rgb(40, 40, 40), Stroke::new(1.5, t.accent));
+        }
+    }
     // Segment midpoint handles: drag up or down to bend, double-click to straighten.
     let hover = painter.ctx().input(|i| i.pointer.hover_pos());
     for (mid, _) in segment_handles(s, tl, lane, track, p) {
@@ -2826,6 +2834,50 @@ fn draw_automation(painter: &egui::Painter, s: &Session, track: &Track, p: &Auto
         }
     }
     painter.text(pos2(lane.min.x + 6.0, lane.min.y + 9.0), Align2::LEFT_CENTER, param_label(track, p), regular(10.0), t.text_dim);
+}
+
+/// One clip's automation for a lane, as drawn over the clip: its span on screen, the lane as it
+/// plays there (the clip's points; a dB lane adds to the track's: `Track::played`) and the
+/// clip's own points on that line.
+struct ClipAutoLine {
+    x0: f32,
+    x1: f32,
+    line: Vec<Pos2>,
+    points: Vec<Pos2>,
+}
+
+/// The clips of `track` with automation of their own for `p` that show in `lane` (muted clips
+/// play none, so show none).
+fn clip_automation_lines(s: &Session, track: &Track, p: &AutoParam, tl: Rect, lane: Rect) -> Vec<ClipAutoLine> {
+    let Some(played) = track.played.iter().find(|l| &l.param == p) else { return Vec::new() };
+    let range = lane_range(track, p);
+    let def = p.range().2;
+    let yv = |at: Samples| auto_y(lane, range, played.value_at(at, def));
+    let mut out = Vec::new();
+    for c in track.clips().iter().filter(|c| !c.muted) {
+        let Some(cl) = c.automation.iter().find(|l| &l.param == p && !l.points.is_empty()) else { continue };
+        let (x0, x1) = (x_of(s, tl, c.start).max(lane.min.x), x_of(s, tl, c.end()).min(lane.max.x));
+        if x1 <= x0 {
+            continue;
+        }
+        let mut line = Vec::new();
+        let mut x = x0;
+        while x < x1 {
+            line.push(pos2(x, yv(sample_at(s, tl, x))));
+            x += 3.0;
+        }
+        line.push(pos2(x1, yv(sample_at(s, tl, x1).min(c.end().saturating_sub(1)))));
+        let points = cl
+            .points
+            .iter()
+            .map(|pt| c.start.saturating_add(pt.at))
+            .filter(|at| *at >= c.start && *at < c.end())
+            .map(|at| pos2(x_of(s, tl, at), yv(at)))
+            .filter(|q| q.x >= lane.min.x - 4.0 && q.x <= lane.max.x + 4.0)
+            .collect();
+        out.push(ClipAutoLine { x0, x1, line, points });
+    }
+    out
 }
 
 fn t_accent_fill() -> Color32 {
@@ -4803,6 +4855,36 @@ mod tests {
         assert_eq!(follow_update(true, Follow::Page, 1_000, SPAN, 1_000, None, false, 96_000), (false, Some(95_000)));
         // Past 90 % of the width already turns it.
         assert_eq!(follow_update(true, Follow::Page, 1_000, SPAN, 1_000, None, false, 10_500), (false, Some(9_500)));
+    }
+
+    /// A clip's own automation shows over the clip in the track's lane: the volume as it plays
+    /// there (the clip's -6 dB on the track's 0 dB) with the clip's point on it.
+    #[test]
+    fn clip_automation_shows_over_its_clip() {
+        let mut s = Session::default();
+        let t = s.add_track(soundcraft_model::TrackKind::Audio, soundcraft_model::ChannelFormat::Mono, None);
+        let id = s.new_clip_id();
+        let mut c = soundcraft_model::Clip::audio(id, "c", soundcraft_model::SourceId(1), 0, 48_000, 48_000);
+        let mut lane = soundcraft_model::AutomationLane::new(AutoParam::Volume);
+        lane.set_point(1_000, -6.0);
+        c.automation.push(lane);
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(c);
+        s.track_mut(t).unwrap().refresh_played();
+        let tl = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 100.0));
+        let lane_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 60.0));
+        s.edit.zoom.scroll = 0;
+        s.edit.zoom.samples_per_px = 192.0;
+        let tr = s.track(t).unwrap().clone();
+        let lines = clip_automation_lines(&s, &tr, &AutoParam::Volume, tl, lane_rect);
+        assert_eq!(lines.len(), 1);
+        let l = &lines[0];
+        let (cx0, cx1) = (x_of(&s, tl, 48_000), x_of(&s, tl, 96_000).min(1000.0));
+        assert!((l.x0 - cx0).abs() < 1e-3 && (l.x1 - cx1).abs() < 1e-3, "over the clip: {} {} vs {cx0} {cx1}", l.x0, l.x1);
+        assert_eq!(l.points.len(), 1);
+        let y = auto_y(lane_rect, lane_range(&tr, &AutoParam::Volume), -6.0);
+        assert!((l.points[0].y - y).abs() < 0.5, "at -6 dB: {} vs {y}", l.points[0].y);
+        // No lane of its own for pan: nothing shows.
+        assert!(clip_automation_lines(&s, &tr, &AutoParam::Pan(0), tl, lane_rect).is_empty());
     }
 
     #[test]

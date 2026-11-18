@@ -33,7 +33,7 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("automation.write_range", "Glide to Current was mis-aliased to it: needs a param and value"),
     (
         "clip.automation_point",
-        "for agents and the control channel until the Edit window draws a clip's own lanes (Move Track Automation into Clips writes them from the UI)",
+        "for agents and the control channel until the Edit window edits a clip's own lanes by mouse (it draws them; Move Track Automation into Clips writes them from the UI)",
     ),
     ("event.renumber_bars", "a no-op (bars start at 1)"),
     ("event.retrospective_record", "no live MIDI capture buffer feeds it"),
