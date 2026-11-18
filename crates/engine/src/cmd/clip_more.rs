@@ -227,9 +227,14 @@ fn effects_set(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn module_add(e: &mut Engine, p: &Value) -> Result<Value> {
     const ID: &str = "clip.module_add";
-    let plugin = p.get("plugin").and_then(Value::as_str).ok_or_else(|| bad(ID, "`plugin` must be a built-in effect's id"))?;
+    let plugin = p.get("plugin").and_then(Value::as_str).ok_or_else(|| bad(ID, "`plugin` must be an effect's id"))?;
     let Some(info) = soundcraft_mix::clip_module_plugin(plugin) else {
-        return Err(bad(ID, format!("{plugin} cannot go on a clip: only the built-in effects can (no instruments, meters or hosted plug-ins)")));
+        return Err(bad(
+            ID,
+            format!(
+                "{plugin} cannot go on a clip: the built-in effects and scanned CLAP and VST3 effects can (no instruments, meters or Audio Units)"
+            ),
+        ));
     };
     let ids: Vec<ClipId> = clip_ids_param(e, p);
     let s = e.session_mut();
@@ -288,7 +293,7 @@ fn module_set(e: &mut Engine, p: &Value) -> Result<Value> {
         let Some(at) = c.modules.iter().position(|x| x.id == m) else { continue };
         n += 1;
         if let Some(x) = c.modules.get_mut(at) {
-            let info = soundcraft_dsp::plugin_info(&x.plugin);
+            let info = soundcraft_mix::clip_module_plugin(&x.plugin);
             for (k, v) in &params {
                 // Only the module's own parameters, inside their range.
                 if let Some(q) = info.and_then(|i| i.params.iter().find(|q| q.id == k)) {

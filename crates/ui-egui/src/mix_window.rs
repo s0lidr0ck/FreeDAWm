@@ -1772,7 +1772,7 @@ fn hosted_groups(instruments: bool) -> (Vec<(String, Vec<MenuPlugin>)>, bool) {
 /// plugin stays reachable however many are installed. Until CLAP and VST3 have both scanned, or
 /// when nothing was found, a row at the bottom says so with a button that starts the scan in the
 /// background. Returns the id picked.
-fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
+pub(crate) fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
     let (groups, scanned) = hosted_groups(instruments);
     let max_h = (ui.ctx().content_rect().height() - 80.0).max(160.0);
     let mut picked = None;

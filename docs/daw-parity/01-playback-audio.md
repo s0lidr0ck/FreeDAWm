@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-17 · **Change:** minor (round three, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-18 · **Change:** minor (round three, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -133,7 +133,7 @@ Varispeed is the only whole-project speed control among the four.
 | Crossfades | ● | ● | ● | ● | **Works**: Edit › Fades › Create… gives each side its own shape and bend (`b6812b6`, section 4, F) |
 | Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Works**: Options › Overlap › Crossfade (section 4, D) |
 | Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Works**: 1 ms on edges without a fade that face silence (Setup › Preferences… › Editing › Automatic Edge Fades, on by default, length by command); butted clips play straight through; edits take the material unfaded |
-| Per-clip effects | ● | ● | ○ | ● | **Partial** (2026-11-17, 24696c4): after the clip's EQ → compressor → gain, a chain of up to eight of any built-in effect (`Clip::modules`; Clip Effects window › Modules: add, bypass, reorder, remove, every parameter; `clip.module_add`, `clip.module_set`, `clip.module_remove`). Instances per clip are made off the audio thread in `BuiltinPrep` and keep their state when the chain is reordered; the clip is read the chain's latency ahead so it is heard in place, and the chain's tail (a reverb's) rings on after the clip ends (at most 10 s); the offline clip render (Consolidate, Process, Render) hears the same. Copy/Paste/Clear Special › Clip Effects take the modules along. Left: hosted plug-ins (CLAP, VST3, AU) on a clip, which need their editor window and saved state per clip slot; a module's files (an amp's cabinet, Vault's impulse) are not loaded on a clip, so it uses its built-in one |
+| Per-clip effects | ● | ● | ○ | ● | **Partial** (2026-11-17, 24696c4; hosted plug-ins 2026-11-18): after the clip's EQ → compressor → gain, a chain of up to eight of any built-in effect or any scanned CLAP or VST3 effect (`Clip::modules`; Clip Effects window › Modules: Add… for the built-in ones, Plug-in… for hosted ones by vendor; bypass, reorder, remove, every parameter as a generic control; `clip.module_add`, `clip.module_set`, `clip.module_remove`). Instances per clip are made off the audio thread in `BuiltinPrep` (a hosted one on the host's control thread, never on the audio thread: one not handed over yet, or that failed to load, passes the clip through and the clip's other effects still play) and keep their state when the chain is reordered; the clip is read the chain's latency ahead so it is heard in place, and the chain's tail (a reverb's) rings on after the clip ends (at most 10 s); the offline clip render (Consolidate, Process, Render) and a bounce make their own from the session and hear the same. Saved per clip slot: each module's parameters. Copy/Paste/Clear Special › Clip Effects take the modules along. Left: a hosted plug-in's own editor window on a clip, and the state it keeps beyond its parameters (read back from the running instance and saved per slot, as an insert's is); Audio Units on a clip; a module's files (an amp's cabinet, Vault's impulse) are not loaded on a clip, so it uses its built-in one |
 | Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Works**: Process › Process History... keeps every Process on the clip and lets a step be bypassed, reordered or removed, the clip rebuilt from there (5d4ebe1, section 4). Left: a step cannot be changed while a later step changed the length |
 | Mute a clip | ● | ● | ● | ● | **Works** |
 | Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place (section 4, E) |
@@ -349,6 +349,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | hosted CLAP and VST3 effects on a clip (parameters; no editor window yet) |
 | 2026-11-17 | minor | Round three: busses render in parallel on the worker pool |
 | 2026-11-17 | minor | Round three: reverse playback through sends, busses and the master |
 | 2026-11-17 | minor | Round three: Clip Effects take any built-in effect as a chain of modules per clip |
