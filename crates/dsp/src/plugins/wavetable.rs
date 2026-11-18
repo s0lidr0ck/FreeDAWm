@@ -95,7 +95,7 @@ const MOD_WHEEL: usize = 35;
 pub static WAVETABLE_INFO: PluginInfo = PluginInfo {
     id: "wavetable_synth",
     name: "Wavetable Synth",
-    short_name: "Wavetable",
+    short_name: "WTSynth",
     category: Category::Instrument,
     params: &WT_PARAMS,
     is_instrument: true,
