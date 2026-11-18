@@ -1,7 +1,10 @@
 //! Clip › Sample Editor: one audio clip's samples in a window of their own, with its own zoom.
-//! Drag to select samples (Silence, Reverse, Invert, Gain act on them, in a copy of the file the
-//! clip then plays: `clip.sample_edit`); with Pencil on and zoomed in to the samples, a drag
-//! redraws them (`clip.draw_samples`). One undo step per edit or stroke.
+//! It shows the clip's window or, with Whole File, the whole file the clip plays. Drag to select
+//! samples (Silence, Reverse, Invert, Gain, Cut and Paste act on them, in a copy of the file the
+//! clip then plays: `clip.sample_edit`; Copy keeps them, `clip.sample_copy`; Loop plays them
+//! looped where the clip sits, `clip.sample_loop`); a click places the paste point. With Pencil
+//! on and zoomed in to the samples, a drag redraws them (`clip.draw_samples`). One undo step per
+//! edit or stroke.
 
 use crate::SoundApp;
 use crate::theme::Tokens;
@@ -18,8 +21,11 @@ struct View {
     spp: f64,
     scroll: f64,
     pencil: bool,
-    /// Selected samples (in the clip).
+    /// The whole file rather than the clip's window.
+    whole: bool,
+    /// Selected samples, or the paste point (from the first sample shown: the clip's or the file's).
     sel: Option<(Samples, Samples)>,
+    cursor: Option<Samples>,
     /// A selection drag's anchor, or a stroke's points (in the clip, value) and channel.
     anchor: Option<Samples>,
     stroke: Vec<(Samples, f32)>,
@@ -50,6 +56,9 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             v = View { clip: Some(clip.id), spp: clip.length as f64 / 600.0, gain_db: -3.0, ..View::default() };
         }
         let plain = clip.stretch == 1.0 && clip.warp.is_empty() && clip.loop_len == 0 && !clip.reversed;
+        let frames = clip.source().and_then(|x| app.engine.session().source(x)).map_or(0, |x| Samples::try_from(x.frames).unwrap_or(0));
+        // What the view spans, in frames of the file: the clip's window or the whole file.
+        let (base, extent) = if v.whole { (0, frames.max(1)) } else { (clip.source_offset(), clip.length.max(1)) };
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&clip.name).strong());
             if ui.small_button("−").on_hover_text("Zoom out").clicked() {
@@ -58,8 +67,17 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             if ui.small_button("+").on_hover_text("Zoom in").clicked() {
                 v.spp /= 2.0;
             }
-            if ui.small_button("Whole Clip").clicked() {
-                (v.spp, v.scroll) = (clip.length as f64 / ui.available_width().max(100.0) as f64, 0.0);
+            if ui.small_button("Show All").on_hover_text("Zoom out to everything shown").clicked() {
+                (v.spp, v.scroll) = (extent as f64 / ui.available_width().max(100.0) as f64, 0.0);
+            }
+            let was = v.whole;
+            crate::widgets::checkbox(ui, &mut v.whole, "Whole File").on_hover_text("Show and edit the whole file, beyond the clip's window");
+            if was != v.whole {
+                // Keep the selection on the same samples.
+                let d = if v.whole { clip.source_offset() } else { -clip.source_offset() };
+                v.sel = v.sel.map(|(a, b)| (a + d, b + d));
+                v.cursor = v.cursor.map(|c| c + d);
+                v.scroll = (v.scroll + d as f64).max(0.0);
             }
             crate::widgets::checkbox(ui, &mut v.pencil, "Pencil");
         });
@@ -68,8 +86,8 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         }
         let (resp, painter) = ui.allocate_painter(vec2(ui.available_width(), (ui.available_height() - 30.0).max(80.0)), Sense::click_and_drag());
         let r = resp.rect;
-        v.spp = v.spp.clamp(1.0 / 64.0, (clip.length.max(1) as f64 / f64::from(r.width().max(1.0))).max(1.0 / 64.0));
-        v.scroll = v.scroll.clamp(0.0, (clip.length as f64 - v.spp * f64::from(r.width())).max(0.0));
+        v.spp = v.spp.clamp(1.0 / 64.0, (extent as f64 / f64::from(r.width().max(1.0))).max(1.0 / 64.0));
+        v.scroll = v.scroll.clamp(0.0, (extent as f64 - v.spp * f64::from(r.width())).max(0.0));
         if resp.hovered() {
             // Wheel scrolls; Ctrl/Cmd + wheel zooms about the pointer.
             let (dy, zoom) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers.command || i.modifiers.ctrl));
@@ -90,6 +108,17 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             let sr = Rect::from_x_y_ranges(x_of(a as f64).max(r.min.x)..=x_of(b as f64).min(r.max.x), r.y_range());
             painter.rect_filled(sr, 0.0, Color32::from_rgba_unmultiplied(120, 160, 230, 50));
         }
+        if v.whole {
+            // The clip's window, outlined, in the whole file.
+            let (a, b) = (x_of(clip.source_offset() as f64), x_of((clip.source_offset() + clip.length) as f64));
+            let wr = Rect::from_x_y_ranges(a.max(r.min.x)..=b.min(r.max.x), r.y_range());
+            if wr.width() > 0.0 {
+                painter.rect_stroke(wr, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            }
+        }
+        if let Some(c) = v.cursor.filter(|_| v.sel.is_none()) {
+            painter.vline(x_of(c as f64), r.y_range(), Stroke::new(1.0, Color32::from_rgb(240, 200, 80)));
+        }
         let s = app.engine.session_arc();
         let audio = clip.source().and_then(|src| s.pool.get(src)).cloned();
         let channels = audio.as_ref().map_or(1, |a| a.num_channels()).max(1);
@@ -97,9 +126,9 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         let band = |ch: usize| Rect::from_min_size(pos2(r.min.x, r.min.y + h * ch as f32), vec2(r.width(), h));
         let y_of = |ch: usize, val: f32| band(ch).center().y - val.clamp(-1.0, 1.0) * h * 0.46;
         if let Some(a) = &audio {
-            let off = usize::try_from(clip.source_offset().max(0)).unwrap_or(0);
+            let off = usize::try_from(base.max(0)).unwrap_or(0);
             let first = v.scroll.floor().max(0.0) as usize;
-            let last = ((v.scroll + v.spp * f64::from(r.width())).ceil() as usize).min(usize::try_from(clip.length.max(0)).unwrap_or(0));
+            let last = ((v.scroll + v.spp * f64::from(r.width())).ceil() as usize).min(usize::try_from(extent.max(0)).unwrap_or(0));
             for ch in 0..channels {
                 let b = band(ch);
                 painter.hline(r.x_range(), b.center().y, Stroke::new(1.0, t.border));
@@ -134,7 +163,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             resp.clone().on_hover_text("Zoom in to the samples to draw them");
         }
         if let Some(p) = resp.interact_pointer_pos() {
-            let i = at_x(p.x).clamp(0, clip.length.saturating_sub(1).max(0));
+            let i = at_x(p.x).clamp(0, extent.saturating_sub(1).max(0));
             if resp.drag_started() || (resp.is_pointer_button_down_on() && v.anchor.is_none() && v.stroke.is_empty()) {
                 if can_draw {
                     v.stroke_ch = (((p.y - r.min.y) / h).floor().max(0.0) as usize).min(channels - 1);
@@ -149,6 +178,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 v.stroke.push((i, val));
             } else if let Some(a) = v.anchor {
                 v.sel = (a != i).then(|| (a.min(i), a.max(i)));
+                v.cursor = Some(i);
             }
         }
         if resp.drag_stopped() || resp.clicked() || (!resp.is_pointer_button_down_on() && (!v.stroke.is_empty() || v.anchor.is_some())) {
@@ -156,7 +186,8 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             let stroke = std::mem::take(&mut v.stroke);
             if let Some(values) = stroke_values(&stroke) {
                 let (from, vals) = values;
-                let p = json!({"clip": clip.id.0, "at": clip.start + from, "values": vals, "channel": v.stroke_ch});
+                let at = clip.start + base + from - clip.source_offset();
+                let p = json!({"clip": clip.id.0, "at": at, "values": vals, "channel": v.stroke_ch});
                 if let Err(e) = app.run("clip.draw_samples", p) {
                     app.ui.status = e;
                 }
@@ -164,9 +195,9 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         }
         ui.horizontal(|ui| {
             let sel = v.sel.filter(|_| plain);
+            let mut op = None;
             ui.add_enabled_ui(sel.is_some(), |ui| {
-                let mut op = None;
-                for (name, id) in [("Silence", "silence"), ("Reverse", "reverse"), ("Invert", "invert")] {
+                for (name, id) in [("Cut", "cut"), ("Silence", "silence"), ("Reverse", "reverse"), ("Invert", "invert")] {
                     if ui.button(name).clicked() {
                         op = Some(json!({"op": id}));
                     }
@@ -175,15 +206,41 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button("Gain").clicked() {
                     op = Some(json!({"op": "gain", "db": v.gain_db}));
                 }
-                if let (Some(mut p), Some((a, b))) = (op, sel) {
-                    p["clip"] = json!(clip.id.0);
-                    p["start"] = json!(clip.start + a);
-                    p["end"] = json!(clip.start + b);
-                    if let Err(e) = app.run("clip.sample_edit", p) {
-                        app.ui.status = e;
-                    }
+            });
+            let span = |a: Samples, b: Samples| json!({"clip": clip.id.0, "file_start": base + a, "file_end": base + b});
+            ui.separator();
+            ui.add_enabled_ui(v.sel.is_some(), |ui| {
+                if ui.button("Copy").on_hover_text("Copy the selected samples for Paste").clicked()
+                    && let Some((a, b)) = v.sel
+                    && let Err(e) = app.run("clip.sample_copy", span(a, b))
+                {
+                    app.ui.status = e;
+                }
+                if ui.button("Loop").on_hover_text("Play the selection looped, where the clip sits on the timeline").clicked()
+                    && let Some((a, b)) = v.sel
+                    && let Err(e) = app.run("clip.sample_loop", span(a, b))
+                {
+                    app.ui.status = e;
                 }
             });
+            let at = v.sel.or(v.cursor.map(|c| (c, c))).filter(|_| plain);
+            ui.add_enabled_ui(at.is_some() && !app.engine.sample_clipboard.is_empty(), |ui| {
+                if ui.button("Paste").on_hover_text("Put the copied samples in place of the selection, or at the clicked point").clicked() {
+                    op = Some(json!({"op": "paste"}));
+                }
+            });
+            if let (Some(mut p), Some((a, b))) = (op.filter(|_| at.is_some()), sel.or(at)) {
+                p["clip"] = json!(clip.id.0);
+                p["file_start"] = json!(base + a);
+                p["file_end"] = json!(base + b);
+                let cut = matches!(p["op"].as_str(), Some("cut" | "paste"));
+                if let Err(e) = app.run("clip.sample_edit", p) {
+                    app.ui.status = e;
+                } else if cut {
+                    // The audio after the edit point moved: the selection no longer marks it.
+                    (v.sel, v.cursor) = (None, Some(a));
+                }
+            }
             if let Some((a, b)) = v.sel {
                 ui.label(format!("{} samples selected", b - a));
             }

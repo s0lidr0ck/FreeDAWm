@@ -245,6 +245,9 @@ pub struct Engine {
     redo: Vec<HistoryEntry>,
     pub history_limit: usize,
     pub clipboard: Clipboard,
+    /// The Sample Editor's own clipboard: samples copied or cut inside a file, one buffer per
+    /// channel (`clip.sample_copy`, `clip.sample_edit` op `cut`, pasted by op `paste`).
+    pub sample_clipboard: Vec<Vec<f32>>,
     pub transport_requests: Vec<TransportRequest>,
     pub transport: TransportStatus,
     /// Command journal (id, params) for macro recording / agents.
@@ -359,6 +362,7 @@ impl Engine {
             redo: Vec::new(),
             history_limit: 200,
             clipboard: Clipboard::default(),
+            sample_clipboard: Vec::new(),
             transport_requests: Vec::new(),
             transport: TransportStatus::default(),
             journal: Vec::new(),

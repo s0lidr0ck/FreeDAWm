@@ -122,6 +122,50 @@ fn the_sample_editor_silences_a_selection() {
 }
 
 #[test]
+fn the_sample_editor_cuts_and_pastes_and_shows_the_whole_file() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    let t = TrackId(app.run("track.new", json!({"name": "Wave", "format": "mono"})).unwrap()["tracks"][0].as_u64().unwrap());
+    let s = app.engine.session_mut();
+    let ramp: Vec<f32> = (0..48_000).map(|i| i as f32 / 48_000.0).collect();
+    let src = soundcraft_engine::io::add_source(s, "ramp", AudioBuffer { sample_rate: 48_000, channels: vec![ramp] }, None, FileFormat::Wav);
+    let id = s.new_clip_id();
+    // The clip plays the middle half of the file.
+    soundcraft_engine::edit::place_clip(s, t, Clip::audio(id, "ramp", src, 12_000, 0, 24_000));
+    app.run("edit.select", json!({"clips": [id.0]})).unwrap();
+    soundcraft_ui_egui::menus::invoke_menu(&mut app, "window.sample_editor", "Process > More > Sample Editor");
+    let mut h = Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+        |ui, app: &mut SoundApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    steps(&mut h, 6);
+    let r = h.get_by_label("Silence").rect();
+    let from = pos2(r.min.x + 40.0, r.min.y - 80.0);
+    drag(&mut h, from, from + vec2(200.0, 0.0));
+    h.get_by_label("Cut").click();
+    steps(&mut h, 4);
+    let c = h.state().engine.session().track(t).unwrap().clips()[0].clone();
+    let frames = h.state().engine.session().pool.get(c.source().unwrap()).unwrap().frames();
+    let cut = 48_000 - frames;
+    assert!(cut > 1_000, "samples cut out of the file: {cut}");
+    assert_eq!(c.length, 24_000 - cut as i64, "the clip is as much shorter");
+    assert_eq!(h.state().engine.sample_clipboard.first().map(Vec::len), Some(cut), "kept for Paste");
+    // Paste at the clicked point puts them back.
+    h.get_by_label("Paste").click();
+    steps(&mut h, 4);
+    let c = h.state().engine.session().track(t).unwrap().clips()[0].clone();
+    assert_eq!(c.length, 24_000, "pasted back in");
+    // Whole File shows the file beyond the clip's window.
+    h.get_by_label("Whole File").click();
+    steps(&mut h, 4);
+    assert!(h.state().ui.show_sample_editor);
+}
+
+#[test]
 fn the_spectral_view_finds_a_tone_and_draws() {
     use soundcraft_ui_egui::spectral::{BANDS, FFT, band_of, column, heat};
     let rate = 48_000.0;
