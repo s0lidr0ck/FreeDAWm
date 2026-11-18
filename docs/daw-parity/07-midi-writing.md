@@ -158,7 +158,7 @@ The gaps are of four kinds:
 | Rows of different lengths, rates and directions | ○ | ● | ● | ◐ | **Works**, up to 64 steps |
 | Pattern variations | ○ | ● | ● | ● | **Works**: a pattern clip holds up to eight variations, A–H, each a full step grid of its own (tabs over the step grid pick the one edited; + adds a copy; right-click plays one in the clip or removes it). The clip plays its chosen variation, and a switch lane beside the tabs (a cell per bar) can name another for any bar. Fills and conditions work in every variation; recording into a pattern clip lands on the variation its bar plays. Variation A keeps its dice, so existing patterns play exactly as before (`pattern.variation_add`, `pattern.variation_remove`, `pattern.play`, `pattern.switch`; tests `variations_play_where_the_clip_and_its_switch_lane_say`, `variations_are_grids_of_their_own_and_the_switch_lane_picks_per_bar`) |
 | Turn a pattern into ordinary notes | ○ | ● | ● | ● | **Works** |
-| Step patterns for melodic instruments | ○ | ● | ● | ● | **Partial**: the drum machine's step sequencer; for a melodic part the MIDI Editor's grid and Write Arpeggio. Left: a step-pattern clip whose steps hold a pitch, on any instrument (design below, est. 4–6 h); not reached |
+| Step patterns for melodic instruments | ○ | ● | ● | ● | **Works**: Clip › New Step Sequence (`pattern.new_sequence`) makes a step pattern for any instrument: its notes go out on channel 1, each step holds a pitch (the row's note until set) and a gate (1–200 % of the step; every pattern has one now, half a step as before), with velocity, probability, nudge, roll, conditions and variations as the drum patterns have. In the step grid a lit step shows its note, a drag up or down moves it a semitone at a time, and the step's details have Pitch and Gate; Convert to MIDI keeps the notes. A drum pattern can be switched to melodic (`pattern.settings {melodic}`). Drum patterns saved before play and save exactly as they did (tests `melodic_steps_hold_their_pitch_and_gate_on_channel_one`, `a_step_sequence_holds_a_pitch_per_step_and_plays_on_any_instrument`) |
 
 ## G. Event list and score
 
@@ -598,3 +598,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-17 | minor | Score parts on their own pages and a staff size |
 | 2026-11-17 | minor | End states for the last open rows: MPE, pattern variations and melodic steps, chord track and audio, wavetable and FM, sampler zones (Pantry), synth editor, layer and split |
 | 2026-11-18 | minor | Pattern variations A–H and a per-bar switch lane |
+| 2026-11-18 | minor | Step sequences with a pitch per step, for any instrument |

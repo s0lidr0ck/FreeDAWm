@@ -1,6 +1,6 @@
 # Four-DAW parity, section 8: what only one of them has
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (tier 4) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (tier 4) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Other product names below (Dolby Atmos, Melodyne, Splice,
@@ -115,7 +115,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Round trip with the tablet edition and with MainStage | **Not planned here** | Apple's own apps and formats |
 | Chord ID from audio | **Works** | Detect Chords writes the chord lane |
 | Flashback capture | **Partial** | MIDI: Capture MIDI makes a take of what was just played ([section 6](06-midi-recording.md#g-punch-count-in-and-capture)); audio played before Record is not kept ([section 2](02-recording-audio.md)) |
-| Step Sequencer with note and automation rows; articulation sets | **Partial** | Drum step sequencer; no automation rows. Articulation sets are a track's articulations now (Studio Pro's row) |
+| Step Sequencer with note and automation rows; articulation sets | **Partial** | Drum step sequencer, and step sequences with a pitch per step for any instrument ([section 7](07-midi-writing.md)); no automation rows. Articulation sets are a track's articulations now (Studio Pro's row) |
 | Assistant that operates the app from a prompt (13, by subscription) | **Partial** | No assistant inside the app; an outside agent can operate every command (section F) |
 
 ## D. Cubase
@@ -512,3 +512,4 @@ includes a feature should be checked before being quoted.
 | 2026-11-17 | minor | Rows built elsewhere reconciled (arranger, lyrics in the score, scratch pads, global transpose for MIDI, score import, note rules); what is left on the others stated |
 | 2026-11-17 | minor | Field recordings: a clip expands to its location channels, and plays another take of its scene from its menu |
 | 2026-11-17 | minor | Show page, step 1: Window › Set List plays the session's songs in order, with Go On and a Stage View |
+| 2026-11-18 | minor | Step Sequencer row: melodic step sequences |
