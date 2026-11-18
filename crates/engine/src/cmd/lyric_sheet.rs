@@ -1,4 +1,4 @@
-//! The lyric sheet (Window › Lyrics): set and read the song's words, line by line with stable ids,
+//! The lyric sheet (Window › Transport & Session › Lyrics): set and read the song's words, line by line with stable ids,
 //! syllable counts and rhyme letters; rhyme suggestions. See `soundcraft_model::LyricSheet` and
 //! `crate::lyric_text`.
 

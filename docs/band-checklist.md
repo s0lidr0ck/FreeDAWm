@@ -1,6 +1,6 @@
 # The Band: owner's checklist
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** major (created) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-18 · **Change:** minor (copying chords; previously major: created) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
 
 The owner's hands-on pass over the Band, MIDI Studio's six musicians inside the DAW
 ([design](superpowers/specs/2026-10-21-band-design.md), [plan](superpowers/plans/2026-10-21-band.md)).
@@ -34,7 +34,9 @@ matches. When it doesn't, write what you saw under the line: the status bar text
   octave, articulations, …).
 - **The song:** View › Rulers › **Sections** and View › Rulers › **Chords** show the two
   lanes in the Edit window. Drag on a lane to lay a block or a chord; right-click for its menu;
-  double-click on Chords to type a chord.
+  double-click on Chords to type a chord. Chords copy as clips do: click one (Shift-click another
+  for the run between), then Ctrl/Cmd+C, X, V (at the insertion point), D, or Ctrl-drag a chord
+  to drop a copy; Left/Right move the pick.
 - **Window › Studio:** the song-wide controls. Key and Scale at the top, then four tabs:
   **Song** (the Band view, the factory songs, Import MIDI chords…, **Print…**), **Sections** (the
   definitions A–H), **Feel** (Natural / Classic, Tension, the song feel and its presets) and
@@ -115,6 +117,12 @@ matches. When it doesn't, write what you saw under the line: the status bar text
   the print: the clips are gone (or the clips they replaced are back) and every track's input is
   its musician again, in one undo step.
 
+- [ ] On the Chords ruler: click a chord, Shift-click the chord three bars on, Ctrl+C (Cmd+C);
+  click in a track at a later bar, Ctrl+V. Expected: the run lands there on the half bar with its
+  chords, lengths and gaps, outlined as the new pick; Ctrl+D then puts another copy straight
+  after; Ctrl+Z takes back one paste or duplicate at a time. Ctrl-drag a chord: a ghost with a "+"
+  follows, the copy drops on release and the original stays; Alt-drag still moves off the grid.
+
 ## 7. Band presets
 
 - [ ] Window › Studio › Band: Load **Funk Machine**. Expected: the six slots change (instruments,
@@ -154,4 +162,5 @@ while stopped, a per-song meter override and MIDI Studio's MIDI export tabs come
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Chords copy: Copy, Cut, Paste, Duplicate, Shift-click runs, arrows, Ctrl-drag copy (sections too) |
 | 2026-10-21 | major | Created: the owner's pass over the Band with real plugins |

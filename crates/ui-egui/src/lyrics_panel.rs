@@ -1,4 +1,4 @@
-//! The Lyrics tab (Window › Lyrics): a plain text editor bound to the session's lyric sheet. Each
+//! The Lyrics tab (Window › Transport & Session › Lyrics): a plain text editor bound to the session's lyric sheet. Each
 //! lyric line gets a dim number in the gutter; the right margin shows its syllable count and a
 //! rhyme letter (lines whose end words rhyme share a letter and colour, and the rhyme word is
 //! underlined in it). "{Verse 1}" lines are section headings. Chords are written in square

@@ -629,60 +629,107 @@ fn search_walk(nodes: &[MenuNode], words: &[String], extra: &[(&str, &str)], out
     }
 }
 
-/// The search field at the right of the menu bar: type a few letters of any menu item, pick it
-/// from the list under the field (Enter takes the first one that can run, Esc clears). Each
-/// match shows the menu it lives in, and one that cannot run now says why when hovered.
+/// The search field at the right of the menu bar: type a few letters of any menu item and pick
+/// it from the list under the field. Up and Down move through the matches that can run, Enter
+/// runs the lit one, Esc clears. Each row shows the item's name on the left and the menu it
+/// lives in on the right; one that cannot run now is greyed and says why when hovered.
 fn menu_search(app: &mut SoundApp, ui: &mut egui::Ui) {
+    let t = crate::theme::Tokens::current();
     let id = egui::Id::new("menu_bar_search");
     let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let mut pick: usize = ui.data(|d| d.get_temp(id.with("pick"))).unwrap_or(0);
+    // The field is a box of its own on the bar, so it reads as a place to type while empty.
     let resp = ui
-        .add(egui::TextEdit::singleline(&mut text).id(id.with("field")).hint_text("Search menus").desired_width(170.0))
-        .on_hover_text("Find any menu item by name");
+        .scope(|ui| {
+            let v = ui.visuals_mut();
+            v.extreme_bg_color = t.panel_bg;
+            v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, t.text_dim.gamma_multiply(0.5));
+            v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, t.text_dim);
+            ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .id(id.with("field"))
+                    .hint_text("\u{1F50D} Search menus")
+                    .desired_width(190.0)
+                    .margin(egui::Margin::symmetric(6, 1)),
+            )
+        })
+        .inner;
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search menus"));
     let mut done = false;
+    if resp.changed() {
+        pick = 0;
+    }
     if !text.trim().is_empty() {
         let extra = ui_aliases();
         let hits = search_hits(&text, &extra);
-        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let mut first = true;
+        let shown = &hits[..hits.len().min(SEARCH_SHOWN)];
+        let usable: Vec<usize> = (0..shown.len()).filter(|&i| item_state(app, &shown[i].1, Some(&shown[i].2)).0).collect();
+        let (down, up, enter) =
+            ui.input(|i| (i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::Enter)));
+        if !usable.is_empty() {
+            let at = usable.iter().position(|&i| i == pick).unwrap_or(0);
+            let at = if down {
+                (at + 1) % usable.len()
+            } else if up {
+                (at + usable.len() - 1) % usable.len()
+            } else {
+                at
+            };
+            pick = usable[at];
+        }
+        let enter = enter && (resp.lost_focus() || resp.has_focus());
         let list = egui::Area::new(id.with("hits"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(resp.rect.right_bottom() + egui::vec2(0.0, 4.0))
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(340.0);
-                    if hits.is_empty() {
-                        ui.label("No menu item matches");
-                    }
-                    for (label, path, cmd) in hits.iter().take(SEARCH_SHOWN) {
-                        let (enabled, _) = item_state(app, path, Some(cmd));
-                        let menu = path.rsplit_once(" > ").map_or("", |(m, _)| m).replace(" > ", " \u{203a} ");
-                        let mut r = ui.add_enabled(enabled, egui::Button::new(label.as_str()).shortcut_text(menu));
-                        if let Some(why) = disabled_reason(app, Some(cmd)) {
-                            r = r.on_disabled_hover_text(why);
+                    ui.set_width(380.0);
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                        if shown.is_empty() {
+                            ui.label(egui::RichText::new("No menu item matches").color(t.text_dim));
                         }
-                        if !done && (r.clicked() || (enter && enabled && first)) {
-                            invoke_menu(app, cmd, path);
-                            done = true;
+                        for (i, (label, path, cmd)) in shown.iter().enumerate() {
+                            let enabled = usable.contains(&i);
+                            let menu = path.rsplit_once(" > ").map_or("", |(m, _)| m).replace(" > ", " \u{203a} ");
+                            let row = egui::Button::new(label.as_str())
+                                .shortcut_text(egui::RichText::new(menu).color(t.text_dim))
+                                .selected(enabled && i == pick);
+                            let mut r = ui.add_enabled(enabled, row);
+                            if let Some(why) = disabled_reason(app, Some(cmd)) {
+                                r = r.on_disabled_hover_text(why);
+                            }
+                            if r.hovered() && enabled {
+                                pick = i;
+                            }
+                            if !done && (r.clicked() || (enter && enabled && i == pick)) {
+                                invoke_menu(app, cmd, path);
+                                done = true;
+                            }
                         }
-                        first &= !enabled;
-                    }
-                    if hits.len() > SEARCH_SHOWN {
-                        ui.label(egui::RichText::new(format!("{} more: keep typing", hits.len() - SEARCH_SHOWN)).small());
-                    }
+                        if hits.len() > SEARCH_SHOWN {
+                            ui.label(egui::RichText::new(format!("{} more: keep typing", hits.len() - SEARCH_SHOWN)).small().color(t.text_dim));
+                        }
+                    });
                 });
             });
         let away = resp.clicked_elsewhere() && list.response.clicked_elsewhere();
         if away || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             done = true;
+        } else if (down || up) && !resp.has_focus() {
+            // The arrows move through the list, not out of the field.
+            resp.request_focus();
         }
     }
     if done {
         text.clear();
+        pick = 0;
         resp.surrender_focus();
     }
-    ui.data_mut(|d| d.insert_temp(id, text));
+    ui.data_mut(|d| {
+        d.insert_temp(id, text);
+        d.insert_temp(id.with("pick"), pick);
+    });
 }
 
 /// Track › Instrument: the instrument picker for the selected instrument track (#374).
@@ -1536,7 +1583,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if id == "ui.vocal_editor" {
         return Some(crate::vocal_editor::open_command(app, p));
     }
-    // The Vocal Studio: the editor over every vocal track (Window › Vocal Studio toggles it).
+    // The Vocal Studio: the editor over every vocal track (Window › Editors › Vocal Studio toggles it).
     if id == "ui.vocal_studio" {
         return Some(crate::vocal_editor::studio::command(app, p));
     }

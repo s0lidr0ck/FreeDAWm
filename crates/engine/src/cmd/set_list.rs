@@ -139,7 +139,7 @@ fn play(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let s = e.session();
     if s.set_list.is_empty() {
-        return Err(bad(PLAY, "the set list is empty: add songs in Window › Set List"));
+        return Err(bad(PLAY, "the set list is empty: add songs in Window › Transport & Session › Set List"));
     }
     let i = match p.get("index") {
         Some(_) => index(p, "index", PLAY, s.set_list.len())?,

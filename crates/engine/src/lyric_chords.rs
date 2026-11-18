@@ -1,4 +1,4 @@
-//! Chords in the lyric sheet (Window › Lyrics): `[Am]` inline before the syllable it falls on,
+//! Chords in the lyric sheet (Window › Transport & Session › Lyrics): `[Am]` inline before the syllable it falls on,
 //! headings `{Verse 1}` ([`soundcraft_model::sheet_chords`]). Here: the text and ChordPro exports,
 //! reading a text or ChordPro file into a sheet, and the two moves between a line placed on the
 //! Lyrics ruler and the Chords ruler (sending the line's chords there, taking the ruler's chords

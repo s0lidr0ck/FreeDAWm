@@ -1,6 +1,6 @@
 # The lyric sheet
 
-**Window › Lyrics** is a plain text editor for the song's words. FreeDAWm numbers the lyric lines,
+**Window › Transport & Session › Lyrics** is a plain text editor for the song's words. FreeDAWm numbers the lyric lines,
 counts their syllables, letters their rhymes and keeps each line in step with its marker on the
 Lyrics ruler and with the Teleprompter. This page covers how the sheet is written: section
 headings, chords, and how chords move between the sheet and the Chords ruler.

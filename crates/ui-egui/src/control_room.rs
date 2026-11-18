@@ -1,4 +1,4 @@
-//! Window › Control Room: the monitor speakers (sets with level, dim, mono and mute), the listen
+//! Window › Transport & Session › Control Room: the monitor speakers (sets with level, dim, mono and mute), the listen
 //! level of AFL/PFL solo, the cue mixes with their sends, and talkback (the Talk button, or F11
 //! held while the session has a control room with a talkback input). Every control runs a
 //! `monitor.*` command.

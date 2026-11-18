@@ -1,4 +1,4 @@
-//! Window › Mix in Separate Window: Edit stays in the main window, and closing the Mix window
+//! Window › Separate Windows › Mix in Separate Window: Edit stays in the main window, and closing the Mix window
 //! brings Mix back into it.
 use egui::vec2;
 use egui_kittest::Harness;

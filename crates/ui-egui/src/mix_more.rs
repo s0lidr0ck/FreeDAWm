@@ -1,4 +1,4 @@
-//! More Mix windows (Window › New Mix Window): each in its own native window, with its own find
+//! More Mix windows (Window › Separate Windows › New Mix Window): each in its own native window, with its own find
 //! filter and spill ([`crate::mix_find`] keeps one per window) and its own shown sections (its
 //! Sections menu), as Pro Tools' several Mix windows and Cubase's MixConsoles 1 to 4 have. The
 //! first Mix window (in the main window or Mix in Separate Window) keeps View › Mix Window Views.

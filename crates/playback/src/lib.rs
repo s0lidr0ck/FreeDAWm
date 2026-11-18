@@ -692,7 +692,7 @@ fn new_engine(sr: f32, max_block: usize) -> MixEngine {
     // Built-in modules and Clip Effects come made from the UI thread too (`Side::builtins`).
     m.set_prepared_builtins(true);
     m.metronome = true;
-    // The master's loudness meter (Window › Loudness Meter) reads the live mix.
+    // The master's loudness meter (Window › Transport & Session › Loudness Meter) reads the live mix.
     m.set_loudness_metering(true);
     m
 }

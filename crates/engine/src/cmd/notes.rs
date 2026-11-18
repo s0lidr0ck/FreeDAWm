@@ -1,4 +1,4 @@
-//! Session notes (Window › Notes): add, edit (text, done, pin, order), delete, list. Each edit is
+//! Session notes (Window › Transport & Session › Notes): add, edit (text, done, pin, order), delete, list. Each edit is
 //! one undo step; typing into a note joins one step per note (`Engine::execute_merged`).
 
 use super::*;

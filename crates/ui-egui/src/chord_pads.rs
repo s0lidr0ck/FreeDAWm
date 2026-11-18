@@ -1,4 +1,4 @@
-//! Chord Pads (Window › Chord Pads…): eight pads, each a chord of the key on the Key
+//! Chord Pads (Window › Editors › Chord Pads…): eight pads, each a chord of the key on the Key
 //! ruler at the playhead (else the band's): the seven triads of its scale (I ii iii IV V vi vii°
 //! in major) and the dominant seventh, voiced from the octave the window sets. Holding a pad
 //! plays its chord, letting go stops it. The notes go out on the Musical Typing port, so every

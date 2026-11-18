@@ -1,4 +1,4 @@
-//! Alternate lines and drafts (Window › Lyrics): a line can hold alternate versions, one active
+//! Alternate lines and drafts (Window › Transport & Session › Lyrics): a line can hold alternate versions, one active
 //! (what the sheet, the Lyrics ruler marker and the Teleprompter show); a draft is a named
 //! snapshot of the whole sheet that can be restored (undoable) or compared.
 

@@ -144,7 +144,7 @@ The gaps are of four kinds:
 | Chord track | ◐ | ● | ● | ● | **Partial**: a chord lane feeds the Band, Cleanup, Write Progression and MIDI clips that follow it; shown above the editor. Audio following the chord track is **not planned here**: it needs polyphonic note editing of audio (Studio Pro's Harmonic Editing, Melodyne-style detection), which FreeDAWm does not have; monophonic audio can be moved by hand in the Vocal Editor |
 | Chords detected from MIDI or audio | ◐ | ● | ● | ● | **Works** (Detect Chords) |
 | Clips follow the chord track when it changes | ○ | ● | ● | ● | **Works** per clip, opt in (More › Follow Chord Lane, `clip.follow_chords`): the clip keeps the chords it was written against; when the chord lane or the band key changes, its chord tones go to the nearest tone of the new chord and other notes move as the root does, in the same undo step. Destructive (the notes are rewritten); the Band is unchanged |
-| Chord stamp tool, chord pads | ○ | ◐ | ◐ | ● | **Works**: More › Chord Stamp makes the Pencil draw a chord on the note clicked (major, minor, 7, maj7, m7, sus4, dim, aug, or the triad in key). Window › Chord Pads… opens eight pads from the key on the Key ruler at the playhead (its seven triads, I ii iii IV V vi vii° in major, and V7), an octave setting; holding a pad plays its chord on the Musical Typing input, so armed or monitored instrument tracks hear it and a take records it. Pads are not yet played from a MIDI keyboard's keys |
+| Chord stamp tool, chord pads | ○ | ◐ | ◐ | ● | **Works**: More › Chord Stamp makes the Pencil draw a chord on the note clicked (major, minor, 7, maj7, m7, sus4, dim, aug, or the triad in key). Window › Editors › Chord Pads… opens eight pads from the key on the Key ruler at the playhead (its seven triads, I ii iii IV V vi vii° in major, and V7), an octave setting; holding a pad plays its chord on the Musical Typing input, so armed or monitored instrument tracks hear it and a take records it. Pads are not yet played from a MIDI keyboard's keys |
 | Wrong notes corrected against key and chords, switchable | ○ | ○ | ○ | ○ | **Works** (MIDI Cleanup, non-destructive) |
 
 ## F. Drums and patterns
@@ -361,7 +361,7 @@ conditions; actions from a table (a velocity curve) and random ranges; rules sav
 editor that acts on tracks and plug-ins (Cubase's Project Logical Editor). Est. 6–8 h.
 ### Chord pads (E)
 
-A pad window (Window › Chord Pads): 8 pads, each a chord (root, quality, voicing, inversion)
+A pad window (Window › Editors › Chord Pads): 8 pads, each a chord (root, quality, voicing, inversion)
 filled from the key on the Key ruler (I ii iii IV V vi vii° and one free pad) or set by hand.
 Clicking a pad (or its key: the eight keys of a MIDI keyboard's lowest octave when Pads Take
 Input is on) plays the chord on the selected instrument track through the same audition path

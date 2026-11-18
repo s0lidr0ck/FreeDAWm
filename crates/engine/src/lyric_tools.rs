@@ -1,4 +1,4 @@
-//! Lyric writing tools (Window › Lyrics, round 2): rhyme types across all words of the sheet, and
+//! Lyric writing tools (Window › Transport & Session › Lyrics, round 2): rhyme types across all words of the sheet, and
 //! line-to-line fit (syllables and stress against the same line of the section's first take).
 //! Built on [`crate::lyric_text`] and the bundled [`crate::lexicon`].
 

@@ -2,17 +2,22 @@
 //!
 //! - **Sections:** blocks of the song's section definitions (A–H), drawn `<letter> · <name>` in
 //!   the letter's colour. A drag on empty space draws a block with the last letter picked (A at
-//!   first); a drag on a body moves it (Alt copies it) and a drag on an edge resizes it. Right-click
-//!   picks the letter, the arrangement chips (Energy, Take), opens the definition or deletes.
+//!   first); a drag on a body moves it (Ctrl copies it, as Ctrl-dragging a clip does) and a drag on
+//!   an edge resizes it. Right-click picks the letter, the arrangement chips (Energy, Take), opens
+//!   the definition or deletes.
 //! - **Chords** (id `band_chords`): the chord lane, named by `chord_theory::name_for`. A
 //!   double-click opens the chord picker (`chord_picker`) on empty space or on a chord; a drag on a
-//!   body or an edge moves or resizes it (Alt: off the grid); a click picks it for Delete.
-//!   Right-click edits, deletes (one, those in the selection, or all: `ruler_items`) or picks the
-//!   bass.
+//!   body or an edge moves or resizes it (Alt: off the grid; Ctrl on a body: drops a copy and
+//!   leaves the chord, as Ctrl-dragging a clip does). A click picks a chord, a Shift-click the run
+//!   from the chord picked to it; the keys then act on the pick (`ruler_items::chord_key`: Delete,
+//!   Copy, Cut, Paste at the insertion, Duplicate, Left/Right). Right-click edits, copies, cuts,
+//!   pastes there, duplicates, deletes (the pick, those in the selection, or all: `ruler_items`) or
+//!   picks the bass.
 //!
 //! Every edit is a `band.*` command. Positions go out in samples and the engine snaps them to the
 //! half-bar grid ([`soundcraft_mix::half_ticks`]); the previews here snap the same way. An
-//! Alt-drag of a chord sends `snap: false` and keeps the tick under the pointer.
+//! Alt-drag of a chord sends `snap: false` and keeps the tick under the pointer. Ctrl and Alt can
+//! be pressed or let go during a drag: the ghost (with a "+" while it copies) follows.
 
 use crate::SoundApp;
 use crate::edit_window::{sample_at, x_of};
@@ -166,8 +171,9 @@ fn ghost(d: Drag, now: i64, g: &Grid, copy: bool, free: bool) -> Ghost {
     }
 }
 
-/// Runs a lane's drag: the ghost while dragging, and the finished one on release. Alt copies on a
-/// lane that `draws` (Sections) and frees the grid on one that doesn't (Chords).
+/// Runs a lane's drag: the ghost while dragging, and the finished one on release. Ctrl on a body
+/// copies (on both lanes, as a Ctrl-drag copies a clip); Alt frees the grid on a lane that doesn't
+/// `draw` (Chords). Both are read every frame, so they can change mid-drag.
 fn drag(ui: &Ui, resp: &Response, g: &Grid, items: &[Item], key: Id, draws: bool) -> (Option<Ghost>, Option<Ghost>) {
     if resp.drag_started() {
         let origin = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
@@ -191,8 +197,8 @@ fn drag(ui: &Ui, resp: &Response, g: &Grid, items: &[Item], key: Id, draws: bool
         ui.ctx().data_mut(|m| m.remove::<Drag>(key));
     }
     let Some(p) = pointer else { return (None, None) };
-    let alt = ui.input(|i| i.modifiers.alt);
-    let gh = ghost(d, g.tick_at(p.x), g, alt && draws, alt && !draws);
+    let (ctrl, alt) = ui.input(|i| (i.modifiers.ctrl, i.modifiers.alt));
+    let gh = ghost(d, g.tick_at(p.x), g, ctrl, alt && !draws);
     if stopped {
         (None, Some(gh))
     } else if going {
@@ -235,6 +241,12 @@ fn block(painter: &Painter, r: Rect, fill: Color32, stroke: Color32, label: impl
 fn draw_ghost(painter: &Painter, g: &Grid, row: Rect, gh: Ghost, color: Color32) {
     let r = span_rect(g, row, gh.start, gh.end);
     painter.rect(r, 2.0, color.gamma_multiply(0.35), Stroke::new(1.5, color), StrokeKind::Inside);
+    // A copy drops where the ghost is and leaves the original: a "+" says so.
+    if gh.copy {
+        let c = pos2(r.max.x - 7.0, r.center().y);
+        painter.circle_filled(c, 5.5, color);
+        painter.text(c, Align2::CENTER_CENTER, "+", bold(11.0), Color32::WHITE);
+    }
 }
 
 /// Runs `id` (one undo step), first making the section definition `letter` when it is missing.
@@ -451,8 +463,10 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
     let items: Vec<Item> = band.chords.iter().map(|c| Item { id: c.id, start: c.tick, end: c.tick.saturating_add(c.length_ticks) }).collect();
     let id = ui.id().with(CHORDS);
     let resp = ui.interact(row, id, Sense::click_and_drag());
+    let resp = resp.on_hover_text(CHORDS_HINT);
     let (live, done) = drag(ui, &resp, &g, &items, id, false);
-    let moving = live.and_then(|gh| gh.id);
+    let moving = live.filter(|gh| !gh.copy).and_then(|gh| gh.id);
+    let picked_run = crate::ruler_items::picked_chords(app);
     let (fill, stroke) = (t.button, t.border);
     // Chords narrower than this are drawn as one run each (thousands fit in a screen).
     let mut run: Option<Rect> = None;
@@ -473,7 +487,7 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
             continue;
         }
         let f = if moving == Some(c.id) { fill.gamma_multiply(0.4) } else { fill };
-        let picked = app.ui.ruler_item == Some(crate::ruler_items::RulerItem::Chord(c.id));
+        let picked = picked_run.contains(&c.id);
         block(painter, r, f, if picked { t.accent } else { stroke }, || name_for(i32::from(c.slot), key, scale, i32::from(c.bass)), t.text);
         if picked {
             painter.rect_stroke(r, 2.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
@@ -487,11 +501,15 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
     }
     flash(ui, painter, &g, row, s);
     edge_cursor(ui, &resp, &g, &items, live);
-    // A click picks a chord (Delete removes it).
+    // A click picks a chord, a Shift-click the run from the chord picked to it (Delete, Copy…).
     if resp.clicked()
         && let Some((it, _)) = resp.interact_pointer_pos().and_then(|p| hit(&items, &g, p.x))
     {
-        crate::ruler_items::pick(app, crate::ruler_items::RulerItem::Chord(it.id));
+        if ui.input(|i| i.modifiers.shift) {
+            crate::ruler_items::extend_chord_pick(app, it.id);
+        } else {
+            crate::ruler_items::pick(app, crate::ruler_items::RulerItem::Chord(it.id));
+        }
     }
     if resp.double_clicked()
         && let Some(p) = resp.interact_pointer_pos()
@@ -502,13 +520,24 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
         }
     }
     let target = menu_target(ui, &resp, &g, &items, ui.id().with(MENU).with(CHORDS));
+    // Where the menu opened, for Paste Here.
+    let at_key = ui.id().with(MENU).with(CHORDS).with("at");
+    if resp.secondary_clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let at = g.samples(g.tick_at(p.x));
+        ui.ctx().data_mut(|m| m.insert_temp(at_key, at));
+    }
+    let menu_at = ui.ctx().data(|m| m.get_temp::<Samples>(at_key)).unwrap_or(0);
+    // A right-click on a chord picks it, or keeps the run it is in.
     if resp.secondary_clicked()
         && let Some(id) = target
+        && !(crate::ruler_items::pick_is_live(app) && picked_run.contains(&id))
     {
         crate::ruler_items::pick(app, crate::ruler_items::RulerItem::Chord(id));
     }
     resp.context_menu(|ui| {
-        chord_menu(app, ui, target);
+        chord_menu(app, ui, target, menu_at);
         ui.separator();
         crate::menus::ruler_menu_head(app, ui, "band_chords");
         crate::menus::rulers_submenu(app, ui);
@@ -520,10 +549,21 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
         let (a, b) = (g.samples(gh.start), g.samples(gh.end));
         // The ghost is already where the chord goes (snapped, or off the grid with Alt): the engine
         // keeps it exactly, so a resize moves only the edge dragged.
-        let p = if gh.resize { json!({"chord": cid, "at": a, "end": b, "snap": false}) } else { json!({"chord": cid, "at": a, "snap": false}) };
-        let _ = app.run("band.chord.set", p);
+        if gh.copy && !gh.resize {
+            // Ctrl: a copy drops there (one undo step) and becomes the pick; the chord stays.
+            match app.run("band.chords.copy_to", json!({"chords": [cid], "to": a, "snap": false})) {
+                Ok(r) => crate::ruler_items::pick_chord_run(app, &crate::ruler_items::new_ids(&r)),
+                Err(e) => app.ui.status = e,
+            }
+        } else {
+            let p = if gh.resize { json!({"chord": cid, "at": a, "end": b, "snap": false}) } else { json!({"chord": cid, "at": a, "snap": false}) };
+            let _ = app.run("band.chord.set", p);
+        }
     }
 }
+
+/// The Chords ruler's hover text.
+const CHORDS_HINT: &str = "Click a chord to pick it, Shift-click another for the run between · Drag to move (Alt: off the grid, Ctrl: drop a copy) · Double-click to add or edit · Delete, Copy, Cut, Paste, Duplicate and Left/Right act on the pick";
 
 /// Where a double-click on empty Chords ruler space at `tick` starts a chord: the half bar
 /// `snapped`, kept out of the chords either side (off-grid ones, from Detect Chords "As played",
@@ -562,12 +602,34 @@ fn flash(ui: &Ui, painter: &Painter, g: &Grid, row: Rect, s: &Session) {
     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((until - now).max(0.0)));
 }
 
-/// A chord's right-click menu (Edit Chord…, Delete Chord, the clear items, then Bass); on
-/// empty space, the clear items and a hint.
-fn chord_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
+/// "Paste Here" at `at` (snapped to the half bar), greyed until chords are copied.
+fn paste_here(app: &mut SoundApp, ui: &mut Ui, at: Samples) {
+    let keys = crate::menus::shortcut_text(app, "edit.paste", ui.ctx().os().is_mac());
+    let can = crate::ruler_items::chords_copied(app);
+    let hint = if app.engine.clipboard.tracks.is_empty() { "Copy a chord first" } else { "The clipboard holds clips: copy a chord first" };
+    if ui.add_enabled(can, egui::Button::new("Paste Here").shortcut_text(keys)).on_disabled_hover_text(hint).clicked() {
+        ui.close();
+        crate::ruler_items::paste_chords(app, at);
+    }
+}
+
+/// What a chord menu's clipboard items do, once the menu is drawn.
+enum ChordPick {
+    Copy,
+    Cut,
+    Duplicate,
+    Delete,
+}
+
+/// A chord's right-click menu (Edit Chord…; Copy, Cut, Paste Here, Duplicate; Delete; the clear
+/// items, then Bass). Copy, Cut, Duplicate and Delete act on the pick: the chord, or the run it is
+/// in. On empty space: Paste Here, the clear items and a hint.
+fn chord_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>, at: Samples) {
     let band = &app.engine.session().band;
     let Some(c) = target.and_then(|id| band.chords.iter().find(|c| c.id == id).cloned()) else {
         ui.label("Double-click to add a chord");
+        ui.separator();
+        paste_here(app, ui, at);
         ui.separator();
         crate::ruler_items::chord_clear_items(app, ui);
         return;
@@ -579,7 +641,31 @@ fn chord_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
         super::chord_picker::open(app, c.tick, Some(c.id));
         ui.close();
     }
-    let delete = ui.add(egui::Button::new("Delete Chord").shortcut_text("Del")).clicked();
+    // The pick (the right-click made it, or kept the run the chord is in).
+    let run = Some(crate::ruler_items::picked_chords(app)).filter(|r| r.contains(&c.id)).unwrap_or_else(|| vec![c.id]);
+    let what = if run.len() > 1 { format!("{} Chords", run.len()) } else { "Chord".to_string() };
+    let mac = ui.ctx().os().is_mac();
+    let keys = |app: &SoundApp, id: &str| crate::menus::shortcut_text(app, id, mac);
+    ui.separator();
+    let mut clip = None;
+    if ui.add(egui::Button::new(format!("Copy {what}")).shortcut_text(keys(app, "edit.copy"))).clicked() {
+        clip = Some(ChordPick::Copy);
+    }
+    if ui.add(egui::Button::new(format!("Cut {what}")).shortcut_text(keys(app, "edit.cut"))).clicked() {
+        clip = Some(ChordPick::Cut);
+    }
+    paste_here(app, ui, at);
+    if ui
+        .add(egui::Button::new(format!("Duplicate {what}")).shortcut_text(keys(app, "edit.duplicate")))
+        .on_hover_text("A copy straight after it")
+        .clicked()
+    {
+        clip = Some(ChordPick::Duplicate);
+    }
+    ui.separator();
+    if ui.add(egui::Button::new(format!("Delete {what}")).shortcut_text("Del")).clicked() {
+        clip = Some(ChordPick::Delete);
+    }
     ui.separator();
     crate::ruler_items::chord_clear_items(app, ui);
     ui.separator();
@@ -593,10 +679,29 @@ fn chord_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
             }
         }
     });
-    if delete {
+    if let Some(k) = clip {
         ui.close();
-        crate::ruler_items::unpick(app);
-        let _ = app.run("band.chord.remove", json!({"chord": c.id}));
+        let ctx = ui.ctx().clone();
+        match k {
+            ChordPick::Copy => {
+                crate::ruler_items::copy_chords(app, &ctx, &run);
+            }
+            ChordPick::Cut => {
+                if crate::ruler_items::copy_chords(app, &ctx, &run) {
+                    crate::ruler_items::unpick(app);
+                    let _ = app.run("band.chords.delete", json!({"chords": run}));
+                }
+            }
+            ChordPick::Duplicate => crate::ruler_items::duplicate_chords(app, &run),
+            ChordPick::Delete => {
+                crate::ruler_items::unpick(app);
+                let _ = if run.len() > 1 {
+                    app.run("band.chords.delete", json!({"chords": run}))
+                } else {
+                    app.run("band.chord.remove", json!({"chord": c.id}))
+                };
+            }
+        }
     } else if let Some(p) = pick {
         ui.close();
         let _ = app.run("band.chord.set", p);

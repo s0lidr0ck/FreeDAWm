@@ -14,7 +14,7 @@ pub enum MarkerKind {
     None,
 }
 
-/// A memory location (Window › Memory Locations).
+/// A memory location (Window › Transport & Session › Memory Locations).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MemoryLocation {
     pub id: MarkerId,
@@ -53,7 +53,7 @@ fn one() -> u8 {
     1
 }
 
-/// A song of the show's set list (Window › Set List): a memory location holding a range,
+/// A song of the show's set list (Window › Transport & Session › Set List): a memory location holding a range,
 /// played from its start to its end; then the transport stops on the next song, or with
 /// `go_on` goes straight on to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

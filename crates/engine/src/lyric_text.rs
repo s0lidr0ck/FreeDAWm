@@ -1,4 +1,4 @@
-//! Lyric-sheet text helpers (Window › Lyrics): syllable counts, stress and end-rhyme keys from the
+//! Lyric-sheet text helpers (Window › Transport & Session › Lyrics): syllable counts, stress and end-rhyme keys from the
 //! bundled pronouncing dictionary ([`crate::lexicon`], once loaded), falling back for words it
 //! lacks (and until it has loaded) to heuristics with small exception tables; the rhyme letters of
 //! a sheet's lines; offline rhyme suggestions.

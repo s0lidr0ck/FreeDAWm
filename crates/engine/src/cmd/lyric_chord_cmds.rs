@@ -1,4 +1,4 @@
-//! Chords in the lyric sheet (Window › Lyrics): send a placed line's chords to the Chords ruler,
+//! Chords in the lyric sheet (Window › Transport & Session › Lyrics): send a placed line's chords to the Chords ruler,
 //! take the ruler's chords into a line (each one undo step; no automatic syncing), export the sheet
 //! as text (with or without chords) or ChordPro, and import a text or ChordPro file. See
 //! `crate::lyric_chords`.
@@ -72,7 +72,7 @@ fn has_sheet(e: &Engine) -> std::result::Result<(), String> {
     if e.session().lyric_sheet.lines.iter().any(|l| !l.text.trim().is_empty()) {
         Ok(())
     } else {
-        Err("the lyric sheet is empty (Window › Lyrics)".into())
+        Err("the lyric sheet is empty (Window › Transport & Session › Lyrics)".into())
     }
 }
 

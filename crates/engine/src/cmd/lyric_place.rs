@@ -45,7 +45,7 @@ fn has_lines(e: &Engine) -> std::result::Result<(), String> {
     if e.session().lyric_sheet.kinds().iter().any(|k| matches!(k, LineKind::Lyric(_))) {
         Ok(())
     } else {
-        Err("the lyric sheet has no lines (Window › Lyrics)".into())
+        Err("the lyric sheet has no lines (Window › Transport & Session › Lyrics)".into())
     }
 }
 

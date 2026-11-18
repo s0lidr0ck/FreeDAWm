@@ -1,6 +1,6 @@
 //! Mixer snapshots: store the strips' settings under a name, recall them whole or by section
 //! (faders, pan, mutes, sends, inserts, routing, delay) on every track or a chosen few. Each
-//! store and recall is one undo step. Window › Mix Snapshots is their window.
+//! store and recall is one undo step. Window › Transport & Session › Mix Snapshots is their window.
 
 use super::*;
 use crate::cmd;

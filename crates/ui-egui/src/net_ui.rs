@@ -1016,7 +1016,11 @@ fn talk_section(ui: &mut egui::Ui, tb: Option<&soundcraft_model::Talkback>, list
             (down != b.on).then_some(down)
         }
         None => {
-            ui.label(egui::RichText::new("To talk to the performer, choose a talkback input in Window › Control Room.").small().color(t.text_dim));
+            ui.label(
+                egui::RichText::new("To talk to the performer, choose a talkback input in Window › Transport & Session › Control Room.")
+                    .small()
+                    .color(t.text_dim),
+            );
             None
         }
     }

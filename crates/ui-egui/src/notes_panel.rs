@@ -1,4 +1,4 @@
-//! The Notes tab (Window › Notes): the session's to-do list. "+ Note" adds one and starts typing
+//! The Notes tab (Window › Transport & Session › Notes): the session's to-do list. "+ Note" adds one and starts typing
 //! in it; "At playhead" adds one pinned to the playhead, whose time shows as a link that locates
 //! there (and as a small flag on the Markers ruler while it is open). The box ticks a note done
 //! (struck through, dim); Show filters Open / Done / All; `#words` are tags. Drag the grip to

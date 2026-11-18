@@ -197,16 +197,16 @@ pub struct UiState {
     pub show_transport: bool,
     pub show_memory_locations: bool,
     pub show_big_counter: bool,
-    /// Window › Loudness Meter: the master's loudness and true peak.
+    /// Window › Transport & Session › Loudness Meter: the master's loudness and true peak.
     #[serde(default)]
     pub show_loudness: bool,
-    /// Window › Mix Snapshots.
+    /// Window › Transport & Session › Mix Snapshots.
     #[serde(default)]
     pub show_mix_snapshots: bool,
-    /// Window › Set List: the show's songs in order.
+    /// Window › Transport & Session › Set List: the show's songs in order.
     #[serde(default)]
     pub show_set_list: bool,
-    /// Window › Control Room.
+    /// Window › Transport & Session › Control Room.
     #[serde(default)]
     pub show_control_room: bool,
     /// Talkback is on because F11 is held, the Talk button is held, or Latch is on.
@@ -217,11 +217,11 @@ pub struct UiState {
     #[serde(skip)]
     pub talk_latched: bool,
     pub show_undo_history: bool,
-    /// The Notes tab (Window › Notes).
+    /// The Notes tab (Window › Transport & Session › Notes).
     pub show_notes: bool,
     /// What the Notes tab shows: open, done or all.
     pub notes_show: String,
-    /// The Lyrics tab (Window › Lyrics).
+    /// The Lyrics tab (Window › Transport & Session › Lyrics).
     pub show_lyrics: bool,
     /// The first-run tour's open card (see [`tour`]); not saved.
     #[serde(skip)]
@@ -238,7 +238,7 @@ pub struct UiState {
     /// The Lyrics tab flags lines that do not fit their partner line (syllables, stress).
     #[serde(default = "default_true")]
     pub lyrics_fit: bool,
-    /// The Teleprompter (Window › Teleprompter).
+    /// The Teleprompter (Window › Transport & Session › Teleprompter).
     pub show_teleprompter: bool,
     /// The Teleprompter in its own native window.
     pub teleprompter_separate: bool,
@@ -359,6 +359,10 @@ pub struct UiState {
     /// The marker or chord clicked on a ruler: Delete removes it (`ruler_items`).
     #[serde(skip)]
     pub ruler_item: Option<ruler_items::RulerItem>,
+    /// With a chord picked: the chord a Shift-click or Shift+arrow run started from (the pick is
+    /// every chord from it to `ruler_item`'s, `ruler_items::picked_chords`).
+    #[serde(skip)]
+    pub chord_anchor: Option<u32>,
     /// A drag of one end of the loop strip on the main ruler (`edit_window::loop_strip`).
     #[serde(skip)]
     pub loop_drag: Option<edit_window::LoopDrag>,
@@ -383,21 +387,21 @@ pub struct UiState {
     /// The record offset per audio system + device + buffer + rate (`record_offset`): per
     /// machine, because drivers add hidden latency that changes with each.
     pub record_offsets: std::collections::BTreeMap<String, RecordOffset>,
-    /// The Mix window lives in its own native window (Window › Mix in Separate Window); the main
+    /// The Mix window lives in its own native window (Window › Separate Windows › Mix in Separate Window); the main
     /// window then always shows Edit.
     pub mix_separate: bool,
-    /// More Mix windows (Window › New Mix Window…), each with its own find, spill and sections
+    /// More Mix windows (Window › Separate Windows › New Mix Window…), each with its own find, spill and sections
     /// ([`mix_more`]). Not kept: they close with the app.
     #[serde(skip)]
     pub more_mix: Vec<mix_more::MoreMix>,
-    /// The Vocal Editor lives in its own native window (Window › Vocal Editor in Separate
+    /// The Vocal Editor lives in its own native window (Window › Editors › Vocal Editor in Separate
     /// Window, `vocal.separate`); closing that window docks it back.
     #[serde(default, rename = "vocal.separate")]
     pub vocal_separate: bool,
     /// That window's last position and inner size, `[x, y, w, h]` (`vocal.window`).
     #[serde(default, rename = "vocal.window")]
     pub vocal_window: Option<[f32; 4]>,
-    /// The MIDI Editor lives in its own native window (Window › MIDI Editor in Separate Window,
+    /// The MIDI Editor lives in its own native window (Window › Separate Windows › MIDI Editor in Separate Window,
     /// `midi_editor.separate`); closing that window docks it back.
     #[serde(default, rename = "midi_editor.separate")]
     pub midi_editor_separate: bool,
@@ -661,6 +665,7 @@ impl Default for UiState {
             preset_dirty: HashMap::new(),
             drawer_tab: None,
             ruler_item: None,
+            chord_anchor: None,
             loop_drag: None,
             ruler_pick_sel: None,
             send_window: None,

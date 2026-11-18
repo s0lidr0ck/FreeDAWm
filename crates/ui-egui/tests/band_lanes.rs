@@ -169,9 +169,10 @@ fn drag_creates_moves_resizes_and_copies_blocks() {
     r.drag(from, to, Modifiers::NONE);
     assert_eq!(spans(&r.blocks()), vec![(4 * HALF, 4 * HALF, 'A')]);
 
-    // Alt-drag copies: the original stays and the copy shares its definition.
+    // Ctrl-drag copies, as a Ctrl-drag copies a clip: the original stays and the copy shares its
+    // definition.
     let (from, to) = (r.at("Sections", 5 * HALF), r.at("Sections", HALF * 111 / 10));
-    r.drag(from, to, Modifiers::ALT);
+    r.drag(from, to, Modifiers::CTRL);
     let blocks = r.blocks();
     assert_eq!(spans(&blocks), vec![(4 * HALF, 4 * HALF, 'A'), (10 * HALF, 4 * HALF, 'A')]);
     assert_eq!(blocks[0].id, id);

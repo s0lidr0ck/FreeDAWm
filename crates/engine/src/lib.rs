@@ -200,6 +200,9 @@ pub struct Clipboard {
     /// from (`automation.paste` takes a lane of the same kind).
     pub auto_points: Vec<soundcraft_model::AutomationPoint>,
     pub auto_param: Option<soundcraft_model::AutoParam>,
+    /// `band.chords.copy`: Band chords, their ticks counted from the first one's start (slot,
+    /// bass and length as they were). A chord copy holds only these; any other copy clears them.
+    pub chords: Vec<soundcraft_model::ChordEvent>,
     /// Where the clips came from: set once the copying command returns ([`Engine::execute`]),
     /// so a paste into another session can bring their audio along ([`ClipOrigin`]).
     pub origin: Option<ClipOrigin>,

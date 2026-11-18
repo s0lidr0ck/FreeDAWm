@@ -1,4 +1,4 @@
-//! Session notes (Window › Notes): a to-do list saved with the session ("lower the kick 2 dB when
+//! Session notes (Window › Transport & Session › Notes): a to-do list saved with the session ("lower the kick 2 dB when
 //! we come back"), each with a done box, free `#tags` and an optional time it is pinned to.
 
 use serde::{Deserialize, Deserializer, Serialize};

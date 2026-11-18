@@ -3,7 +3,7 @@
 //! editor's own track: full colour, every tool of the editor) over the other listed tracks' notes
 //! as faint **reference**, each track in its own colour; a track list on the left picks the
 //! editing track and shows, hides, solos and mutes each one, with a status chip in the Mix pitch
-//! box's colours; a bar under the header holds the studio's tools. Window › Vocal Studio (or the
+//! box's colours; a bar under the header holds the studio's tools. Window › Editors › Vocal Studio (or the
 //! editor's Studio button) turns it on; everything is reachable as `ui.vocal_studio`.
 //!
 //! Edit All (spec 2026-11-04-vocal-studio-edit-all-design.md, mockup

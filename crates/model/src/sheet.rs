@@ -1,4 +1,4 @@
-//! The lyric sheet (Window › Lyrics): the song's words as written, one entry per line, each with a
+//! The lyric sheet (Window › Transport & Session › Lyrics): the song's words as written, one entry per line, each with a
 //! stable id so what refers to a line (its marker on the Lyrics ruler) survives edits around it.
 //! "{Verse 1}" lines are section headings; blank lines separate; a line of only chords ("[Am]
 //! [G]") is an instrumental bar; every other line is a lyric line, numbered from 1 down the sheet.

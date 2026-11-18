@@ -597,8 +597,10 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
         .find(|r| TimeFormat::from_id(r) == Some(s.edit.main_counter))
         .or_else(|| rulers.iter().find(|r| TimeFormat::from_id(r).is_some()))
         .cloned();
-    // A press anywhere drops the picked marker or chord; a click on one picks it again below.
-    if ui.input(|i| i.pointer.primary_pressed()) {
+    // A press anywhere drops the picked marker or chord; a click on one picks it again below. A
+    // Shift-press keeps it: a Shift-click on a chord grows the run from it (a Shift-press that
+    // moves the edit selection makes the pick stale anyway, `ruler_items::prune`).
+    if ui.input(|i| i.pointer.primary_pressed() && !i.modifiers.shift) {
         crate::ruler_items::unpick(app);
     }
     for (i, id) in rulers.iter().enumerate() {
@@ -727,7 +729,7 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
                         crate::ruler_items::pick(app, crate::ruler_items::RulerItem::Marker(m.id));
                     }
                 }
-                // Open notes pinned to a time (Window › Notes) flag it on the first Markers ruler.
+                // Open notes pinned to a time (Window › Transport & Session › Notes) flag it on the first Markers ruler.
                 if lane == 1 {
                     crate::notes_panel::ruler_flags(app, ui, &painter, tl, row, |at| x_of(&s, tl, at));
                 }

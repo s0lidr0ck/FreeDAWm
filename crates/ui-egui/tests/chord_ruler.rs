@@ -150,9 +150,63 @@ impl Rig {
         self.click(r.center());
     }
 
+    /// A press and its release (egui counts a second press of a key still held as a repeat).
     fn key(&mut self, key: Key) {
         self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        self.frame(vec![Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }]);
         self.frames(2);
+    }
+
+    fn key_with(&mut self, key: Key, mods: Modifiers) {
+        self.frame(vec![Event::ModifiersChanged(mods), Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods }]);
+        self.frame(vec![
+            Event::ModifiersChanged(Modifiers::NONE),
+            Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: mods },
+        ]);
+        self.frames(2);
+    }
+
+    /// One event as the window system sends it (`Event::Copy` for Ctrl+C…), then a few frames.
+    fn send(&mut self, e: Event) {
+        self.frame(vec![e]);
+        self.frames(2);
+    }
+
+    fn shift_click(&mut self, at: Pos2) {
+        self.frames(30);
+        let m = Event::ModifiersChanged(Modifiers::SHIFT);
+        self.frame(vec![m.clone(), Event::PointerMoved(at)]);
+        self.frame(vec![m.clone(), Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::SHIFT }]);
+        self.frame(vec![m, Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::SHIFT }]);
+        self.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+        self.frames(3);
+    }
+
+    /// The insertion point to `tick` (a click on the timeline does this).
+    fn insert_at(&mut self, tick: i64) {
+        let at = self.samples(tick);
+        self.app.run("edit.select", json!({"start": at, "end": at})).unwrap();
+        self.frames(2);
+    }
+
+    /// The chords picked, by name, in time order.
+    fn picked(&self) -> Vec<String> {
+        let ids = soundcraft_ui_egui::ruler_items::picked_chords(&self.app);
+        let mut v: Vec<(i64, String)> = Vec::new();
+        let st = &self.app.engine.session().band;
+        let (k, sc) = (i32::from(st.key), i32::from(st.scale));
+        for c in st.chords.iter().filter(|c| ids.contains(&c.id)) {
+            v.push((c.tick, soundcraft_band::chord_theory::name_for(i32::from(c.slot), k, sc, i32::from(c.bass))));
+        }
+        v.sort();
+        v.into_iter().map(|(_, n)| n).collect()
+    }
+
+    /// (tick, name) of every chord, in time order.
+    fn lane(&self) -> Vec<(i64, String)> {
+        let mut v: Vec<(i64, String)> = self.chords().into_iter().map(|c| (c.0, c.2)).collect();
+        v.sort();
+        v
     }
 
     fn type_text(&mut self, text: &str) {
@@ -369,4 +423,210 @@ fn a_plain_resize_moves_only_the_edge_dragged() {
     let edge = r.at(4500) + vec2(2.0, 0.0);
     r.drag(edge, r.at(2 * HALF + 80), Modifiers::NONE);
     assert_eq!(span(&r.chord("F")), (2 * HALF, 7000 - 2 * HALF), "{:?}", r.chords());
+}
+
+// ---- copying chords ---------------------------------------------------------------------------
+
+fn copy_keys(r: &mut Rig, key: Key) {
+    r.key_with(key, Modifiers::COMMAND);
+}
+
+#[test]
+fn copy_and_paste_a_chord_at_the_insertion_on_the_grid() {
+    let mut r = with_chords();
+    r.click(r.at(3 * HALF));
+    copy_keys(&mut r, Key::C);
+    assert_eq!(r.app.engine.clipboard.chords.len(), 1, "Am is copied");
+    // The insertion a little past bar 6 (where a click on the timeline puts it): the copy lands on
+    // bar 6, a bar long, and becomes the pick.
+    r.insert_at(10 * HALF + 100);
+    copy_keys(&mut r, Key::V);
+    assert!(r.chords().contains(&(10 * HALF, 2 * HALF, "Am".into())), "{:?}", r.chords());
+    assert_eq!(r.picked(), ["Am"]);
+    assert_eq!(r.chords().len(), 5);
+    r.undo();
+    assert_eq!(r.chords().len(), 4, "one undo step");
+
+    // The copy, cut and paste events the window system sends for the keys do the same.
+    r.click(r.at(5 * HALF));
+    r.send(Event::Copy);
+    r.insert_at(12 * HALF);
+    r.send(Event::Paste("F".into()));
+    assert!(r.lane().contains(&(12 * HALF, "F".into())), "{:?}", r.lane());
+
+    // Cut: G goes onto the clipboard and off the lane; pasted over C at bar 1 it replaces it, as
+    // a chord dragged there does.
+    r.click(r.at(7 * HALF));
+    r.send(Event::Cut);
+    assert!(!r.lane().contains(&(6 * HALF, "G".into())), "{:?}", r.lane());
+    assert_eq!(r.app.ui.ruler_item, None);
+    r.insert_at(0);
+    copy_keys(&mut r, Key::V);
+    assert_eq!(r.lane()[0], (0, "G".into()));
+    assert!(!r.lane().iter().any(|c| c.1 == "C"), "the paste cut what it landed on: {:?}", r.lane());
+}
+
+#[test]
+fn shift_click_picks_a_run_that_copies_with_its_gaps() {
+    let mut r = with_chords();
+    // Am out: a gap between C and F.
+    let am = r.app.engine.session().band.chords.iter().find(|c| c.tick == 2 * HALF).unwrap().id;
+    r.app.run("band.chord.remove", json!({"chord": am})).unwrap();
+    r.frames(2);
+    r.click(r.at(HALF));
+    r.shift_click(r.at(7 * HALF));
+    assert_eq!(r.picked(), ["C", "F", "G"], "the run from C to G");
+    r.shift_click(r.at(5 * HALF));
+    assert_eq!(r.picked(), ["C", "F"], "a second Shift-click moves the run's end");
+    copy_keys(&mut r, Key::C);
+    r.insert_at(16 * HALF);
+    copy_keys(&mut r, Key::V);
+    let lane = r.lane();
+    assert!(lane.contains(&(16 * HALF, "C".into())) && lane.contains(&(20 * HALF, "F".into())), "the gap kept: {lane:?}");
+    assert_eq!(r.picked(), ["C", "F"], "the pasted run is picked");
+    // Delete takes the whole run.
+    r.key(Key::Delete);
+    assert_eq!(r.chords().len(), 3, "{:?}", r.lane());
+    // A plain click picks one chord again.
+    r.click(r.at(5 * HALF));
+    assert_eq!(r.picked(), ["F"]);
+}
+
+#[test]
+fn duplicate_puts_a_copy_after_and_repeats() {
+    let mut r = with_chords();
+    r.click(r.at(3 * HALF));
+    copy_keys(&mut r, Key::D);
+    // Straight after Am, over F; the copy is the pick, so again goes on over G.
+    assert_eq!(r.lane(), [(0, "C".to_string()), (2 * HALF, "Am".to_string()), (4 * HALF, "Am".to_string()), (6 * HALF, "G".to_string())]);
+    copy_keys(&mut r, Key::D);
+    assert_eq!(r.lane().last(), Some(&(6 * HALF, "Am".into())));
+    r.undo();
+    r.undo();
+    assert_eq!(
+        r.lane(),
+        [(0, "C".to_string()), (2 * HALF, "Am".to_string()), (4 * HALF, "F".to_string()), (6 * HALF, "G".to_string())],
+        "a step each"
+    );
+    // A run: after its last chord.
+    r.click(r.at(HALF));
+    r.shift_click(r.at(3 * HALF));
+    copy_keys(&mut r, Key::D);
+    assert_eq!(r.lane(), [(0, "C".to_string()), (2 * HALF, "Am".to_string()), (4 * HALF, "C".to_string()), (6 * HALF, "Am".to_string())]);
+    assert_eq!(r.picked(), ["C", "Am"]);
+}
+
+#[test]
+fn arrows_move_and_extend_the_pick() {
+    let mut r = with_chords();
+    // Nothing picked: the arrows don't pick anything.
+    r.key(Key::ArrowRight);
+    assert_eq!(r.app.ui.ruler_item, None);
+    r.click(r.at(3 * HALF));
+    r.key(Key::ArrowRight);
+    assert_eq!(r.picked(), ["F"]);
+    r.key_with(Key::ArrowRight, Modifiers::SHIFT);
+    assert_eq!(r.picked(), ["F", "G"]);
+    r.key_with(Key::ArrowRight, Modifiers::SHIFT);
+    assert_eq!(r.picked(), ["F", "G"], "the lane's end");
+    r.key_with(Key::ArrowLeft, Modifiers::SHIFT);
+    r.key_with(Key::ArrowLeft, Modifiers::SHIFT);
+    assert_eq!(r.picked(), ["Am", "F"]);
+    r.key(Key::ArrowLeft);
+    assert_eq!(r.picked(), ["C"]);
+    r.key(Key::ArrowLeft);
+    assert_eq!(r.picked(), ["C"], "the lane's start");
+    assert_eq!(r.chords().len(), 4, "the arrows change no chord");
+}
+
+#[test]
+fn ctrl_drag_drops_a_copy_and_leaves_the_chord() {
+    let mut r = with_chords();
+    let steps = r.app.engine.undo_history().len();
+    // Am's body, Ctrl held: a copy at bar 6 (on the grid).
+    r.drag(r.at(3 * HALF), r.at(11 * HALF + HALF / 5), Modifiers::CTRL);
+    assert!(r.lane().contains(&(2 * HALF, "Am".into())), "the original stays: {:?}", r.lane());
+    assert!(r.chords().contains(&(10 * HALF, 2 * HALF, "Am".into())), "{:?}", r.chords());
+    assert_eq!(r.app.engine.undo_history().len(), steps + 1, "one undo step");
+    assert_eq!(r.picked(), ["Am"]);
+    r.undo();
+    assert_eq!(r.chords().len(), 4);
+    // Ctrl and Alt: a copy off the grid.
+    let d = HALF * 7 / 10;
+    r.drag(r.at(3 * HALF), r.at(3 * HALF + 4 * HALF + d), Modifiers::CTRL | Modifiers::ALT);
+    let copy = r.chords().into_iter().find(|c| c.2 == "Am" && c.0 != 2 * HALF).expect("a copy");
+    assert!((copy.0 - (6 * HALF + d)).abs() < 40 && copy.0 % HALF != 0, "off the grid: {copy:?}");
+    assert!(r.lane().contains(&(2 * HALF, "Am".into())));
+}
+
+/// A drag of Am's body with `before` held until halfway and `after` from then to the release.
+fn drag_changing_mods(r: &mut Rig, before: Modifiers, after: Modifiers) {
+    let (from, to) = (r.at(3 * HALF), r.at(11 * HALF));
+    r.frames(30);
+    r.frame(vec![Event::ModifiersChanged(before), Event::PointerMoved(from)]);
+    r.frame(vec![Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: before }]);
+    for k in 1..=6 {
+        let m = if k > 3 { after } else { before };
+        r.frame(vec![Event::ModifiersChanged(m), Event::PointerMoved(from + (to - from) * (k as f32 / 6.0))]);
+    }
+    r.frame(vec![Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: after }]);
+    r.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    r.frames(3);
+}
+
+#[test]
+fn ctrl_pressed_or_let_go_mid_drag_decides_at_the_drop() {
+    let mut r = with_chords();
+    drag_changing_mods(&mut r, Modifiers::NONE, Modifiers::CTRL);
+    assert_eq!(r.chords().len(), 5, "pressed mid-drag: a copy {:?}", r.lane());
+    assert!(r.lane().contains(&(2 * HALF, "Am".into())));
+    r.undo();
+    drag_changing_mods(&mut r, Modifiers::CTRL, Modifiers::NONE);
+    assert_eq!(r.chords().len(), 4, "let go mid-drag: a move {:?}", r.lane());
+    assert!(r.lane().contains(&(10 * HALF, "Am".into())) && !r.lane().contains(&(2 * HALF, "Am".into())));
+}
+
+#[test]
+fn clip_copy_and_paste_are_untouched_without_a_chord_pick() {
+    let mut r = with_chords();
+    let t = r.app.run("track.new", json!({"kind": "instrument", "name": "Keys"})).unwrap()["tracks"][0].as_u64().unwrap();
+    let bar = r.samples(2 * HALF);
+    r.app.run("midi.new_clip", json!({"track": t, "start": 0, "length": bar})).unwrap();
+    let clips = |r: &Rig| r.app.engine.session().track(soundcraft_model::TrackId(t)).map_or(0, |t| t.clips().len());
+    // A chord picked, then the clip's range selected: the pick is dropped, so Copy copies the clip.
+    r.click(r.at(3 * HALF));
+    r.app.run("edit.select", json!({"tracks": [t], "start": 0, "end": bar})).unwrap();
+    r.frames(2);
+    copy_keys(&mut r, Key::C);
+    assert!(r.app.engine.clipboard.chords.is_empty() && !r.app.engine.clipboard.tracks.is_empty(), "the clip is copied");
+    r.app.run("edit.select", json!({"tracks": [t], "start": 4 * bar, "end": 4 * bar})).unwrap();
+    r.frames(2);
+    copy_keys(&mut r, Key::V);
+    assert_eq!(clips(&r), 2, "the clip is pasted");
+    assert_eq!(r.chords().len(), 4, "no chord moved");
+}
+
+#[test]
+fn the_chord_menu_copies_cuts_pastes_here_and_duplicates() {
+    let mut r = with_chords();
+    r.right_click(r.at(3 * HALF));
+    for item in ["Copy Chord", "Cut Chord", "Paste Here", "Duplicate Chord", "Delete Chord"] {
+        assert!(r.has_text(item), "{item}: {:?}", r.texts());
+    }
+    r.click_text("Copy Chord");
+    assert_eq!(r.app.engine.clipboard.chords.len(), 1);
+    // Paste Here on empty space, where the menu opened (snapped to the half bar). Zoomed out so
+    // there is empty ruler past G.
+    r.app.run("view.zoom_set", json!({"samples_per_px": 800.0})).unwrap();
+    r.frames(3);
+    r.right_click(r.at(12 * HALF + HALF / 5));
+    r.click_text("Paste Here");
+    assert!(r.lane().contains(&(12 * HALF, "Am".into())), "{:?}", r.lane());
+    r.right_click(r.at(HALF));
+    r.click_text("Duplicate Chord");
+    assert_eq!(r.lane()[..2], [(0, "C".to_string()), (2 * HALF, "C".to_string())]);
+    r.right_click(r.at(7 * HALF));
+    r.click_text("Cut Chord");
+    assert!(!r.lane().iter().any(|c| c.1 == "G"), "{:?}", r.lane());
+    assert_eq!(r.app.engine.clipboard.chords.len(), 1);
 }

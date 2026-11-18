@@ -1,4 +1,4 @@
-//! Window › Set List (parity section 8, the show page, step 1): the songs of the show, each a
+//! Window › Transport & Session › Set List (parity section 8, the show page, step 1): the songs of the show, each a
 //! memory location holding a range, in the order they are played. A song plays from its start
 //! to its end (`setlist.play`); then the transport waits on the next song, or with Go On plays
 //! it at once. Stage View fills the app with the song playing and the next one, big enough to
@@ -156,7 +156,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             })
             .response
-            .on_disabled_hover_text("Make a memory location that keeps a selection first (Window › Memory Locations)");
+            .on_disabled_hover_text("Make a memory location that keeps a selection first (Window › Transport & Session › Memory Locations)");
         });
         ui.horizontal(|ui| {
             if ui.add_enabled(at.is_some(), egui::Button::new("Play Set")).on_hover_text("Play the song the set stands on").clicked() {

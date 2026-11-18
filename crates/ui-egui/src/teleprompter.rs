@@ -1,7 +1,7 @@
-//! The Teleprompter (Window › Teleprompter): a big, high-contrast lyric view for the singer. It
+//! The Teleprompter (Window › Transport & Session › Teleprompter): a big, high-contrast lyric view for the singer. It
 //! follows the playhead through the lines placed on the Lyrics ruler: the current line large and
 //! bright with a bar showing how far through it the playhead is, the next line below it, the
-//! section above. It docks as a tab, or lives in its own native window (Window › Teleprompter in
+//! section above. It docks as a tab, or lives in its own native window (Window › Transport & Session › Teleprompter in
 //! Separate Window), sized and placed as last left; closing that window docks it back. The lines'
 //! chords are left out unless Show chords is on (right-click): then each stands above its syllable.
 

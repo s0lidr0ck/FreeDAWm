@@ -1,4 +1,4 @@
-//! Parity section 8, the show page (step 1): Window › Set List plays the songs of the session in
+//! Parity section 8, the show page (step 1): Window › Transport & Session › Set List plays the songs of the session in
 //! order. A song with Go On runs straight into the next; one without stops and waits on the next
 //! song's start.
 

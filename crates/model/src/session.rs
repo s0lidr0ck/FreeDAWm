@@ -410,14 +410,14 @@ pub struct Session {
     /// The Band: six musicians, the section and chord lanes (omitted from the file while untouched).
     #[serde(default, skip_serializing_if = "crate::BandState::is_untouched", deserialize_with = "crate::band::lenient_state")]
     pub band: crate::BandState,
-    /// Session notes (Window › Notes), in list order (omitted from the file while empty).
+    /// Session notes (Window › Transport & Session › Notes), in list order (omitted from the file while empty).
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::notes::de_notes")]
     pub notes: Vec<crate::Note>,
     /// Grooves taken from clips (Groove from Clip), for Quantize and playback quantize; the
     /// built-in ones are made in code and not stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grooves: Vec<soundcraft_midi::ops::Groove>,
-    /// The lyric sheet (Window › Lyrics; omitted from the file while empty).
+    /// The lyric sheet (Window › Transport & Session › Lyrics; omitted from the file while empty).
     #[serde(default, skip_serializing_if = "crate::LyricSheet::is_empty", deserialize_with = "crate::sheet::de_sheet")]
     pub lyric_sheet: crate::LyricSheet,
     /// The Vocal Studio's Tune all tolerance and Fix to (omitted from the file while default).
@@ -430,7 +430,7 @@ pub struct Session {
     /// Mixer snapshots (`mix.snapshot_store`), in the order stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mix_snapshots: Vec<crate::MixSnapshot>,
-    /// The control room (Window › Control Room; omitted from the file while there is none).
+    /// The control room (Window › Transport & Session › Control Room; omitted from the file while there is none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_room: Option<crate::ControlRoom>,
     #[serde(skip)]
