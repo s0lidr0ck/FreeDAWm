@@ -239,10 +239,9 @@ pub fn resample(ch: &[Vec<f32>], from: u32, to: u32) -> Vec<Vec<f32>> {
     per_channel(ch, &one)
 }
 
-/// `f` on each channel, on a thread per channel when there are threads (inline otherwise, or when
-/// a thread can't be started).
+/// `f` on each channel, on a thread per channel (inline for one channel, or when a thread can't be
+/// started).
 fn per_channel(ch: &[Vec<f32>], f: &(dyn Fn(&Vec<f32>) -> Vec<f32> + Sync)) -> Vec<Vec<f32>> {
-    #[cfg(not(target_arch = "wasm32"))]
     if ch.len() > 1 {
         let done: Vec<Option<Vec<f32>>> = std::thread::scope(|sc| {
             let handles: Vec<_> =

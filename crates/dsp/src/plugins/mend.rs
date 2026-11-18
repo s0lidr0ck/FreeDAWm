@@ -279,8 +279,7 @@ impl Mend {
                 let end = taken + l.answers() as u64;
                 end.saturating_sub((from + want).max(taken)).min(usize::MAX as u64) as usize
             };
-            // (The browser build has no worker and no clock to wait by.)
-            if self.offline && cfg!(not(target_arch = "wasm32")) {
+            if self.offline {
                 Self::wait_for(&link, stream, need, ahead);
             }
             let (s, from) = link.answer_from();
