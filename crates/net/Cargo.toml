@@ -19,9 +19,6 @@ serde_json.workspace = true
 log.workspace = true
 # Wipes a pairing code's copies and the keys a pairing derives once they are done with.
 zeroize = "1"
-
-# The network itself is native only (the web build has no sockets).
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # DNS-SD over mDNS (`_freedawm._tcp`): pure Rust, no async runtime.
 mdns-sd = "0.21"
 # The page's address as a QR code for the phone (the matrix only; drawn by the UI).

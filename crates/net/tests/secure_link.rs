@@ -1,6 +1,5 @@
 //! The encrypted local link: two in-process peers on this machine, the booth's QUIC endpoint
 //! bridged to its encrypted-link listener, the remote PC's bridged to a local port.
-#![cfg(not(target_arch = "wasm32"))]
 
 use serde_json::{Value, json};
 use soundcraft_net::audio::{b64_decode, b64_encode};

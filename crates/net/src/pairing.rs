@@ -185,7 +185,6 @@ pub fn clean_name(name: &str) -> String {
 /// What is wiped when done: this side's copies of the code, `k` and the confirmation key. The
 /// `spake2` crate keeps its own copy of the password and its secret scalar inside its state
 /// without wiping them when that state is dropped.
-#[cfg(not(target_arch = "wasm32"))]
 pub mod exchange {
     use hkdf::Hkdf;
     use hkdf::hmac::{Hmac, Mac};
