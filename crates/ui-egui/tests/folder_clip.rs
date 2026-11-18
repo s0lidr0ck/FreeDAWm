@@ -109,11 +109,11 @@ fn the_grabber_drags_a_closed_folders_block_and_trims_its_edge() {
     let mid = pos2(tl[0] + 300.0, y);
     drag(&mut h, mid, mid + vec2(50.0, 0.0));
     let moved = starts(&h);
-    assert!(moved[0] > 48_000 && moved[1] - moved[0] == 48_000, "both members moved together: {moved:?} status {:?} tool {:?} sel {:?} journal {:?}", h.state().ui.status, h.state().engine.session().edit.tool, h.state().engine.session().edit.selection, h.state().engine.journal.iter().rev().take(3).collect::<Vec<_>>());
+    assert!(moved[0] > 48_000 && moved[1] - moved[0] == 48_000, "both members moved together: {moved:?} ({})", h.state().ui.status);
     // Its start edge dragged 20 points left: the clip on the edge follows, the other stays.
     let edge = tl[0] + (moved[0] as f32 / 400.0);
     drag(&mut h, pos2(edge + 1.0, y), pos2(edge - 20.0, y));
     let trimmed = starts(&h);
-    assert!(trimmed[0] < moved[0], "the clip on the edge trimmed out: {trimmed:?} status {:?} journal {:?}", h.state().ui.status, h.state().engine.journal.iter().rev().take(3).collect::<Vec<_>>());
+    assert!(trimmed[0] < moved[0], "the clip on the edge trimmed out: {trimmed:?} ({})", h.state().ui.status);
     assert_eq!(trimmed[1], moved[1], "the other clip stays");
 }

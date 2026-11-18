@@ -85,10 +85,10 @@ pub mod mix_view;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod ml;
 pub mod modulator;
+pub mod multisample;
 pub mod note_expr;
 pub mod tempo_fit;
 pub mod transpose_track;
-pub mod multisample;
 pub(crate) use mix::restore_plugin_param_ids;
 mod chain;
 pub(crate) mod copyq;
