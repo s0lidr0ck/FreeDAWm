@@ -47,8 +47,8 @@ Write a chord in square brackets right before the syllable it falls on:
   syllable after it, in the chord colour, and its bracket text is dimmed (it lights up while the
   cursor is inside it). While the sheet has chords every row is a little taller to make room for
   them, so the line numbers and the margin columns stay lined up.
-- **Something in brackets that is not a chord**, such as `[sic]`, is left as words. It has a faint
-  underline, and hovering it says why.
+- **Something in brackets that is not a chord**, such as `[sic]`, is left as words. It is shown in a
+  soft orange, and hovering it says why.
 - **A line of only chords** (`[F]  [C]`) is an instrumental bar: it is not numbered or counted.
 - **Chords are not words.** Syllable counts, stress, fit, rhyme letters and colours, the Words
   list and the Hook counter, rhyme suggestions, Find Words, Copy for AI, the Lyrics ruler's

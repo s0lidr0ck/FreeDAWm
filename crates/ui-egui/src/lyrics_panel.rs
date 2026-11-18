@@ -5,7 +5,7 @@
 //! brackets before the syllable they fall on ("[Am]Hello dark[G]ness"): each is drawn above that
 //! syllable in the chord colour, its bracket text dimmed (lit while the cursor is in it); while
 //! the sheet has chords every row is taller by the room the chord names take, so the gutter and
-//! margin columns stay in line. A bracket that is not a chord name stays words, dotted underline.
+//! margin columns stay in line. A bracket that is not a chord name stays words, tinted.
 //! Right-click a line for rhyme suggestions and the Chords ruler actions. Typing is one undo step
 //! per line (Enter ends a step).
 
@@ -29,6 +29,8 @@ pub const FIT_FLAG: Color32 = Color32::from_rgb(240, 150, 40);
 const LINE_FONT: f32 = 15.0;
 /// The colour chords are drawn in.
 pub const CHORD_COLOR: Color32 = Color32::from_rgb(224, 164, 58);
+/// Bracket text that is no chord name: read as words, tinted.
+const UNKNOWN_BRACKET: Color32 = Color32::from_rgb(214, 160, 120);
 /// The chord names' font size.
 const CHORD_FONT: f32 = 11.5;
 
@@ -193,8 +195,9 @@ fn layout(
                     fmt.underline = Stroke::NONE;
                     fmt.background = Color32::TRANSPARENT;
                 } else {
-                    // Not a chord name: words, gently marked.
-                    fmt.underline = Stroke::new(1.0, FIT_FLAG.gamma_multiply(0.55));
+                    // Not a chord name: words, gently marked (tinted; an underline would sit at the
+                    // bottom of a row made tall for chords).
+                    fmt.color = UNKNOWN_BRACKET;
                 }
             }
             job.append(piece, 0.0, fmt);
@@ -1148,9 +1151,8 @@ mod tests {
         let lit = layout(text, &infos, &marks, false, 0x0f, &[], ChordView { cursor: Some(at_g), ..cv }, &t);
         assert_eq!(colour_of(&lit, "[G]"), Some(CHORD_COLOR));
         assert_eq!(colour_of(&lit, "[Am]"), Some(CHORD_COLOR.gamma_multiply(0.4)));
-        // A bracket that is no chord: words, flagged by a faint underline.
-        let flagged = job.sections.iter().find(|s| job.text.get(s.byte_range.start.0..s.byte_range.end.0) == Some("[chords]")).unwrap();
-        assert!(flagged.format.underline.width > 0.0);
+        // A bracket that is no chord: words, gently tinted.
+        assert_eq!(colour_of(&job, "[chords]"), Some(UNKNOWN_BRACKET));
         // Chord lines are not numbered.
         assert_eq!(infos.iter().filter_map(|i| i.number).collect::<Vec<_>>(), vec![1, 2]);
     }
