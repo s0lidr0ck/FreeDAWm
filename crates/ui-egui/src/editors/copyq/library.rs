@@ -82,7 +82,6 @@ pub(crate) fn delete(dir: &Path, name: &str) {
     disk::remove(&dir.join(format!("{}.json", file_stem(name))));
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use std::path::Path;
     pub fn json_files(dir: &Path) -> Vec<(String, String)> {
@@ -101,18 +100,6 @@ mod disk {
     pub fn remove(f: &Path) {
         let _ = std::fs::remove_file(f);
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod disk {
-    use std::path::Path;
-    pub fn json_files(_dir: &Path) -> Vec<(String, String)> {
-        Vec::new()
-    }
-    pub fn write(_f: &Path, _text: &str) -> bool {
-        false
-    }
-    pub fn remove(_f: &Path) {}
 }
 
 #[cfg(test)]

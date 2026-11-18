@@ -498,10 +498,6 @@ fn transport_window(app: &mut SoundApp, ctx: &egui::Context) {
                     (cmd == "transport.play" && app.is_playing()) || (cmd == "transport.record" && app.engine.transport.recording),
                     cmd,
                 );
-                let resp = match crate::record_unavailable(cfg!(target_arch = "wasm32")) {
-                    Some(why) if cmd == "transport.record" => resp.on_hover_text(why),
-                    _ => resp,
-                };
                 if cmd == "transport.record"
                     && let Some(why) = app.record_hint()
                 {

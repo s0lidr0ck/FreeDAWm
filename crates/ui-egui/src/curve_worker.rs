@@ -1,8 +1,7 @@
 //! A background worker for curves too expensive to compute on the UI thread (Vint's measured
 //! frequency response runs two whole engines). Requests are keyed (one graph each); a new request
 //! for a key replaces one still waiting (latest request wins), and the UI picks finished curves up
-//! when it next draws. Without threads (wasm32), or when no thread can be started, it computes
-//! inline when asked.
+//! when it next draws. When no thread can be started, it computes inline when asked.
 
 use egui::Id;
 use std::collections::HashMap;
@@ -57,18 +56,18 @@ pub struct CurveWorker {
 }
 
 impl CurveWorker {
-    /// A worker computing with `compute` on its own thread (inline on wasm32, or if the thread
-    /// cannot be started), calling `notify` whenever a curve is finished.
+    /// A worker computing with `compute` on its own thread (inline if the thread cannot be
+    /// started), calling `notify` whenever a curve is finished.
     pub fn new(compute: Box<CurveFn>, notify: Box<dyn Fn() + Send + Sync>) -> Self {
         let shared = Arc::new(Shared { state: Mutex::new(State::default()), wake: Condvar::new(), compute, notify });
-        let threaded = !cfg!(target_arch = "wasm32") && {
+        let threaded = {
             let s = Arc::clone(&shared);
             std::thread::Builder::new().name("curve-worker".into()).spawn(move || work(&s)).is_ok()
         };
         CurveWorker { shared, threaded }
     }
 
-    /// A worker that computes inline, when asked (what wasm32 gets).
+    /// A worker that computes inline, when asked.
     pub fn inline(compute: Box<CurveFn>) -> Self {
         CurveWorker {
             shared: Arc::new(Shared { state: Mutex::new(State::default()), wake: Condvar::new(), compute, notify: Box::new(|| {}) }),

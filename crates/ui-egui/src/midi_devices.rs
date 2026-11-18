@@ -33,12 +33,10 @@ pub fn tick(app: &mut SoundApp) {
     if app.midi_outputs.is_none() && app.use_system_midi {
         app.midi_outputs = soundcraft_playback::midi_out::MidiOutputs::system(app.ui.midi_outputs.clone());
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(m) = &mut app.midi_inputs {
         m.set_offsets(app.ui.midi_offsets.clone());
         m.tick(std::time::Instant::now());
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(m) = &mut app.midi_outputs {
         // The ports the session's tracks send to open even if never enabled in the window.
         m.set_wanted(wanted_outputs(app.engine.session()));
@@ -844,10 +842,7 @@ pub fn input_choices(app: &SoundApp, current: Option<&MidiIn>) -> Vec<(String, O
         out.push((format!("MIDI: {typing}"), Some(typing.clone()), true));
     }
     // The remote recorders' ports (Setup › Network): `Remote: <PC> › <port>`.
-    #[cfg(not(target_arch = "wasm32"))]
     let remote = app.net.as_ref().map(|n| n.hub.remote_ports()).unwrap_or_default();
-    #[cfg(target_arch = "wasm32")]
-    let remote: Vec<String> = Vec::new();
     for p in &remote {
         out.push((format!("MIDI: {p}"), Some(p.clone()), true));
     }

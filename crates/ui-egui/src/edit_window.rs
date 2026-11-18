@@ -1078,7 +1078,6 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
     }
     draw_live_take(app, &painter, &s, track, tl, lane);
     crate::live_midi::draw(app, &painter, &s, track, tl, lane);
-    #[cfg(not(target_arch = "wasm32"))]
     crate::net_ui::draw_sketch(app, &painter, &s, track, tl, lane);
     crate::video_track::draw_lane(app, &painter, &s, track, tl, lane);
     if s.edit.grid_lines {
@@ -1608,7 +1607,6 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
         }
     }
     let md = app.meters.get(&id).copied().unwrap_or_default();
-    #[cfg(not(target_arch = "wasm32"))]
     let md = crate::net_ui::with_remote_level(app, track, md);
     header_meter(ui, Rect::from_min_max(pos2(head.max.x - 8.0, head.min.y + 1.0), pos2(head.max.x, head.max.y - 1.5)), &md, track.channels() >= 2);
     if track.kind.is_midi() {
@@ -2437,7 +2435,6 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
             let _ = app.run(cmd, json!({"tracks": selection, "routing": false}));
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
     ml_menu(app, ui, json!({"track": tid}));
     // Lyrics from Transcribe Lyrics: clear them (one undo step).
     if app.engine.session().track(id).is_some_and(soundcraft_model::track_has_lyrics) && ui.button("Clear Lyrics").clicked() {
@@ -4794,7 +4791,6 @@ fn new_midi_clip(app: &mut SoundApp, s: &Session, track: TrackId, from: Samples,
 
 /// The ML jobs for a track or clip (`target` = `{"track": id}` or `{"clip": id}`): each opens
 /// its dialog.
-#[cfg(not(target_arch = "wasm32"))]
 fn ml_menu(app: &mut SoundApp, ui: &mut Ui, target: serde_json::Value) {
     for (id, label, _) in crate::ml_ui::MENU_ITEMS.iter().filter(|m| m.0.starts_with("ui.ml.")) {
         if ui.button(*label).clicked() {
@@ -4881,11 +4877,8 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
             ui.close();
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        ui.separator();
-        ml_menu(app, ui, json!({"clip": c.0}));
-    }
+    ui.separator();
+    ml_menu(app, ui, json!({"clip": c.0}));
 }
 
 /// Clean Vocal's controls on a cleaned clip: Original/Cleaned, the Amount (a drag is one undo

@@ -100,7 +100,6 @@ pub const RECALL_GESTURE: &str = "preset";
 
 /// The file system the browser touches: the user preset folder and the favourites file. None on
 /// the web (no file system): factory presets only, no Save / Delete / Folder.
-#[cfg(not(target_arch = "wasm32"))]
 mod disk {
     use std::path::Path;
     pub fn json_files(dir: &Path) -> Vec<(String, String)> {
@@ -124,22 +123,6 @@ mod disk {
     pub fn make_dir(d: &Path) {
         let _ = std::fs::create_dir_all(d);
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod disk {
-    use std::path::Path;
-    pub fn json_files(_dir: &Path) -> Vec<(String, String)> {
-        Vec::new()
-    }
-    pub fn read(_f: &Path) -> Option<String> {
-        None
-    }
-    pub fn write(_f: &Path, _text: &str) -> bool {
-        false
-    }
-    pub fn remove(_f: &Path) {}
-    pub fn make_dir(_d: &Path) {}
 }
 
 fn user_dir(app: &SoundApp, plugin: &str) -> Option<std::path::PathBuf> {

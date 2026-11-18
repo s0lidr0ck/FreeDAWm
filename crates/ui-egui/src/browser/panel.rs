@@ -163,7 +163,6 @@ fn on_selected_track(app: &SoundApp) -> Vec<String> {
 }
 
 pub(crate) fn browser_panel(app: &mut SoundApp, ui: &mut Ui) {
-    #[cfg(not(target_arch = "wasm32"))]
     let started = std::time::Instant::now();
     let t = Tokens::current();
     let rect = ui.max_rect();
@@ -285,10 +284,7 @@ pub(crate) fn browser_panel(app: &mut SoundApp, ui: &mut Ui) {
         super::scan_job::start(app, retry_failed);
     }
     app.browser_debug.cards_built = built;
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        app.browser_debug.panel_ms = started.elapsed().as_secs_f32() * 1000.0;
-    }
+    app.browser_debug.panel_ms = started.elapsed().as_secs_f32() * 1000.0;
 }
 
 /// ★ Favourites, Recent, the categories the tab's plugins have, and the vendor menu.

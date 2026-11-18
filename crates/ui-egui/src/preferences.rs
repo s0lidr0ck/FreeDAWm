@@ -358,7 +358,6 @@ fn mixing(app: &mut SoundApp, ui: &mut Ui) {
     ui.add_enabled_ui(wide, |ui| {
         flag(app, ui, "Slim plugin editors", "ui.mix.slim_editors", slim, "The VST editors' slim layout, at the drawer's width")
     });
-    #[cfg(not(target_arch = "wasm32"))]
     plugin_process(app, ui);
     heading(ui, "EDIT AND MIX WINDOWS (WINDOW › SYNC)");
     let sync = app.ui.sync;
@@ -370,7 +369,6 @@ fn mixing(app: &mut SoundApp, ui: &mut Ui) {
 
 /// Preferences › Mixing › Run CLAP and VST3 plug-ins in their own process, with what overrides it and
 /// whether the helper is there.
-#[cfg(not(target_arch = "wasm32"))]
 fn plugin_process(app: &mut SoundApp, ui: &mut Ui) {
     use soundcraft_mix::plugin_bridge as bridge;
     let on = app.ui.plugin_process;

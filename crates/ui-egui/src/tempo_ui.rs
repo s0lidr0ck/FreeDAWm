@@ -99,20 +99,13 @@ fn start(app: &mut SoundApp) {
     let source = d.source.clone();
     d.analysis = None;
     d.error = None;
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new().name("tempo-detect".into()).spawn(move || {
-            let _ = tx.send(td::analyse(&session, source, (lo, hi)));
-        });
-        match spawned {
-            Ok(_) => d.running = Some(rx),
-            Err(e) => d.error = Some(format!("could not start the analysis: {e}")),
-        }
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        d.analysis = Some(td::analyse(&session, source, (lo, hi)));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("tempo-detect".into()).spawn(move || {
+        let _ = tx.send(td::analyse(&session, source, (lo, hi)));
+    });
+    match spawned {
+        Ok(_) => d.running = Some(rx),
+        Err(e) => d.error = Some(format!("could not start the analysis: {e}")),
     }
 }
 

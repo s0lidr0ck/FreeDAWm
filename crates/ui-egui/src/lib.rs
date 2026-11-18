@@ -40,7 +40,6 @@ mod hw_insert_ui;
 pub mod icons;
 mod imprint_ui;
 pub mod juke_fx;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod juke_kits_ui;
 pub mod juke_window;
 pub mod key_knobs;
@@ -70,20 +69,15 @@ pub mod midi_wide_lanes;
 pub mod mix_find;
 pub mod mix_more;
 pub mod mix_window;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_audition;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_downloads;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_text_ui;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_ui;
 mod modulators_ui;
 pub mod module_drawer;
 pub mod module_graphs;
 pub mod monitor_ui;
 pub mod musical_typing;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod net_ui;
 pub mod notes_panel;
 pub mod open_progress;
@@ -1101,7 +1095,6 @@ pub struct SoundApp {
     /// it off before it rolls from `play_from` (`SoundApp::countoff_status`).
     pub(crate) countoff: Option<soundcraft_playback::CountOff>,
     /// Setup › Network: the LAN listener, the remote recorder link and their per-frame glue.
-    #[cfg(not(target_arch = "wasm32"))]
     pub net: Option<net_ui::NetState>,
     /// Musical Typing: its window's keys and the computer keys as a live MIDI input.
     pub typing: musical_typing::TypingState,
@@ -1149,7 +1142,6 @@ pub struct SoundApp {
     last_autosave: Option<std::time::Instant>,
     /// PipeWire's sources and the "All sources" channels in effect (`None` off "All sources"),
     /// looked up at most every two seconds: I/O Setup asks every frame.
-    #[cfg(not(target_arch = "wasm32"))]
     all_sources: Option<(std::time::Instant, Option<AllSources>)>,
     pub dialogs: dialogs::Dialogs,
     pub meters: HashMap<TrackId, MeterDisplay>,
@@ -1253,7 +1245,6 @@ pub struct SoundApp {
     /// Export › Stems in progress, rendered a slice per frame (see [`bounce::start_stems`]).
     pub stems: Option<soundcraft_engine::io::StemsJob>,
     /// The movie bounce (File › Export › Movie) in progress, a few frames per frame.
-    #[cfg(not(target_arch = "wasm32"))]
     pub movie: Option<soundcraft_engine::movie_export::MovieBounce>,
     /// The Freeze / Commit / Bounce render running (see [`render`]).
     pub(crate) track_render: Option<soundcraft_engine::render_job::RenderJob>,
@@ -1268,10 +1259,8 @@ pub struct SoundApp {
     /// The last DAWproject import's report, while its window is open ([`dawproject_report`]).
     pub dawproject_report: Option<soundcraft_engine::dawproject::Report>,
     /// Local ML jobs (desktop only): the dialog, the job on its worker, the Models window.
-    #[cfg(not(target_arch = "wasm32"))]
     pub ml: ml_ui::MlUi,
     /// Juke's recorded kits: the installed ones, the kits release's list and its downloads.
-    #[cfg(not(target_arch = "wasm32"))]
     pub juke_kits: juke_kits_ui::KitDownloads,
     /// Event › Detect Tempo…: the dialog and its analysis worker.
     pub tempo: tempo_ui::TempoUi,
@@ -1314,11 +1303,6 @@ pub struct SoundApp {
     _palette_lock: theme::TestPaletteGuard,
 }
 
-/// Why this build cannot record, if it cannot: the browser build has no audio input yet.
-pub(crate) fn record_unavailable(web: bool) -> Option<&'static str> {
-    web.then_some("The browser build cannot record yet: record in the desktop app (Linux, macOS, Windows or FreeBSD) and open the session here.")
-}
-
 impl SoundApp {
     pub fn new(engine: Engine, player: Option<Player>, services: Services) -> Self {
         let thumb_dir = services.thumb_dir.clone();
@@ -1330,10 +1314,7 @@ impl SoundApp {
             vocal_worker: vocal_worker::VocalWorker::new(),
             stretch_worker: stretch_worker::StretchWorker::default(),
             player,
-            #[cfg(not(target_arch = "wasm32"))]
             midi_hub: Some(soundcraft_playback::midi_in::MidiHub::new()),
-            #[cfg(target_arch = "wasm32")]
-            midi_hub: None,
             midi_inputs: None,
             midi_outputs: None,
             use_system_midi: false,
@@ -1363,7 +1344,6 @@ impl SoundApp {
             half_speed_play: false,
             loop_basis: (false, None),
             countoff: None,
-            #[cfg(not(target_arch = "wasm32"))]
             net: None,
             typing: musical_typing::TypingState::default(),
             pads: chord_pads::PadState::default(),
@@ -1389,7 +1369,6 @@ impl SoundApp {
             preset_dir: None,
             library_default: None,
             last_autosave: None,
-            #[cfg(not(target_arch = "wasm32"))]
             all_sources: None,
             dialogs: dialogs::Dialogs::default(),
             meters: HashMap::new(),
@@ -1449,7 +1428,6 @@ impl SoundApp {
             bounce: None,
             print: None,
             stems: None,
-            #[cfg(not(target_arch = "wasm32"))]
             movie: None,
             track_render: None,
             split: None,
@@ -1457,9 +1435,7 @@ impl SoundApp {
             lending: None,
             open: None,
             dawproject_report: None,
-            #[cfg(not(target_arch = "wasm32"))]
             ml: ml_ui::MlUi::default(),
-            #[cfg(not(target_arch = "wasm32"))]
             juke_kits: juke_kits_ui::KitDownloads::default(),
             tempo: tempo_ui::TempoUi::default(),
             scout: scout::ScoutUi::default(),
@@ -1517,7 +1493,6 @@ impl SoundApp {
         }
         let replacing = matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "file.import_dawproject");
         // (a running render refuses the session commands below, through `render::blocked`)
-        #[cfg(not(target_arch = "wasm32"))]
         if replacing && ml_ui::refuses_session_switch(self) {
             return Err(self.ui.status.clone());
         }
@@ -1593,14 +1568,7 @@ impl SoundApp {
 
     /// A movie bounce is running.
     pub fn movie_running(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.movie.is_some()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        self.movie.is_some()
     }
 
     /// The second half of [`SoundApp::run`]: the command itself and what the UI does after it.
@@ -1702,7 +1670,6 @@ impl SoundApp {
     /// reason in the status line) when command `id` has to wait. Paths that run commands outside
     /// [`SoundApp::run`] ask this too.
     pub(crate) fn edit_waits(&mut self, id: &str) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
         if self.ml.running.is_some() && ml_ui::blocks(id) {
             self.ui.status = ml_ui::BLOCKED.into();
             return true;
@@ -1967,10 +1934,6 @@ impl SoundApp {
 
     fn start_recording(&mut self, countoff: bool) {
         self.late_refused.clear();
-        if let Some(why) = record_unavailable(cfg!(target_arch = "wasm32")) {
-            self.ui.status = why.into();
-            return;
-        }
         let armed = self.engine.session().tracks.iter().any(|t| t.mixer.record_arm);
         if !armed {
             let why = if self.engine.session().tracks.is_empty() {
@@ -2609,22 +2572,17 @@ impl SoundApp {
 
     /// On PipeWire's "All sources" input: every source and the ones its channels record now.
     pub fn all_sources(&mut self) -> Option<AllSources> {
-        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((at, view)) = &self.all_sources
+            && at.elapsed() < std::time::Duration::from_secs(2)
         {
-            if let Some((at, view)) = &self.all_sources
-                && at.elapsed() < std::time::Duration::from_secs(2)
-            {
-                return view.clone();
-            }
-            let view = self.ui.audio.all_sources().then(|| AllSources {
-                sources: soundcraft_playback::pw::sources(),
-                chosen: soundcraft_playback::pw::effective_sources(&self.ui.audio.input_sources),
-            });
-            self.all_sources = Some((std::time::Instant::now(), view.clone()));
-            view
+            return view.clone();
         }
-        #[cfg(target_arch = "wasm32")]
-        None
+        let view = self.ui.audio.all_sources().then(|| AllSources {
+            sources: soundcraft_playback::pw::sources(),
+            chosen: soundcraft_playback::pw::effective_sources(&self.ui.audio.input_sources),
+        });
+        self.all_sources = Some((std::time::Instant::now(), view.clone()));
+        view
     }
 
     /// Records `keys` too on "All sources" (after its channels in use); the input reopens with
@@ -2640,10 +2598,7 @@ impl SoundApp {
         }
         chosen.extend(keys.iter().cloned());
         self.ui.audio.input_sources = chosen;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.all_sources = None;
-        }
+        self.all_sources = None;
         // The input reopens with the new channels on the next record or monitor.
         self.recorder = None;
         self.recorder_failed = false;
@@ -3332,9 +3287,7 @@ impl SoundApp {
         render::step(self, ctx);
         split_progress::step(self, ctx);
         capture_progress::step(self, ctx);
-        #[cfg(not(target_arch = "wasm32"))]
         ml_ui::step(self, ctx);
-        #[cfg(not(target_arch = "wasm32"))]
         ml_audition::step(self, ctx);
         // A MIDI Editor audition that has finished hands the document back.
         midi_editor::step(self);
@@ -3385,7 +3338,6 @@ impl SoundApp {
         }
         // The LAN remote: its buttons and the booth it follows ask for the transport here, in
         // time for this frame's transport handling.
-        #[cfg(not(target_arch = "wasm32"))]
         net_ui::step(self, ctx);
         // Preferences › Operation › Copy imported audio into the project (this computer's).
         self.engine.copy_imported_audio = self.ui.copy_imported_audio;
@@ -4221,14 +4173,6 @@ mod tests {
         app.take_reported = Some(soundcraft_playback::Latency { input: 100, output: 120, feed: 30, mix: 64 });
         assert_eq!(app.take_latency(), 314);
         assert_eq!(app.take_latency(), 314);
-    }
-
-    #[test]
-    fn the_browser_build_says_it_cannot_record() {
-        // Only the web build is refused, and the reason names what to do instead.
-        assert_eq!(super::record_unavailable(false), None);
-        let why = super::record_unavailable(true).unwrap();
-        assert!(why.contains("cannot record") && why.contains("desktop app"), "{why}");
     }
 
     #[test]

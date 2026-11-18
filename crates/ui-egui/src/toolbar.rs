@@ -37,7 +37,6 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 counters(app, ui);
                 grid_nudge(app, ui);
                 transport(app, ui);
-                #[cfg(not(target_arch = "wasm32"))]
                 follow_badge(app, ui);
                 scout_button(app, ui);
                 tempo_meter(app, ui);
@@ -460,7 +459,6 @@ pub fn record_line(app: &SoundApp, pos: soundcraft_time::Samples) -> String {
     let t = secs as u64;
     let (h, m, s) = (t / 3600, (t / 60) % 60, t % 60);
     let clock = if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") };
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(soundcraft_net::glue::FollowBadge::Recording(booth)) = crate::net_ui::badge(app) {
         return format!("● REC with {booth} · {clock}");
     }
@@ -473,7 +471,6 @@ pub fn record_line(app: &SoundApp, pos: soundcraft_time::Samples) -> String {
 
 /// While following a booth (Setup › Network): what this PC is doing for it, in the record colour
 /// while it records a take for the booth, amber while a take waits to be sent.
-#[cfg(not(target_arch = "wasm32"))]
 fn follow_badge(app: &mut SoundApp, ui: &mut Ui) {
     use soundcraft_net::glue::FollowBadge;
     let Some(badge) = crate::net_ui::badge(app) else { return };

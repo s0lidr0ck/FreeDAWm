@@ -864,7 +864,6 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         }
     }
     let md = app.meters.get(&id).copied().unwrap_or_default();
-    #[cfg(not(target_arch = "wasm32"))]
     let md = crate::net_ui::with_remote_level(app, track, md);
     let slot = fader_slot(fr);
     let mr = Rect::from_min_max(pos2(fr.max.x + 4.0, slot.min.y - 5.0), pos2(x0 + inner_w - 2.0, slot.max.y + if wide_meter { 17.0 } else { 1.0 }));
@@ -2527,7 +2526,6 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
         }
     }
     if input {
-        #[cfg(not(target_arch = "wasm32"))]
         crate::net_ui::input_menu(app, ui, id, &current);
         crate::midi_devices::input_menu(app, ui, id);
         crate::band::input_menu(app, ui, id);

@@ -152,7 +152,6 @@ fn step_stems(app: &mut SoundApp, ctx: &egui::Context) {
 
 /// Starts the movie `file.bounce_movie` writes for `params`; [`step`] writes it a few frames at a
 /// time, the status line showing how far it is.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn start_movie(app: &mut SoundApp, params: &Value) {
     if app.rendering() {
         app.ui.status = "A render is already running".into();
@@ -173,7 +172,6 @@ pub fn start_movie(app: &mut SoundApp, params: &Value) {
 }
 
 /// Writes the running movie bounce for a moment (see [`start_movie`]).
-#[cfg(not(target_arch = "wasm32"))]
 fn step_movie(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(job) = &mut app.movie else { return };
     app.ui.status = match job.step(slice()) {
@@ -199,7 +197,6 @@ fn step_movie(app: &mut SoundApp, ctx: &egui::Context) {
 /// the window is hidden as long as a repaint is requested, so a bounce doesn't pause then.
 pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
     step_stems(app, ctx);
-    #[cfg(not(target_arch = "wasm32"))]
     step_movie(app, ctx);
     if step_print(app, ctx) || app.bounce.is_none() || !crate::render::instances_ready(app, ctx) {
         return;
@@ -258,20 +255,9 @@ pub fn refuses_session_switch(app: &mut SoundApp) -> bool {
 }
 
 /// Whether to render another block in this call: for 30 ms.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn slice() -> impl FnMut() -> bool {
     let until = std::time::Instant::now() + std::time::Duration::from_millis(30);
     move || std::time::Instant::now() < until
-}
-
-/// The browser has no `Instant` (it panics there), so a call renders 32 blocks.
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn slice() -> impl FnMut() -> bool {
-    let mut blocks = 32;
-    move || {
-        blocks -= 1;
-        blocks > 0
-    }
 }
 
 /// Shows how far the running stems export got, with Cancel (or Esc).

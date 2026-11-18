@@ -1177,21 +1177,14 @@ fn selection_frozen(app: &SoundApp) -> bool {
 }
 
 /// No ML job running (desktop; the web app has no ML).
-#[cfg(not(target_arch = "wasm32"))]
 fn ml_idle(app: &SoundApp) -> bool {
     app.ml.running.is_none()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn ml_idle(_: &SoundApp) -> bool {
-    false
 }
 
 /// Menu-style invocation: may open a dialog.
 pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
     // The ML jobs run for minutes: from a menu or the palette they open their dialog and run on a
     // worker, never as the blocking engine command on the UI thread.
-    #[cfg(not(target_arch = "wasm32"))]
     if id.starts_with("ml.") && id != "ml.models" && !crate::ml_downloads::is_download_command(id) {
         if let Err(e) = crate::ml_ui::open(app, id, None) {
             app.ui.status = e;
@@ -1481,7 +1474,6 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if let Some(r) = crate::scout::run(app, id, p) {
         return Some(r);
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(r) = crate::ml_ui::run(app, id, p) {
         return Some(r);
     }

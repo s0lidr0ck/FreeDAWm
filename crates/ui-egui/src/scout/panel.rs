@@ -227,10 +227,10 @@ fn capture_card(app: &mut SoundApp, ui: &mut Ui, c: &ScoutCapture, ticked: bool,
     }
 }
 
-/// The empty-conversation hint: the web build can only Copy; without a key, set one or Copy.
+/// The empty-conversation hint: without a key, set one or Copy.
 fn send_hint(app: &mut SoundApp) -> Option<&'static str> {
     if !ask::can_send(app) {
-        return Some(if cfg!(target_arch = "wasm32") { ask::WEB_HINT } else { NO_KEY });
+        return Some(NO_KEY);
     }
     (!ask::has_key(app)).then_some(NO_KEY)
 }
@@ -566,11 +566,7 @@ fn conversation(app: &mut SoundApp, ui: &mut Ui) {
 
 fn send_button(app: &mut SoundApp, ui: &mut Ui, can: bool, enter: bool) {
     let send = ui.add_enabled(can, egui::Button::new("Send").min_size(vec2(56.0, 28.0)));
-    let send = if ask::can_send(app) {
-        send.on_hover_text("Ask Claude about the ticked captures")
-    } else {
-        send.on_disabled_hover_text(if cfg!(target_arch = "wasm32") { ask::WEB_HINT } else { NO_KEY })
-    };
+    let send = if ask::can_send(app) { send.on_hover_text("Ask Claude about the ticked captures") } else { send.on_disabled_hover_text(NO_KEY) };
     if (send.clicked() || (enter && can))
         && let Err(e) = app.run("ui.scout.send", json!({}))
     {

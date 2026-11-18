@@ -297,7 +297,6 @@ pub(crate) fn poll(app: &mut SoundApp, ctx: &egui::Context) {
         ctx.copy_text(text);
     }
     ask::poll(app);
-    #[cfg(not(target_arch = "wasm32"))]
     profiles::poll(app);
     let mut back: Vec<ScoutRig> = std::mem::take(&mut app.scout.sim_back);
     if let Some(p) = &app.player {

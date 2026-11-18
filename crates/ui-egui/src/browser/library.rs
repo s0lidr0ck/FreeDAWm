@@ -132,10 +132,7 @@ impl SoundApp {
         let Some(root) = self.library_root() else { return };
         self.dialogs.dirs = UserDirs::under(&root);
         self.preset_dir = self.dialogs.dirs.presets.clone();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.juke_kits.presets = self.dialogs.dirs.juke_presets.clone();
-        }
+        self.juke_kits.presets = self.dialogs.dirs.juke_presets.clone();
         self.browser_library = None;
         self.browser_presets = None;
     }
@@ -150,15 +147,7 @@ impl SoundApp {
 
 /// The Juke presets in the Library (none on the web).
 fn juke_presets(app: &SoundApp) -> Vec<(String, PathBuf)> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        app.juke_kits.user_presets()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = app;
-        Vec::new()
-    }
+    app.juke_kits.user_presets()
 }
 
 /// One line of the list: a group's heading, or an item (its index in the cache).
@@ -443,10 +432,7 @@ pub(crate) fn use_item(app: &mut SoundApp, catalog: &Catalog, it: &LibraryItem, 
                 app.ui.status = "Select a Juke track first (Track › New Beat makes one)".into();
                 return;
             };
-            #[cfg(not(target_arch = "wasm32"))]
             let kits = app.juke_kits.dir().to_string_lossy().into_owned();
-            #[cfg(target_arch = "wasm32")]
-            let kits = String::new();
             app.ui.status = match app.run("mix.kit_preset", json!({"track": t.0, "path": path, "kits_dir": kits})) {
                 Ok(_) => format!("Loaded Juke preset {}", it.name),
                 Err(e) => e,

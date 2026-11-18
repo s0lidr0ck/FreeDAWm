@@ -886,14 +886,7 @@ fn clear_message(s: &Session, clips: &[ClipId], sources: &[SourceId]) -> Option<
 }
 
 fn default_dir() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        String::new()
-    }
+    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into())
 }
 
 /// The main window's dialogs: Process, bounce and ML progress, and the open dialog when the
@@ -907,7 +900,6 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     crate::render::show(app, ctx);
     crate::split_progress::show(app, ctx);
     crate::capture_progress::show(app, ctx);
-    #[cfg(not(target_arch = "wasm32"))]
     crate::ml_ui::show(app, ctx);
     crate::tempo_ui::show(app, ctx);
     show_open(app, ctx);
@@ -1640,7 +1632,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                 Dialog::SaveChanges { then } => {
                     let name = &app.engine.session().name;
                     let revert = then.0 == "session.revert";
-                    if revert || cfg!(target_arch = "wasm32") {
+                    if revert {
                         let (question, ok) = if revert {
                             (format!("Revert “{name}” to its last saved version?"), "Revert")
                         } else {
@@ -1686,7 +1678,6 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         action = None;
     }
     let saving = action.as_ref().is_some_and(|(cmd, _)| cmd.starts_with("session.save"));
-    #[cfg(not(target_arch = "wasm32"))]
     let action = match action {
         // A movie is written behind the status line's progress, not in one long frame.
         Some((cmd, params)) if cmd == "file.bounce_movie" => {

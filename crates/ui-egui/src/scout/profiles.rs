@@ -35,20 +35,12 @@ pub struct ProfilesUi {
     /// The profile being renamed, and the name typed so far.
     pub renaming: Option<(String, String)>,
     /// Capture per stem running on a worker thread.
-    #[cfg(not(target_arch = "wasm32"))]
     pub stems: Option<std::sync::mpsc::Receiver<Result<Value, String>>>,
 }
 
 impl ProfilesUi {
     pub fn busy(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.stems.is_some()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        self.stems.is_some()
     }
 }
 
@@ -156,32 +148,23 @@ fn capture_stems(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
     if let Some(o) = q.as_object_mut() {
         o.insert("from".into(), json!("stems"));
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let s = app.engine.session().clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .name("scout-stems".into())
-            .spawn(move || {
-                let mut e = soundcraft_engine::Engine::new(s);
-                let r = e.execute("scout.profile_capture", &q).map_err(|e| e.to_string());
-                let _ = tx.send(r);
-            })
-            .map_err(|e| e.to_string())?;
-        app.scout.profiles.stems = Some(rx);
-        app.ui.status = "Separating stems for profiles…".into();
-        Ok(json!({"started": true}))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = q;
-        Err("Capture per stem needs the desktop app".into())
-    }
+    let s = app.engine.session().clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("scout-stems".into())
+        .spawn(move || {
+            let mut e = soundcraft_engine::Engine::new(s);
+            let r = e.execute("scout.profile_capture", &q).map_err(|e| e.to_string());
+            let _ = tx.send(r);
+        })
+        .map_err(|e| e.to_string())?;
+    app.scout.profiles.stems = Some(rx);
+    app.ui.status = "Separating stems for profiles…".into();
+    Ok(json!({"started": true}))
 }
 
 /// Each frame: a finished Capture per stem re-reads the library (desktop only: the web build has
 /// no Capture per stem).
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn poll(app: &mut SoundApp) {
     let done = app.scout.profiles.stems.as_ref().and_then(|rx| match rx.try_recv() {
         Ok(r) => Some(r),

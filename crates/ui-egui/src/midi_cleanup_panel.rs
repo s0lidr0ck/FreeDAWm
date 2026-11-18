@@ -217,7 +217,6 @@ fn switch(ui: &mut Ui, labels: [&str; 2], right_on: bool) -> Option<bool> {
 
 /// The audio track a chord detection starts on: the one named like the MIDI track without its
 /// " MIDI" (what Audio to MIDI names it), else the nearest audio track above it, else the first.
-#[cfg(not(target_arch = "wasm32"))]
 fn default_chord_source(s: &Session, midi_track: soundcraft_model::TrackId) -> Option<soundcraft_model::TrackId> {
     let audio = |k: soundcraft_model::TrackKind| k == soundcraft_model::TrackKind::Audio;
     let pos = s.tracks.iter().position(|t| t.id == midi_track)?;
@@ -388,7 +387,6 @@ fn out_of_key_row(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, on: bool, remove
 
 /// The chord detection row: a combo of the session's audio tracks and "Detect chords", which opens
 /// the Detect Chords dialog (the background ML job) on the chosen track.
-#[cfg(not(target_arch = "wasm32"))]
 fn detect_row(app: &mut SoundApp, ui: &mut Ui, midi_track: soundcraft_model::TrackId) {
     let audio: Vec<(soundcraft_model::TrackId, String)> =
         app.engine.session().tracks.iter().filter(|t| t.kind == soundcraft_model::TrackKind::Audio).map(|t| (t.id, t.name.clone())).collect();
@@ -416,6 +414,3 @@ fn detect_row(app: &mut SoundApp, ui: &mut Ui, midi_track: soundcraft_model::Tra
         }
     });
 }
-
-#[cfg(target_arch = "wasm32")]
-fn detect_row(_app: &mut SoundApp, _ui: &mut Ui, _midi_track: soundcraft_model::TrackId) {}

@@ -211,11 +211,8 @@ pub(crate) fn cached(app: &mut SoundApp, item: &BrowserItem, refresh: bool) {
     }
 }
 
-/// Lists `item`'s presets on a worker thread; `None` when no thread can be started (the web).
+/// Lists `item`'s presets on a worker thread; `None` when no thread can be started.
 fn spawn_listing(dir: Option<PathBuf>, item: BrowserItem) -> Option<std::sync::Arc<std::sync::Mutex<Option<Listing>>>> {
-    if cfg!(target_arch = "wasm32") {
-        return None;
-    }
     let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
     let out = std::sync::Arc::clone(&slot);
     let started = std::thread::Builder::new().name("preset-listing".into()).spawn(move || {

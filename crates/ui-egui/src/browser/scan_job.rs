@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 pub struct ScanJob {
     progress: Arc<ScanProgress>,
     outcome: Arc<Mutex<Option<Result<(), String>>>>,
-    #[cfg(not(target_arch = "wasm32"))]
     worker: Option<std::thread::JoinHandle<()>>,
     /// How many formats plan their work before the counts mean anything.
     formats: usize,
@@ -47,7 +46,6 @@ impl ScanJob {
             let r = work(&p);
             *o.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
         };
-        #[cfg(not(target_arch = "wasm32"))]
         let worker = match std::thread::Builder::new().name("plugin-scan".into()).spawn(run) {
             Ok(h) => Some(h),
             Err(e) => {
@@ -55,17 +53,8 @@ impl ScanJob {
                 None
             }
         };
-        #[cfg(target_arch = "wasm32")]
-        run();
         *running_slot() = Some(Arc::clone(&progress));
-        ScanJob {
-            progress,
-            outcome,
-            #[cfg(not(target_arch = "wasm32"))]
-            worker,
-            formats: 0,
-            resolving: false,
-        }
+        ScanJob { progress, outcome, worker, formats: 0, resolving: false }
     }
 
     /// Whether every format has planned its work (the total is final).
@@ -80,10 +69,8 @@ impl ScanJob {
 
     /// Cancels the scan and waits (at most `wait`) for its worker, which stops the running
     /// helper process: for quitting the app.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     pub fn stop(mut self, wait: std::time::Duration) {
         self.cancel();
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(h) = self.worker.take() {
             let until = std::time::Instant::now() + wait;
             while !h.is_finished() && std::time::Instant::now() < until {
@@ -95,8 +82,6 @@ impl ScanJob {
                 log::warn!("plugin scan: the worker did not stop in {wait:?}");
             }
         }
-        #[cfg(target_arch = "wasm32")]
-        let _ = wait;
         *running_slot() = None;
     }
 
@@ -128,14 +113,11 @@ fn scan_hosts(retry_failed: bool, progress: &ScanProgress) -> Result<(), String>
     let opts = ScanOptions { retry_failed, ..ScanOptions::default() };
     // Both formats at once: each plans its work (adding to the total) before it scans, so the
     // count shown covers both from the start.
-    #[cfg(not(target_arch = "wasm32"))]
     let (clap, vst3) = std::thread::scope(|s| {
         let clap = s.spawn(|| soundcraft_clap_host::scan_with(&opts, progress));
         let vst3 = soundcraft_vst3_host::scan_with(&opts, progress);
         (clap.join().unwrap_or_else(|_| Err("the CLAP scan failed".into())), vst3)
     });
-    #[cfg(target_arch = "wasm32")]
-    let (clap, vst3) = (soundcraft_clap_host::scan_with(&opts, progress), soundcraft_vst3_host::scan_with(&opts, progress));
     if progress.cancelled() {
         return Err("Plugin scan cancelled".into());
     }
