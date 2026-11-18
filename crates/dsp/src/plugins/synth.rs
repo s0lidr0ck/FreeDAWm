@@ -2,9 +2,11 @@
 //! square an octave below oscillator 1) and noise, a resonant state-variable filter (TPT form;
 //! 12 or 24 dB low-pass, high-pass, band-pass or notch) with its own ADSR and key tracking, amp
 //! ADSR, an LFO (sine, triangle, square or saw) to pitch, cutoff and level, poly, mono or legato
-//! play, optional glide. The parameters past Mod Wheel Vibrato came later and default to the
-//! sound the synth had before them (12 dB low-pass, LFO amounts, sub, noise and key tracking at
-//! 0, poly), so sessions saved before sound as they did.
+//! play, optional glide, unison (up to seven detuned copies of both oscillators, spread across the
+//! stereo field) and hard sync (oscillator 2 restarted by oscillator 1, the restart band-limited
+//! by a PolyBLEP step). The parameters past Mod Wheel Vibrato came later and default to the sound
+//! the synth had before them (12 dB low-pass, LFO amounts, sub, noise and key tracking at 0, poly,
+//! unison and sync off), so sessions saved before sound as they did, sample for sample.
 
 use crate::osc::{Osc, Waveform};
 use crate::params::{Params, choice, lin, log, param_plumbing};
@@ -96,8 +98,10 @@ fn wave(i: usize) -> Waveform {
 const FILTERS: &[&str] = &["Low-pass 12 dB", "Low-pass 24 dB", "High-pass", "Band-pass", "Notch"];
 const LFO_WAVES: &[&str] = &["Sine", "Triangle", "Square", "Saw"];
 const MODES: &[&str] = &["Poly", "Mono", "Legato"];
+const UNISON: &[&str] = &["Off", "2", "3", "4", "5", "6", "7"];
+const OFF_ON: &[&str] = &["Off", "On"];
 
-static SYNTH_PARAMS: [ParamInfo; 31] = [
+static SYNTH_PARAMS: [ParamInfo; 35] = [
     choice("osc1_wave", "Osc 1", WAVES, 0),
     choice("osc2_wave", "Osc 2", WAVES, 0),
     lin("osc2_semitones", "Osc 2 Pitch", -24.0, 24.0, 0.0, Unit::Semitones),
@@ -130,7 +134,19 @@ static SYNTH_PARAMS: [ParamInfo; 31] = [
     lin("lfo_cutoff", "LFO to Cutoff", 0.0, 100.0, 0.0, Unit::Percent),
     lin("lfo_amp", "LFO to Level", 0.0, 100.0, 0.0, Unit::Percent),
     choice("voice_mode", "Voice Mode", MODES, 0),
+    // Unison: copies of both oscillators per note, detuned (cents across the stack) and spread
+    // (the outer copies to the sides); hard sync restarts oscillator 2 with oscillator 1.
+    choice("unison", "Unison", UNISON, 0),
+    lin("unison_detune", "Unison Detune", 0.0, 100.0, 20.0, Unit::Cents),
+    lin("unison_spread", "Unison Spread", 0.0, 100.0, 50.0, Unit::Percent),
+    choice("osc_sync", "Osc 2 Sync", OFF_ON, 0),
 ];
+const UNISON_P: usize = 31;
+const UNISON_DETUNE: usize = 32;
+const UNISON_SPREAD: usize = 33;
+const OSC_SYNC: usize = 34;
+/// Most copies a unison note plays.
+const MAX_UNISON: usize = 7;
 const FILTER_TYPE: usize = 21;
 const KEY_TRACK: usize = 22;
 const SUB_LEVEL: usize = 23;
@@ -292,6 +308,81 @@ impl Svf {
     }
 }
 
+/// The naive (not band-limited) value of `wave` at phase `p`: what a hard-sync restart jumps
+/// between.
+#[inline]
+fn naive(wave: Waveform, p: f32) -> f32 {
+    match wave {
+        Waveform::Saw => 2.0 * p - 1.0,
+        Waveform::Square => {
+            if p < 0.5 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        Waveform::Triangle => 1.0 - 4.0 * ((p + 0.25).fract() - 0.5).abs(),
+        _ => (std::f32::consts::TAU * p).sin(),
+    }
+}
+
+/// The step `Osc` corrects for itself just after phase 0 (its own wrap): a saw falls by 2, a
+/// square rises by 2; the others have none there.
+#[inline]
+fn own_step(wave: Waveform) -> f32 {
+    match wave {
+        Waveform::Saw => -2.0,
+        Waveform::Square => 2.0,
+        _ => 0.0,
+    }
+}
+
+/// One copy of the two oscillators: oscillator 2 optionally hard-synced to oscillator 1.
+#[derive(Debug, Clone, Copy)]
+struct Pair {
+    osc1: Osc,
+    osc2: Osc,
+    /// The second half of the last restart's PolyBLEP, added to oscillator 2's next sample.
+    fix: f32,
+}
+
+impl Pair {
+    fn new(seed: u32) -> Pair {
+        Pair { osc1: Osc::new(seed), osc2: Osc::new(seed.wrapping_mul(7919)), fix: 0.0 }
+    }
+
+    /// One sample of each oscillator; with `sync`, oscillator 2 starts again where oscillator 1
+    /// wraps, the jump spread over the two samples around it (a PolyBLEP step).
+    #[inline]
+    fn next(&mut self, w1: Waveform, w2: Waveform, inc1: f32, inc2: f32, sync: bool) -> (f32, f32) {
+        if !sync {
+            return (self.osc1.next(w1, inc1), self.osc2.next(w2, inc2));
+        }
+        let dt1 = if inc1.is_finite() { inc1.clamp(0.0, 0.49) } else { 0.0 };
+        let dt2 = if inc2.is_finite() { inc2.clamp(0.0, 0.49) } else { 0.0 };
+        let (p1, p2) = (self.osc1.phase, self.osc2.phase);
+        let s1 = self.osc1.next(w1, inc1);
+        let mut s2 = self.osc2.next(w2, inc2) + std::mem::take(&mut self.fix);
+        if dt1 > 0.0 && p1 + dt1 >= 1.0 {
+            // Oscillator 1 wrapped `d` of a sample before the next sample: oscillator 2 restarts
+            // there, from where it had got to.
+            let d = ((p1 + dt1 - 1.0) / dt1).clamp(0.0, 1.0);
+            let at = (p2 + dt2 * (1.0 - d)).fract();
+            let h = naive(w2, 0.0) - naive(w2, at);
+            s2 += 0.5 * h * d * d;
+            self.osc2.phase = (dt2 * d).min(0.999_999);
+            // The next sample's `Osc` already adds the after-step of its own wrap; the rest of
+            // this jump's is added then.
+            let e = 1.0 - d;
+            self.fix = if dt2 * d < dt2 { -0.5 * (h - own_step(w2)) * e * e } else { -0.5 * h * e * e };
+            if !self.fix.is_finite() {
+                self.fix = 0.0;
+            }
+        }
+        (s1, s2)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Voice {
     note: u8,
@@ -307,6 +398,11 @@ struct Voice {
     svf2: Svf,
     sub: Osc,
     noise: u32,
+    /// Unison and hard sync: the copies of the oscillators (the first is `osc1`/`osc2`'s place
+    /// when either is on), and the right side's filters.
+    pairs: [Pair; MAX_UNISON],
+    svf_r: Svf,
+    svf2_r: Svf,
     age: u64,
     held: bool,
     /// Released while the sustain pedal was down.
@@ -328,6 +424,9 @@ impl Voice {
             svf2: Svf::default(),
             sub: Osc::new(seed.wrapping_mul(104_729)),
             noise: seed.wrapping_mul(2_654_435_761).max(1),
+            pairs: [Pair::new(seed); MAX_UNISON],
+            svf_r: Svf::default(),
+            svf2_r: Svf::default(),
             age: 0,
             held: false,
             sustained: false,
@@ -336,6 +435,21 @@ impl Voice {
 
     fn active(&self) -> bool {
         self.amp.stage != Stage::Idle
+    }
+
+    /// A fresh start for the unison copies and the right filters: each copy from its own phase
+    /// (so the stack does not start as one wave), oscillator 2 at the phase the plain path uses.
+    fn restart_pairs(&mut self) {
+        for (i, p) in self.pairs.iter_mut().enumerate() {
+            let spread = (i as f32 * 0.618_034).fract();
+            p.osc1.reset();
+            p.osc1.phase = spread;
+            p.osc2.reset();
+            p.osc2.phase = (0.37 + spread).fract();
+            p.fix = 0.0;
+        }
+        self.svf_r = Svf::default();
+        self.svf2_r = Svf::default();
     }
 }
 
@@ -474,6 +588,7 @@ impl SubtractiveSynth {
                 v.osc2.phase = 0.37;
                 v.svf = Svf::default();
                 v.svf2 = Svf::default();
+                v.restart_pairs();
             }
             v.amp.gate_on();
             v.filt.gate_on();
@@ -533,6 +648,7 @@ impl SubtractiveSynth {
                 v.osc2.phase = 0.37;
                 v.svf = Svf::default();
                 v.svf2 = Svf::default();
+                v.restart_pairs();
             }
             if fresh {
                 v.vel = (1.0 - sens) + sens * f32::from(vel.min(127)) / 127.0;
@@ -615,8 +731,20 @@ impl SubtractiveSynth {
         cents
     }
 
+    /// One sample, left and right: the same unless unison spreads the copies.
     #[inline]
-    fn render_sample(&mut self) -> f32 {
+    fn render_sample(&mut self) -> (f32, f32) {
+        let unison = self.p.choice(UNISON_P).min(MAX_UNISON - 1) + 1;
+        if unison > 1 || self.p.choice(OSC_SYNC) == 1 {
+            return self.render_wide(unison);
+        }
+        let y = self.render_plain();
+        (y, y)
+    }
+
+    /// The synth as it was before unison and hard sync, sample for sample.
+    #[inline]
+    fn render_plain(&mut self) -> f32 {
         let sr = self.sr;
         let w1 = wave(self.p.choice(0));
         let w2 = wave(self.p.choice(1));
@@ -687,6 +815,122 @@ impl SubtractiveSynth {
         }
         out * 0.3
     }
+
+    /// The control values one sample shares across voices (as `render_plain` reads them).
+    #[inline]
+    fn lfo_now(&mut self) -> f32 {
+        let ph = self.lfo_phase;
+        let lfo = match self.p.choice(LFO_WAVE) {
+            1 => 1.0 - 4.0 * (ph - 0.5).abs(),
+            2 => {
+                if ph < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            3 => 2.0 * ph - 1.0,
+            _ => (std::f32::consts::TAU * ph).sin(),
+        };
+        self.lfo_phase = (self.lfo_phase + self.p.v(LFO_RATE) / self.sr).fract();
+        lfo
+    }
+
+    /// Unison and/or hard sync: `unison` copies of the oscillator pair per voice, detuned across
+    /// Unison Detune and panned across Unison Spread (constant power, the stack's level kept by
+    /// 1/√n), each side through its own filter.
+    #[inline]
+    fn render_wide(&mut self, unison: usize) -> (f32, f32) {
+        let sr = self.sr;
+        let w1 = wave(self.p.choice(0));
+        let w2 = wave(self.p.choice(1));
+        let ratio2 = 2f32.powf(self.tune2.next() / 12.0);
+        let mix = self.mix.next();
+        let k = self.damping.next();
+        let env_oct = self.env_oct.next();
+        let cutoff = self.cutoff.next();
+        let nyq = sr * 0.45;
+        let cents = self.pitch_cents();
+        self.vib_phase = (self.vib_phase + VIBRATO_HZ / sr).fract();
+        let lfo = self.lfo_now();
+        let cents = cents + self.p.v(LFO_PITCH) * lfo;
+        let lfo_oct = self.p.v(LFO_CUTOFF) / 100.0 * 4.0 * lfo;
+        let lfo_amp = 1.0 - self.p.v(LFO_AMP) / 100.0 * 0.5 * (1.0 - lfo);
+        let kind = self.p.choice(FILTER_TYPE);
+        let key_track = self.p.v(KEY_TRACK) / 100.0;
+        let sub_level = self.p.v(SUB_LEVEL) / 100.0;
+        let noise_level = self.p.v(NOISE_LEVEL) / 100.0;
+        let sync = self.p.choice(OSC_SYNC) == 1;
+        let detune = self.p.v(UNISON_DETUNE);
+        let spread = self.p.v(UNISON_SPREAD) / 100.0;
+        let bend = if cents == 0.0 { 1.0 } else { 2f32.powf(cents / 1200.0) };
+        let norm = 1.0 / (unison as f32).sqrt();
+        // Per copy: its pitch ratio and its left and right gains (one copy: the centre, at the
+        // plain path's level on both sides).
+        let mut copies = [(1.0f32, 1.0f32, 1.0f32); MAX_UNISON];
+        if unison > 1 {
+            for (i, c) in copies.iter_mut().take(unison).enumerate() {
+                let x = 2.0 * i as f32 / (unison - 1) as f32 - 1.0;
+                let angle = (1.0 + spread * x) * std::f32::consts::FRAC_PI_4;
+                let g = std::f32::consts::SQRT_2 * norm;
+                *c = (2f32.powf(detune * x / 1200.0), g * angle.cos(), g * angle.sin());
+            }
+        }
+        let (mut out_l, mut out_r) = (0.0, 0.0);
+        for v in &mut self.voices {
+            if !v.active() {
+                continue;
+            }
+            if self.glide_coef > 0.0 {
+                v.freq = v.target + (v.freq - v.target) * self.glide_coef;
+            } else {
+                v.freq = v.target;
+            }
+            let a = v.amp.next(&self.amp_rates);
+            let fe = v.filt.next(&self.filt_rates);
+            let base = v.freq * bend / sr;
+            let (mut l, mut r) = (0.0, 0.0);
+            for (pair, &(ratio, gl, gr)) in v.pairs.iter_mut().zip(copies.iter()).take(unison) {
+                let (s1, s2) = pair.next(w1, w2, base * ratio, base * ratio * ratio2, sync);
+                let raw = s1 * (1.0 - mix) + s2 * mix;
+                l += raw * gl;
+                r += raw * gr;
+            }
+            let mut centre = 0.0;
+            if sub_level > 0.0 {
+                centre += sub_level * v.sub.next(Waveform::Square, base * 0.5);
+            }
+            if noise_level > 0.0 {
+                v.noise ^= v.noise << 13;
+                v.noise ^= v.noise >> 17;
+                v.noise ^= v.noise << 5;
+                centre += noise_level * (v.noise as f32 / u32::MAX as f32 * 2.0 - 1.0);
+            }
+            let track = if key_track > 0.0 { key_track * (f32::from(v.note) - 60.0) / 12.0 } else { 0.0 };
+            let fc = (cutoff * 2f32.powf(env_oct * fe + track + lfo_oct)).clamp(20.0, nyq);
+            let g = (std::f32::consts::PI * fc / sr).tan();
+            let gain = a * v.vel * lfo_amp;
+            if unison == 1 {
+                // Sync alone: one path, the same on both sides.
+                let mut y = v.svf.run(l + centre, g, k, kind);
+                if kind == 1 {
+                    y = v.svf2.run(y, g, k, 1);
+                }
+                out_l += y * gain;
+                out_r += y * gain;
+                continue;
+            }
+            let mut yl = v.svf.run(l + centre, g, k, kind);
+            let mut yr = v.svf_r.run(r + centre, g, k, kind);
+            if kind == 1 {
+                yl = v.svf2.run(yl, g, k, 1);
+                yr = v.svf2_r.run(yr, g, k, 1);
+            }
+            out_l += yl * gain;
+            out_r += yr * gain;
+        }
+        (out_l * 0.3, out_r * 0.3)
+    }
 }
 
 impl Plugin for SubtractiveSynth {
@@ -745,10 +989,20 @@ impl Plugin for SubtractiveSynth {
                 self.apply(kind);
                 next += 1;
             }
-            let y = self.render_sample() * self.level.next();
-            for b in io.iter_mut().take(ch) {
-                if let Some(x) = b.get_mut(n) {
+            let (l, r) = self.render_sample();
+            let g = self.level.next();
+            let (l, r) = (l * g, r * g);
+            if ch == 1 {
+                // One channel: both sides (the same sample when unison does not spread them).
+                let y = if l == r { l } else { 0.5 * (l + r) };
+                if let Some(x) = io.first_mut().and_then(|b| b.get_mut(n)) {
                     *x = y;
+                }
+                continue;
+            }
+            for (c, b) in io.iter_mut().take(ch).enumerate() {
+                if let Some(x) = b.get_mut(n) {
+                    *x = if c % 2 == 0 { l } else { r };
                 }
             }
         }
@@ -943,6 +1197,167 @@ mod upgrade_tests {
         assert!(rms(&render(&[("sub_level", 100.0)], &[(0, 60)], 12_000)[2_000..]) > base * 1.1);
         assert!(rms(&render(&[("noise_level", 100.0), ("cutoff", 20000.0)], &[(0, 60)], 12_000)[2_000..]) > base * 1.1);
         assert_eq!(render(&[("sub_level", 0.0), ("noise_level", 0.0)], &[(0, 60)], 4_096), render(&[], &[(0, 60)], 4_096));
+    }
+
+    /// What the synth plays at its defaults and with each factory preset, as FNV-1a over the
+    /// samples' bits (stereo, a phrase with a chord, a bend and the mod wheel): recorded before
+    /// unison and hard sync were added, so their defaults must leave every sample as it was.
+    fn golden(set: &[(&str, f32)]) -> u64 {
+        let mut s = SubtractiveSynth::new();
+        s.prepare(44_100.0, 256, 2);
+        for (id, v) in set {
+            s.set_param(id, *v);
+        }
+        let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+        let mut io = vec![vec![0.0f32; 256]; 2];
+        for block in 0..200usize {
+            match block {
+                0 => [48u8, 55, 60, 64].iter().enumerate().for_each(|(i, n)| s.note_on(i * 7, *n, 90 + i as u8 * 9)),
+                40 => s.midi(10, [0xE0, 0, 96]),
+                60 => s.midi(3, [0xB0, 1, 100]),
+                90 => [48u8, 55].iter().for_each(|n| s.note_off(0, *n)),
+                100 => s.note_on(100, 72, 127),
+                150 => (0..128).for_each(|n| s.note_off(5, n)),
+                _ => {}
+            }
+            s.process(&mut io, 256);
+            for c in &io {
+                for x in c {
+                    for b in x.to_bits().to_le_bytes() {
+                        h ^= u64::from(b);
+                        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+                    }
+                }
+            }
+        }
+        h
+    }
+
+    #[test]
+    fn the_defaults_and_the_factory_presets_sound_as_before_unison_and_sync() {
+        let mut got = vec![golden(&[])];
+        for p in presets::SYNTH_PRESETS.iter().take(GOLDEN.len() - 1) {
+            got.push(golden(p.set));
+        }
+        assert_eq!(got, GOLDEN.to_vec(), "{got:?}");
+    }
+
+    /// [`golden`] before unison and hard sync: the defaults, then the first twelve factory presets.
+    const GOLDEN: [u64; 13] = [
+        3715586722440030317,
+        8644343548099411209,
+        11361103330836395649,
+        9310577426190126389,
+        17243079934635600449,
+        13814638314381514681,
+        17319399269672680025,
+        7137426600716816809,
+        5906201002951708181,
+        4308638506693745745,
+        14985188900884901721,
+        7884382926005052761,
+        5780801337431639761,
+    ];
+
+    fn render2(set: &[(&str, f32)], notes: &[(usize, u8)], frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut s = SubtractiveSynth::new();
+        s.prepare(48_000.0, 512, 2);
+        for (id, v) in set {
+            assert!(s.set_param(id, *v), "{id}");
+        }
+        let (mut l, mut r) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
+        let mut io = vec![vec![0.0f32; 256]; 2];
+        let mut at = 0;
+        while at < frames {
+            for (when, note) in notes.iter().filter(|(w, _)| (at..at + 256).contains(w)) {
+                s.note_on(when - at, *note, 100);
+            }
+            s.process(&mut io, 256);
+            l.extend_from_slice(&io[0]);
+            r.extend_from_slice(&io[1]);
+            at += 256;
+        }
+        (l, r)
+    }
+
+    /// Hann-windowed DFT magnitude of `x` at `hz` (48 kHz).
+    fn mag(x: &[f32], hz: f64) -> f64 {
+        let n = x.len() as f64;
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, v) in x.iter().enumerate() {
+            let w = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n).cos();
+            let a = std::f64::consts::TAU * hz * i as f64 / 48_000.0;
+            re += f64::from(*v) * w * a.cos();
+            im += f64::from(*v) * w * a.sin();
+        }
+        (re * re + im * im).sqrt()
+    }
+
+    #[test]
+    fn unison_spreads_a_detuned_stack_across_the_sides_at_the_same_level() {
+        let set = |n: f32, spread: f32| vec![("unison", n), ("unison_spread", spread), ("unison_detune", 25.0), ("amp_sustain", 100.0)];
+        let (pl, pr) = render2(&[("amp_sustain", 100.0)], &[(0, 57)], 24_000);
+        assert_eq!(pl, pr, "one copy: the same on both sides");
+        let (l, r) = render2(&set(4.0, 100.0), &[(0, 57)], 24_000);
+        let diff = rms(&l.iter().zip(&r).map(|(a, b)| a - b).collect::<Vec<_>>()[4_000..]);
+        assert!(diff > rms(&l[4_000..]) * 0.2, "spread: the sides differ ({diff})");
+        // The stack keeps the level of one copy within 3 dB.
+        let one = rms(&pl[4_000..]);
+        let both = ((rms(&l[4_000..]).powi(2) + rms(&r[4_000..]).powi(2)) / 2.0).sqrt();
+        assert!((both / one).log10().abs() * 20.0 < 3.0, "{both} against {one}");
+        // No spread: the sides are the same, but the detuned copies still beat against each other.
+        let (l0, r0) = render2(&set(4.0, 0.0), &[(0, 57)], 24_000);
+        assert_eq!(l0, r0);
+        assert_ne!(l0, pl);
+        // Detune widens each harmonic: by the eighth harmonic's outer copy, 25 cents up, a
+        // detuned stack has far more energy than one copy.
+        let f = 1760.0;
+        let side = |x: &[f32]| mag(x, f * 2f64.powf(25.0 / 1200.0)) / mag(x, f);
+        assert!(side(&l0[4_000..]) > side(&pl[4_000..]) * 2.0, "{} {}", side(&l0[4_000..]), side(&pl[4_000..]));
+        // A mono output folds the sides.
+        let mono = render(&set(4.0, 100.0), &[(0, 57)], 4_096);
+        assert!(mono.iter().zip(l.iter().zip(&r)).all(|(m, (a, b))| (m - 0.5 * (a + b)).abs() < 1e-6));
+    }
+
+    /// The restart is band-limited: what folds back between the harmonics of oscillator 1 is
+    /// well under what a naive restart leaves, and the sound repeats at oscillator 1's period.
+    #[test]
+    fn hard_sync_locks_osc_2_to_osc_1_without_the_naive_aliasing() {
+        let (f1, f2) = (1234.5f64, 1234.5f64 * 2f64.powf(7.0 / 12.0));
+        let (dt1, dt2) = ((f1 / 48_000.0) as f32, (f2 / 48_000.0) as f32);
+        for w in [Waveform::Saw, Waveform::Square] {
+            let mut p = Pair::new(3);
+            p.osc1.phase = 0.0;
+            p.osc2.phase = 0.0;
+            let ours: Vec<f32> = (0..48_000).map(|_| p.next(Waveform::Saw, w, dt1, dt2, true).1).collect();
+            let (mut a, mut b) = (0.0f64, 0.0f64);
+            let naive: Vec<f32> = (0..48_000)
+                .map(|_| {
+                    let y = naive(w, b as f32);
+                    a += f1 / 48_000.0;
+                    b += f2 / 48_000.0;
+                    if a >= 1.0 {
+                        a -= 1.0;
+                        b = a * f2 / f1;
+                    }
+                    b = b.fract();
+                    y
+                })
+                .collect();
+            let between = |x: &[f32]| (1..15).map(|k| mag(x, (k as f64 + 0.5) * f1)).sum::<f64>();
+            let harmonics = |x: &[f32]| (1..15).map(|k| mag(x, k as f64 * f1)).sum::<f64>();
+            // At least 6 dB less folded back (the saw does far better; a square restarted while
+            // high has no jump at all, so less of its folding came from the restart).
+            let most = if w == Waveform::Saw { 0.35 } else { 0.5 };
+            assert!(between(&ours) < between(&naive) * most, "{w:?}: {} against {}", between(&ours), between(&naive));
+            assert!(harmonics(&ours) > between(&ours) * 20.0, "{w:?}: locked to oscillator 1");
+            assert!(ours.iter().all(|x| x.is_finite() && x.abs() < 2.5));
+        }
+        // In the synth: off, it is the plain sound; on, oscillator 2 follows oscillator 1.
+        let plain = render(&[("osc_mix", 100.0), ("osc2_semitones", 7.0)], &[(0, 48)], 8_192);
+        let synced = render(&[("osc_mix", 100.0), ("osc2_semitones", 7.0), ("osc_sync", 1.0)], &[(0, 48)], 8_192);
+        assert_ne!(plain, synced);
+        assert!(synced.iter().all(|x| x.is_finite()));
     }
 
     #[test]
