@@ -195,6 +195,48 @@ fn changing_one_route_lets_go_only_of_that_tracks_notes() {
     assert_eq!(offs(&log).iter().filter(|m| **m == [0x81, 64, 0]).count(), 1, "{:?}", offs(&log));
 }
 
+/// One MIDI track playing two instruments split at middle C, and a third layered over the top
+/// half for loud notes only: each hears only its zone's notes, every one hears the pedal.
+#[test]
+fn one_track_layers_and_splits_several_instruments() {
+    let mut s = Session::default();
+    let mk = |s: &mut Session, name: &str| {
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some(name));
+        s.track_mut(t).unwrap().instrument = Some(Insert::new(TAPE));
+        s.track_mut(t).unwrap().mixer.output = Route::Main;
+        t
+    };
+    let (low, high, loud) = (mk(&mut s, "Bass"), mk(&mut s, "Piano"), mk(&mut s, "Strings"));
+    let src = s.add_track(TrackKind::Midi, ChannelFormat::Stereo, Some("Keys"));
+    let id = s.new_clip_id();
+    let note = |pitch, velocity, start| Note { probability: 100, start, length: 480, pitch, velocity, release_velocity: 0, channel: 0, muted: false };
+    let seq = Sequence { notes: vec![note(40, 90, 0), note(72, 60, 960), note(76, 120, 1920)], ctrls: Vec::new(), sysex: Vec::new() };
+    let mut c = Clip::midi(id, "notes", 0, 4 * SR as i64, seq);
+    c.midi_channels = false;
+    s.track_mut(src).unwrap().playlist_mut().unwrap().clips.push(c);
+    let mut ins = Insert::new(track_midi::ID);
+    let zones = [
+        track_midi::Zone { track: low, keys: (0, 59), vel: (1, 127) },
+        track_midi::Zone { track: high, keys: (60, 127), vel: (1, 127) },
+        track_midi::Zone { track: loud, keys: (60, 127), vel: (100, 127) },
+    ];
+    ins.set_state_bytes(track_midi::zones_text(&zones).as_bytes());
+    s.track_mut(src).unwrap().instrument = Some(ins);
+    let routes: Vec<_> = module_input_routes(&s).into_iter().filter(|r| r.module == INSTRUMENT_OUT).collect();
+    assert_eq!(routes.len(), 3, "{routes:?}");
+    assert!(routes.iter().all(|r| r.result.is_ok()));
+    let ((a, la), (b, lb), (c, lc)) = (tape(low), tape(high), tape(loud));
+    let mut eng = engine(vec![a, b, c]);
+    render(&mut eng, &s, 0..300);
+    let ons = |l: &Log| l.lock().unwrap().iter().filter(|(_, m)| m[0] & 0xF0 == 0x90 && m[2] > 0).map(|(_, m)| m[1]).collect::<Vec<_>>();
+    let offs = |l: &Log| l.lock().unwrap().iter().filter(|(_, m)| m[0] & 0xF0 == 0x80).map(|(_, m)| m[1]).collect::<Vec<_>>();
+    assert_eq!(ons(&la), vec![40], "the bass takes the low split");
+    assert_eq!(ons(&lb), vec![72, 76], "the piano the high one");
+    assert_eq!(ons(&lc), vec![76], "the strings only the loud high note");
+    assert_eq!(offs(&la), vec![40]);
+    assert_eq!(offs(&lb), vec![72, 76]);
+}
+
 #[test]
 fn a_loop_is_refused_and_plays_nothing() {
     let (mut s, synth, a, _) = rig();

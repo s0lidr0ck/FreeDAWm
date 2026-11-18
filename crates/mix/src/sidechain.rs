@@ -349,8 +349,16 @@ fn resolve_with(s: &Session, over: Over<'_>) -> Plan {
     }
     // MIDI tracks playing an instrument on another track (MIDI to Track) order like module MIDI
     // inputs: the source renders before the target; one that would close a loop plays nothing.
-    for (si, st) in s.tracks.iter().enumerate() {
-        let Some(target) = st.instrument.as_ref().and_then(crate::track_midi::target_of) else { continue };
+    let targets = s.tracks.iter().enumerate().flat_map(|(si, st)| {
+        let mut seen: Vec<TrackId> = Vec::new();
+        st.instrument.as_ref().map(crate::track_midi::zones_of).unwrap_or_default().into_iter().filter_map(move |z| {
+            (!seen.contains(&z.track)).then(|| {
+                seen.push(z.track);
+                (si, st, z.track)
+            })
+        })
+    });
+    for (si, st, target) in targets {
         let ci = s.tracks.iter().position(|t| t.id == target);
         let result = ci.map_or(Err(SidechainProblem::Missing), |ci| check_routed(s, &adj, ci, si));
         if result.is_ok()

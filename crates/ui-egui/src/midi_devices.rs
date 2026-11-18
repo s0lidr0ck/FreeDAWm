@@ -436,6 +436,86 @@ fn to_track_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
             ui.close();
         }
     });
+    layers_menu(app, ui, id);
+}
+
+/// The output menu's "Layers & Splits" part: the track plays up to four instruments at once, each
+/// over a key range and a velocity range (`mix.midi_layers`). Each layer's ranges are drag
+/// values (a drag is one undo step); a layer is added from the other instrument tracks.
+fn layers_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    use soundcraft_mix::track_midi::{MAX_ZONES, Zone};
+    let s = app.engine.session();
+    let Some(track) = s.track(id) else { return };
+    let zones: Vec<Zone> = track.instrument.as_ref().map(soundcraft_engine::cmd::midi_out::layers).unwrap_or_default();
+    let targets: Vec<(TrackId, String)> =
+        s.tracks.iter().filter(|t| t.id != id && t.kind.is_midi() && t.instrument.is_some()).map(|t| (t.id, t.name.clone())).collect();
+    let name = |t: TrackId| s.track(t).map_or_else(|| "(gone)".to_string(), |t| t.name.clone());
+    let names: Vec<String> = zones.iter().map(|z| name(z.track)).collect();
+    let title = if zones.len() > 1 { format!("Layers & Splits: {}", zones.len()) } else { "Layers & Splits".to_string() };
+    let as_json = |zs: &[Zone]| -> Vec<serde_json::Value> {
+        zs.iter().map(|z| json!({"target": z.track.0, "keys": [z.keys.0, z.keys.1], "velocities": [z.vel.0, z.vel.1]})).collect()
+    };
+    ui.menu_button(title, |ui| {
+        let mut next = zones.clone();
+        let mut merge: Option<String> = None;
+        let mut remove = None;
+        for (i, (z, n)) in next.iter_mut().zip(&names).enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(n).strong());
+                let mut drag = |ui: &mut egui::Ui, v: &mut u8, lo: u8, hi: u8, what: &str, note: bool| {
+                    let r = ui.add(egui::DragValue::new(v).range(lo..=hi).custom_formatter(move |x, _| {
+                        if note { soundcraft_midi::note_name(x.round().clamp(0.0, 127.0) as u8) } else { format!("{x:.0}") }
+                    }));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, format!("{n} {what}")));
+                    if r.changed() {
+                        merge = Some(format!("midi_layers:{}:{i}:{what}", id.0));
+                    }
+                };
+                ui.label("Keys");
+                drag(ui, &mut z.keys.0, 0, 127, "lowest key", true);
+                drag(ui, &mut z.keys.1, 0, 127, "highest key", true);
+                ui.label("Vel");
+                drag(ui, &mut z.vel.0, 1, 127, "lowest velocity", false);
+                drag(ui, &mut z.vel.1, 1, 127, "highest velocity", false);
+                if ui.small_button("✕").on_hover_text("Take this layer off").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(key) = merge {
+            if let Err(e) = app.engine.execute_merged("mix.midi_layers", &json!({"track": id.0, "layers": as_json(&next)}), &key) {
+                app.ui.status = e.to_string();
+            }
+        }
+        if let Some(i) = remove {
+            next.remove(i);
+            if let Err(e) = app.run("mix.midi_layers", json!({"track": id.0, "layers": as_json(&next)})) {
+                app.ui.status = e;
+            }
+        }
+        if !zones.is_empty() {
+            ui.separator();
+        }
+        ui.add_enabled_ui(zones.len() < MAX_ZONES, |ui| {
+            ui.menu_button("Add Layer", |ui| {
+                if targets.is_empty() {
+                    ui.label(egui::RichText::new("No other instrument tracks").small().color(Tokens::current().text_dim));
+                }
+                for (t, n) in &targets {
+                    if ui.button(n).clicked() {
+                        let mut more = zones.clone();
+                        more.push(Zone::all(*t));
+                        if let Err(e) = app.run("mix.midi_layers", json!({"track": id.0, "layers": as_json(&more)})) {
+                            app.ui.status = e;
+                        }
+                        ui.close();
+                    }
+                }
+            });
+        })
+        .response
+        .on_disabled_hover_text(format!("A track plays at most {MAX_ZONES} layers"));
+    });
 }
 
 /// The output port MIDI clock and timecode go to (`setup.midi_beat_clock`'s destination).

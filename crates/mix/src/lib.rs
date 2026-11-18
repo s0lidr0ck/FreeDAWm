@@ -595,6 +595,9 @@ struct Strip {
     /// change lets go of the notes only of the tracks that left; the others' held notes follow
     /// their new index. Capacity reserved in `sync`.
     routed_src: Vec<(u8, TrackId)>,
+    /// The zone each MIDI track playing this instrument plays it through (layers and splits,
+    /// `track_midi::Zone`), by source index; a source not listed takes everything.
+    routed_zone: Vec<(u8, track_midi::Zone)>,
     /// The instrument's next block starts somewhere new: send it the controllers in effect there.
     chase: bool,
     /// Counts the passes the clips have played from somewhere new (each start, locate or loop
@@ -765,6 +768,23 @@ impl StripMidi {
     }
 
     /// Adds source `src`'s events (in its order).
+    /// [`StripMidi::add`] through a layer's or split's zone: only what it takes.
+    fn add_zoned(&mut self, src: u8, out: &MidiOut, zone: Option<track_midi::Zone>) {
+        let Some(zone) = zone else {
+            self.add(src, out);
+            return;
+        };
+        for e in out.events().iter().filter(|e| zone.passes(e.msg)) {
+            match self.events.get_mut(self.len) {
+                Some(slot) => {
+                    *slot = StripMidiEvent { offset: e.offset, msg: e.msg, src, seq: self.len as u16 };
+                    self.len += 1;
+                }
+                None => self.dropped = self.dropped.saturating_add(1),
+            }
+        }
+    }
+
     fn add(&mut self, src: u8, out: &MidiOut) {
         for e in out.events() {
             match self.events.get_mut(self.len) {
@@ -854,6 +874,7 @@ impl Strip {
             midi_in: Box::new(StripMidi::new()),
             midi_held: Vec::with_capacity(MIDI_HELD),
             routed_src: Vec::new(),
+            routed_zone: Vec::new(),
             chase: true,
             pass: 0,
             muted: false,
@@ -2058,11 +2079,17 @@ impl MixEngine {
                 s.tracks
                     .iter()
                     .enumerate()
-                    .filter(|(_, x)| x.instrument.as_ref().and_then(track_midi::target_of) == Some(t.id))
+                    .filter(|(_, x)| x.instrument.as_ref().and_then(|i| track_midi::zone_for(i, t.id)).is_some())
                     .filter(|(_, x)| plan.midi_ok(t.id, ModuleRef { track: x.id, module: sidechain::INSTRUMENT_OUT }))
                     .enumerate()
                     .filter_map(|(j, (si, _))| Some((u8::try_from(ROUTED_MIDI + j).ok()?, si, sidechain::INSTRUMENT_OUT))),
             );
+            // Each routed source's zone: only the layers and splits that limit what they take.
+            strip.routed_zone.clear();
+            strip.routed_zone.extend(strip.midi_src.iter().filter(|x| usize::from(x.0) >= ROUTED_MIDI).filter_map(|&(k, si, _)| {
+                let zone = s.tracks.get(si)?.instrument.as_ref().and_then(|i| track_midi::zone_for(i, t.id))?;
+                (!zone.is_all()).then_some((k, zone))
+            }));
             strip.routed_src.reserve(strip.midi_src.len());
             strip.inst_outs.sync(t, self.max_block);
             strip.module_in.reserve(sources.len());
@@ -2493,7 +2520,7 @@ impl MixEngine {
                     if let Some((_, src)) = done.iter().find(|(i, x)| *i == si && x.stamp == block)
                         && let Some(out) = src.module_midi(m)
                     {
-                        st.midi_in.add(k, out);
+                        st.midi_in.add_zoned(k, out, st.routed_zone.iter().find(|z| z.0 == k).map(|z| z.1));
                     }
                 }
                 st.midi_in.sort();
@@ -6263,7 +6290,7 @@ fn late_midi_in(st: &mut Strip, s: &Session, strips: &HashMap<TrackId, Strip>, b
         if let Some(src) = s.tracks.get(si).and_then(|x| strips.get(&x.id)).filter(|x| x.stamp == block)
             && let Some(out) = src.module_midi(m)
         {
-            st.midi_in.add(k, out);
+            st.midi_in.add_zoned(k, out, st.routed_zone.iter().find(|z| z.0 == k).map(|z| z.1));
         }
     }
     st.midi_in.sort();
