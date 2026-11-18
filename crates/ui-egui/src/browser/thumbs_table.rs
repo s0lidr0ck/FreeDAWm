@@ -13,6 +13,7 @@ static THUMBS: &[(&str, &[u8])] = &[
     ("eq_7band", include_bytes!("../../assets/browser-thumbs/eq_7band.png")),
     ("expander_gate", include_bytes!("../../assets/browser-thumbs/expander_gate.png")),
     ("flanger", include_bytes!("../../assets/browser-thumbs/flanger.png")),
+    ("fm_synth", include_bytes!("../../assets/browser-thumbs/fm_synth.png")),
     ("fs_amp", include_bytes!("../../assets/browser-thumbs/fs_amp.png")),
     ("fs_chamber", include_bytes!("../../assets/browser-thumbs/fs_chamber.png")),
     ("fs_cleanq", include_bytes!("../../assets/browser-thumbs/fs_cleanq.png")),
@@ -64,4 +65,5 @@ static THUMBS: &[(&str, &[u8])] = &[
     ("trim", include_bytes!("../../assets/browser-thumbs/trim.png")),
     ("tuner", include_bytes!("../../assets/browser-thumbs/tuner.png")),
     ("vault", include_bytes!("../../assets/browser-thumbs/vault.png")),
+    ("wavetable_synth", include_bytes!("../../assets/browser-thumbs/wavetable_synth.png")),
 ];
