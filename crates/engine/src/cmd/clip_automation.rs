@@ -15,9 +15,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Clip Automation Point",
             [],
             None,
-            "{clip, param (an automation lane id: volume, pan, plugin:m3:gain, ...), at: samples from the clip's start, value} — a point on the clip's own lane, heard while the clip plays (a dB lane adds to the track's, any other replaces it there)",
-            has_selection,
+            "{clip, param (an automation lane id: volume, pan, plugin:m3:gain, ...), at: samples from the clip's start, value, from?} — a point on the clip's own lane, heard while the clip plays (a dB lane adds to the track's, any other replaces it there); with `from` the point there moves to `at` (a drag in the Edit window)",
+            always,
             point
+        ),
+        cmd!(
+            "clip.automation_delete",
+            "Delete Clip Automation Points",
+            [],
+            None,
+            "{clip, param, points: [samples from the clip's start]} — removes those points from the clip's own lane (the lane goes when it has none left)",
+            always,
+            delete_points
         ),
         cmd!(
             "clip.automation_clear",
@@ -66,6 +75,12 @@ fn point(e: &mut Engine, p: &Value) -> Result<Value> {
     if !(0..c.length).contains(&at) {
         return Err(bad(C, format!("`at` is inside the clip: 0 to {}", c.length - 1)));
     }
+    let from = p.get("from").and_then(Value::as_i64);
+    if let Some(from) = from
+        && !c.automation.iter().any(|l| l.param == param && l.points.iter().any(|q| q.at == from))
+    {
+        return Err(bad(C, format!("no point at {from} on the clip's lane")));
+    }
     let lane = match c.automation.iter().position(|l| l.param == param) {
         Some(i) => &mut c.automation[i],
         None => {
@@ -74,8 +89,33 @@ fn point(e: &mut Engine, p: &Value) -> Result<Value> {
             &mut c.automation[n]
         }
     };
+    if let Some(from) = from.filter(|f| *f != at) {
+        lane.points.retain(|q| q.at != from);
+    }
     lane.set_point(at, value);
     Ok(json!({"points": lane.points.len()}))
+}
+
+fn delete_points(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "clip.automation_delete";
+    let id = p.get("clip").and_then(Value::as_u64).map(ClipId).ok_or_else(|| bad(C, "`clip` required"))?;
+    let param = param_of(p, C)?.ok_or_else(|| bad(C, "`param` required"))?;
+    let points: Vec<Samples> = p.get("points").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_i64).collect()).unwrap_or_default();
+    if points.is_empty() {
+        return Err(bad(C, "`points` required (samples from the clip's start)"));
+    }
+    let Some((_, c)) = e.session().find_clip(id) else { return Err(bad(C, format!("no clip {}", id.0))) };
+    let n = c.automation.iter().filter(|l| l.param == param).flat_map(|l| &l.points).filter(|q| points.contains(&q.at)).count();
+    if n == 0 {
+        return Err(bad(C, "none of those points is on the clip's lane"));
+    }
+    if let Some(c) = e.session_mut().find_clip_mut(id) {
+        for l in c.automation.iter_mut().filter(|l| l.param == param) {
+            l.points.retain(|q| !points.contains(&q.at));
+        }
+        c.automation.retain(|l| !l.points.is_empty());
+    }
+    Ok(json!({"deleted": n}))
 }
 
 /// The selected (or named) clips, with their tracks.
@@ -221,6 +261,29 @@ mod tests {
         e.execute("clip.automation_clear", &json!({})).unwrap();
         assert_eq!(played(&e, t, &pan, 60_000), -1.0);
         assert!(e.session().track(t).unwrap().played.is_empty());
+    }
+
+    /// The Edit window's mouse gestures on a clip's own points: a drag moves one (`from`), an
+    /// Alt-click deletes it, and the last one going takes the lane with it.
+    #[test]
+    fn a_clip_point_moves_and_deletes_by_name() {
+        let (mut e, t, id) = engine();
+        let pan = AutoParam::Pan(0);
+        e.session_mut().edit.selected_clips.clear();
+        e.session_mut().edit.selected_tracks.clear();
+        e.execute("clip.automation_point", &json!({"clip": id.0, "param": "pan", "at": 1_000, "value": 0.5})).unwrap();
+        e.execute("clip.automation_point", &json!({"clip": id.0, "param": "pan", "at": 2_000, "from": 1_000, "value": 0.25})).unwrap();
+        let lane = e.session().find_clip(id).unwrap().1.automation[0].clone();
+        assert_eq!(lane.points.iter().map(|q| (q.at, q.value)).collect::<Vec<_>>(), vec![(2_000, 0.25)]);
+        assert_eq!(played(&e, t, &pan, 50_000), 0.25);
+        assert!(e.execute("clip.automation_point", &json!({"clip": id.0, "param": "pan", "at": 3_000, "from": 1_000, "value": 0.0})).is_err());
+        assert!(e.execute("clip.automation_delete", &json!({"clip": id.0, "param": "pan", "points": [1_000]})).is_err());
+        e.execute("clip.automation_delete", &json!({"clip": id.0, "param": "pan", "points": [2_000]})).unwrap();
+        assert!(e.session().find_clip(id).unwrap().1.automation.is_empty());
+        assert_eq!(played(&e, t, &pan, 50_000), -1.0);
+        // Each was one undo step.
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(played(&e, t, &pan, 50_000), 0.25);
     }
 
     #[test]

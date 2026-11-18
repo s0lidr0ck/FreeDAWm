@@ -1,6 +1,6 @@
 # Four-DAW parity, section 3: mixing
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-17 · **Change:** minor (round three: strip, solo, bounce, automation and metering rows built) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (round three: strip, solo, bounce, automation and metering rows built) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -158,7 +158,7 @@ K-system scales, and the master a loudness meter.
 | Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Works**: curves and the range's edges come along; a paste replaces what was there |
 | Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Works**: a pass's lanes are thinned when it ends (Setup › Preferences… › Mixing › Thin Automation After Pass) |
 | Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
-| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Partial** (2026-11-17, to the design below): lanes stored on the clip (`Clip::automation`, saved only when not empty) move, trim, split and copy with it and are heard over its range in playback, bounces and freezes (dB lanes add to the track's, others replace it, a 64-sample ramp at the edges), from flattened lanes the engine makes after each edit (`Track::played`, `clip_automation`). Edit › Automation › Move Track Automation into Clips, Move Clip Automation to Track and Clear Clip Automation; `clip.automation_point` adds points. Since 2026-11-18 (6ca37e7) the Edit window draws them: over each clip with a lane of its own, the track's automation lane shows the lane as it plays there (accent colour, the clip's range shaded) with the clip's points on it. Left: editing them there by mouse (adding, dragging and deleting a clip's points), so points are still added by command or by moving track automation in (about 4–6 h) |
+| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Works** (2026-11-18, to the design below): lanes stored on the clip (`Clip::automation`, saved only when not empty) move, trim, split and copy with it and are heard over its range in playback, bounces and freezes (dB lanes add to the track's, others replace it, a 64-sample ramp at the edges), from flattened lanes the engine makes after each edit (`Track::played`, `clip_automation`). Edit › Automation › Move Track Automation into Clips, Move Clip Automation to Track and Clear Clip Automation. The Edit window draws them (6ca37e7): over each clip with a lane of its own, the track's automation lane shows the lane as it plays there (accent colour, the clip's range shaded) with the clip's points on it; and edits them by mouse there as the track's points are edited: a drag moves a clip's point between its neighbours inside the clip (one undo step), Alt-click deletes it (the lane goes with its last point), and a Pencil click or a Smart/Grabber double-click inside a clip that has a lane of its own for the parameter adds the point to the clip, not the track (on a dB lane the clip stores the difference from the track's line, so the point lands where it is clicked); `clip.automation_point` (`from` moves a point) and `clip.automation_delete`. A clip with no lane yet gets its first points by command or by Move Track Automation into Clips |
 | Several lanes per track, any parameter | ● | ● | ● | ● | **Works** |
 | Show the parameter last touched | ◐ | ● | ● | ● | **Works**: Edit › Automation › Show Last Touched (`automation.show_last_touched`) selects the track whose control (fader, pan, send, mute or plug-in knob) moved last and shows that lane; `automation.last_touched` names it |
 | Convert between clip gain and volume automation | ● | ○ | ○ | ○ | **Works** |
@@ -282,7 +282,7 @@ AFL and PFL (all but Logic), 6–10 (**done**, with the control room); post-fade
 inserts with a latency ping, 6–10 (**done**; hearing it needs hardware); multi-mono processing, 6–10 (**linked done**); write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
 
-### Design: automation inside a clip (round three, built 2026-11-17 but for the clip-lane drawing)
+### Design: automation inside a clip (round three, built 2026-11-17 and 2026-11-18)
 
 Logic's region automation and Studio Pro's part envelopes, for audio and MIDI clips.
 
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | a clip's own automation points are added, dragged and deleted by mouse in the Edit window |
 | 2026-11-18 | minor | a clip's own automation is drawn over it in the Edit window |
 | 2026-11-17 | minor | a Hardware Insert not pinged says "not measured" on its slot |
 | 2026-11-17 | minor | linked multi-mono processing |

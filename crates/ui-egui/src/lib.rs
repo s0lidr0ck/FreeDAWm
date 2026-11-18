@@ -937,6 +937,13 @@ pub enum Gesture {
         param: soundcraft_model::AutoParam,
         at: Samples,
     },
+    /// Dragging a point of a clip's own automation (`at`: samples from the clip's start).
+    ClipPoint {
+        track: TrackId,
+        clip: soundcraft_model::ClipId,
+        param: soundcraft_model::AutoParam,
+        at: Samples,
+    },
     /// Dragging a selected breakpoint: all the selected ones move together. `grab` is the
     /// grabbed point's original time and the press; `moved` what has been applied so far.
     MovePoints {
