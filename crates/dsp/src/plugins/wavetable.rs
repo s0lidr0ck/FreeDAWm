@@ -19,7 +19,9 @@ use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
 pub mod presets;
 #[cfg(test)]
 mod reference;
+
 pub mod tables;
+pub mod user;
 
 static WT_PARAMS: [ParamInfo; 36] = [
     choice("table", "Table", tables::BANKS, 0),
@@ -193,6 +195,8 @@ pub struct WavetableSynth {
     wheel: f32,
     vib_phase: f32,
     lfo_phase: f32,
+    /// A user's own table, playing instead of the built-in bank while loaded (see [`user`]).
+    user: user::Slot,
 }
 
 impl Default for WavetableSynth {
@@ -229,6 +233,7 @@ impl WavetableSynth {
             wheel: 0.0,
             vib_phase: 0.0,
             lfo_phase: 0.0,
+            user: user::Slot::default(),
         };
         s.update();
         s
@@ -367,6 +372,9 @@ impl WavetableSynth {
         // The highest copy's ratio picks the band limit for the whole stack.
         let top_ratio = copies.iter().take(unison).fold(1.0f32, |m, c| m.max(c.0));
         let (mut out_l, mut out_r) = (0.0, 0.0);
+        // A user table in place of the bank (and the one faded from while a new one comes in).
+        let table = self.user.current();
+        let from = self.user.fading_from();
         for v in &mut self.voices {
             if !v.active() {
                 continue;
@@ -383,7 +391,15 @@ impl WavetableSynth {
             let level = tables::level_for(inc * top_ratio);
             let (mut l, mut r) = (0.0, 0.0);
             for (ph, &(cr, gl, gr)) in v.phases.iter_mut().zip(copies.iter()).take(unison) {
-                let s = self.t.read(bank, pos, level, *ph);
+                let s = if !self.user.active() {
+                    self.t.read(bank, pos, level, *ph)
+                } else {
+                    let s = user::read_either(self.t, table, bank, pos, level, *ph);
+                    match from {
+                        Some((old, left)) => s + (user::read_either(self.t, old, bank, pos, level, *ph) - s) * left,
+                        None => s,
+                    }
+                };
                 *ph += inc * cr;
                 if *ph >= 1.0 {
                     *ph -= 1.0;
@@ -426,6 +442,7 @@ impl WavetableSynth {
             out_l += yl * gain;
             out_r += yr * gain;
         }
+        self.user.step();
         (out_l * 0.3, out_r * 0.3)
     }
 }
@@ -457,6 +474,7 @@ impl Plugin for WavetableSynth {
         self.wheel = 0.0;
         self.vib_phase = 0.0;
         self.lfo_phase = 0.0;
+        self.user.snap();
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -522,7 +540,21 @@ impl Plugin for WavetableSynth {
     fn all_notes_off(&mut self) {
         self.events.push(0, EventKind::AllOff);
     }
+
+    /// A user table made ready off the audio thread ([`user::prepare`]) under
+    /// [`crate::PREPARED_ASSET_KEY`], `None` to go back to the built-in bank. Swapped in with a
+    /// short crossfade while notes sound (at once when none do); the one let go of comes back
+    /// out of `take_released_asset`.
+    fn set_asset(&mut self, key: &str, asset: Option<std::sync::Arc<dyn crate::SampleSource>>) -> bool {
+        key == crate::PREPARED_ASSET_KEY && self.user.set(asset, self.sr, self.voices.iter().any(Voice::active))
+    }
+
+    fn take_released_asset(&mut self) -> Option<std::sync::Arc<dyn crate::SampleSource>> {
+        self.user.take_released()
+    }
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod user_tests;

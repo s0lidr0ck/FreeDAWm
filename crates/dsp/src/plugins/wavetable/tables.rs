@@ -55,7 +55,7 @@ pub const fn size(level: usize) -> usize {
 
 /// Where `level` starts inside a frame (each level is followed by one guard sample, a copy of
 /// its first, so reading between the last sample and the first needs no wrap).
-const fn offset(level: usize) -> usize {
+pub(crate) const fn offset(level: usize) -> usize {
     let mut at = 0;
     let mut l = 0;
     while l < level {
@@ -114,7 +114,7 @@ impl Tables {
 }
 
 #[inline]
-fn lerp_cycle(t: &[f32], phase: f32) -> f32 {
+pub(crate) fn lerp_cycle(t: &[f32], phase: f32) -> f32 {
     let n = t.len().saturating_sub(1);
     if n == 0 {
         return 0.0;
@@ -144,7 +144,7 @@ pub fn draw(bank: usize, pos: f32, out: &mut [f32]) {
     }
 }
 
-type C = (f64, f64);
+pub(crate) type C = (f64, f64);
 
 fn build() -> Tables {
     let mut data = vec![0.0f32; BANKS.len() * FRAMES * FRAME_LEN];
@@ -189,7 +189,7 @@ fn build() -> Tables {
 }
 
 /// In-place radix-2 FFT (length a power of two): `inverse` uses e^{+i...} and does not divide.
-fn fft(x: &mut [C], inverse: bool) {
+pub(crate) fn fft(x: &mut [C], inverse: bool) {
     let n = x.len();
     if n < 2 || !n.is_power_of_two() {
         return;

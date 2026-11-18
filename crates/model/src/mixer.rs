@@ -1040,11 +1040,23 @@ pub const SPACE_IR_KEY: &str = "vaultIr";
 
 /// Numbers made ready for a plugin from its stored state (see [`Insert::prepared`]), shared by
 /// every snapshot of the document. `rev` tells one preparation from another without comparing
-/// the numbers (the mix engine hands a new one over once); equality compares only the numbers.
-#[derive(Debug, Clone)]
+/// the numbers (the mix engine hands a new one over once); equality compares the numbers and whether the
+/// shared object is the same one.
+#[derive(Clone)]
 pub struct PreparedState {
     pub rev: u64,
     pub data: std::sync::Arc<[f64]>,
+    /// An object made ready from the state for the plugin to hold (the Wavetable Synth's
+    /// band-limited user table), which the mix engine hands over by reference
+    /// (`Plugin::set_asset` under `PREPARED_ASSET_KEY`): an `Arc<dyn SampleSource>` behind `Any`
+    /// so the model need not know the plugin crate. `None` for plugins that take only numbers.
+    pub shared: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+}
+
+impl std::fmt::Debug for PreparedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedState").field("rev", &self.rev).field("data", &self.data.len()).field("shared", &self.shared.is_some()).finish()
+    }
 }
 
 static PREPARED_REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -1053,13 +1065,23 @@ impl PreparedState {
     /// A new preparation (a fresh `rev`, never 0).
     pub fn new(data: Vec<f64>) -> Self {
         let rev = PREPARED_REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed).max(1);
-        PreparedState { rev, data: data.into() }
+        PreparedState { rev, data: data.into(), shared: None }
+    }
+
+    /// A new preparation holding an object for the plugin (see [`PreparedState::shared`]).
+    pub fn new_shared(shared: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        PreparedState { shared: Some(shared), ..PreparedState::new(Vec::new()) }
     }
 }
 
 impl PartialEq for PreparedState {
     fn eq(&self, other: &Self) -> bool {
-        self.data == other.data
+        let shared = match (&self.shared, &other.shared) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        self.data == other.data && shared
     }
 }
 

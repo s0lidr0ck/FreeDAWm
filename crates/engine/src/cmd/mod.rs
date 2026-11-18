@@ -123,6 +123,7 @@ mod vocal;
 mod vocal_studio;
 mod vst3;
 pub mod warp;
+pub mod wavetable;
 mod zoom_toggle;
 
 pub use clap::plugin_info;

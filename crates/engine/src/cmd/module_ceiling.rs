@@ -91,6 +91,9 @@ fn module_guides(e: &mut Engine, p: &Value) -> Result<Value> {
 /// Makes a module's stored state ready for its plugin (`Insert::prepared`), or clears that when
 /// the plugin keeps no such state or the module has none.
 pub(crate) fn prepare_insert(ins: &mut Insert) {
+    if ins.plugin == super::wavetable::WAVETABLE {
+        return super::wavetable::prepare_insert(ins);
+    }
     ins.prepared = ins.state_bytes().and_then(|b| soundcraft_dsp::prepare_state(&ins.plugin, &b)).map(PreparedState::new);
 }
 
