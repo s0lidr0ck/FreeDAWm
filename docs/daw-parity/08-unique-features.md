@@ -34,7 +34,7 @@ exists and is stored, but nothing acts on it) · **Missing**.
 
 ## Summary
 
-Of 67 signature features checked, FreeDAWm has a working answer to 26 and a partial one to 28; the
+Of 67 signature features checked, FreeDAWm has a working answer to 27 and a partial one to 27; the
 other 13 are not planned here, each with its reason (re-counted 2026-11-18, after rounds three and
 four; the first count, of 60, found about 12, 28 and 20).
 
@@ -54,8 +54,8 @@ four; the first count, of 60, found about 12, 28 and 20).
   lyric-writing tools with a teleprompter.
 
 Four controls once promised a signature feature and did nothing: the Object/Bed switch and the
-Renderer window (Atmos; now labelled as not rendering), QuickPunch and TrackPunch (QuickPunch now
-works), and Ambisonics above first order (2nd and 3rd order now encoded). See "Things that
+Renderer window (Atmos; now labelled as not rendering), QuickPunch and TrackPunch (both now
+work), and Ambisonics above first order (2nd and 3rd order now encoded). See "Things that
 promise more than they do" below.
 
 ## A. Pro Tools
@@ -72,7 +72,7 @@ promise more than they do" below.
 | Dolby Atmos renderer built in: beds, objects, re-renders, ADM; MPEG-H | **Partial** | Channel surround to 9.1.6 with a 3-D panner works. Object/Bed is a mark that says it is one; no renderer, no ADM. Dolby's renderer needs a licence (not planned); a renderer of FreeDAWm's own is [section 3](03-mixing.md)'s work |
 | Speech-to-text on dialogue with text search | **Partial** | Lyric transcription with word times, searchable (AI › Find in Transcript…); no dialogue-specific lane |
 | Video: several tracks, editing, satellite link, pull up and down | **Partial** | One video track with H.264, ProRes and Motion JPEG playback, timecode and feet+frames; export to a ProRes movie with the mix; no editing |
-| Destructive record, QuickPunch, TrackPunch | **Partial** | QuickPunch works (punch in and out on the fly, several punches in one pass: [section 2](02-recording-audio.md)); TrackPunch and the destructive modes stay off the menus, stored and unread (section 2's rows) |
+| Destructive record, QuickPunch, TrackPunch | **Works** | QuickPunch (punch in and out on the fly, several punches in one pass) and TrackPunch (Transport › TrackPunch: disarming a track while recording punches it out, arming it punches it back in, each track kept to its own punches with handles and crossfades): [section 2](02-recording-audio.md), C. Destructive Record and DestructivePunch are not planned here: FreeDAWm never overwrites recorded audio in place (section 2's row) |
 | EUCON control surfaces | **Not planned here** | Needs Avid's licensed SDK. Mackie Control and HUI surfaces and MIDI learn work instead ([section 6](06-midi-recording.md), K) |
 | Scripting SDK | **Works** | Every command, from a script, a command line or an agent (section F) |
 | Cloud collaboration on one project | **Not planned here** | Needs a hosted service and a second machine to develop at all |
@@ -190,7 +190,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 |---|---|---|---|
 | 1 | Object/Bed switch on the mixer strip and the Renderer window: the switch is stored and drawn; no audio path reads it, and the Renderer only draws speakers and dots | `engine/src/cmd/track_more.rs:21-40`; `ui-egui/src/mix_window.rs:408-414`; `ui-egui/src/extra_windows.rs:86-145` | **Labelled** (943143a): the switch's hover, its command's description and the Renderer window say that objects are not rendered yet and play through their panners into the bed. Rendering objects is the mixing section's work ([section 3](03-mixing.md)) |
 | 2 | Track widths of 2nd- to 7th-order Ambisonics can be chosen; the panner fills the first four channels and leaves the rest silent | `dsp/src/pan.rs:268-279` | **Done** (a2e9845): the panner encodes every order the track carries (ACN, SN3D, to 7th order in the DSP), so 2nd and 3rd order are filled; the mixer carries at most 16 channels, so 4th to 7th order are no longer offered and are refused by the commands that make tracks, busses and outputs. The decoder to speakers is still first order |
-| 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` | **Another section's**: punch modes are the recording work in [section 2](02-recording-audio.md); QuickPunch landed there (4b98b7f) |
+| 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` | **Done for QuickPunch and TrackPunch** (4b98b7f; TrackPunch 2026-11-18, on the Transport menu, read while recording). Destructive Record, DestructivePunch and Prepare DPE Tracks stay off the menus (agents only, described as stored only): not planned here, FreeDAWm never records over a file in place |
 | 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` | **Done; claim partly wrong** (8fac425): these were already off the menu bar (the 2026-10 menus clean-up); agents and scripts still reach them, and their descriptions now end "stored only: nothing in FreeDAWm reads this setting yet". The video sync offset is not one of them: the Video track and window read it (it has no window of its own) |
 | 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (b5ef0ca): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23), which left them out of the web build's menus (352090a). The browser build itself was removed (2026-11-18) |
 | 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can. The encrypted local link is **done** too (4d3e275, below), and a PC's first pairing proves both keys with the code, never sending it (30e56ba, below); the window and the prompt say so |
@@ -496,6 +496,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | TrackPunch built (section 2): the Destructive record row Works, destructive modes not planned here |
 | 2026-11-18 | minor | Partial rows checked against the code: Flashback capture Works (audio pre-record); Beat Detective, Chord Pads, offline processing, Track Versions, the score and the instrument set say what is left now; the summary re-counted |
 | 2026-11-18 | minor | A PC's first pairing proves both PCs' keys with the code by a password-authenticated key exchange (SPAKE2); the code is never sent; older FreeDAWm on either side is told to update |
 | 2026-11-18 | minor | Mix Engine FX: a Summing menu on a bus's strip (Console, Tape, drive), off by default |

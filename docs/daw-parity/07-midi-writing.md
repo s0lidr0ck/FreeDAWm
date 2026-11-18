@@ -59,9 +59,10 @@ The gaps are of four kinds:
    clips, ramps that play smoothly, shared clip copies, stretching a clip and per-note
    probability (the rows below say how far each goes); the follow-up round notes edited on the
    track, 14-bit and RPN lanes, tempo from a performance, chord pads and the MIDI writers.
-4. **Instruments are few and thin.** Four built in; the synth has two oscillators with a sub and
+4. **Instruments are few and thin.** Five built in; the synth has two oscillators with a sub and
    noise, five filter types, an LFO, mono and legato play and factory presets; the sampler holds
-   one sample (a multisample instrument is being built on another branch). Instrument parameters now take
+   one sample, and Pantry, the multisampler, plays zones by key and velocity (captured from an
+   instrument or loaded from SFZ and Decent Sampler libraries). Instrument parameters now take
    automation lanes, instrument latency is compensated and notes from clips keep their channel.
 
 ## A. The note editor

@@ -133,6 +133,7 @@ pub use file::{MAX_TAIL_SECS as MAX_BOUNCE_TAIL_SECS, bounce_job, stems_job};
 pub(crate) use mix::arm_follows_selection;
 pub use mix::{ARM_FOLLOWS_SELECTION, GROUPS_SUSPENDED, default_send_db};
 pub use more_util::env_db;
+pub use options::TRACKPUNCH;
 /// What the UI needs of Scout: the store refusal for a capture no longer pending, and "same section".
 pub use scout::{NOT_PENDING as SCOUT_NOT_PENDING, same_as as scout_same_as};
 pub use setup_more::PRE_RECORD;

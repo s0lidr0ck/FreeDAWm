@@ -2112,6 +2112,7 @@ impl SoundApp {
                             tap_latency: 0,
                             file: Some(soundcraft_engine::io::TakeFile { format, depth, bwf: bwf.is_some() }),
                             late: None,
+                            punches: Vec::new(),
                         });
                     }
                 }
@@ -2123,12 +2124,46 @@ impl SoundApp {
                 }
             }
         }
+        // TrackPunch: a track disarmed while the take records is punched out (its take goes on
+        // recording, so each punch has handles, and the track plays its clips again); armed again,
+        // it punches back in. Without it, disarming ends the track's take there.
+        let gone = if self.engine.session().edit.flag(soundcraft_engine::cmd::TRACKPUNCH) { self.track_punch(&gone) } else { gone };
         if let Some(r) = &mut self.recorder {
             for t in gone {
                 r.end_take(t);
             }
         }
         self.place_late_takes();
+    }
+
+    /// TrackPunch: punches out each recording track of `disarmed` that is punched in, and back in
+    /// each armed one punched out. Returns the tracks it has no take plan for (to end as usual).
+    fn track_punch(&mut self, disarmed: &[TrackId]) -> Vec<TrackId> {
+        let at = self.position();
+        let s = self.engine.session();
+        let armed: Vec<TrackId> = s.tracks.iter().filter(|t| t.mixer.record_arm).map(|t| t.id).collect();
+        let names: Vec<(TrackId, String)> = s.tracks.iter().map(|t| (t.id, t.name.clone())).collect();
+        let Some(plan) = &mut self.take_plan else { return disarmed.to_vec() };
+        let start = plan.start;
+        let mut changed = Vec::new();
+        for take in plan.takes.iter_mut() {
+            let punched_in = take.punches.last().is_none_or(|p| p.end == Samples::MAX);
+            let flip = if disarmed.contains(&take.track) { punched_in } else { !punched_in && armed.contains(&take.track) };
+            if flip {
+                let now_in = soundcraft_engine::io::toggle_punch(&mut take.punches, start, at);
+                changed.push((take.track, now_in));
+            }
+        }
+        let kept: Vec<TrackId> = plan.takes.iter().map(|t| t.track).collect();
+        if let Some((t, now_in)) = changed.last() {
+            let name = names.iter().find(|(id, _)| id == t).map_or("", |(_, n)| n.as_str());
+            self.ui.status =
+                if *now_in { format!("TrackPunch: {name} punched in") } else { format!("TrackPunch: {name} punched out (arm it to punch in again)") };
+            if let Some(root) = self.autosave_dir.clone() {
+                self.queue_autosave(root);
+            }
+        }
+        disarmed.iter().copied().filter(|t| !kept.contains(t)).collect()
     }
 
     /// The start of each take armed during the recording, from the writer, into the plan (so a
@@ -2179,6 +2214,7 @@ impl SoundApp {
                 tap_latency: 0,
                 file: Some(file),
                 late: None,
+                punches: Vec::new(),
             })
             .collect();
         if let Some(p) = &self.player {

@@ -776,7 +776,17 @@ mod tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track, path: take, channels: 1, internal: false, from_device: false, tap_latency: 0, file: None, late: None }],
+            takes: vec![Take {
+                track,
+                path: take,
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+                punches: Vec::new(),
+            }],
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
@@ -886,7 +896,17 @@ mod tests {
             rate: 48_000,
             takes: paths
                 .iter()
-                .map(|p| Take { track, path: p.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None, late: None })
+                .map(|p| Take {
+                    track,
+                    path: p.clone(),
+                    channels: 1,
+                    internal: false,
+                    from_device: false,
+                    tap_latency: 0,
+                    file: None,
+                    late: None,
+                    punches: Vec::new(),
+                })
                 .collect(),
             latency: 0,
             loop_from: None,

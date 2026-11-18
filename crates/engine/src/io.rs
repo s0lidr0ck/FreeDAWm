@@ -3601,6 +3601,26 @@ pub struct Take {
     /// Record (and plans saved before it existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub late: Option<Samples>,
+    /// TrackPunch: this track's own punches, made by disarming and arming it again while the
+    /// take records ([`toggle_punch`]), in order; the last may be open. When there are any, the
+    /// take is kept to them (and to the recording's QuickPunch punches, where both exist) with
+    /// crossfades at each punch point. Empty (and plans saved before it existed): the whole take.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub punches: Vec<Range>,
+}
+
+/// Where both punch lists keep audio: `own` (a track's TrackPunch punches) within `all` (the
+/// recording's punches); an empty list keeps everything.
+pub fn punch_overlap(all: &[Range], own: &[Range]) -> Vec<Range> {
+    if own.is_empty() {
+        return all.to_vec();
+    }
+    if all.is_empty() {
+        return own.to_vec();
+    }
+    let mut out: Vec<Range> = all.iter().flat_map(|a| own.iter().filter_map(|o| a.intersect(o))).filter(|r| !r.is_empty()).collect();
+    out.sort_by_key(|r| r.start);
+    out
 }
 
 /// A track armed while a take records (not by loop recording, whose passes are fixed at Record):
@@ -3654,7 +3674,22 @@ pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, Pa
         stamp_time_reference(p, start.saturating_sub(*l).saturating_add(tc));
     }
     let punches: Vec<Range> = if plan.punches.is_empty() { plan.punch.into_iter().collect() } else { plan.punches.clone() };
-    add_recording_in(e, start, takes, plan.pass, &punches)
+    // TrackPunch: a take with punches of its own is placed alone, kept to them.
+    let (own, rest): (Vec<_>, Vec<_>) = takes.into_iter().partition(|(_, p, _)| plan.takes.iter().any(|x| x.path == *p && !x.punches.is_empty()));
+    let before = e.session_arc();
+    let mut out = place_takes(e, start, rest, plan.pass, &punches);
+    for (t, p, l) in own {
+        let mine = plan.takes.iter().find(|x| x.path == p).map(|x| punch_overlap(&punches, &x.punches)).unwrap_or_default();
+        // Punched out before it ever punched in (or outside every QuickPunch punch): nothing kept.
+        if mine.is_empty() {
+            continue;
+        }
+        out.extend(place_takes(e, start, vec![(t, p, l)], plan.pass, &mine));
+    }
+    if !out.is_empty() {
+        e.push_undo("Record", before);
+    }
+    out
 }
 
 /// Turn recorded take files into clips at `start`, as one undo step ("Record"); each file is the
@@ -3678,6 +3713,21 @@ fn add_recording_in(
     punches: &[Range],
 ) -> Vec<soundcraft_model::ClipId> {
     let before = e.session_arc();
+    let out = place_takes(e, start, takes, pass, punches);
+    if !out.is_empty() {
+        e.push_undo("Record", before);
+    }
+    out
+}
+
+/// [`add_recording_in`] without its undo step.
+fn place_takes(
+    e: &mut Engine,
+    start: Samples,
+    takes: Vec<(TrackId, PathBuf, Samples)>,
+    pass: Option<Samples>,
+    punches: &[Range],
+) -> Vec<soundcraft_model::ClipId> {
     let mut out = Vec::new();
     for (tid, path, latency) in takes {
         let name = path.file_stem().and_then(|x| x.to_str()).unwrap_or("Take");
@@ -3711,9 +3761,6 @@ fn add_recording_in(
             x.unsaved = resampled;
         }
         place_take(s, tid, src, name, start, pass, punches, latency, &mut out);
-    }
-    if !out.is_empty() {
-        e.push_undo("Record", before);
     }
     out
 }
@@ -4047,6 +4094,7 @@ mod record_tests {
                 tap_latency: 0,
                 file: None,
                 late: None,
+                punches: Vec::new(),
             }],
             latency: 0,
             loop_from: None,
@@ -4075,6 +4123,7 @@ mod record_tests {
                 tap_latency: 0,
                 file: None,
                 late: None,
+                punches: Vec::new(),
             }],
             latency: 0,
             loop_from: rs.loop_from,
@@ -4237,8 +4286,28 @@ mod record_tests {
             punch: None,
             rate: 48_000,
             takes: vec![
-                Take { track: vox, path: hw.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None, late: None },
-                Take { track: print, path: bus.clone(), channels: 1, internal: true, from_device: false, tap_latency: 20, file: None, late: None },
+                Take {
+                    track: vox,
+                    path: hw.clone(),
+                    channels: 1,
+                    internal: false,
+                    from_device: false,
+                    tap_latency: 0,
+                    file: None,
+                    late: None,
+                    punches: Vec::new(),
+                },
+                Take {
+                    track: print,
+                    path: bus.clone(),
+                    channels: 1,
+                    internal: true,
+                    from_device: false,
+                    tap_latency: 20,
+                    file: None,
+                    late: None,
+                    punches: Vec::new(),
+                },
             ],
             latency: 300,
             loop_from: None,
@@ -4282,6 +4351,7 @@ mod record_tests {
                 tap_latency: 64,
                 file: None,
                 late: None,
+                punches: Vec::new(),
             }],
             latency: 300,
             loop_from: None,
@@ -4336,6 +4406,7 @@ mod record_tests {
                 tap_latency: 0,
                 file: None,
                 late: None,
+                punches: Vec::new(),
             }],
             latency: 100,
             loop_from: None,
@@ -4379,6 +4450,7 @@ mod record_tests {
                 tap_latency: 0,
                 file: None,
                 late: None,
+                punches: Vec::new(),
             }],
             latency: 0,
             loop_from: None,
@@ -4398,6 +4470,71 @@ mod record_tests {
         // The old audio stays between the punches and fades across them.
         let old: Vec<_> = t.clips().iter().filter(|c| !ids.contains(&c.id)).map(|c| (c.start, c.end())).collect();
         assert_eq!(old, [(0, 1_000 + h), (3_000 - h, 5_000 + h), (6_000 - h, 8_000 + h), (9_000, 10_000)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// TrackPunch: a track disarmed and armed again while the take records keeps its take to its
+    /// own punches (inside the recording's QuickPunch punches, where there are any); a track
+    /// never punched keeps the whole take; all of it is one undo step. A plan saved before the
+    /// field existed reads with no punches of its own.
+    #[test]
+    fn trackpunch_keeps_each_take_to_its_own_punches() {
+        let dir = test_dir("trackpunch");
+        let (vox_take, gtr_take, bass_take) =
+            (dir.join("Audio Files/Vox_01.wav"), dir.join("Audio Files/Gtr_01.wav"), dir.join("Audio Files/Bass_01.wav"));
+        for p in [&vox_take, &gtr_take, &bass_take] {
+            write_take(p, 8_000);
+        }
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let gtr = armed(&mut e, "Gtr", "mono", "In 1");
+        let bass = armed(&mut e, "Bass", "mono", "In 1");
+        let undo_before = e.undo_history().len();
+        // Gtr disarmed at 3000, armed again at 5000; Bass disarmed at 2000 and never again.
+        let mut gtr_p = Vec::new();
+        assert!(!toggle_punch(&mut gtr_p, 1_000, 3_000));
+        assert!(toggle_punch(&mut gtr_p, 1_000, 5_000));
+        let mut bass_p = Vec::new();
+        assert!(!toggle_punch(&mut bass_p, 1_000, 2_000));
+        let take = |track, path: &PathBuf, punches| Take {
+            track,
+            path: path.clone(),
+            channels: 1,
+            internal: false,
+            from_device: false,
+            tap_latency: 0,
+            file: None,
+            late: None,
+            punches,
+        };
+        let rec = Recording {
+            start: 1_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: vec![take(vox, &vox_take, Vec::new()), take(gtr, &gtr_take, gtr_p), take(bass, &bass_take, bass_p)],
+            latency: 0,
+            loop_from: None,
+            punches: Vec::new(),
+            pre: 0,
+        };
+        let ids = place_recording(&mut e, &rec, vec![(vox, vox_take), (gtr, gtr_take), (bass, bass_take)]);
+        let spans = |t| -> Vec<(Samples, Samples)> {
+            e.session().track(t).unwrap().clips().iter().filter(|c| ids.contains(&c.id)).map(|c| (c.start, c.end())).collect()
+        };
+        assert_eq!(spans(vox), [(1_000, 9_000)], "never punched: the whole take");
+        let gs = spans(gtr);
+        assert_eq!(gs.len(), 2, "{gs:?}");
+        assert_eq!((gs[0].0, gs[1].1), (1_000, 9_000));
+        assert!(gs[0].1 <= 3_000 + punch_crossfade(e.session()) && gs[1].0 >= 5_000 - punch_crossfade(e.session()), "{gs:?}");
+        assert_eq!(spans(bass), [(1_000, 2_000)]);
+        assert_eq!(e.undo_history().len(), undo_before + 1, "one undo step");
+        // Within QuickPunch punches: only where both keep audio.
+        assert_eq!(punch_overlap(&[Range::new(0, 4_000)], &[Range::new(2_000, Samples::MAX)]), [Range::new(2_000, 4_000)]);
+        assert_eq!(punch_overlap(&[], &[Range::new(2_000, 3_000)]), [Range::new(2_000, 3_000)]);
+        assert_eq!(punch_overlap(&[Range::new(2_000, 3_000)], &[]), [Range::new(2_000, 3_000)]);
+        let old: Take = serde_json::from_value(json!({"track": vox.0, "path": "x.wav", "channels": 1})).unwrap();
+        assert!(old.punches.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4422,6 +4559,7 @@ mod record_tests {
             tap_latency: 0,
             file: None,
             late,
+            punches: Vec::new(),
         };
         let rec = Recording {
             start: 1_000,

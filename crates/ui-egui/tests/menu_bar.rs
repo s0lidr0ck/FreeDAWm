@@ -25,7 +25,7 @@ const ROWS: [(&str, usize); 12] = [
     ("Event", 31),
     ("Process", 18),
     ("AI", 12),
-    ("Transport", 27),
+    ("Transport", 28),
     ("Options", 14),
     ("Setup", 12),
     ("Window", 51),
@@ -151,7 +151,6 @@ fn each_action_has_one_item_and_dead_ones_are_gone() {
         "event.tempo_linear",
         "event.tempo_scale",
         "automation.write_range",
-        "options.trackpunch",
         "options.layered_editing",
         "options.midi_thru",
         "view.edit_object",
@@ -664,6 +663,7 @@ fn the_transport_menu_holds_the_transport_items() {
         ("Transport > Pre/Post-Roll...", "options.pre_post_roll"),
         ("Transport > Insertion Follows Playback", "options.insertion_follows_playback"),
         ("Transport > QuickPunch", "options.quickpunch"),
+        ("Transport > TrackPunch", "options.trackpunch"),
         ("Transport > Record Mode > Keep Takes as Lanes", "options.record_mode"),
     ] {
         assert_eq!(id_at(shown), id, "{shown}");

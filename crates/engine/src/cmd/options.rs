@@ -86,7 +86,15 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(noundo "options.destructive_record", "Destructive Record", ["Options"], None, "{value?: bool}", always, |e, p| record_mode(e, p, "destructive")),
-        cmd!(noundo "options.trackpunch", "TrackPunch", ["Options"], Some("Cmd+Shift+T"), "{value?: bool}", always, |e, p| record_mode(e, p, "trackpunch")),
+        cmd!(
+            noundo "options.trackpunch",
+            "TrackPunch",
+            ["Options"],
+            Some("Cmd+Shift+T"),
+            "{value?: bool} (toggles when omitted) — while a take records, disarming an audio track punches it out (it plays its clips again, its take goes on recording for handles) and arming it again punches it back in; the take is kept to the track's own punches with crossfades. Off: disarming ends the track's take there. Not while loop recording",
+            always,
+            |e, p| record_mode(e, p, "trackpunch")
+        ),
         cmd!(noundo "options.scrolling", "Edit Window Scrolling", ["Options", "Edit Window Scrolling"], None, "{mode: none|after_playback|page|continuous|center}", always, |e, p| {
             let m = str_param(p, "mode").filter(|m| ["none", "after_playback", "page", "continuous", "center"].contains(m)).ok_or_else(|| bad("options.scrolling", "unknown mode"))?.to_string();
             e.session_mut().edit.scrolling = m.clone();
@@ -152,9 +160,11 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Destructive Record and TrackPunch: a stored flag nothing reads yet (FreeDAWm records
-/// non-destructively, every track at once). Kept apart from `record_mode`, which they used to
-/// overwrite.
+/// The flag of Transport › TrackPunch (read by the app while a take records).
+pub const TRACKPUNCH: &str = "options.trackpunch";
+
+/// Destructive Record (a stored flag nothing reads: FreeDAWm records non-destructively) and
+/// TrackPunch ([`TRACKPUNCH`]). Kept apart from `record_mode`, which they used to overwrite.
 fn record_mode(e: &mut Engine, p: &Value, mode: &str) -> Result<Value> {
     let s = e.session_mut();
     let key = format!("options.{mode}");

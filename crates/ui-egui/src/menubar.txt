@@ -602,6 +602,7 @@ Transport > ---
 Transport > ## Recording
 Transport > Loop Record = Options > Loop Record
 Transport > QuickPunch = Options > QuickPunch
+Transport > TrackPunch = @options.trackpunch
 Transport > Record Mode > Replace = Options > Record Mode > Replace
 Transport > Record Mode > Keep Takes as Lanes = Options > Record Mode > Keep Takes as Lanes
 Transport > Record Mode > New Playlist per Take = Options > Record Mode > New Playlist per Take

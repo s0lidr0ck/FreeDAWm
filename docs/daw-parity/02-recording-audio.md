@@ -31,7 +31,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 |---|---|---|
 | A. Arming and inputs | Arming, record safe, arm follows selection; inputs of up to 16 channels, or a bus | Small: tracks cannot join or leave a take under way |
 | B. Starting and stopping | Record, count-off, pre-roll, punch in on the fly, discard and restart take, record lock | Small: no recording at another speed (designed, needs hardware) |
-| C. Punching | Automatic and on-the-fly punches with handles and crossfades | Small: three Pro Tools modes are hidden labels |
+| C. Punching | Automatic and on-the-fly punches with handles and crossfades | Small: the two destructive modes are not planned (stored, off the menus) |
 | D. Loop recording and takes | Takes to layers, swipe comping, three record modes, a take soloed in place of the comp | Small: no stacked "layer" record mode |
 | E. Monitoring | Auto / On / Off through the strip, input-only mode, low-latency mode, cue mixes, click on its own output, a tuner | Medium: no dual buffer; no hardware direct monitoring (not planned) |
 | F. Latency and placement | Reported, measured and manual offsets, stored per interface | **Level or ahead** |
@@ -83,11 +83,12 @@ Logic print effects by recording an aux's bus, which needs the row above it.
 | Punch in on the fly | ● | ● | ● | ● | **Works** |
 | Punch out on the fly and keep playing; several punches in one pass | ● | ● | ● | ● | **Works** with Transport › QuickPunch: Record while recording punches out (playback goes on, the clips are heard again) and in again, any number of times; the take records throughout, so each punch has handles. Without QuickPunch Record stops, as before. MIDI takes ignore the punches |
 | Crossfades at the punch points | ● | ● | ● | ● | **Works**: 10 ms, centred on each punch point, out of the take's and the old audio's handles (at most half a short punch) |
-| Punch modes for many tracks, destructive recording | ● | ○ | ○ | ○ | **Partial**: QuickPunch works (above, back on the Options menu); TrackPunch, DestructivePunch and Destructive Record stay off the menus and store a value nothing reads. Left, and of little use: TrackPunch (QuickPunch armed per track) and recording over the file in place; the other three DAWs record non-destructively with handles, as FreeDAWm does |
+| Punch modes for many tracks, destructive recording | ● | ○ | ○ | ○ | **Works** for TrackPunch: Transport › TrackPunch (`options.trackpunch`, Cmd+Shift+T): while a take records, disarming an audio track punches it out (it plays its clips again, and its take goes on recording, so each punch has handles) and arming it again punches it back in; at Stop each track's take is kept to its own punches (inside QuickPunch's punches too, where both are used), with the same 10 ms crossfades, all in one undo step, and a recovered take is placed the same way (the punches are in the autosaved plan). Off, disarming ends the track's take there, as before. Not while loop recording (passes are fixed at Record, so arming changes wait for the next Record), and MIDI tracks keep their takes as before. Test `trackpunch_keeps_each_take_to_its_own_punches`. **Not planned here**: Destructive Record and DestructivePunch (recording over the original file in place): FreeDAWm never overwrites recorded audio, and the other three DAWs record non-destructively with handles as FreeDAWm does; their switches stay off the menus, stored and unread (agents only), as does Prepare DPE Tracks |
 
 The four Pro Tools modes exist there for historical reasons; the others record non-destructively
 with handles all the time, as FreeDAWm already does. They are worth hiding or wiring, not a gap in
-what a user can do, apart from punch out on the fly.
+what a user can do, apart from punch out on the fly. QuickPunch and TrackPunch are built; the two
+destructive modes are not planned here.
 
 ## D. Loop recording and takes
 
@@ -220,6 +221,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | TrackPunch: disarm and arm a track while recording to punch it out and in; destructive modes not planned here |
 | 2026-11-18 | minor | large playback buffer with a small live path: not built in round four, what is needed noted |
 | 2026-11-18 | minor | arm or disarm during a take |
 | 2026-11-17 | minor | round three follow-up: recording at another speed designed, not planned here (needs hardware and listening) |
