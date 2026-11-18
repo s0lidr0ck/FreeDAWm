@@ -145,7 +145,7 @@ Varispeed is the only whole-project speed control among the four.
 | Split a stereo track into mono | ● | ● | ● | ● | **Works**: each new track plays its own channel |
 | Freeze, commit, render in place | ● | ● | ● | ● | **Works**: freeze up to a chosen module; third-party plug-ins stay loaded |
 | Built-in pitch correction heard live | ◐ | ● | ● | ● | **Works** (Tune Vocal), except on stretched clips |
-| ARA editors | ● | ● | ● | ● | **Not planned here**: needs Celemony's ARA SDK, which is not in the tree (section 4, J) |
+| ARA editors | ● | ● | ● | ● | **Missing**, approved by the owner (2026-11-18) and next after this round: ARA 2 hosting through Rust bindings to the ARA C header, VST3 first (section 4, J) |
 
 ## G. Tempo and time-stretch
 
