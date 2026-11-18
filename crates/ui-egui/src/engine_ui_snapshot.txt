@@ -35,7 +35,7 @@ spectrum 7bd7510624190918
 loudness 27102c0c7ab30210
 phase_meter 4ffc0733047242e2
 tuner 7ec4a5ced25d6c77
-subtractive_synth 9e43363f59074e96
+subtractive_synth 4ad19951a00e38b4
 drum_synth 478531d398691945
 sampler 16145a9a705b2929
 juke 04efeb92437600c7
@@ -51,7 +51,7 @@ fs_copyq 861732b38e20737d
 fs_vint 6b9aa6514ae30d48
 fs_pitch cd2caa3fc0f91cb7
 fs_mod 4796cbd29a314695
-fs_dist 34f22af7b9308b05
+fs_dist d2903b1f2fb202f4
 fs_transient 1f25606fa4898f52
 fs_filter d812773f9917c2c5
 fs_delay 87e6bfd305c1be74

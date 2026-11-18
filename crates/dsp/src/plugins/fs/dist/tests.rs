@@ -831,4 +831,3 @@ fn four_times_is_the_dist_as_it_was() {
     assert_eq!(render(None, None), render(Some(0.0), None));
     assert_eq!(render(None, Some(0.0)), render(None, Some(1.0)), "8x on and off, then a reset: as if it had stayed at 4x");
 }
-

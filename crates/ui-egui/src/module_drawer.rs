@@ -1967,8 +1967,8 @@ mod tests {
         ins.params.insert("circuit".into(), 1.0); // RAT
         let (params, names) = grid_params(dist, &ins, Some("drive"), None);
         let ids: Vec<&str> = params.iter().map(|p| p.id).collect();
-        assert_eq!(ids, ["tone", "level", "circuit", "trim", "link", "ratLo", "ratHi", "ratModel", "ratDiode", "ratChip", "ratFat"]);
-        assert_eq!(names, ["Filter", "Volume", "Circuit", "Input", "Link", "Link Lo", "Link Hi", "Model", "Diode", "Chip", "Fat"]);
+        assert_eq!(ids, ["tone", "level", "circuit", "trim", "link", "ratLo", "ratHi", "ratModel", "ratDiode", "ratChip", "ratFat", "oversample"]);
+        assert_eq!(names, ["Filter", "Volume", "Circuit", "Input", "Link", "Link Lo", "Link Hi", "Model", "Diode", "Chip", "Fat", "Oversampling"]);
         assert_eq!(model_switch(&ins, "ratChip"), Some(Switch::Show { label: "Chip", opts: &["Stock", "LM308", "OP07", "LM741", "TL071"] }));
         assert_eq!(model_switch(&ins, "tsModel"), Some(Switch::Hide));
         assert_eq!(model_switch(&ins, "tsLo"), Some(Switch::Hide));
@@ -1985,7 +1985,7 @@ mod tests {
         for c in 0..12 {
             ins.params.insert("circuit".into(), c as f32);
             let (params, _) = grid_params(dist, &ins, Some("drive"), None);
-            let switches = params.iter().filter(|p| p.unit == Unit::Choice && p.id != "circuit").count();
+            let switches = params.iter().filter(|p| p.unit == Unit::Choice && p.id != "circuit" && p.id != "oversample").count();
             assert_eq!(switches, soundcraft_dsp::plugins::fs::dist::wrapper::CIRCUITS[c].switches.len(), "circuit {c}");
         }
         // Garbage circuit values fall back to a real circuit.
