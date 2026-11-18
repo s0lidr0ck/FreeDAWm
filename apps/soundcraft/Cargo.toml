@@ -29,10 +29,8 @@ serde_json.workspace = true
 log.workspace = true
 # The launch splash's JPEG frames (zune-jpeg is already in the graph through soundcraft-video).
 image = { workspace = true, features = ["jpeg"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd.workspace = true
-# Scout asks Claude (the Anthropic Messages API, streamed); native only.
+# Scout asks Claude (the Anthropic Messages API, streamed).
 ureq = { version = "2", features = ["tls", "json"] }
 
 [build-dependencies]
