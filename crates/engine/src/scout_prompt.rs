@@ -112,6 +112,7 @@ pub fn purpose(id: &str) -> &'static str {
             "Instrument: Juke drum machine, 16 pads of samples or synthesized drums (General MIDI notes), with choke groups, sends to two effect buses and step patterns as clips."
         }
         "subtractive_synth" => "Instrument: subtractive synthesizer (oscillators, filter, envelopes).",
+        "wavetable_synth" => "Instrument: wavetable synth, 13 built-in tables; Position moved by Env 2, LFO, velocity, mod wheel; unison, filter.",
         "mend" => "Vocal cleaner. Studio: takes room, noise and clipping off (2.9 s latency, mixing only). Live: noise only, 60 ms.",
         "vault" => "Convolution reverb: plays the sound through an impulse response loaded from a file (its drawer), else a built-in hall.",
         "imprint" => "Utility: captures an impulse response with a sine sweep on Play (Send, Return or Loop); saved from its drawer.",

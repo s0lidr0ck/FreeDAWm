@@ -29,11 +29,12 @@ pub mod test_link;
 mod timed;
 pub mod utility;
 pub mod vault;
+pub mod wavetable;
 
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 42] = [
+const BUILTINS: [&PluginInfo; 43] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -76,6 +77,7 @@ const BUILTINS: [&PluginInfo; 42] = [
     &sampler::SAMPLER_INFO,
     &juke::JUKE_INFO,
     &multisampler::MULTISAMPLER_INFO,
+    &wavetable::WAVETABLE_INFO,
 ];
 
 /// Every built-in plugin, in menu order: [`BUILTINS`], then the FireStation engines by their
@@ -175,6 +177,7 @@ fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
         "sampler" => Box::new(sampler::Sampler::new()),
         "juke" => Box::new(juke::Juke::new()),
         "multisampler" => Box::new(multisampler::Multisampler::new()),
+        "wavetable_synth" => Box::new(wavetable::WavetableSynth::new()),
         #[cfg(feature = "test-plugins")]
         "test_link" => Box::new(test_link::TestLink::new()),
         #[cfg(feature = "test-plugins")]
@@ -230,6 +233,7 @@ mod tests {
         "sampler",
         "juke",
         "multisampler",
+        "wavetable_synth",
         "fs_sat",
         "fs_comp",
         "fs_tape",

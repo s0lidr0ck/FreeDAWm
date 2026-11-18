@@ -1119,6 +1119,18 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
             r.response.on_disabled_hover_text(read_only.as_str());
         }
     }
+    if instrument && info.id == crate::wavetable_panel::WAVETABLE {
+        // The wavetable synth's panel: the current wave and its envelopes, over the controls.
+        let r = ui.scope(|ui| {
+            if frozen {
+                ui.disable();
+            }
+            crate::wavetable_panel::draw(app, ui, tid, ins);
+        });
+        if frozen {
+            r.response.on_disabled_hover_text(read_only.as_str());
+        }
+    }
     // What the drawer offers, by the drawer's names (a FireStation engine's own
     // bypass and a model's unused switches are not here).
     let params = crate::module_drawer::window_params(ins, info);

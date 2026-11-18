@@ -38,6 +38,7 @@ pub fn subtitle(id: &str) -> &'static str {
         "mend" => "Vocal Cleaner",
         "imprint" => "Impulse Response Capture",
         "subtractive_synth" => "Analog-Style Synth",
+        "wavetable_synth" => "Morphing Tables",
         "time_shift" => "Track Alignment",
         "trim" => "Input Level for Gain Staging",
         "gain" => "Clean Level Change",

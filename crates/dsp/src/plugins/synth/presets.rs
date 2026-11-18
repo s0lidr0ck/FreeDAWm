@@ -16,7 +16,7 @@ pub struct SynthPreset {
     pub set: &'static [(&'static str, f32)],
 }
 
-const fn preset(group: &'static str, name: &'static str, desc: &'static str, set: &'static [(&'static str, f32)]) -> SynthPreset {
+pub(crate) const fn preset(group: &'static str, name: &'static str, desc: &'static str, set: &'static [(&'static str, f32)]) -> SynthPreset {
     SynthPreset { name, group, desc, set }
 }
 
@@ -306,7 +306,13 @@ fn quoted(text: &str) -> String {
 }
 
 fn json_of(p: &SynthPreset) -> String {
-    let values: Vec<String> = SYNTH_INFO
+    json_for(&SYNTH_INFO, p)
+}
+
+/// A preset's JSON for `info`'s instrument (every parameter, the preset's values over the
+/// defaults): shared by the synths' preset lists.
+pub(crate) fn json_for(info: &crate::PluginInfo, p: &SynthPreset) -> String {
+    let values: Vec<String> = info
         .params
         .iter()
         .map(|info| {
@@ -321,6 +327,11 @@ fn json_of(p: &SynthPreset) -> String {
 pub fn factory_presets() -> &'static [(&'static str, &'static str)] {
     static BUILT: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
     BUILT.get_or_init(|| SYNTH_PRESETS.iter().map(|p| (p.name, &*Box::leak(json_of(p).into_boxed_str()))).collect())
+}
+
+/// `list` as `(name, json)` pairs for `info` (each JSON made once, kept for the program's life).
+pub(crate) fn pairs_for(info: &crate::PluginInfo, list: &[SynthPreset]) -> Vec<(&'static str, &'static str)> {
+    list.iter().map(|p| (p.name, &*Box::leak(json_for(info, p).into_boxed_str()))).collect()
 }
 
 #[cfg(test)]

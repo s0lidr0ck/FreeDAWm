@@ -38,8 +38,72 @@ pub(crate) fn bend_of(d1: u8, d2: u8) -> f32 {
     (v as f32 / 8192.0).clamp(-1.0, 1.0)
 }
 
+/// The controller messages the synths act on (sustain, all notes off, reset controllers, mod
+/// wheel, pitch bend) as events; anything else `None`.
+pub(crate) fn event_of(msg: [u8; 3]) -> Option<EventKind> {
+    let [status, d1, d2] = msg;
+    Some(match (status & 0xF0, d1) {
+        (0xB0, 64) => EventKind::Sustain(d2 >= 64),
+        (0xB0, 120 | 123) => EventKind::AllOff,
+        (0xB0, 121) => EventKind::ResetControllers,
+        (0xB0, 1) => EventKind::Mod(f32::from(d2 & 0x7F) / 127.0),
+        (0xE0, _) => EventKind::Bend(bend_of(d1, d2)),
+        _ => return None,
+    })
+}
+
+/// The voice a new note takes, from each voice's (sounding, note, key held, amp level): one
+/// already playing this note, else a free one, else the quietest released one, else the
+/// quietest held one (the synths' voice stealing).
+pub(crate) fn pick_voice(voices: impl Iterator<Item = (bool, u8, bool, f32)> + Clone, note: u8) -> usize {
+    voices
+        .clone()
+        .position(|(active, n, _, _)| active && n == note)
+        .or_else(|| voices.clone().position(|(active, _, _, _)| !active))
+        .or_else(|| {
+            voices.enumerate().min_by(|(_, a), (_, b)| (a.2, a.3).partial_cmp(&(b.2, b.3)).unwrap_or(std::cmp::Ordering::Equal)).map(|(i, _)| i)
+        })
+        .unwrap_or(0)
+}
+
+/// An LFO's value (-1..1) at `phase` (0..1) for wave `wave` ([`LFO_WAVES`]: sine, triangle,
+/// square, saw).
+#[inline]
+pub(crate) fn lfo_shape(wave: usize, phase: f32) -> f32 {
+    match wave {
+        1 => 1.0 - 4.0 * (phase - 0.5).abs(),
+        2 => {
+            if phase < 0.5 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        3 => 2.0 * phase - 1.0,
+        _ => (std::f32::consts::TAU * phase).sin(),
+    }
+}
+
+/// Per unison copy: its pitch ratio and its left and right gains, `unison` copies detuned across
+/// `detune` cents and panned across `spread` (0..1) at constant power, the stack's level kept by
+/// 1/√n (one copy: the centre, at full level on both sides).
+#[inline]
+pub(crate) fn unison_copies(unison: usize, detune: f32, spread: f32) -> [(f32, f32, f32); MAX_UNISON] {
+    let norm = 1.0 / (unison as f32).sqrt();
+    let mut copies = [(1.0f32, 1.0f32, 1.0f32); MAX_UNISON];
+    if unison > 1 {
+        for (i, c) in copies.iter_mut().take(unison).enumerate() {
+            let x = 2.0 * i as f32 / (unison - 1) as f32 - 1.0;
+            let angle = (1.0 + spread * x) * std::f32::consts::FRAC_PI_4;
+            let g = std::f32::consts::SQRT_2 * norm;
+            *c = (2f32.powf(detune * x / 1200.0), g * angle.cos(), g * angle.sin());
+        }
+    }
+    copies
+}
+
 /// The vibrato the mod wheel brings in (the synth's; the sampler uses its own LFO), Hz.
-const VIBRATO_HZ: f32 = 5.5;
+pub(crate) const VIBRATO_HZ: f32 = 5.5;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Event {
@@ -97,11 +161,11 @@ fn wave(i: usize) -> Waveform {
     }
 }
 
-const FILTERS: &[&str] = &["Low-pass 12 dB", "Low-pass 24 dB", "High-pass", "Band-pass", "Notch"];
-const LFO_WAVES: &[&str] = &["Sine", "Triangle", "Square", "Saw"];
+pub(crate) const FILTERS: &[&str] = &["Low-pass 12 dB", "Low-pass 24 dB", "High-pass", "Band-pass", "Notch"];
+pub(crate) const LFO_WAVES: &[&str] = &["Sine", "Triangle", "Square", "Saw"];
 const MODES: &[&str] = &["Poly", "Mono", "Legato"];
-const UNISON: &[&str] = &["Off", "2", "3", "4", "5", "6", "7"];
-const OFF_ON: &[&str] = &["Off", "On"];
+pub(crate) const UNISON: &[&str] = &["Off", "2", "3", "4", "5", "6", "7"];
+pub(crate) const OFF_ON: &[&str] = &["Off", "On"];
 
 static SYNTH_PARAMS: [ParamInfo; 35] = [
     choice("osc1_wave", "Osc 1", WAVES, 0),
@@ -148,7 +212,7 @@ const UNISON_DETUNE: usize = 32;
 const UNISON_SPREAD: usize = 33;
 const OSC_SYNC: usize = 34;
 /// Most copies a unison note plays.
-const MAX_UNISON: usize = 7;
+pub(crate) const MAX_UNISON: usize = 7;
 const FILTER_TYPE: usize = 21;
 const KEY_TRACK: usize = 22;
 const SUB_LEVEL: usize = 23;
@@ -177,7 +241,7 @@ pub static SYNTH_INFO: PluginInfo = PluginInfo {
 };
 
 const VOICES: usize = 16;
-const SILENT: f32 = 1.0e-5;
+pub(crate) const SILENT: f32 = 1.0e-5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Stage {
@@ -255,9 +319,9 @@ impl Adsr {
     }
 }
 
-/// Topology-preserving-transform state-variable low-pass.
+/// Topology-preserving-transform state-variable filter (shared with the Wavetable Synth).
 #[derive(Debug, Clone, Copy, Default)]
-struct Svf {
+pub(crate) struct Svf {
     ic1: f32,
     ic2: f32,
 }
@@ -266,7 +330,7 @@ impl Svf {
     /// One sample through the filter as `kind` ([`FILTERS`]: 0 and 1 low-pass, 2 high-pass, 3
     /// band-pass, 4 notch).
     #[inline]
-    fn run(&mut self, x: f32, g: f32, k: f32, kind: usize) -> f32 {
+    pub(crate) fn run(&mut self, x: f32, g: f32, k: f32, kind: usize) -> f32 {
         let a1 = 1.0 / (1.0 + g * (g + k));
         let a2 = g * a1;
         let a3 = g * a2;
@@ -558,23 +622,7 @@ impl SubtractiveSynth {
         self.counter += 1;
         let freq = note_hz(f32::from(note.min(127)));
         // Reuse a voice already playing this note, else a free one, else steal.
-        let idx = self
-            .voices
-            .iter()
-            .position(|v| v.active() && v.note == note)
-            .or_else(|| self.voices.iter().position(|v| !v.active()))
-            .or_else(|| {
-                self.voices
-                    .iter()
-                    .enumerate()
-                    .min_by(|(_, a), (_, b)| {
-                        let ka = (a.held, a.amp.level);
-                        let kb = (b.held, b.amp.level);
-                        ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .map(|(i, _)| i)
-            })
-            .unwrap_or(0);
+        let idx = pick_voice(self.voices.iter().map(|v| (v.active(), v.note, v.held, v.amp.level)), note);
         let sens = self.p.v(17) / 100.0;
         let glide = self.glide_coef > 0.0;
         let start = if glide { self.last_freq.unwrap_or(freq) } else { freq };
@@ -821,19 +869,7 @@ impl SubtractiveSynth {
     /// The control values one sample shares across voices (as `render_plain` reads them).
     #[inline]
     fn lfo_now(&mut self) -> f32 {
-        let ph = self.lfo_phase;
-        let lfo = match self.p.choice(LFO_WAVE) {
-            1 => 1.0 - 4.0 * (ph - 0.5).abs(),
-            2 => {
-                if ph < 0.5 {
-                    1.0
-                } else {
-                    -1.0
-                }
-            }
-            3 => 2.0 * ph - 1.0,
-            _ => (std::f32::consts::TAU * ph).sin(),
-        };
+        let lfo = lfo_shape(self.p.choice(LFO_WAVE), self.lfo_phase);
         self.lfo_phase = (self.lfo_phase + self.p.v(LFO_RATE) / self.sr).fract();
         lfo
     }
@@ -866,18 +902,7 @@ impl SubtractiveSynth {
         let detune = self.p.v(UNISON_DETUNE);
         let spread = self.p.v(UNISON_SPREAD) / 100.0;
         let bend = if cents == 0.0 { 1.0 } else { 2f32.powf(cents / 1200.0) };
-        let norm = 1.0 / (unison as f32).sqrt();
-        // Per copy: its pitch ratio and its left and right gains (one copy: the centre, at the
-        // plain path's level on both sides).
-        let mut copies = [(1.0f32, 1.0f32, 1.0f32); MAX_UNISON];
-        if unison > 1 {
-            for (i, c) in copies.iter_mut().take(unison).enumerate() {
-                let x = 2.0 * i as f32 / (unison - 1) as f32 - 1.0;
-                let angle = (1.0 + spread * x) * std::f32::consts::FRAC_PI_4;
-                let g = std::f32::consts::SQRT_2 * norm;
-                *c = (2f32.powf(detune * x / 1200.0), g * angle.cos(), g * angle.sin());
-            }
-        }
+        let copies = unison_copies(unison, detune, spread);
         let (mut out_l, mut out_r) = (0.0, 0.0);
         for v in &mut self.voices {
             if !v.active() {
@@ -1028,16 +1053,9 @@ impl Plugin for SubtractiveSynth {
     }
 
     fn midi(&mut self, offset: usize, msg: [u8; 3]) {
-        let [status, d1, d2] = msg;
-        let kind = match (status & 0xF0, d1) {
-            (0xB0, 64) => EventKind::Sustain(d2 >= 64),
-            (0xB0, 120 | 123) => EventKind::AllOff,
-            (0xB0, 121) => EventKind::ResetControllers,
-            (0xB0, 1) => EventKind::Mod(f32::from(d2 & 0x7F) / 127.0),
-            (0xE0, _) => EventKind::Bend(bend_of(d1, d2)),
-            _ => return,
-        };
-        self.events.push(offset, kind);
+        if let Some(kind) = event_of(msg) {
+            self.events.push(offset, kind);
+        }
     }
 
     fn all_notes_off(&mut self) {

@@ -69,13 +69,13 @@ pub fn envelope_points(a_ms: f32, d_ms: f32, sustain: f32, r_ms: f32) -> Vec<(f3
     pts
 }
 
-fn frame(ui: &mut Ui, r: Rect, title: &str) {
+pub(crate) fn frame(ui: &mut Ui, r: Rect, title: &str) {
     let t = Tokens::current();
     ui.painter().rect_filled(r, 6.0, t.panel_bg2);
     ui.painter().text(r.min + vec2(8.0, 6.0), egui::Align2::LEFT_TOP, title, egui::FontId::proportional(11.0), t.text_dim);
 }
 
-fn line(ui: &Ui, pts: &[Pos2], color: Color32) {
+pub(crate) fn line(ui: &Ui, pts: &[Pos2], color: Color32) {
     ui.painter().add(egui::Shape::line(pts.to_vec(), Stroke::new(1.8, color)));
 }
 
