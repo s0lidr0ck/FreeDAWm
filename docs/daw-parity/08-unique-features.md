@@ -122,7 +122,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 
 | Signature feature | FreeDAWm | What is there |
 |---|---|---|
-| Expression Maps and Note Expression | **Partial** | Expression maps as articulations switched by keyswitch, chosen by a controller lane (`e16557a`, Studio Pro's sound variations row; Cubase's direction type). Left: the attribute type (per note), map import, and Note Expression, which is per-note controller data ([section 7](07-midi-writing.md)'s MPE row) |
+| Expression Maps and Note Expression | **Partial** | Expression maps as articulations switched by keyswitch, chosen by a controller lane (`e16557a`, Studio Pro's sound variations row; Cubase's direction type). Note Expression: per-note tuning, pressure and brightness on a note's own channel, edited in lanes that follow the selected note ([section 7](07-midi-writing.md)). Left: the attribute type (per note), map import |
 | VariAudio: pitch and formant editing, harmonies from the chord track | **Works** | Note-based tuning with formant-preserving resynthesis; Make Harmony follows the chords; a view of every vocal track with clashes marked |
 | Chord Pads and Chord Assistant | **Partial** | A chord picker offering the key's triads and sevenths, and a chord stamp for the Pencil ([section 7](07-midi-writing.md)); no pads, no suggestions |
 | Control Room: cue mixes, talkback, monitor sets | **Works** | Window › Control Room: monitor sets with level, dim and mono, AFL/PFL listen, cue mixes from pre-fader sends, talkback ([section 3](03-mixing.md), ec5efc3) |
@@ -513,3 +513,4 @@ includes a feature should be checked before being quoted.
 | 2026-11-17 | minor | Field recordings: a clip expands to its location channels, and plays another take of its scene from its menu |
 | 2026-11-17 | minor | Show page, step 1: Window › Set List plays the session's songs in order, with Go On and a Stage View |
 | 2026-11-18 | minor | Step Sequencer row: melodic step sequences |
+| 2026-11-18 | minor | Note Expression row: per-note expression built |

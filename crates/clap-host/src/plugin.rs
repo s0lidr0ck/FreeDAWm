@@ -47,6 +47,8 @@ pub struct ClapPlugin {
     /// For a plug-in that takes only CLAP notes: each channel's last value of each note
     /// expression its controllers set (NaN: none yet), sent again with every new note.
     expr: [[f64; EXPRESSIONS]; 16],
+    /// Each channel's bend range as RPN 0 last set it: the tuning a bend becomes.
+    rpn: BendRanges,
     channels: usize,
     max_block: usize,
     latency: usize,
@@ -89,6 +91,7 @@ impl ClapPlugin {
             midi_in: false,
             held: [0; 128],
             expr: [[f64::NAN; EXPRESSIONS]; 16],
+            rpn: BendRanges::default(),
             channels: 2,
             max_block: 0,
             latency: 0,
@@ -278,17 +281,67 @@ impl ClapPlugin {
 /// How many CLAP note expressions there are (`CLAP_NOTE_EXPRESSION_VOLUME` … `PRESSURE`).
 const EXPRESSIONS: usize = 7;
 
+/// Each channel's pitch-bend range as RPN 0 sets it (MSB semitones, LSB cents), for the tuning a
+/// bend becomes. Nothing allocates: two fixed arrays.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BendRanges {
+    /// Semitones (with cents) per channel.
+    range: [f32; 16],
+    /// The registered parameter selected per channel (MSB, LSB), 127/127 for none.
+    rpn: [(u8, u8); 16],
+}
+
+impl Default for BendRanges {
+    fn default() -> Self {
+        BendRanges { range: [2.0; 16], rpn: [(127, 127); 16] }
+    }
+}
+
+impl BendRanges {
+    /// Takes a controller: RPN selects (101, 100) and data entry (6, 38) on pitch-bend
+    /// sensitivity set the range.
+    pub(crate) fn hear(&mut self, msg: [u8; 3]) {
+        if msg[0] & 0xF0 != 0xB0 {
+            return;
+        }
+        let ch = usize::from(msg[0] & 0x0F);
+        let (Some(sel), Some(range)) = (self.rpn.get_mut(ch), self.range.get_mut(ch)) else { return };
+        let v = msg[2] & 0x7F;
+        match msg[1] {
+            101 => sel.0 = v,
+            100 => sel.1 = v,
+            // NRPN selects end an RPN selection.
+            99 | 98 => *sel = (127, 127),
+            6 if *sel == (0, 0) => *range = f32::from(v) + range.fract(),
+            38 if *sel == (0, 0) => *range = range.trunc() + f32::from(v.min(99)) / 100.0,
+            _ => {}
+        }
+    }
+
+    pub(crate) fn bend_range(&self, channel: u8) -> f64 {
+        f64::from(self.range.get(usize::from(channel & 0x0F)).copied().unwrap_or(2.0))
+    }
+}
+
 /// The CLAP note expression a MIDI channel message stands for, for a plug-in that takes only
 /// CLAP notes: (expression, key: -1 for every key on the channel, value). Pitch bend is tuning
 /// (± 2 semitones), channel and poly pressure are pressure, CC1 vibrato, CC7 volume (amplitude,
 /// the General MIDI curve), CC10 pan, CC11 expression, CC74 brightness. Anything else has none.
+#[cfg(test)]
 pub(crate) fn expression_of(msg: [u8; 3]) -> Option<(i32, i16, f64)> {
+    expression_in(msg, 2.0)
+}
+
+/// [`expression_of`] with the channel's bend range (semitones a full bend throws), as RPN 0
+/// sets it (an MPE zone's member channels: 48 by default).
+pub(crate) fn expression_in(msg: [u8; 3], bend_range: f64) -> Option<(i32, i16, f64)> {
     let [status, d1, d2] = msg;
     let unit = |v: u8| f64::from(v.min(127)) / 127.0;
+    let range = if bend_range.is_finite() { bend_range.clamp(0.0, 96.0) } else { 2.0 };
     match status & 0xF0 {
         0xE0 => {
             let bend = (i32::from(d1 & 0x7F) | (i32::from(d2 & 0x7F) << 7)) - 8192;
-            Some((CLAP_NOTE_EXPRESSION_TUNING, -1, f64::from(bend) / 8192.0 * 2.0))
+            Some((CLAP_NOTE_EXPRESSION_TUNING, -1, f64::from(bend) / 8192.0 * range))
         }
         0xD0 => Some((CLAP_NOTE_EXPRESSION_PRESSURE, -1, unit(d1))),
         0xA0 => Some((CLAP_NOTE_EXPRESSION_PRESSURE, i16::from(d1 & 0x7F), unit(d2))),
@@ -469,7 +522,10 @@ impl Plugin for ClapPlugin {
         if self.midi_in {
             self.push(Event::Midi { time, data: msg });
         } else if self.notes == NoteMode::Clap
-            && let Some((expression, key, value)) = expression_of(msg)
+            && let Some((expression, key, value)) = {
+                self.rpn.hear(msg);
+                expression_in(msg, self.rpn.bend_range(msg[0] & 0x0F))
+            }
         {
             // A plug-in without MIDI input hears controllers, bend and pressure as note
             // expressions on the sounding notes (and on the notes that follow).
@@ -614,6 +670,29 @@ mod tests {
 
     /// Parity section 7, bug 24: controllers, bend and pressure become CLAP note expressions for
     /// a plug-in that takes only CLAP notes.
+    /// MPE: a member channel's bend range set by RPN 0 (as an MPE zone's setup sends it) scales
+    /// the tuning its bends become; other channels keep two semitones.
+    #[test]
+    fn a_channels_bend_range_scales_its_tuning() {
+        let mut r = BendRanges::default();
+        for m in [[0xB1, 101, 0], [0xB1, 100, 0], [0xB1, 6, 48], [0xB1, 38, 0]] {
+            r.hear(m);
+        }
+        assert_eq!(r.bend_range(1), 48.0);
+        assert_eq!(r.bend_range(0), 2.0);
+        let up = expression_in([0xE1, 0x7F, 0x7F], r.bend_range(1)).unwrap();
+        assert!((up.2 - 48.0 * 8191.0 / 8192.0).abs() < 1e-9);
+        // Another parameter selected: data entry leaves the range alone; cents add.
+        for m in [[0xB1, 101, 0], [0xB1, 100, 1], [0xB1, 6, 70]] {
+            r.hear(m);
+        }
+        assert_eq!(r.bend_range(1), 48.0);
+        for m in [[0xB2, 101, 0], [0xB2, 100, 0], [0xB2, 6, 12], [0xB2, 38, 50]] {
+            r.hear(m);
+        }
+        assert_eq!(r.bend_range(2), 12.5);
+    }
+
     #[test]
     fn channel_messages_become_note_expressions() {
         assert_eq!(expression_of([0xE3, 0, 0x40]), Some((CLAP_NOTE_EXPRESSION_TUNING, -1, 0.0)));
