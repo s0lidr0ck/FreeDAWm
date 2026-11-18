@@ -98,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 crate::io::import_video_bytes(e, &path, bytes, at)
             }
         ),
-        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name|hardware output name (I/O Setup; `output:name` when a bus has that name), normalize?: false (peak to -0.1 dBFS), loudness?: target LUFS (-40..0; integrated, BS.1770: gain only, held back so the true peak stays under true_peak), true_peak?: dBTP ceiling for loudness (-9..0, default -1), dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30), sample_rate?: Hz to convert to (8000-384000), dither?: tpdf|shaped|off (true/false), channels?: as_mixed|mono|split (a mono file per channel), also?: [more formats written in the same pass], tags?: {title, artist, album, date, comment} (ID3 in MP3, LIST/INFO and bext in WAV), import?: false (add the bounce to the session on new tracks), realtime?: false (the app plays the range through the audio device and prints it as heard, hardware inserts included; without a device, and outside the app, it renders offline)} → {path, files, imported, ...}", always, bounce),
+        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name|hardware output name (I/O Setup; `output:name` when a bus has that name), normalize?: false (peak to -0.1 dBFS), loudness?: target LUFS (-40..0; integrated, BS.1770: gain only, held back so the true peak stays under true_peak), true_peak?: dBTP ceiling for loudness (-9..0, default -1), dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30), sample_rate?: Hz to convert to (8000-384000), dither?: tpdf|shaped|off (true/false), channels?: as_mixed|mono|split (a mono file per channel), also?: [more formats written in the same pass], tags?: {title, artist, album, date, comment} (in every format), import?: false (add the bounce to the session on new tracks), realtime?: false (the app plays the range through the audio device and prints it as heard, hardware inserts included; without a device, and outside the app, it renders offline)} → {path, files, imported, ...}", always, bounce),
         cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac|mp3|opus, bit_depth?: 16|24|32f, bitrate?: kbps for mp3 or opus, start?, end?, fold_down?: stereo, tracks?: [track] (default: every unmuted audio, instrument and MIDI track), busses?: true (every bus) | [bus name]: a stem of each bus as summed}", has_tracks, |e, p| {
             let files = stems_job(e, p)?.run()?;
             Ok(json!({"files": files}))
@@ -580,8 +580,9 @@ fn also_param(p: &Value, main: &soundcraft_audio_io::EncodeOptions) -> Result<Ve
     Ok(out)
 }
 
-/// `tags`: {title, artist, album, date, comment}, written as ID3v2 in an MP3 and `LIST`/`INFO`
-/// (and the `bext` description) in a WAV.
+/// `tags`: {title, artist, album, date, comment}, written as ID3v2 in an MP3, `LIST`/`INFO` (and
+/// the `bext` description) in a WAV, Vorbis comments in a FLAC or Opus file and text chunks in an
+/// AIFF.
 fn tags_param(p: &Value) -> Result<Option<soundcraft_audio_io::export::Tags>> {
     match p.get("tags") {
         None | Some(Value::Null) => Ok(None),
@@ -723,6 +724,17 @@ mod tests {
         let (mp3, mbytes) = probe(&p("a.mp3"));
         assert!(mbytes.starts_with(b"ID3"), "the MP3 is tagged");
         assert_eq!(mp3.channels, 2);
+        // FLAC, AIFF and Opus carry the tags in the file too.
+        e.execute(
+            "file.bounce_mix",
+            &json!({"path": p("t.flac"), "start": start, "end": end, "also": ["aif", "opus"], "tags": {"title": "Song", "artist": "Band"}}),
+        )
+        .unwrap();
+        for (f, title) in [("t.flac", &b"TITLE=Song"[..]), ("t.opus", b"TITLE=Song"), ("t.aif", b"NAME\0\0\0\x04Song")] {
+            let (info, bytes) = probe(&p(f));
+            assert_eq!(info.channels, 2, "{f}");
+            assert!(bytes.windows(title.len()).any(|w| w == title), "{f} is tagged");
+        }
         // Mono, and one file per channel.
         e.execute("file.bounce_mix", &json!({"path": p("m.wav"), "start": start, "end": end, "channels": "mono"})).unwrap();
         assert_eq!(probe(&p("m.wav")).0.channels, 1);

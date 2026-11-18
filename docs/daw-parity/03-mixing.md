@@ -191,7 +191,7 @@ K-system scales, and the master a loudness meter.
 | Dither with a choice of type and noise shaping | ● | ● | ● | ● | **Works**: Dither in the Bounce dialog: TPDF, noise-shaped TPDF (second-order error feedback, the noise moved above the midrange) or off (`dither`), for 16- and 24-bit files |
 | Mono, and one file per channel | ● | ● | ● | ● | **Works**: Channels in the Bounce dialog: as mixed, mono (the channels averaged; a surround source's stereo fold-down) or one mono file per channel named after it, `Mix.L.wav`, `Mix.R.wav` (`channels`) |
 | Normalize on export | ○ | ◐ | ● | ◐ | **Works**: to sample peak (−0.1 dBFS) or to a loudness target in LUFS held under a true-peak ceiling, by rendering twice |
-| Tags and broadcast metadata in the file | ● | ● | ● | ● | **Partial**: every bounced WAV carries a BWF `bext` (FreeDAWm, the date, the range's start as its time reference, the title as its description); Tags in the Bounce dialog (title, artist, album, date, comment; `tags`) go into an MP3 as ID3v2 and a WAV as `LIST`/`INFO`. FLAC, AIFF and Opus files are not tagged yet |
+| Tags and broadcast metadata in the file | ● | ● | ● | ● | **Works**: every bounced WAV carries a BWF `bext` (FreeDAWm, the date, the range's start as its time reference, the title as its description); Tags in the Bounce dialog (title, artist, album, date, comment; `tags`) go into an MP3 as ID3v2, a WAV as `LIST`/`INFO`, a FLAC as a `VORBIS_COMMENT` block, an Opus file as its `OpusTags` comments (`TITLE`, `ARTIST`, `ALBUM`, `DATE`, `COMMENT`) and an AIFF as `NAME`, `AUTH` and `ANNO` chunks (AIFF has no chunk for an album or a date: each goes in an `ANNO` as `Album: …` and `Date: …`). Written by FreeDAWm's own encoders, no new dependency; a bounce without tags is byte for byte as before. Tests: `audio-io` `flac_aiff_and_opus_carry_their_tags` (the tagged files read back as the same audio), `engine` `a_bounce_converts_splits_tags_and_comes_back` |
 | Add the bounce back to the session | ● | ● | ● | ● | **Works**: Add to Session in the Bounce dialog (`import`): the main file (each file of a split bounce) on new tracks at the range's start, one undo step |
 | Several formats in one pass | ● | ◐ | ● | ● | **Works**: Also write in the Bounce dialog (`also`): more formats from the same render, each beside the main file with its own extension (MP3 and Opus at their default bitrate; a surround mix needs a fold-down or a split for them) |
 | Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Works**: Export › Stems takes every unmuted track or the selected ones, and a stem of each bus as summed (`tracks`, `busses`), behind a progress window with Cancel; a track's stem is it soloed through the master |
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | FLAC, AIFF and Opus bounces carry the Bounce dialog's tags |
 | 2026-11-18 | minor | sends' levels read sample by sample and pans glide between the 64-sample grid's points, so a bending lane no longer steps |
 | 2026-11-18 | minor | several Mix windows, each with its own find, spill and sections |
 | 2026-11-18 | minor | Import Session Data onto existing tracks of the same name, choosing the parts that come |

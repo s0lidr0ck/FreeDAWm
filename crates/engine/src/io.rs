@@ -1150,7 +1150,10 @@ impl Bounce {
                         std::io::Write::write_all(&mut out, &t.id3v2())?;
                     }
                     let mask = (export.layout == FileLayout::AsMixed).then(|| label_fmt.channel_mask());
-                    let enc = soundcraft_audio_io::FileEncoder::new(out, &shaped_options(&o, export.noise_shaping), file_channels, rate, mask)?;
+                    // FLAC, AIFF and Opus carry the tags in the stream (WAV and MP3 above and below).
+                    let tags = export.tags.as_ref().filter(|t| !t.is_empty());
+                    let enc =
+                        soundcraft_audio_io::FileEncoder::with_tags(out, &shaped_options(&o, export.noise_shaping), file_channels, rate, mask, tags)?;
                     enc.check_room(frames)?;
                     Ok(enc)
                 })()

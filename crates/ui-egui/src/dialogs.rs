@@ -169,7 +169,7 @@ impl BounceMore {
                     ui.add(egui::TextEdit::singleline(v).desired_width(300.0));
                 });
             }
-            ui.label(egui::RichText::new("Written as ID3 in MP3 files and as INFO and the BWF description in WAV files").small().color(dim));
+            ui.label(egui::RichText::new("Written into every format: ID3 in MP3, INFO and the BWF description in WAV, Vorbis comments in FLAC and Opus, text chunks in AIFF").small().color(dim));
         });
         crate::widgets::checkbox(ui, &mut self.import, "Add to session (new tracks at the range's start)");
         crate::widgets::checkbox(ui, &mut self.realtime, "In real time").on_hover_text(

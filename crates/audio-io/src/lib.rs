@@ -396,13 +396,32 @@ impl<W: Write + Seek> FileEncoder<W> {
     /// Starts a file at the current position of `out`. `mask` overrides the WAV speaker mask
     /// derived from the channel count.
     pub fn new(out: W, opts: &EncodeOptions, channels: usize, sample_rate: u32, mask: Option<u32>) -> Result<Self> {
+        Self::with_tags(out, opts, channels, sample_rate, mask, None)
+    }
+
+    /// [`FileEncoder::new`] with text tags written into the formats that keep them in the stream:
+    /// a FLAC's `VORBIS_COMMENT` block, an Opus file's `OpusTags`, an AIFF's text chunks (after
+    /// the sound data). WAV and MP3 take theirs from the caller ([`export::Tags::wav_info`],
+    /// [`export::Tags::id3v2`]); empty tags write nothing.
+    pub fn with_tags(
+        out: W,
+        opts: &EncodeOptions,
+        channels: usize,
+        sample_rate: u32,
+        mask: Option<u32>,
+        tags: Option<&export::Tags>,
+    ) -> Result<Self> {
         let (depth, dither) = (opts.bit_depth, opts.dither);
+        let comments = tags.map(export::Tags::vorbis_comments).unwrap_or_default();
         Ok(FileEncoder(match opts.format {
             FileFormat::Wav => Writer::Wav(wav::Writer::new(out, channels, sample_rate, depth, dither, opts.bwf.as_ref(), mask, false)?),
-            FileFormat::Aiff => Writer::Aiff(aiff::Writer::new(out, channels, sample_rate, depth, dither)?),
-            FileFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither)?),
+            FileFormat::Aiff => {
+                let chunks = tags.map(export::Tags::aiff_chunks).unwrap_or_default();
+                Writer::Aiff(aiff::Writer::new(out, channels, sample_rate, depth, dither, chunks)?)
+            }
+            FileFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither, &comments)?),
             FileFormat::Mp3 => Writer::Mp3(Box::new(mp3::Writer::new(out, channels, sample_rate, opts.bitrate_kbps)?)),
-            FileFormat::Opus => Writer::Opus(Box::new(opus::Writer::new(out, channels, sample_rate, opts.bitrate_kbps)?)),
+            FileFormat::Opus => Writer::Opus(Box::new(opus::Writer::new(out, channels, sample_rate, opts.bitrate_kbps, &comments)?)),
             other => return Err(AudioError::Unsupported(format!("encoding {other:?} is not supported"))),
         }))
     }
@@ -511,4 +530,57 @@ pub fn wav_float_header(channels: usize, sample_rate: u32, frames: u64) -> Resul
         return Err(AudioError::Encode("a WAV needs channels and a sample rate".into()));
     }
     wav::header(channels, sample_rate, (32, true), None, None, frames, false)
+}
+
+#[cfg(test)]
+mod stream_tag_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    use super::*;
+    use std::io::Cursor;
+
+    fn tagged(format: FileFormat, tags: Option<&export::Tags>) -> Vec<u8> {
+        let buf: Vec<Vec<f32>> = (0..2).map(|c| (0..9600).map(|i| ((i + c * 7) as f32 * 0.01).sin() * 0.3).collect()).collect();
+        let opts = EncodeOptions { format, bit_depth: BitDepth::Int16, ..EncodeOptions::default() };
+        let mut enc = FileEncoder::with_tags(Cursor::new(Vec::new()), &opts, 2, 48_000, None, tags).unwrap();
+        enc.write(&buf, 9600).unwrap();
+        enc.finish().unwrap().into_inner()
+    }
+
+    fn has(bytes: &[u8], s: &[u8]) -> bool {
+        bytes.windows(s.len()).any(|w| w == s)
+    }
+
+    /// FLAC, AIFF and Opus bounces carry their tags (Vorbis comments, text chunks), still read
+    /// back as the same audio, and untagged files are byte for byte as before.
+    #[test]
+    fn flac_aiff_and_opus_carry_their_tags() {
+        let tags = export::Tags { title: "Song".into(), artist: "Me".into(), album: "LP".into(), date: "2026-11-18".into(), comment: "mix 3".into() };
+        for format in [FileFormat::Flac, FileFormat::Aiff, FileFormat::Opus] {
+            let plain = tagged(format, None);
+            assert_eq!(plain, tagged(format, Some(&export::Tags::default())), "{format:?}: empty tags write nothing");
+            let with = tagged(format, Some(&tags));
+            let (_, a) = decode(&plain, None).unwrap();
+            let (info, b) = decode(&with, None).unwrap();
+            assert_eq!(info.format, format);
+            assert_eq!(a.channels, b.channels, "{format:?}: the same audio");
+            match format {
+                FileFormat::Aiff => {
+                    for s in [&b"NAME\0\0\0\x04Song"[..], b"AUTH", b"ANNO\0\0\0\x09Album: LP", b"Date: 2026-11-18", b"mix 3"] {
+                        assert!(has(&with, s), "AIFF lacks {:?}", String::from_utf8_lossy(s));
+                    }
+                    let form = u32::from_be_bytes(with[4..8].try_into().unwrap()) as usize;
+                    assert_eq!(form + 8, with.len(), "the FORM size counts the tags");
+                }
+                _ => {
+                    for s in ["TITLE=Song", "ARTIST=Me", "ALBUM=LP", "DATE=2026-11-18", "COMMENT=mix 3"] {
+                        assert!(has(&with, s.as_bytes()), "{format:?} lacks {s}");
+                    }
+                }
+            }
+        }
+        // FLAC: STREAMINFO then VORBIS_COMMENT, the last block.
+        let f = tagged(FileFormat::Flac, Some(&tags));
+        assert_eq!(f[4], 0x00, "STREAMINFO is no longer the last block");
+        assert_eq!(f[4 + 4 + 34], 0x84, "VORBIS_COMMENT, last");
+    }
 }

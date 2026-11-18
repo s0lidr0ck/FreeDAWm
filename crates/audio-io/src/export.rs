@@ -1,5 +1,6 @@
 //! Export helpers a bounce uses around [`crate::FileEncoder`]: noise-shaped dither ahead of an
-//! integer file, and text tags (ID3v2 for MP3, a `LIST`/`INFO` chunk for WAV).
+//! integer file, and text tags (ID3v2 for MP3, a `LIST`/`INFO` chunk for WAV, Vorbis comments for
+//! FLAC and Opus, text chunks for AIFF).
 
 /// TPDF dither with second-order noise shaping, quantizing to an integer bit depth ahead of the
 /// encoder: each output is exactly on the grid of that depth, so an encoder writing it without
@@ -48,8 +49,9 @@ impl NoiseShaper {
     }
 }
 
-/// Text a bounce writes into its files: an MP3's ID3v2 tag and a WAV's `LIST`/`INFO` chunk.
-/// Empty fields are left out.
+/// Text a bounce writes into its files: an MP3's ID3v2 tag, a WAV's `LIST`/`INFO` chunk, a FLAC's
+/// or an Opus file's Vorbis comments and an AIFF's `NAME`/`AUTH`/`ANNO` chunks. Empty fields are
+/// left out.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Tags {
@@ -123,6 +125,46 @@ impl Tags {
         let mut out = b"ID3\x03\x00\x00".to_vec();
         out.extend_from_slice(&size);
         out.extend_from_slice(&frames);
+        out
+    }
+
+    /// The fields as Vorbis comments (`TITLE=…`, `ARTIST=…`, `ALBUM=…`, `DATE=…`, `COMMENT=…`), as
+    /// a FLAC's `VORBIS_COMMENT` block and an Opus file's `OpusTags` hold them.
+    pub fn vorbis_comments(&self) -> Vec<String> {
+        [("TITLE", &self.title), ("ARTIST", &self.artist), ("ALBUM", &self.album), ("DATE", &self.date), ("COMMENT", &self.comment)]
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let t = clip(v.trim());
+                (!t.is_empty()).then(|| format!("{k}={t}"))
+            })
+            .collect()
+    }
+
+    /// The AIFF text chunks: `NAME` (title), `AUTH` (artist) and an `ANNO` each for the album
+    /// (`Album: …`), the date (`Date: …`) and the comment, to append after the sound data. AIFF
+    /// has no chunk of its own for an album or a date. Empty when there is nothing to tag.
+    pub fn aiff_chunks(&self) -> Vec<u8> {
+        let album = format!("Album: {}", clip(self.album.trim()));
+        let date = format!("Date: {}", clip(self.date.trim()));
+        let mut out = Vec::new();
+        for (id, text, on) in [
+            (b"NAME", self.title.trim(), true),
+            (b"AUTH", self.artist.trim(), true),
+            (b"ANNO", album.as_str(), !self.album.trim().is_empty()),
+            (b"ANNO", date.as_str(), !self.date.trim().is_empty()),
+            (b"ANNO", self.comment.trim(), true),
+        ] {
+            let t = clip(text);
+            if t.is_empty() || !on {
+                continue;
+            }
+            out.extend_from_slice(id);
+            out.extend_from_slice(&u32::try_from(t.len()).unwrap_or(0).to_be_bytes());
+            out.extend_from_slice(t.as_bytes());
+            if t.len() % 2 == 1 {
+                out.push(0);
+            }
+        }
         out
     }
 
