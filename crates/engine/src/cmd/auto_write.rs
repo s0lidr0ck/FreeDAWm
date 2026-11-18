@@ -23,6 +23,12 @@
 //! value over the edit selection, or from where it is heard to the end of the session, and plays
 //! the lanes again. Turning Preview off without punching drops the previewed values.
 //!
+//! **Hearing the move**: while a pass writes a lane (a control held or latched, every lane in
+//! Write), the lane is suspended in the session the player is handed, as Preview suspends one, so
+//! the strip plays the control as set: the move reaches the audio thread with the next session
+//! (the next block after the frame that made it) instead of trailing behind the points written
+//! where it was heard. Let go (Touch) or stopped, the lane plays again.
+//!
 //! [`AutomationLane::suspended`]: soundcraft_model::AutomationLane::suspended
 //!
 //! Each written point replaces the automation since the previous one; stopping writes a last
@@ -290,6 +296,9 @@ pub struct AutoWriter {
     preview: bool,
     /// The controls touched while previewing: their lanes are suspended until punched.
     previewing: Vec<(TrackId, AutoParam)>,
+    /// The lanes the running pass writes now (touched, latched, or in Write): they play as set,
+    /// so the move is heard at once (see the module docs).
+    live: Vec<(TrackId, AutoParam)>,
 }
 
 impl AutoWriter {
@@ -409,21 +418,26 @@ impl Engine {
         }
     }
 
-    /// Suspends exactly the lanes being previewed (an undo can bring back a lane as it was, either
-    /// way). Edits the session only when something is to change.
+    /// Suspends exactly the lanes being previewed or written live by a pass (an undo can bring
+    /// back a lane as it was, either way), in the track's lanes and the lanes it plays (clip
+    /// automation laid over them). Edits the session only when something is to change.
     fn preview_reconcile(&mut self) {
         let w = &self.auto_write;
-        let want = |t: TrackId, p: &AutoParam| w.preview && w.previewing.iter().any(|x| x.0 == t && x.1 == *p);
-        let wrong = self.session().tracks.iter().any(|tr| tr.automation.iter().any(|l| l.suspended != want(tr.id, &l.param)));
+        let want = |t: TrackId, p: &AutoParam| {
+            (w.preview && w.previewing.iter().any(|x| x.0 == t && x.1 == *p)) || w.live.iter().any(|x| x.0 == t && x.1 == *p)
+        };
+        let wrong = self.session().tracks.iter().any(|tr| tr.automation.iter().chain(&tr.played).any(|l| l.suspended != want(tr.id, &l.param)));
         if !wrong {
             return;
         }
-        let previewing = if w.preview { w.previewing.clone() } else { Vec::new() };
+        let mut on: Vec<(TrackId, AutoParam)> = if w.preview { w.previewing.clone() } else { Vec::new() };
+        on.extend(w.live.iter().cloned());
         for tr in &mut self.session_mut().tracks {
-            for l in &mut tr.automation {
-                let on = previewing.iter().any(|x| x.0 == tr.id && x.1 == l.param);
-                if l.suspended != on {
-                    l.suspended = on;
+            let id = tr.id;
+            for l in tr.automation.iter_mut().chain(tr.played.iter_mut()) {
+                let s = on.iter().any(|x| x.0 == id && x.1 == l.param);
+                if l.suspended != s {
+                    l.suspended = s;
                 }
             }
         }
@@ -538,7 +552,6 @@ impl Engine {
     /// `playing`, but the frame playback stops on writes each written lane's last point. Returns
     /// how many points it wrote.
     pub fn automation_pass(&mut self, playing: bool) -> usize {
-        self.preview_reconcile();
         let writes_any = |m: M| matches!(m, M::Write | M::Touch | M::Latch | M::TouchLatch | M::Trim);
         let may_write = playing && self.session().tracks.iter().any(|t| writes_any(t.mixer.automation_mode));
         self.hold_merge(may_write.then_some(PASS));
@@ -556,6 +569,13 @@ impl Engine {
             self.auto_write.before.clear();
             self.auto_write.last_at = i64::MIN;
         }
+        // The lanes written now play as set (the trim the fader holds is not in the session).
+        self.auto_write.live = if playing {
+            self.due_writes(pos, hold).into_iter().filter(|(_, p, _)| *p != AutoParam::Trim).map(|(t, p, _)| (t, p)).collect()
+        } else {
+            Vec::new()
+        };
+        self.preview_reconcile();
         if !playing && !stopped {
             self.auto_write.last_at = i64::MIN;
             return 0;
@@ -862,6 +882,43 @@ mod tests {
         e.execute("automation.preview", &json!({"value": false})).unwrap();
         assert!(!lane(&e).suspended);
         assert!(points(&e, t, &AutoParam::Volume).iter().all(|p| p.1 == -20.0));
+    }
+
+    /// You hear the control you move: while a Touch pass writes the held fader its lane is out
+    /// of the session the player plays (the strip plays the fader as set, the same render as with
+    /// no lane), from the frame it is held, not 20 ms of points later; let go, the lane plays
+    /// again; a Latch keeps playing the latched value until Stop; stopped, nothing stays held out.
+    #[test]
+    fn the_control_being_written_is_heard_as_set() {
+        for mode in ["touch", "latch"] {
+            let (mut e, t, _, q) = kick(mode);
+            for at in [0, 100 * q] {
+                e.execute("automation.set_point", &json!({"track": t.0, "param": "volume", "at": at, "value": -20.0})).unwrap();
+            }
+            let played = |e: &Engine| e.session().track(t).unwrap().played_lane(&AutoParam::Volume).is_some();
+            play(&mut e, q);
+            assert!(played(&e), "{mode}: not touched, the lane plays");
+            e.automation_ui_held(vec![(t, AutoParam::Volume)]);
+            e.execute("mix.volume", &json!({"track": t.0, "db": -3.0})).unwrap();
+            // The same frame's pass (before any 20 ms step is due) hands the player the fader.
+            e.transport.position = q + 1;
+            e.automation_pass(true);
+            assert!(!played(&e), "{mode}: held, the strip plays the fader as set");
+            let range = soundcraft_time::Range::new(2 * q, 2 * q + 2048);
+            let heard = soundcraft_mix::render_range(e.session(), range, 512);
+            let mut plain = e.session().clone();
+            plain.track_mut(t).unwrap().automation.retain(|l| l.param != AutoParam::Volume);
+            plain.track_mut(t).unwrap().played.retain(|l| l.param != AutoParam::Volume);
+            assert_eq!(heard, soundcraft_mix::render_range(&plain, range, 512), "{mode}: the move, not the lane");
+            play(&mut e, 2 * q);
+            e.automation_ui_held(Vec::new());
+            play(&mut e, 3 * q);
+            assert_eq!(played(&e), mode == "touch", "{mode}: let go, Touch plays the lane again, Latch the latched value");
+            stop(&mut e, 4 * q);
+            e.automation_pass(false);
+            assert!(played(&e), "{mode}: stopped, the lane plays");
+            assert!(e.session().tracks.iter().all(|tr| tr.automation.iter().all(|l| !l.suspended)));
+        }
     }
 
     #[test]
