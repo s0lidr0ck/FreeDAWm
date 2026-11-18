@@ -10,7 +10,6 @@
 //   Menu > Item = soon                shown greyed out, hover "Coming soon: needs its own window"
 //   Menu > Item = soon: Text          shown greyed out, hover "Text"
 //   Menu > Item = !instrument         built by the UI (!instrument, !recent)
-//   ... [desktop]                     left out of the web build
 //
 // Submenus are made by the path; lines of one submenu need not be adjacent, but keep them so.
 // Labels ending in "..." or "…" open a dialog or window (a test checks it).
@@ -38,7 +37,7 @@ File > Import > MusicXML...
 File > Import > Video...
 File > Import > Clip Groups...
 File > Import > DAWproject...
-File > Import > Reference... = @ui.scout.import_reference [desktop]
+File > Import > Reference... = @ui.scout.import_reference
 File > Import > FireStation User Presets = File > Import > FireStation User Presets
 File > Export > MIDI...
 File > Export > Sibelius...
@@ -47,7 +46,7 @@ File > Export > Lyrics as Text...
 File > Export > Session Info as Text...
 File > Export > Selected Tracks as New Session...
 File > Export > DAWproject...
-File > Export > Movie (ProRes)... = @file.bounce_movie [desktop]
+File > Export > Movie (ProRes)... = @file.bounce_movie
 File > Export > ---
 File > Export > Stems... = @file.bounce_stems
 File > Export > Clips... = @file.export_clips
@@ -468,9 +467,9 @@ Event > ---
 Event > ## MIDI recording
 Event > Input Quantize... = Event > MIDI Operations > Input Quantize...
 Event > Step Input... = @window.step_input
-Event > Capture MIDI = @ui.capture_midi [desktop]
-Event > Undo Last Pass = @ui.midi_undo_pass [desktop]
-Event > Erase Held Notes = @ui.midi_erase_held [desktop]
+Event > Capture MIDI = @ui.capture_midi
+Event > Undo Last Pass = @ui.midi_undo_pass
+Event > Erase Held Notes = @ui.midi_erase_held
 Event > ---
 Event > ## Performance
 Event > Restore Performance = Event > MIDI Operations > Restore Performance...
@@ -527,38 +526,38 @@ Process > ## History & samples
 Process > Process History... = Process > More > Process History
 Process > Sample Editor... = Process > More > Sample Editor
 
-AI > ## Separate [desktop]
-AI > Separate Stems… [desktop]
-AI > Make Karaoke… [desktop]
-AI > Split Drums… [desktop]
-AI > --- [desktop]
-AI > ## Clean [desktop]
-AI > Clean Vocal > Open… = AI > Clean Vocal… [desktop]
-AI > Clean Vocal > --- [desktop]
-AI > Clean Vocal > Original / Cleaned = @clip.clean_toggle [desktop]
-AI > Clean Vocal > Amount... = @clip.clean_mix [desktop]
-AI > Clean Vocal > Commit = @clip.clean_commit [desktop]
-AI > Clean Vocal > Remove Cleaned Version = @clip.clean_remove [desktop]
-AI > Tune Vocal > Open… = AI > Tune Vocal… [desktop]
-AI > Tune Vocal > --- [desktop]
-AI > Tune Vocal > Analyse Now = @vocal.analyse [desktop]
-AI > Tune Vocal > Tuned / Original = @vocal.toggle [desktop]
-AI > Tune Vocal > Notes Classic / Musical = @vocal.note_mode [desktop]
-AI > Tune Vocal > Fit to Lead = @vocal.fit_to_lead [desktop]
-AI > Tune Vocal > Make Harmony… = @ui.vocal_harmony [desktop]
-AI > Tune Vocal > Commit = @vocal.commit [desktop]
-AI > Tune Vocal > Remove Tuning = @vocal.remove [desktop]
-AI > --- [desktop]
-AI > ## Transcribe [desktop]
-AI > Convert to MIDI… [desktop]
-AI > Detect Chords… [desktop]
-AI > Transcribe Lyrics… [desktop]
+AI > ## Separate
+AI > Separate Stems…
+AI > Make Karaoke…
+AI > Split Drums…
+AI > ---
+AI > ## Clean
+AI > Clean Vocal > Open… = AI > Clean Vocal…
+AI > Clean Vocal > ---
+AI > Clean Vocal > Original / Cleaned = @clip.clean_toggle
+AI > Clean Vocal > Amount... = @clip.clean_mix
+AI > Clean Vocal > Commit = @clip.clean_commit
+AI > Clean Vocal > Remove Cleaned Version = @clip.clean_remove
+AI > Tune Vocal > Open… = AI > Tune Vocal…
+AI > Tune Vocal > ---
+AI > Tune Vocal > Analyse Now = @vocal.analyse
+AI > Tune Vocal > Tuned / Original = @vocal.toggle
+AI > Tune Vocal > Notes Classic / Musical = @vocal.note_mode
+AI > Tune Vocal > Fit to Lead = @vocal.fit_to_lead
+AI > Tune Vocal > Make Harmony… = @ui.vocal_harmony
+AI > Tune Vocal > Commit = @vocal.commit
+AI > Tune Vocal > Remove Tuning = @vocal.remove
+AI > ---
+AI > ## Transcribe
+AI > Convert to MIDI…
+AI > Detect Chords…
+AI > Transcribe Lyrics…
 AI > Find in Transcript… = @lyrics.find
 AI > MIDI Cleanup…
-AI > --- [desktop]
-AI > ## Generate [desktop]
-AI > Generate MIDI from Text… [desktop]
-AI > Generate Song… [desktop]
+AI > ---
+AI > ## Generate
+AI > Generate MIDI from Text…
+AI > Generate Song…
 
 Transport > ## Play
 Transport > Play Edit Selection = Edit > Selection > Play Edit
@@ -661,20 +660,20 @@ Setup > ---
 Setup > ## Recording & MIDI
 Setup > Click/Countoff... = @window.click_countoff
 Setup > Disk Allocation... = @window.disk_allocation
-Setup > MIDI Input Devices... = @window.midi_inputs [desktop]
-Setup > Control Surfaces... = @window.control_surfaces [desktop]
-Setup > MIDI Mappings... = @window.midi_mappings [desktop]
-Setup > --- [desktop]
-Setup > ## Network [desktop]
-Setup > Network... = @window.network [desktop]
+Setup > MIDI Input Devices... = @window.midi_inputs
+Setup > Control Surfaces... = @window.control_surfaces
+Setup > MIDI Mappings... = @window.midi_mappings
+Setup > ---
+Setup > ## Network
+Setup > Network... = @window.network
 Setup > ---
 Setup > ## Session & keys
 Setup > Session... = Setup > Session
 Setup > Keyboard Shortcuts...
 Setup > Preferences...
-Setup > --- [desktop]
-Setup > ## AI [desktop]
-Setup > ML Models… [desktop]
+Setup > ---
+Setup > ## AI
+Setup > ML Models…
 
 Window > ## Main windows
 Window > Mix
@@ -695,8 +694,8 @@ Window > Vocal Editor
 Window > Vocal Studio = @window.vocal_studio
 Window > Score Editor
 Window > MIDI Event List
-Window > Musical Typing [desktop]
-Window > Chord Pads... = @window.chord_pads [desktop]
+Window > Musical Typing
+Window > Chord Pads... = @window.chord_pads
 Window > ---
 Window > ## Transport & session
 Window > Transport

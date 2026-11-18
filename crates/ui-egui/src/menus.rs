@@ -333,8 +333,6 @@ pub struct Line {
     /// Where it is shown, `Menu > Submenu > Item`.
     pub display: &'static str,
     pub target: Target,
-    /// Left out of the web build.
-    pub desktop: bool,
 }
 
 fn parse_line(raw: &'static str) -> Option<Line> {
@@ -342,10 +340,6 @@ fn parse_line(raw: &'static str) -> Option<Line> {
     if line.is_empty() || line.starts_with("//") {
         return None;
     }
-    let (line, desktop) = match line.strip_suffix("[desktop]") {
-        Some(l) => (l.trim_end(), true),
-        None => (line, false),
-    };
     let (display, target) = match line.split_once(" = ") {
         Some((d, t)) => (d.trim(), t.trim()),
         None => (line, ""),
@@ -363,7 +357,7 @@ fn parse_line(raw: &'static str) -> Option<Line> {
     } else {
         Target::Path(target)
     };
-    Some(Line { display, target, desktop })
+    Some(Line { display, target })
 }
 
 /// Every line of `menubar.txt`, parsed once.
@@ -505,9 +499,6 @@ fn insert_line(roots: &mut Vec<MenuNode>, line: &Line) {
 pub fn tree() -> Vec<MenuNode> {
     let mut roots: Vec<MenuNode> = Vec::new();
     for line in layout() {
-        if line.desktop && cfg!(target_arch = "wasm32") {
-            continue;
-        }
         insert_line(&mut roots, line);
     }
     roots

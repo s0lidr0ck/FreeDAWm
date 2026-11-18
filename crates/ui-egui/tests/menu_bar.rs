@@ -473,16 +473,6 @@ fn every_menubar_line_has_a_known_shape() {
     }
 }
 
-/// Bug 23 of parity section 6: the web build has no live MIDI, so the windows that play or set it
-/// up are left out of its menus.
-#[test]
-fn live_midi_windows_are_desktop_only() {
-    for shown in ["Setup > MIDI Input Devices...", "Window > Musical Typing"] {
-        let line = menus::layout().iter().find(|l| l.display == shown).unwrap_or_else(|| panic!("{shown} is on the menu bar"));
-        assert!(line.desktop, "{shown} is left out of the web build");
-    }
-}
-
 #[test]
 fn greyed_items_are_refused_by_path() {
     // Click/Countoff… has its window now.
