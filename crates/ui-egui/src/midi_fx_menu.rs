@@ -101,6 +101,7 @@ fn effect(ui: &mut egui::Ui, i: usize, n: usize, fx: &MidiFx, asks: &mut Vec<Ask
             choice(ui, "Chord", &shapes, fx.chord, "chord", &mut set);
         }
         MidiFxKind::Scale => {
+            choice(ui, "Follow", &soundcraft_model::FOLLOW_MODES, fx.follow, "follow", &mut set);
             choice(ui, "Root", &ROOT_NAMES, fx.root, "root", &mut set);
             let scales: Vec<&str> = SCALES.iter().map(|c| c.0).collect();
             choice(ui, "Scale", &scales, fx.scale, "scale", &mut set);

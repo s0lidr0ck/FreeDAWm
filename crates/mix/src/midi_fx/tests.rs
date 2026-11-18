@@ -355,3 +355,71 @@ fn sequence_events_play_a_clip_on_its_channels() {
     // A quarter at 120 bpm is 24 000 samples; the note before the clip's start is left out.
     assert_eq!(ev, vec![(48_000, [0x92, 60, 90]), (72_000, [0x82, 60, 30])]);
 }
+
+/// The chord lane shapes live input: a Scale set to follow it snaps each key to the chord there,
+/// a held key's note-off ends the note it made though the chord changed, and with no chord its
+/// own scale holds.
+#[test]
+fn a_scale_follows_the_chord_lane() {
+    let tones = |pcs: &[u8]| pcs.iter().fold(0u16, |m, p| m | (1 << p));
+    // C major over the first 1000 samples, A minor then to 2000; nothing after.
+    let lane = [
+        ChordSpan { start: 0, end: 1_000, root: 0, tones: tones(&[0, 4, 7]) },
+        ChordSpan { start: 1_000, end: 2_000, root: 9, tones: tones(&[9, 0, 4]) },
+    ];
+    let (mut p, log) = host(&[fx(Scale, |f| f.follow = 1)]);
+    if let Some(h) = p.host_wrapper().and_then(|a| a.downcast_mut::<MidiFxHost>()) {
+        h.set_chords(&lane);
+    }
+    let at = |p: &mut Box<dyn Plugin>, pos: i64| p.set_transport(&Transport { tempo: 120.0, samples: pos, ..Transport::default() });
+    // D (62) under C major: to the nearest tone, C (60, the lower of two).
+    at(&mut p, 0);
+    p.note_on(10, 62, 100);
+    blocks(&mut p, 1, 500);
+    // Under A minor, G (67) goes to A (69), the nearest tone (E is three away).
+    at(&mut p, 1_000);
+    p.note_on(0, 67, 100);
+    // The D key let go under A minor still ends its C.
+    p.note_off(5, 62);
+    blocks(&mut p, 1, 500);
+    // Past the lane: its own C major scale; F# (66) to F (65).
+    at(&mut p, 2_500);
+    p.note_on(0, 66, 100);
+    blocks(&mut p, 1, 500);
+    let heard = notes(&log);
+    let ons: Vec<u8> = heard.iter().filter(|n| n.1 == 0x90).map(|n| n.2).collect();
+    assert_eq!(ons, vec![60, 69, 65], "{heard:?}");
+    assert!(heard.iter().any(|n| n.1 == 0x80 && n.2 == 60), "the held key's note ends: {heard:?}");
+    // Chord scale: under A minor (dorian), B (71) is in it and stays; under C major, F# goes to F
+    // or G (the lower: F).
+    let (mut q, log) = host(&[fx(Scale, |f| f.follow = 2)]);
+    if let Some(h) = q.host_wrapper().and_then(|a| a.downcast_mut::<MidiFxHost>()) {
+        h.set_chords(&lane);
+    }
+    at(&mut q, 1_000);
+    q.note_on(0, 71, 100);
+    q.note_on(1, 68, 100);
+    blocks(&mut q, 1, 100);
+    let ons: Vec<u8> = notes(&log).iter().filter(|n| n.1 == 0x90).map(|n| n.2).collect();
+    assert_eq!(ons, vec![71, 67], "B is in A dorian; G# goes to G");
+}
+
+#[test]
+fn chord_scales_and_the_lane_from_a_session() {
+    let m = |pcs: &[u16]| pcs.iter().fold(0u16, |m, p| m | (1 << p));
+    assert_eq!(chord_scale(m(&[0, 4, 7])), m(&[0, 2, 4, 5, 7, 9, 11]));
+    assert_eq!(chord_scale(m(&[0, 4, 7, 10])), m(&[0, 2, 4, 5, 7, 9, 10]));
+    assert_eq!(chord_scale(m(&[0, 3, 7])), m(&[0, 2, 3, 5, 7, 9, 10]));
+    assert_eq!(chord_scale(m(&[0, 3, 6, 10])), m(&[0, 1, 3, 5, 6, 8, 10]));
+    assert_eq!(chord_scale(m(&[0, 3, 6, 9])), m(&[0, 2, 3, 5, 6, 8, 9, 11]));
+    assert_eq!(chord_scale(m(&[0, 4, 8])), m(&[0, 2, 4, 6, 8, 10]));
+    let mut s = soundcraft_model::Session::default();
+    s.band.chords.push(soundcraft_model::ChordEvent { id: 1, tick: 0, length_ticks: 1920, slot: 0, bass: -1 });
+    s.band.chords.push(soundcraft_model::ChordEvent { id: 2, tick: 1920, length_ticks: 0, slot: 0, bass: -1 });
+    let t = chord_table(&s);
+    assert_eq!(t.len(), 1, "an empty chord is left out");
+    assert_eq!(t[0].start, 0);
+    assert_eq!(t[0].end, s.tempo.tick_to_samples(1920, s.sample_rate));
+    assert!(t[0].tones & 1 != 0, "the key's first chord holds its root");
+    assert_eq!(t[0].tones & (1 << t[0].root), 1 << t[0].root);
+}

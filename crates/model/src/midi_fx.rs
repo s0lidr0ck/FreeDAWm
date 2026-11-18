@@ -130,7 +130,20 @@ pub struct MidiFx {
     /// Scale: notes outside it are left out instead of moved to the nearest note in it.
     #[serde(default)]
     pub drop: bool,
+    /// Scale: follows the chord lane instead of its own root and scale, where the lane has a
+    /// chord ([`FOLLOW_MODES`]: 0 no, 1 the chord's tones, 2 the chord's scale); elsewhere its
+    /// own scale holds.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub follow: u8,
 }
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
+}
+
+/// What a Scale effect follows on the chord lane: nothing, the chord's tones only, or a scale
+/// built on the chord (its tones and the steps between them).
+pub const FOLLOW_MODES: [&str; 3] = ["Own scale", "Chord tones", "Chord scale"];
 
 fn default_rate() -> u8 {
     3
@@ -158,6 +171,7 @@ impl MidiFx {
             root: 0,
             scale: 0,
             drop: false,
+            follow: 0,
         }
     }
 
@@ -170,6 +184,7 @@ impl MidiFx {
         self.chord = self.chord.min(CHORD_SHAPES.len() as u8 - 1);
         self.root = self.root.min(11);
         self.scale = self.scale.min(SCALES.len() as u8 - 1);
+        self.follow = self.follow.min(FOLLOW_MODES.len() as u8 - 1);
         self
     }
 
@@ -188,6 +203,9 @@ impl MidiFx {
                 format!("{pat} {rate}, {} oct{}", s.octaves, if s.latch { ", latch" } else { "" })
             }
             MidiFxKind::Chord => CHORD_SHAPES.get(usize::from(s.chord)).map_or("", |c| c.0).to_string(),
+            MidiFxKind::Scale if s.follow > 0 => {
+                format!("{} on the chord lane{}", FOLLOW_MODES.get(usize::from(s.follow)).copied().unwrap_or(""), if s.drop { ", drop" } else { "" })
+            }
             MidiFxKind::Scale => format!(
                 "{} {}{}",
                 ROOT_NAMES.get(usize::from(s.root)).copied().unwrap_or(""),

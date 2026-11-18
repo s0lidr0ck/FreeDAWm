@@ -287,6 +287,7 @@ fn set(e: &mut Engine, p: &Value) -> Result<Value> {
     let root = int("root", 0, 11)?;
     let scale = int("scale", 0, SCALES.len() as i64 - 1)?;
     let (bypass, latch, drop) = (flag("bypass")?, flag("latch")?, flag("drop")?);
+    let follow = int("follow", 0, soundcraft_model::FOLLOW_MODES.len() as i64 - 1)?;
     let kind = match str_param(p, "kind") {
         None => None,
         Some(k) => Some(MidiFxKind::from_key(k).ok_or_else(|| bad(C, "`kind` is arpeggiator, chord, scale or note_repeat"))?),
@@ -307,6 +308,7 @@ fn set(e: &mut Engine, p: &Value) -> Result<Value> {
         set(&mut f.chord, chord);
         set(&mut f.root, root);
         set(&mut f.scale, scale);
+        set(&mut f.follow, follow);
         f.bypass = bypass.unwrap_or(f.bypass);
         f.latch = latch.unwrap_or(f.latch);
         f.drop = drop.unwrap_or(f.drop);

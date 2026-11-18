@@ -20,6 +20,15 @@
 //! chord shape changed under a held key sounds at once and nothing hangs. All MIDI Notes Off,
 //! a stop and a reset clear every effect.
 //!
+//! **Following the chord lane.** A Scale set to follow the chord lane (`MidiFx::follow`) snaps
+//! each note to the chord on the lane where it is played (the transport's position, playing or
+//! stopped): to the chord's tones, or to a scale built on the chord (a major chord's major scale,
+//! a seventh's mixolydian, a minor chord's dorian, a half-diminished chord's locrian, a diminished
+//! chord's whole-half scale, an augmented chord's whole-tone scale; its tones always in it).
+//! Where the lane has no chord, its own root and scale hold. A key's note-off ends the note its
+//! note-on made, even when the chord changed in between. The lane is copied into the host off the
+//! audio thread ([`sync_chords`], a fixed table of [`MAX_CHORDS`]).
+//!
 //! **Audio thread.** Nothing here allocates after [`sync`] has made the host (one boxed value of
 //! fixed arrays) and nothing panics: buffers are fixed (full, an event is dropped and counted).
 
@@ -27,6 +36,94 @@ use std::sync::Arc;
 
 use soundcraft_dsp::{LinkSlab, MidiOut, Plugin, PluginEditor, PluginInfo, PluginStateReader, SampleSource, Transport, analysis};
 use soundcraft_model::{CHORD_SHAPES, MAX_MIDI_FX, MidiFx, MidiFxKind, SCALES};
+
+/// Most chords of the lane a Scale effect follows (the rest are left out).
+pub const MAX_CHORDS: usize = 512;
+
+/// One chord of the lane as the Scale follows it: its span (timeline samples), its root (pitch
+/// class) and its tones (bit per pitch class, absolute).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ChordSpan {
+    pub start: i64,
+    pub end: i64,
+    pub root: u8,
+    pub tones: u16,
+}
+
+/// The chord lane of `s` as [`ChordSpan`]s in time order (allocates: control thread).
+pub fn chord_table(s: &soundcraft_model::Session) -> Vec<ChordSpan> {
+    use soundcraft_band::chord_match::slot_pitch_classes;
+    use soundcraft_band::chord_theory::shape_for;
+    let (key, scale) = (i32::from(s.band.key), i32::from(s.band.scale));
+    let mut out: Vec<ChordSpan> = s
+        .band
+        .chords
+        .iter()
+        .filter(|c| c.length_ticks > 0)
+        .map(|c| {
+            let slot = i32::from(c.slot);
+            let pcs = slot_pitch_classes(slot, key, scale);
+            let mut tones = pcs.iter().enumerate().fold(0u16, |m, (i, on)| if *on { m | (1 << i) } else { m });
+            if c.bass >= 0 {
+                tones |= 1 << (key + i32::from(c.bass)).rem_euclid(12);
+            }
+            let root = shape_for(slot, key, scale, -1).root_pc.rem_euclid(12) as u8;
+            let start = s.tempo.tick_to_samples(c.tick, s.sample_rate);
+            let end = s.tempo.tick_to_samples(c.tick.saturating_add(c.length_ticks), s.sample_rate);
+            ChordSpan { start, end, root, tones }
+        })
+        .collect();
+    out.sort_by_key(|c| (c.start, c.end));
+    out.truncate(MAX_CHORDS);
+    out
+}
+
+/// The scale a chord with `tones` (relative to its root, bit per semitone) is heard in, as a mask
+/// relative to the root: its tones and the steps of the mode its third and seventh pick.
+pub fn chord_scale(rel: u16) -> u16 {
+    let has = |i: u16| rel & (1 << i) != 0;
+    const IONIAN: u16 = 0b1010_1011_0101;
+    const MIXOLYDIAN: u16 = 0b0110_1011_0101;
+    const DORIAN: u16 = 0b0110_1010_1101;
+    const LOCRIAN: u16 = 0b0101_0110_1011;
+    const WHOLE_HALF: u16 = 0b1011_0110_1101;
+    const WHOLE_TONE: u16 = 0b0101_0101_0101;
+    let mode = if has(4) && has(8) && !has(7) {
+        WHOLE_TONE
+    } else if has(4) {
+        if has(10) { MIXOLYDIAN } else { IONIAN }
+    } else if has(3) && has(6) && !has(7) {
+        if has(9) { WHOLE_HALF } else { LOCRIAN }
+    } else if has(3) {
+        DORIAN
+    } else {
+        // Suspended or a bare fifth: mixolydian holds both fourths' neighbours.
+        MIXOLYDIAN
+    };
+    mode | rel
+}
+
+/// The chord lane copied into a host: fixed, so following it never allocates.
+#[derive(Clone, Copy)]
+struct ChordTable {
+    spans: [ChordSpan; MAX_CHORDS],
+    n: usize,
+}
+
+impl ChordTable {
+    const fn new() -> ChordTable {
+        ChordTable { spans: [ChordSpan { start: 0, end: 0, root: 0, tones: 0 }; MAX_CHORDS], n: 0 }
+    }
+
+    /// The chord sounding at timeline sample `t`: its root and tones (the later of two that
+    /// overlap there).
+    fn at(&self, t: i64) -> Option<(u8, u16)> {
+        let spans = self.spans.get(..self.n)?;
+        // The last chord starting at or before `t` that still sounds there.
+        let k = spans.partition_point(|c| c.start <= t);
+        spans.get(..k)?.iter().rev().take(8).find(|c| t < c.end).map(|c| (c.root, c.tones))
+    }
+}
 
 /// Events one block holds at each stage.
 const CAP: usize = 1024;
@@ -141,6 +238,9 @@ struct Stage {
     /// Arpeggiator: steps since the keys were first pressed, and the random order's state.
     step: u32,
     rng: u32,
+    /// A Scale that follows the chord lane: the note each key's note-on made (pitch + 1; 0 none),
+    /// so its note-off ends that note whatever chord holds then.
+    made: [u8; 2048],
 }
 
 impl Stage {
@@ -159,6 +259,7 @@ impl Stage {
             cur_off: 0.0,
             step: 0,
             rng: 0x9E37_79B9,
+            made: [0; 2048],
         }
     }
 
@@ -166,14 +267,23 @@ impl Stage {
         *self = Stage::new(self.fx);
     }
 
-    /// The notes an instant effect makes of pitch `p` (output pitches, how many).
-    fn fan(&self, p: u8) -> ([u8; MAX_FAN], usize) {
+    /// The notes an instant effect makes of pitch `p` (output pitches, how many); `chord`: the
+    /// chord on the lane there (root, absolute tones), for a Scale that follows it.
+    fn fan(&self, p: u8, chord: Option<(u8, u16)>) -> ([u8; MAX_FAN], usize) {
         let mut out = [0u8; MAX_FAN];
         let mut n = 0;
         match self.fx.kind {
             MidiFxKind::Scale => {
-                let mask = SCALES.get(usize::from(self.fx.scale)).map_or(0xFFF, |s| s.1);
-                if let Some(q) = snap(p, self.fx.root, mask, self.fx.drop) {
+                let own = (self.fx.root, SCALES.get(usize::from(self.fx.scale)).map_or(0xFFF, |s| s.1));
+                let (root, mask) = match chord.filter(|_| self.fx.follow > 0) {
+                    Some((root, tones)) => {
+                        // The tones relative to the root (bit `i`: `i` semitones above it).
+                        let rel = (0..12u16).fold(0u16, |m, i| if tones & (1 << ((i + u16::from(root % 12)) % 12)) != 0 { m | (1 << i) } else { m });
+                        (root % 12, if self.fx.follow == 2 { chord_scale(rel) } else { rel })
+                    }
+                    None => own,
+                };
+                if let Some(q) = snap(p, root, mask, self.fx.drop) {
                     out[0] = q;
                     n = 1;
                 }
@@ -198,15 +308,39 @@ impl Stage {
         (out, n)
     }
 
-    /// Scale and chord: each event mapped as it comes.
-    fn run_instant(&mut self, input: &[Ev], out: &mut EvBuf) {
+    /// Scale and chord: each event mapped as it comes. `chords`: the lane, and the timeline
+    /// sample at the block's start (a Scale that follows it reads the chord at each event).
+    fn run_instant(&mut self, input: &[Ev], out: &mut EvBuf, chords: &ChordTable, at: i64) {
+        let follows = self.fx.kind == MidiFxKind::Scale && self.fx.follow > 0;
         for e in input {
             let kind = e.msg[0] & 0xF0;
             if !matches!(kind, 0x80 | 0x90 | 0xA0) {
                 out.push(*e);
                 continue;
             }
-            let (pitches, n) = self.fan(e.msg[1] & 0x7F);
+            let key = slot(e.msg);
+            let (pitches, n) = if follows && !is_on(e.msg) {
+                // A note-off (or pressure) goes to the note its key's note-on made.
+                match self.made.get(key).copied().unwrap_or(0) {
+                    0 => ([0u8; MAX_FAN], 0),
+                    m => {
+                        let mut v = [0u8; MAX_FAN];
+                        v[0] = m - 1;
+                        (v, 1)
+                    }
+                }
+            } else {
+                self.fan(e.msg[1] & 0x7F, if follows { chords.at(at.saturating_add(i64::from(e.offset))) } else { None })
+            };
+            if follows && let Some(m) = self.made.get_mut(key) {
+                *m = if is_on(e.msg) {
+                    pitches.first().filter(|_| n > 0).map_or(0, |q| q + 1)
+                } else if is_off(e.msg) {
+                    0
+                } else {
+                    *m
+                };
+            }
             for q in pitches.iter().take(n) {
                 let msg = [e.msg[0], *q, e.msg[2]];
                 let Some(c) = self.counts.get_mut(slot(msg)) else { continue };
@@ -460,10 +594,10 @@ impl Stage {
         }
     }
 
-    fn run(&mut self, input: &[Ev], out: &mut EvBuf, frames: usize, t: &Transport, spq: f64) {
+    fn run(&mut self, input: &[Ev], out: &mut EvBuf, frames: usize, t: &Transport, spq: f64, chords: &ChordTable) {
         out.clear();
         match self.fx.kind {
-            MidiFxKind::Scale | MidiFxKind::Chord => self.run_instant(input, out),
+            MidiFxKind::Scale | MidiFxKind::Chord => self.run_instant(input, out, chords, t.samples),
             MidiFxKind::Arpeggiator | MidiFxKind::NoteRepeat => self.run_timed(input, out, frames, t, spq),
         }
     }
@@ -512,6 +646,8 @@ pub struct MidiFxHost {
     direct: bool,
     transport: Transport,
     sr: f32,
+    /// The chord lane, for a Scale that follows it ([`sync_chords`]).
+    chords: ChordTable,
 }
 
 /// A stand-in while the instrument is moved into a host (a zero-sized type: boxing it does not
@@ -564,7 +700,25 @@ impl MidiFxHost {
             direct: false,
             transport: Transport::default(),
             sr,
+            chords: ChordTable::new(),
         })
+    }
+
+    /// Takes the chord lane a following Scale reads (no allocation: a fixed table).
+    pub fn set_chords(&mut self, spans: &[ChordSpan]) {
+        let n = spans.len().min(MAX_CHORDS);
+        if self.chords.n == n && self.chords.spans.get(..n) == spans.get(..n) {
+            return;
+        }
+        for (d, s) in self.chords.spans.iter_mut().zip(spans) {
+            *d = *s;
+        }
+        self.chords.n = n;
+    }
+
+    /// Whether one of its effects follows the chord lane.
+    pub fn follows_chords(&self) -> bool {
+        self.stages.iter().take(self.n).any(|s| s.fx.kind == MidiFxKind::Scale && s.fx.follow > 0)
     }
 
     /// The instrument it holds.
@@ -700,6 +854,7 @@ impl MidiFxHost {
         let tempo = if self.transport.tempo.is_finite() && self.transport.tempo > 1.0 { self.transport.tempo } else { 120.0 };
         let spq = f64::from(self.sr.max(1.0)) * 60.0 / tempo;
         let t = self.transport;
+        let chords = &self.chords;
         // The input into the first buffer, then back and forth between the two.
         let [a, b] = &mut self.bufs;
         a.clear();
@@ -710,9 +865,9 @@ impl MidiFxHost {
         let mut in_a = true;
         for s in self.stages.iter_mut().take(self.n).filter(|s| !s.fx.bypass) {
             if in_a {
-                s.run(a.events(), b, frames, &t, spq);
+                s.run(a.events(), b, frames, &t, spq, chords);
             } else {
-                s.run(b.events(), a, frames, &t, spq);
+                s.run(b.events(), a, frames, &t, spq, chords);
             }
             in_a = !in_a;
         }
@@ -907,6 +1062,16 @@ pub(crate) fn sync(plugin: &mut Box<dyn Plugin>, fx: &[MidiFx], sr: f32) {
     }
 }
 
+/// Gives the host around `plugin` (when it is one and one of its effects follows the chord lane)
+/// the lane `spans`. No allocation.
+pub(crate) fn sync_chords(plugin: &mut dyn Plugin, spans: &[ChordSpan]) {
+    if let Some(host) = plugin.host_wrapper().and_then(|a| a.downcast_mut::<MidiFxHost>())
+        && host.follows_chords()
+    {
+        host.set_chords(spans);
+    }
+}
+
 /// Turns [`MidiFxHost::set_direct`] on or off on `plugin` when it is one (an instrument with
 /// MIDI effects); nothing otherwise. No allocation.
 pub(crate) fn set_direct(plugin: &mut dyn Plugin, on: bool) {
@@ -966,6 +1131,9 @@ pub fn print(s: &soundcraft_model::Session, fx: &[MidiFx], range: soundcraft_tim
     let sr = s.sample_rate.as_f64() as f32;
     let mut host = MidiFxHost::new(Box::new(Sink { got: Vec::new() }), sr);
     host.configure(fx);
+    if host.follows_chords() {
+        host.set_chords(&chord_table(s));
+    }
     let mut io: Vec<Vec<f32>> = Vec::new();
     let mut next = events.iter().filter(|(at, _)| *at >= range.start && *at < range.end).peekable();
     let mut pos = range.start;

@@ -2201,6 +2201,10 @@ impl MixEngine {
             // MIDI effects ahead of the instrument (a host around it once the track has one).
             if let Some(slot) = strip.instrument.as_mut() {
                 midi_fx::sync(&mut slot.plugin, &t.midi_fx, cx.sr);
+                // A Scale that follows the chord lane: the lane as it is now.
+                if t.midi_fx.iter().any(|f| f.kind == soundcraft_model::MidiFxKind::Scale && f.follow > 0) {
+                    midi_fx::sync_chords(&mut *slot.plugin, &midi_fx::chord_table(s));
+                }
             }
             let n = if t.mixer.inserts.is_empty() { 0 } else { ch };
             if strip.llm_dry.len() != n || strip.llm_dry.iter().any(|b| b.len() != mb) {
