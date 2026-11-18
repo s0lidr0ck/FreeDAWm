@@ -314,3 +314,32 @@ fn the_control_channels_open_stays_synchronous() {
     assert_eq!(app.engine.session().name, "sync");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_bundle_opens_from_a_folder_beside_it_and_the_status_line_says_where() {
+    let dir = scratch("bundle");
+    let (bytes, _) = soundcraft_engine::io::session_bundle(soundcraft_engine::demo::demo_engine().session()).unwrap();
+    let path = dir.join("Old Song.fdawmz");
+    std::fs::write(&path, bytes).unwrap();
+    let app = SoundApp::new(soundcraft_engine::Engine::default(), None, Services::default());
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
+        |ui, app: &mut SoundApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("session.open", json!({"path": path.to_string_lossy()})).unwrap();
+    for _ in 0..500 {
+        if h.state().open.is_none() {
+            break;
+        }
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let folder = dir.join("Old Song");
+    assert_eq!(h.state().ui.status, format!("Opened Old Song — unpacked into {}", folder.display()));
+    assert_eq!(h.state().engine.path.as_deref(), Some(folder.join("Old Song.fdawm").to_string_lossy().as_ref()));
+    assert!(!h.state().engine.session().tracks.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

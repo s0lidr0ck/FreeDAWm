@@ -623,7 +623,8 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                         let ext = std::path::Path::new(&name).extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
                         (is_dir
                             || ["wav", "aif", "aiff", "flac", "mp3", "ogg", "opus", "m4a", "m4b", "caf", "mid", "midi"].contains(&ext.as_str())
-                            || soundcraft_model::is_session_extension(&ext))
+                            || soundcraft_model::is_session_extension(&ext)
+                            || soundcraft_engine::io::is_bundle_path(&name))
                         .then_some((name, is_dir))
                     })
                     .collect()
@@ -634,7 +635,8 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
             for (name, is_dir) in entries.into_iter().take(2000) {
                 let path = std::path::Path::new(&dir).join(&name).to_string_lossy().into_owned();
                 let label = if is_dir { format!("📁 {name}") } else { format!("🔊 {name}") };
-                let audio = !is_dir && !soundcraft_model::is_session_path(&name) && !is_midi_file(&name);
+                let session = soundcraft_model::is_session_path(&name) || soundcraft_engine::io::is_bundle_path(&name);
+                let audio = !is_dir && !session && !is_midi_file(&name);
                 let on = !is_dir && app.audition.playing.as_deref() == Some(path.as_str());
                 let r = ui.selectable_label(on, label);
                 if audio && r.clicked() && !r.double_clicked() {
@@ -648,7 +650,7 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                 if r.double_clicked() {
                     if is_dir {
                         app.ui.workspace_dir = path;
-                    } else if soundcraft_model::is_session_path(&name) {
+                    } else if session {
                         let _ = crate::dialogs::run_or_ask(app, "session.open", json!({"path": path}));
                     } else if is_midi_file(&name) {
                         // At the insertion point, as the line under the list says (and audio does).

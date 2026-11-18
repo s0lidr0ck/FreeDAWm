@@ -269,6 +269,10 @@ fn finish(app: &mut SoundApp, job: &OpenJob, loaded: LoadedSession) {
             (0, _) => format!("Opened {} ({problems} plugins not loaded)", job.name),
             _ => format!("Opened {} ({missing} missing media, {} plugins not loaded)", job.name, job.failed.len()),
         };
+        // A bundle opens from the folder it was unpacked into: say where that is.
+        if let Some(folder) = v.get("unpacked").and_then(serde_json::Value::as_str) {
+            app.ui.status.push_str(&format!(" — unpacked into {folder}"));
+        }
     } else {
         app.ui.status.clear();
     }
