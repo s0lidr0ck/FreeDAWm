@@ -29,17 +29,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod exchange;
-#[cfg(not(target_arch = "wasm32"))]
 mod helper;
-#[cfg(not(target_arch = "wasm32"))]
 mod host;
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(unsafe_code)]
 mod shm;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use helper::serve;
-#[cfg(not(target_arch = "wasm32"))]
 pub use host::{BridgedPlugin, DescribeError, describe_with, preset_state_with, presets_with};
 
 use std::sync::Mutex;
@@ -81,12 +76,9 @@ pub fn enabled() -> bool {
     env_override().unwrap_or_else(|| SETTING.load(Ordering::Relaxed))
 }
 
-/// The helper program the app would start, or why there is none (none in the browser).
+/// The helper program the app would start, or why there is none.
 pub fn helper_path() -> Result<std::path::PathBuf, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    return host::helper_exe();
-    #[cfg(target_arch = "wasm32")]
-    Err("plug-ins in their own process need the desktop app".into())
+    host::helper_exe()
 }
 
 /// Whether `id` is a plug-in the bridge can run: a CLAP (`clap:`) or VST3 (`vst3:`) one.
@@ -103,25 +95,20 @@ pub fn create(id: &str) -> Option<Option<Box<dyn soundcraft_dsp::Plugin>>> {
     if !enabled() || !bridgeable(id) {
         return None;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let exe = match host::helper_exe() {
-            Ok(exe) => exe,
-            Err(e) => {
-                log::warn!("{id}: not run in its own process: {e}");
-                return None;
-            }
-        };
-        match BridgedPlugin::spawn_from(&exe, id) {
-            Ok(p) => Some(Some(Box::new(p))),
-            Err(e) => {
-                report(format!("{} could not be loaded in its own process: {e}", host::scanned_name(id).unwrap_or_else(|| id.to_string())));
-                Some(None)
-            }
+    let exe = match host::helper_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            log::warn!("{id}: not run in its own process: {e}");
+            return None;
+        }
+    };
+    match BridgedPlugin::spawn_from(&exe, id) {
+        Ok(p) => Some(Some(Box::new(p))),
+        Err(e) => {
+            report(format!("{} could not be loaded in its own process: {e}", host::scanned_name(id).unwrap_or_else(|| id.to_string())));
+            Some(None)
         }
     }
-    #[cfg(target_arch = "wasm32")]
-    None
 }
 
 /// The description of a CLAP or VST3 plug-in, read in a helper of its own when plug-ins run in
@@ -135,10 +122,7 @@ pub fn plugin_info(id: &str) -> Option<Option<&'static soundcraft_dsp::PluginInf
     if !enabled() || !bridgeable(id) {
         return None;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    return host::describe(id);
-    #[cfg(target_arch = "wasm32")]
-    None
+    host::describe(id)
 }
 
 /// The presets a `clap:` plug-in's own binary reports, listed in a helper of its own while
@@ -149,10 +133,7 @@ pub fn presets(id: &str) -> Option<Vec<soundcraft_clap_host::ClapPreset>> {
     if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
         return None;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    return host::presets(id);
-    #[cfg(target_arch = "wasm32")]
-    None
+    host::presets(id)
 }
 
 /// The state of a fresh instance of `clap:` plug-in `id` with `preset` loaded, made in a helper
@@ -162,19 +143,12 @@ pub fn preset_state(id: &str, preset: &soundcraft_clap_host::ClapPreset) -> Opti
     if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
         return None;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    return host::preset_state(id, preset);
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = preset;
-        None
-    }
+    host::preset_state(id, preset)
 }
 
 static REPORTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Says (once) that a bridged plug-in crashed or hung and was silenced.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn report(what: String) {
     log::error!("{what}");
     REPORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(what);

@@ -14,8 +14,6 @@ soundcraft-vst3-host.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The audio exchange's shared memory: one file per instance mapped by both processes.
 memmap2 = "0.9"
 

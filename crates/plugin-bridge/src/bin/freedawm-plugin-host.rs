@@ -2,10 +2,6 @@
 //! its audio over shared memory and its requests on stdin. A plug-in that crashes here only
 //! costs this process: the app silences that plug-in and carries on.
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::process::ExitCode {
     std::process::ExitCode::from(u8::try_from(soundcraft_plugin_bridge::serve()).unwrap_or(1))
 }
-
-#[cfg(target_arch = "wasm32")]
-fn main() {}
