@@ -436,6 +436,7 @@ Clip > Quantize Audio... = @ui.quantize_audio
 Clip > Conform to Tempo
 Clip > Identify Sync Point
 Clip > Elastic Properties... = Clip > Elastic Properties
+Clip > ARA Plug-ins... = @window.ara
 Clip > Real-Time > Transpose... = @clip.transpose
 Clip > Real-Time > Reverse in Place = @clip.play_reversed
 Clip > Real-Time > Loop in Place... = @clip.loop_in_place

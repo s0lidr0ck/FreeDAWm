@@ -140,7 +140,7 @@ promise more than they do" below.
 | Modulators for any parameter | **Works** | Built in [section 5](05-built-in-effects.md): LFOs and envelope followers on a track, each moving up to 8 plug-in parameters |
 | Track Versions, arranger chains, Render in Place | **Partial** | Track Versions: playlists per track, and Track › Arrangements keeps whole alternative arrangements of the song, switched in one step (`b3776ae`); Render in Place: commit and bounce. Left: arranger chains |
 | Remote recording over the internet (VST Connect) | **Partial** | Works, by a different design (section F), with talkback (4d3e275); no video |
-| ARA 2 and spectral editing | **Missing** | ARA 2 hosting is approved by the owner (2026-11-18) and next after this round ([section 4](04-editing-audio.md), J); spectral editing is [section 4](04-editing-audio.md)'s. A view flag exists and is unread |
+| ARA 2 and spectral editing | **Partial** | ARA 2 hosting stage one is built ([section 4](04-editing-audio.md), J): ARA VST3 plug-ins are found and read and analyse clips given to them; playback through them (stage two) and their editors (stage three) are not built. Spectral editing is [section 4](04-editing-audio.md)'s. The ARA note overlay view flag still exists and is unread |
 | Score editor with engraving; drum and pattern editors, now melodic | **Partial** | Notes entered and edited in the score (`d1610d6`); rests, ties and beams, pages, parts and lyrics (`e7768d1`, `b17e0fd`, `07a98b3`); print, MusicXML export and import (`0d5f801`); drum maps (`5817ba3`), the drum step sequencer, and step sequences with a pitch per step for any instrument (`0dda09d`). Left: engraving controls (dynamics, articulations and text placed in the score, symbols moved by hand), a key signature drawn in the score view, step entry from a MIDI keyboard ([section 7](07-midi-writing.md), G) |
 | Video export; loudness track and normalising on export; metering suite | **Partial** | Bounce to a loudness target with a true-peak ceiling; export to a ProRes movie; no loudness track; meters are strong (BS.1770 with true peak, LevelUp, Scout) |
 | Vocal synthesis (Omnivocal, beta) | **Not planned here** | Needs a singing-voice model, and no third-party models are added here. Song generation produces finished audio, not an editable sung part |
@@ -158,7 +158,7 @@ noticed, and the ones sections 1–7 did not already list:
 | Dolby Atmos mixing with a renderer | ● | ● | ● | ● | **Partial** (see A) |
 | Arranger sections that move the song | ○ | ● | ● | ● | **Works** (`c8cfbb1`) |
 | Chord track that existing clips follow | ◐ | ● | ● | ● | **Partial** (MIDI clips, opt in; not audio) |
-| ARA 2 | ● | ● | ● | ● | **Missing**: approved, next after this round ([section 4](04-editing-audio.md), J) |
+| ARA 2 | ● | ● | ● | ● | **Partial**: stage one of three built ([section 4](04-editing-audio.md), J): discovery, the session as an ARA document, audio access; no playback through the plug-in or its editor yet |
 | An assistant inside the app | ○ | ● | ● | ○ | **Partial** (Scout advises on the mix only) |
 | Tablet or phone remote | ● | ● | ● | ● | **Partial** (a phone page on the local network: transport, record, arm, markers; left: mixing from it, see B) |
 
@@ -496,6 +496,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | ARA 2 rows: stage one built (section 4, J) |
 | 2026-11-18 | minor | Logical Editor row: controller events in Select Notes too |
 | 2026-11-18 | minor | Step Sequencer row: value rows for controllers and the track's parameters (Works) |
 | 2026-11-18 | minor | TrackPunch built (section 2): the Destructive record row Works, destructive modes not planned here |

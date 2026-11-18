@@ -4,6 +4,7 @@
 //! executing commands. It can be replaced without touching anything below it.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod ara_ui;
 pub mod audition;
 pub mod auto_lanes;
 pub mod band;
@@ -245,6 +246,8 @@ pub struct UiState {
     pub teleprompter_window: Option<[f32; 4]>,
     pub show_session_info: bool,
     pub show_audio_health: bool,
+    /// Clip › ARA Plug-ins… (`window.ara`).
+    pub show_ara: bool,
     pub show_about: bool,
     pub show_midi_editor: bool,
     /// The Vocal Editor (AI › Tune Vocal › Open…); plan 3 draws it.
@@ -617,6 +620,7 @@ impl Default for UiState {
             teleprompter_window: None,
             show_session_info: false,
             show_audio_health: false,
+            show_ara: false,
             show_about: false,
             show_midi_editor: false,
             show_vocal_editor: false,
@@ -1129,6 +1133,11 @@ pub struct SoundApp {
     take_plan: Option<soundcraft_engine::io::Recording>,
     pub ui: UiState,
     pub audio_health_report: Option<Result<Value, String>>,
+    /// The session's ARA documents (Clip › ARA Plug-ins…), kept in line with the session every
+    /// frame on this thread ([`ara_ui::tick`]).
+    pub ara: soundcraft_engine::ara::AraHost,
+    /// The ARA plug-in picked in the ARA Plug-ins window.
+    pub ara_pick: Option<String>,
     pub services: Services,
     /// Set only by a desktop host after installing an OS menu bar.
     pub native_menu_bar: bool,
@@ -1366,6 +1375,8 @@ impl SoundApp {
             take_plan: None,
             ui: UiState::default(),
             audio_health_report: None,
+            ara: soundcraft_engine::ara::AraHost::default(),
+            ara_pick: None,
             services,
             native_menu_bar: false,
             autosave_dir: None,
@@ -3480,6 +3491,7 @@ impl SoundApp {
             ctx.memory_mut(|m| m.reset_areas());
         }
         window_sync::tidy(self);
+        ara_ui::tick(self);
         // Musical Typing takes its letter keys first (while it is on).
         musical_typing::handle_keys(self, &ctx);
         shortcuts::handle(self, &ctx);
@@ -3515,6 +3527,7 @@ impl SoundApp {
         }
         panels::floating(self, &ctx);
         windows::show(self, &ctx);
+        ara_ui::show(self, &ctx);
         video_window::show(self, &ctx);
         ops_windows::show(self, &ctx);
         sample_editor::show(self, &ctx);

@@ -1,6 +1,6 @@
 # Four-DAW parity, section 4: editing audio on the timeline
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (bug fixes and tier-2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (bug fixes and tier-2 work, ARA stage one, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -43,7 +43,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Small: bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
 | I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag and hear while dragging, stretches heard at once | Small |
-| J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral editing, mono sources only |
+| J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: ARA 2 stage one only (plug-ins read and analyse clips, nothing plays through them yet), no spectral editing, mono sources only |
 | K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | Medium: tempo edits do not move audio, a closed folder's blocks can't be dragged |
 | L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Small: the sample editor has no cut, copy or paste inside the file |
 | M. Undo and keys | 200 levels, history window with undo and redo by clicking, single-key editing, a key editor | Small |
@@ -211,7 +211,7 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Built-in note-level pitch editor | ◐ | ◐ | ● | ● | **Works**: pitch, drift, vibrato, formant, per-note gain; monophonic sources |
 | Pitch editor on a stretched clip | ● | ● | ● | ● | **Works** for a varispeed clip: it is analysed and tuned in file time, the editor and the note commands place notes through the stretch, and playback reads the file with the tuned render in place, so a tuned clip at another speed plays exactly the tuned file stretched (a test compares them sample for sample at 1.5× and 0.8×); a clip whose Elastic render is done is a file of its own and tunes as any clip. Still refused, with "commit the stretch first": an Elastic stretch still playing live, and a stretch together with warp markers, a reverse or a loop. Not checked by ear. Key changes under a stretched clip are read at the unstretched times for Snap to key |
 | Automatic pitch correction in real time | ○ | ○ | ● | ● | **Not planned here**: real-time pitch correction was dropped by the owner; offline per clip (centre and snap to key) works |
-| ARA 2 for third-party editors | ● | ● | ● | ● | **Missing**, approved by the owner (2026-11-18) and next after this round: Rust bindings to the ARA C header (no C++ library), VST3 first, in process, with a test ARA plug-in in the repo; then playback, bounce and saving; then the editor window, selection and undo; CLAP and AU later |
+| ARA 2 for third-party editors | ● | ● | ● | ● | **Partial** (stage one of three, round four): FreeDAWm hosts ARA 2 through its own Rust bindings to the ARA C header (ARA SDK 2.3, Apache-2.0; no C++ library). The VST3 scan finds ARA plug-ins (their ARA main factory, API generations, what they analyse, and the three ARA 2 roles through the plug-in extension) and lists a plug-in that lies about ARA with the problem; Clip › ARA Plug-ins… gives the selected audio clips to one (`clip.ara_add`, `clip.ara_remove`, one undo step each, greyed with the reason until a plug-in is found), and each plug-in gets an ARA document of the session in process: tracks as region sequences, files as audio sources it reads through the host on its own threads (32- or 64-bit, never the audio thread), clips as modifications with playback regions, the tempo map as musical context; moves, trims, deletes, undo and redo follow in one editing cycle each, a deleted clip kept deactivated for undo. The window shows what the plug-in did (analysis, notes found). Tested with a test ARA plug-in in the repo, in process and as a VST3 bundle; not yet with a commercial plug-in (the owner tries Melodyne and VocAlign on Windows). Left: stage two, playback through the plug-in, bounce, freeze and saving its document (the clips still play their own audio); stage three, its editor window, selection and undo inside it; stretched, warped, reversed, looped or transposed clips; CLAP and AU |
 | Audio to MIDI | ● | ● | ● | ● | **Works**, including polyphonic and drum models |
 | Spectral view or spectral editing on the timeline | ○ | ◐ | ○ | ● | **Works** for the view: an audio track's view menu offers spectral, which draws each clip as a spectrogram (time across, 30 Hz to the top on a log scale, colour by level over 90 dB) in place of its waveform, following stretch and reverse; the columns are analysed as they come into view and kept in memory, so a long clip fills in over a few frames. Spectral editing (a rectangle that attenuates a band of frequencies and writes a new file, as Cubase does) is not built |
 | Stem separation | ◐ | ● | ● | ● | **Works** (desktop, downloaded model) |
@@ -313,7 +313,7 @@ edit primitives; clip effects carried on the clip rather than looked up by id).
 | Bounce in place for a clip or range, with or without effects; processing that keeps handles; strip-silence preview | 8–12 | |
 | Overlap modes (keep both, crossfade on overlap) with a working front/back order | 5–8 | |
 | Clip list: relink missing audio, audition, rename, find unused, scroll to the clip, capture | 6–10 | Audition shares section 1's preview work |
-| ARA 2 hosting | 20–30 | Largest single item; VST3 first |
+| ARA 2 hosting | 20–30 | Largest single item; VST3 first. Stage one (bindings, discovery, document model, audio access) built in round four |
 | Undo that leaves the view alone; tap tempo; scissors and mute tools | 4–6 | |
 
 **3. What most have (≈ 45–70 h).** An arranger track (all but Pro Tools), 12–18; folders that only
@@ -524,3 +524,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-18 | minor | Round four: a closed folder's blocks are dragged, nudged and trimmed |
 | 2026-11-18 | minor | Round four: crossfade placement before, across or after the cut in the fade dialog |
 | 2026-11-18 | minor | Round four: a varispeed clip tunes in file time and plays the tuned file stretched |
+| 2026-11-18 | minor | ARA 2 hosting, stage one: bindings to the ARA C header, VST3 discovery, the session as an ARA document, audio access; Clip › ARA Plug-ins… |
