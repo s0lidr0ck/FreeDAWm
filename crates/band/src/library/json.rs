@@ -620,7 +620,6 @@ pub fn compare_ignore_case(a: &str, b: &str) -> Ordering {
 }
 
 /// `File::createLegalFileName`
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // saving is native only
 pub fn create_legal_file_name(original: &str) -> String {
     let s: Vec<char> = original.chars().filter(|c| !"\"#@,;:<>*^|?\\/".contains(*c)).collect();
     const MAX_LENGTH: usize = 128;
