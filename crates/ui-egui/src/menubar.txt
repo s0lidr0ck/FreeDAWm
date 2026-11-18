@@ -304,6 +304,8 @@ Track > Vocal Track = @track.vocal
 Track > ---
 Track > ## Organise
 Track > Rename... = @track.rename
+Track > Rename Selected Tracks... = @track.rename_selected
+Track > Pin = @track.pin
 Track > Color... = @window.color_palette
 Track > Group...
 Track > Move to New Folder = Track > Move to New Folder...

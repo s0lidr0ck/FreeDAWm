@@ -89,6 +89,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("track.delete", "Delete", ["Track"], None, "{tracks?}", has_selection, delete),
         cmd!("track.rename", "Rename Track", [], None, "{track, name}", has_tracks, rename),
+        cmd!(
+            "track.rename_selected",
+            "Rename Selected Tracks...",
+            ["Track"],
+            None,
+            "{pattern, start?: number (1), tracks?} — renames the selected tracks in track order by one pattern: `*` is a track's name, `#` the running number (`##` pads it to two digits); without a `#` the number goes at the end → {names}",
+            has_selection,
+            rename_selected
+        ),
         cmd!("track.comments", "Track Comments", [], None, "{track, comments}", has_tracks, comments),
         cmd!("track.color", "Track Color", [], None, "{tracks?, color: [r,g,b] | palette index}", has_selection, color),
         cmd!(
@@ -870,6 +879,85 @@ fn delete(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": tracks.len()}))
 }
 
+/// The name `pattern` gives a track called `old` numbered `n`: `*` is the old name, a run of
+/// `#` the number (padded with zeros to the run's length), anything else as written. Without a
+/// `#` the number follows the pattern after a space.
+pub fn batch_name(pattern: &str, old: &str, n: u64) -> String {
+    let mut out = String::new();
+    let mut numbered = false;
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => out.push_str(old),
+            '#' => {
+                let mut width = 1;
+                while chars.peek() == Some(&'#') {
+                    chars.next();
+                    width += 1;
+                }
+                out.push_str(&format!("{n:0width$}"));
+                numbered = true;
+            }
+            c => out.push(c),
+        }
+    }
+    if !numbered {
+        out = format!("{} {n}", out.trim_end());
+    }
+    out.trim().chars().take(64).collect()
+}
+
+/// Track › Rename Selected Tracks…: every target track named by one pattern and a running
+/// number ([`batch_name`]), in track order. One undo step; refused (nothing renamed) when a new
+/// name would be empty or taken by another track.
+fn rename_selected(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.rename_selected";
+    let pattern =
+        str_param(p, "pattern").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(C, "`pattern` required (`*` the name, `#` the number)"))?;
+    let start = p.get("start").and_then(Value::as_u64).unwrap_or(1);
+    let targets = if p.get("tracks").is_some() { tracks_required(e, C, p)? } else { e.target_tracks() };
+    let s = e.session();
+    let order: Vec<TrackId> = s
+        .tracks
+        .iter()
+        .map(|t| t.id)
+        .filter(|id| targets.contains(id))
+        .filter(|id| s.track(*id).is_some_and(|t| t.kind != TrackKind::Master))
+        .collect();
+    if order.is_empty() {
+        return Err(bad(C, "select the tracks to rename"));
+    }
+    let mut names: Vec<(TrackId, String)> = Vec::new();
+    for (i, id) in order.iter().enumerate() {
+        let old = s.track(*id).map(|t| t.name.as_str()).unwrap_or_default();
+        let name = batch_name(pattern, old, start.saturating_add(i as u64));
+        if name.is_empty() {
+            return Err(bad(C, format!("the pattern leaves track {} without a name", i + 1)));
+        }
+        if names.iter().any(|(_, n)| *n == name) || s.tracks.iter().any(|t| t.name == name && !order.contains(&t.id)) {
+            return Err(bad(C, format!("a track named `{name}` would be there twice")));
+        }
+        names.push((*id, name));
+    }
+    let s = e.session_mut();
+    for (id, name) in &names {
+        let bus = s.track(*id).and_then(|track| match (track.kind, &track.mixer.input) {
+            (TrackKind::Folder, Route::Bus(bus)) => Some(*bus),
+            _ => None,
+        });
+        if let Some(track) = s.track_mut(*id) {
+            track.name.clone_from(name);
+        }
+        if let Some(bus) = bus {
+            let bus_name = unique_folder_bus_name(s, &format!("{name} Bus"), Some(bus));
+            if let Some(bus) = s.busses.iter_mut().find(|candidate| candidate.id == bus) {
+                bus.name = bus_name;
+            }
+        }
+    }
+    Ok(json!({"names": names.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>()}))
+}
+
 fn rename(e: &mut Engine, p: &Value) -> Result<Value> {
     let t = track_param(e, "track.rename", p, "track")?.ok_or_else(|| bad("track.rename", "`track` required"))?;
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("track.rename", "`name` required"))?;
@@ -1451,6 +1539,33 @@ fn route(e: &mut Engine, p: &Value, input: bool) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_batch_name_is_the_pattern_with_the_name_and_a_number() {
+        assert_eq!(batch_name("Gtr #", "x", 3), "Gtr 3");
+        assert_eq!(batch_name("* ##", "Kick", 4), "Kick 04");
+        assert_eq!(batch_name("Vox", "a", 2), "Vox 2");
+        assert_eq!(batch_name("#-*", "Bass", 10), "10-Bass");
+    }
+
+    /// Rename Selected Tracks: the selected tracks in track order, one undo step; a clash with
+    /// an unselected track renames nothing.
+    #[test]
+    fn renaming_the_selected_tracks_numbers_them_in_order() {
+        let mut e = Engine::default();
+        for n in ["A", "B", "C", "Gtr 1"] {
+            e.execute("track.new", &json!({"name": n})).unwrap();
+        }
+        let ids: Vec<TrackId> = e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).map(|t| t.id).collect();
+        e.execute("edit.select", &json!({"tracks": [ids[2].0, ids[0].0]})).unwrap();
+        let names = |e: &Engine| e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).map(|t| t.name.clone()).collect::<Vec<_>>();
+        assert!(e.execute("track.rename_selected", &json!({"pattern": "Gtr #"})).is_err(), "Gtr 1 is another track's");
+        assert_eq!(names(&e), ["A", "B", "C", "Gtr 1"]);
+        e.execute("track.rename_selected", &json!({"pattern": "Gtr #", "start": 5})).unwrap();
+        assert_eq!(names(&e), ["Gtr 5", "B", "Gtr 6", "Gtr 1"]);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(names(&e), ["A", "B", "C", "Gtr 1"]);
+    }
 
     #[test]
     fn ambisonics_above_third_order_is_refused_and_third_order_is_filled() {

@@ -13,12 +13,12 @@ use std::collections::HashMap;
 /// Health, Tour of FreeDAWm, Quit) is drawn by hand ahead of these. The 2026-11 layout
 /// (Transport between AI and Options; the More submenus dissolved into named groups; set-once
 /// Options settings moved to Setup › Preferences…) set the counts below, plus Track › Capture to Pantry… (2026-11-17,
-/// `docs/pantry.md`).
+/// `docs/pantry.md`), Track › Rename Selected Tracks… and Track › Pin (2026-11-18).
 const ROWS: [(&str, usize); 12] = [
     ("File", 14),
     ("Edit", 29),
     ("View", 11),
-    ("Track", 36),
+    ("Track", 38),
     ("Clip", 29),
     ("Event", 29),
     ("Process", 18),

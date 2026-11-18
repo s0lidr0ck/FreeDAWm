@@ -280,6 +280,7 @@ const DIALOG_COMMANDS: &[&str] = &[
     "clip.loop_in_place",
     "clip.elastic_properties",
     "track.trim_automation_write",
+    "track.rename_selected",
     "lyrics.find",
     "track.new",
     "file.bounce_mix",

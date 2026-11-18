@@ -317,37 +317,52 @@ fn main_area_content(app: &mut SoundApp, ui: &mut Ui) {
     column_titles(ui, rulers_rect, &cols);
     // A track selected in the Mix window scrolls into view here.
     if let Some(id) = app.window_sync.reveal_edit.take() {
-        let s = app.engine.session();
+        // A pinned track is always in view; the others scroll in the room under the pinned.
+        let (pinned, scrolled) = pinned_split(app.engine.session(), tl.height() * 0.5);
+        let pinned_h: f32 = pinned.iter().map(|(_, h)| h + 1.0).sum();
         let mut top = 0.0;
-        for t in s.tracks.iter().filter(|x| in_edit_window(s, x)) {
-            let h = track_height(t);
-            if t.id == id {
-                app.edit_layout.scroll_y = crate::window_sync::scroll_to_show(top, top + h, app.edit_layout.scroll_y, tl.height()).max(0.0);
+        for (t, h) in scrolled {
+            if t == id {
+                app.edit_layout.scroll_y =
+                    crate::window_sync::scroll_to_show(top, top + h, app.edit_layout.scroll_y, (tl.height() - pinned_h).max(1.0)).max(0.0);
                 break;
             }
             top += h + 1.0;
         }
     }
-    // Tracks.
-    let mut y = tl.min.y - app.edit_layout.scroll_y;
+    // Tracks. Pinned ones (Track › Pin) stay at the top in their order while the others scroll
+    // under them; at most half the track area is pinned (the rest of the pinned ones scroll).
+    let (pinned, scrolled) = pinned_split(app.engine.session(), tl.height() * 0.5);
+    let pinned_h: f32 = pinned.iter().map(|(_, h)| h + 1.0).sum();
+    let mut y = tl.min.y - app.edit_layout.scroll_y + pinned_h;
     app.edit_layout.rows.clear();
-    let mut content_h = 0.0;
-    for t in app.engine.session().tracks.iter().filter(|x| in_edit_window(app.engine.session(), x)) {
-        let h = track_height(t);
-        app.edit_layout.rows.push((t.id.0, [full.min.x, y, tl.max.x, y + h]));
+    let mut fixed_y = tl.min.y;
+    for (id, h) in &pinned {
+        app.edit_layout.rows.push((id.0, [full.min.x, fixed_y, tl.max.x, fixed_y + h]));
+        fixed_y += h + 1.0;
+    }
+    let mut content_h = pinned_h;
+    for (id, h) in &scrolled {
+        app.edit_layout.rows.push((id.0, [full.min.x, y, tl.max.x, y + h]));
         y += h + 1.0;
         content_h += h + 1.0;
     }
     app.edit_layout.content_h = content_h;
-    let clip_rect = Rect::from_min_max(pos2(full.min.x, tl.min.y), pos2(full.max.x, tl.max.y));
-    for (id, r) in app.edit_layout.rows.clone() {
+    let pin_clip = Rect::from_min_max(pos2(full.min.x, tl.min.y), pos2(full.max.x, (tl.min.y + pinned_h).min(tl.max.y)));
+    let clip_rect = Rect::from_min_max(pos2(full.min.x, pin_clip.max.y), pos2(full.max.x, tl.max.y));
+    for (i, (id, r)) in app.edit_layout.rows.clone().into_iter().enumerate() {
         let row = rect(r);
-        if row.max.y >= clip_rect.min.y && row.min.y <= clip_rect.max.y {
+        let clip = if i < pinned.len() { pin_clip } else { clip_rect };
+        if row.max.y >= clip.min.y && row.min.y <= clip.max.y {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
-            child.set_clip_rect(clip_rect);
+            child.set_clip_rect(clip);
             track_row(app, &mut child, TrackId(id), row, tl, &cols);
             crate::browser::drop::target(app, &child, row, crate::browser::drop::DropTarget::Track(TrackId(id)));
         }
+    }
+    if pinned_h > 0.0 {
+        // The pinned tracks' edge: the others scroll under it.
+        ui.painter().hline(full.min.x..=tl.max.x, pin_clip.max.y - 0.5, Stroke::new(2.0, t.accent.gamma_multiply(0.6)));
     }
     // Below the tracks a click clears the selection and a double-click opens New Tracks.
     let empty = Rect::from_min_max(pos2(full.min.x, y.max(tl.min.y)), tl.max);
@@ -378,6 +393,24 @@ fn main_area_content(app: &mut SoundApp, ui: &mut Ui) {
             app.edit_layout.scroll_by(resp.drag_delta().y / frac, tl.height());
         }
     }
+}
+
+/// The Edit window's tracks with their heights, split into those that stay at the top (pinned,
+/// in session order, while they fit in `room`) and those that scroll.
+pub(crate) fn pinned_split(s: &Session, room: f32) -> (Vec<(TrackId, f32)>, Vec<(TrackId, f32)>) {
+    let mut pinned = Vec::new();
+    let mut scrolled = Vec::new();
+    let mut used = 0.0;
+    for t in s.tracks.iter().filter(|x| in_edit_window(s, x)) {
+        let h = track_height(t);
+        if t.pinned && used + h + 1.0 <= room {
+            used += h + 1.0;
+            pinned.push((t.id, h));
+        } else {
+            scrolled.push((t.id, h));
+        }
+    }
+    (pinned, scrolled)
 }
 
 fn in_edit_window(s: &Session, t: &Track) -> bool {
@@ -6234,6 +6267,28 @@ mod tests {
         h.step();
         assert!(h.state().gesture.is_none());
         assert_eq!(h.state().engine.undo_history().len(), undo_len);
+    }
+
+    /// Track › Pin: a pinned track stays at the top of the track area while the others scroll
+    /// under it; unpinned, it scrolls with them again.
+    #[test]
+    fn a_pinned_track_stays_in_view_while_the_others_scroll() {
+        let mut h = harness(20);
+        let ids = row_ids(&h);
+        h.state_mut().engine.execute("track.pin", &json!({"tracks": [ids[12].0], "value": true})).unwrap();
+        h.step();
+        let top = timeline(&h).min.y;
+        let pinned = |h: &Harness<SoundApp>| rect(h.state().edit_layout.rows.iter().find(|(i, _)| *i == ids[12].0).unwrap().1);
+        assert!((pinned(&h).min.y - top).abs() < 0.5, "pinned at the top: {} vs {top}", pinned(&h).min.y);
+        assert_eq!(h.state().edit_layout.rows[1].0, ids[0].0, "the others follow under it");
+        h.state_mut().edit_layout.scroll_y = 500.0;
+        h.step();
+        assert!((pinned(&h).min.y - top).abs() < 0.5, "still at the top after scrolling");
+        assert!(row(&h, 1).max.y < pinned(&h).max.y, "the first unpinned track scrolled away under it");
+        h.state_mut().engine.execute("track.pin", &json!({"tracks": [ids[12].0], "value": false})).unwrap();
+        h.state_mut().edit_layout.scroll_y = 0.0;
+        h.step();
+        assert_eq!(row_ids(&h), ids, "back in its place");
     }
 
     #[test]

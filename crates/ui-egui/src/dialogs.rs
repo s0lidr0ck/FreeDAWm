@@ -616,6 +616,13 @@ impl Dialogs {
             // Not a path: the words to find (the prompt is the same one-line field).
             "lyrics.find" => Dialog::PathPrompt { cmd: id.into(), title: "Find in Transcript".into(), path: String::new(), key: "text".into() },
             "file.import_midi" => Dialog::PathPrompt { cmd: id.into(), title: "Import MIDI".into(), path: home, key: "path".into() },
+            // Not a path: the pattern the selected tracks are named by.
+            "track.rename_selected" => Dialog::PathPrompt {
+                cmd: id.into(),
+                title: "Rename Selected Tracks (* is the name, # the number)".into(),
+                path: "* #".into(),
+                key: "pattern".into(),
+            },
             "file.import_musicxml" => Dialog::PathPrompt { cmd: id.into(), title: "Import MusicXML".into(), path: home, key: "path".into() },
             "session.open" => Dialog::PathPrompt { cmd: id.into(), title: "Open Session".into(), path: home, key: "path".into() },
             "session.save" if e.path.is_some() => return false,
@@ -1335,6 +1342,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         && cmd != "file.export_dawproject"
                         && key != "dir"
                         && key != "text"
+                        && key != "pattern"
                         && ui.button("Browse…").clicked()
                         && let Some(p) = pick(cmd, &[])
                     {

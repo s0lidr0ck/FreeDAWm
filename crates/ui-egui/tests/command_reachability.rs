@@ -16,7 +16,6 @@ const KNOWN_UNREACHED: &[&str] = &[
     "setup.hardware",        // menu opens the Playback Engine window, which doesn't run it
     "setup.playback_engine", // same
     "setup.reset_edit_state",
-    "track.pin",
     "transport.status",
     "video.offset",
     "view.sub_counter",

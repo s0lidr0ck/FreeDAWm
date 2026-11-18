@@ -73,7 +73,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Scripting SDK | **Works** | Every command, from a script, a command line or an agent (section F) |
 | Cloud collaboration on one project | **Not planned here** | Needs a hosted service and a second machine to develop at all |
 | AudioSuite with handles; commit, freeze, bounce | **Works** | Process keeps up to 1 s of handles each side for processes that keep the length ([section 4](04-editing-audio.md)); freeze (also up to a chosen insert), commit and bounce work |
-| Track Pin, batch rename and other large-session aids | **Partial** | Pin Track (`track.pin`) is stored and nothing reads it yet; no batch rename. Left: a pinned track staying in view while the others scroll (about half a day in the Edit window's layout), and Rename Selected Tracks with a pattern and a number (half a day, one undo step) |
+| Track Pin, batch rename and other large-session aids | **Works** (2026-11-18) | Track › Pin (`track.pin`, saved on the track) keeps a track at the top of the Edit window's track area, in session order, while the others scroll under it (a line marks the edge; pinned tracks take at most half the area, the rest of them scroll); unpinned, it goes back to its place. Track › Rename Selected Tracks… (`track.rename_selected`) names the selected tracks in track order by one pattern, `*` the track's name and `#` a running number (`##` pads to two digits; `start` sets the first), in one undo step, and renames nothing when a new name would clash with another track's. Not done: pinning in the Mix window (strips there do not pin), and Pro Tools' find-and-replace and trim parts of batch rename |
 
 ## B. Studio Pro (Studio One)
 
@@ -491,6 +491,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Track Pin keeps a track in view while the others scroll; Rename Selected Tracks by a pattern and a number |
 | 2026-11-17 | minor | Sound variations and expression maps built as track articulations chosen by a controller lane; designs for Scripter, Mix Engine FX, the field-recorder workflow and the show page; the modulators row in the work list says done |
 | 2026-11-17 | minor | Logical Editor: Partial, for notes (the rule-based transformer of section 7) |
 | 2026-11-17 | minor | Plug-ins in their own process: VST3 plug-ins run there too (the option is now for CLAP and VST3) |
