@@ -302,6 +302,10 @@ pub struct MidiEditorState {
     pub ctrl_drag: Option<crate::midi_lanes::CtrlDrag>,
     /// The controller lanes as last drawn.
     pub drawn_lanes: Vec<crate::midi_lanes::LaneGeometry>,
+    /// Lanes › SysEx: the SysEx lane is shown (after the other lanes).
+    pub sysex_lane: bool,
+    /// A SysEx marker being dragged: its clip and index.
+    pub sysex_drag: Option<(ClipId, usize)>,
     /// The controller point a lane's right-click menu is about.
     pub ctrl_menu: Option<usize>,
     /// The editor's own grid (follows the Edit window's until one is picked).
@@ -371,6 +375,8 @@ impl Default for MidiEditorState {
             ctrls_follow: false,
             ctrl_drag: None,
             drawn_lanes: Vec::new(),
+            sysex_lane: false,
+            sysex_drag: None,
             ctrl_menu: None,
             grid: tools::MidiGrid::default(),
             ghosts: true,
@@ -1067,10 +1073,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         for l in soundcraft_engine::cmd::midi_wide::lanes_of(sequence) {
             crate::midi_wide_lanes::toggle(app, l, true);
         }
+        if !sequence.sysex.is_empty() {
+            app.midi.sysex_lane = true;
+        }
     }
     // Controller lanes under the velocity lane, shrunk (not below 18 points) to leave the roll 80;
     // the 14-bit and RPN lanes after them.
-    let n_lanes = app.midi.lanes.len() + app.midi.wide_lanes.len();
+    let n_lanes = app.midi.lanes.len() + app.midi.wide_lanes.len() + usize::from(app.midi.sysex_lane);
     let room = bottom - top - VEL_H - 4.0 - BAR_H - 80.0;
     let lane_h = crate::midi_lanes::lane_height(n_lanes, room);
     let lanes_h = n_lanes as f32 * (lane_h + crate::midi_lanes::LANE_GAP);
@@ -1098,7 +1107,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         })
         .collect();
     app.midi.drawn_wide = wide_rects.clone();
-    let lanes_area = lane_rects.iter().map(|l| l.rect).chain(wide_rects.iter().map(|w| w.1)).fold(Rect::NOTHING, |a, r| a.union(r));
+    // The SysEx lane, last.
+    let sysex_rect = app.midi.sysex_lane.then(|| {
+        let i = first_wide + app.midi.wide_lanes.len();
+        let y = vel.max.y + crate::midi_lanes::LANE_GAP + i as f32 * (lane_h + crate::midi_lanes::LANE_GAP);
+        Rect::from_min_max(pos2(roll.min.x, y), pos2(roll.max.x, y + lane_h))
+    });
+    let lanes_area = lane_rects.iter().map(|l| l.rect).chain(wide_rects.iter().map(|w| w.1)).chain(sysex_rect).fold(Rect::NOTHING, |a, r| a.union(r));
     // The clip's view: fitted, and centred on its notes, the first time it opens.
     // Views of clips gone from the session go too.
     app.midi.views.retain(|id, _| s.find_clip(*id).is_some());
@@ -1791,6 +1806,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     crate::midi_lanes::lanes(app, ui, cid, sequence, &lane_rects, full.min.x, &geo, grid_ticks, len_ticks);
     for (l, r) in &wide_rects {
         crate::midi_wide_lanes::lane(app, ui, cid, sequence, *l, *r, full.min.x, &geo, grid_ticks, len_ticks);
+    }
+    if let Some(r) = sysex_rect {
+        crate::midi_sysex_lane::lane(app, ui, cid, sequence, r, full.min.x, &geo, grid_ticks, len_ticks);
     }
     tools::note_bar(app, ui, cid, Rect::from_min_max(pos2(full.min.x, bottom), pos2(right, full.max.y)), alt);
     if cleanup {

@@ -65,6 +65,7 @@ pub mod midi_ghosts;
 pub mod midi_lanes;
 pub mod midi_learn;
 pub mod midi_sync_in;
+pub mod midi_sysex_lane;
 pub mod midi_wide_lanes;
 pub mod mix_find;
 pub mod mix_more;

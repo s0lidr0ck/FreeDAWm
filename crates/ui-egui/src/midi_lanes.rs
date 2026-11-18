@@ -294,6 +294,15 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
     })
     .response
     .on_hover_text("Polyphonic aftertouch: a lane per key");
+    let mut sysex = app.midi.sysex_lane;
+    let sysex_text = if seq.sysex.is_empty() { "SysEx".to_string() } else { format!("SysEx \u{2022} ({})", seq.sysex.len()) };
+    if ui
+        .checkbox(&mut sysex, sysex_text)
+        .on_hover_text("System Exclusive messages as markers: hover for the bytes, drag to move, Alt-click to delete")
+        .changed()
+    {
+        app.midi.sysex_lane = sysex;
+    }
     ui.menu_button("14-bit and RPN", |ui| crate::midi_wide_lanes::menu(app, ui, seq))
         .response
         .on_hover_text("A 14-bit controller pair or an RPN/NRPN parameter as one value, 0 to 16383");
