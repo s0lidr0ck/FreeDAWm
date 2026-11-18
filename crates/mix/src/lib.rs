@@ -1071,6 +1071,11 @@ pub struct MixEngine {
     serial: u64,
     /// Ownership workspace reused for parallel strip processing.
     work: Vec<(usize, Strip)>,
+    /// The auxes (and late tracks) of one rank, rendered together; capacity reserved in `sync`.
+    aux_work: Vec<(usize, Strip)>,
+    /// Auxes of one rank render in parallel on the worker pool (off: one after another, for
+    /// tests comparing the two).
+    pub(crate) parallel_busses: bool,
     /// Blocks rendered (stamps strips, so keys are read only from this block's sources).
     block: u64,
     /// A live release runs with the transport stopped: the mix renders on until its whole
@@ -1320,6 +1325,8 @@ impl MixEngine {
             regrow: false,
             serial: 0,
             work: Vec::new(),
+            aux_work: Vec::new(),
+            parallel_busses: true,
             block: 0,
             tail_on: false,
             tail_age: 0,
@@ -2205,6 +2212,8 @@ impl MixEngine {
         }
         self.order = plan.order;
         self.late = plan.late;
+        // Room for the auxes rendered together (`render`'s phase 2) without growing while playing.
+        self.aux_work.reserve(s.tracks.len());
         self.reserve_delays(s);
     }
 
@@ -2567,72 +2576,113 @@ impl MixEngine {
         }
         self.work = work;
         let is_aux = sidechain::is_aux;
-        // Phase 2: auxes in dependency order (they read busses), and the tracks keyed from them.
-        for (i, t) in order.iter().filter_map(|&i| Some((i, s.tracks.get(i)?))).filter(|(i, t)| live(t) && (is_aux(t) || late(*i))) {
-            let Some(mut st) = self.strips.remove(&t.id) else { continue };
-            st.llm = on_path(i);
-            if st.scratch.len() < self.max_block {
-                st.scratch.resize(self.max_block, 0.0);
+        // Phase 2: auxes in dependency order (they read busses), and the tracks keyed from them,
+        // a rank at a time: strips of one rank never feed or key one another (a strip that does
+        // ranks higher), so they render in parallel on the worker pool; they are routed into the
+        // busses and the main mix afterwards one by one in the same order as before, so the sums
+        // (and every bounce) come out bit for bit the same as rendering them one after another.
+        let mut aux_work = std::mem::take(&mut self.aux_work);
+        let mut rest = order.iter().copied().filter(|&i| s.tracks.get(i).is_some_and(|t| live(t) && (is_aux(t) || late(i)))).peekable();
+        while rest.peek().is_some() {
+            aux_work.clear();
+            let mut rank = None;
+            while let Some(&i) = rest.peek() {
+                let Some(t) = s.tracks.get(i) else {
+                    rest.next();
+                    continue;
+                };
+                let level = self.strips.get(&t.id).map(|st| st.level);
+                if !aux_work.is_empty() && level != rank {
+                    break;
+                }
+                rest.next();
+                let Some(mut st) = self.strips.remove(&t.id) else { continue };
+                rank = Some(st.level);
+                st.llm = on_path(i);
+                if st.scratch.len() < self.max_block {
+                    st.scratch.resize(self.max_block, 0.0);
+                }
+                // An aux reads busses that already carry the tracks' compensation delay. An aux
+                // without a bus input hears nothing but its own modules; it is compensated as if its
+                // input were the tracks' (it returns alongside the other auxes), so its main input
+                // counts as `track_latency` too (test `an_aux_consumer_lines_its_key_up_with_the_mix`).
+                st.base = match &t.mixer.input {
+                    _ if late(i) => 0,
+                    Route::Bus(b) if pdc => self.bus_latency(*b),
+                    _ if pdc => self.track_latency,
+                    _ => 0,
+                };
+                for k in &mut st.keys {
+                    let src = k.source.and_then(|(_, id)| self.strips.get(&id)).map(Strip::key_source);
+                    fill_key(k, src, block, frames);
+                }
+                if late(i) {
+                    late_midi_in(&mut st, s, &self.strips, block);
+                }
+                aux_work.push((i, st));
             }
-            let live_in = LiveInput {
-                input: &self.input,
-                monitor_only: self.monitor_only,
-                recording: self.recording,
-                auto_input: self.auto_input(pos, frames),
-                pdc,
-                xf,
-                scout: scout_win,
-                band: &self.band_out,
-                midi: &self.live_midi,
-                ports_gone: self.ports_gone,
-                looping: self.looping,
-                reverse: self.reverse,
-                feedback_frames: self.feedback_frames(s),
-                hw_inserts: !self.offline,
-            };
-            // An aux reads busses that already carry the tracks' compensation delay. An aux
-            // without a bus input hears nothing but its own modules; it is compensated as if its
-            // input were the tracks' (it returns alongside the other auxes), so its main input
-            // counts as `track_latency` too (test `an_aux_consumer_lines_its_key_up_with_the_mix`).
-            st.base = match &t.mixer.input {
-                _ if late(i) => 0,
-                Route::Bus(b) if pdc => self.bus_latency(*b),
-                _ if pdc => self.track_latency,
-                _ => 0,
-            };
-            for k in &mut st.keys {
-                let src = k.source.and_then(|(_, id)| self.strips.get(&id)).map(Strip::key_source);
-                fill_key(k, src, block, frames);
+            {
+                let live_in = LiveInput {
+                    input: &self.input,
+                    monitor_only: self.monitor_only,
+                    recording: self.recording,
+                    auto_input: self.auto_input(pos, frames),
+                    pdc,
+                    xf,
+                    scout: scout_win,
+                    band: &self.band_out,
+                    midi: &self.live_midi,
+                    ports_gone: self.ports_gone,
+                    looping: self.looping,
+                    reverse: self.reverse,
+                    feedback_frames: self.feedback_frames(s),
+                    hw_inserts: !self.offline,
+                };
+                let busses = &self.busses;
+                let render = |(i, st): &mut (usize, Strip)| {
+                    if let Some(t) = s.tracks.get(*i) {
+                        process_strip(s, t, st, busses, &live_in, pos, frames, solo.muted(*i) && !listening);
+                    }
+                    st.stamp = block;
+                    #[cfg(test)]
+                    if let Some(w) = rayon_worker() {
+                        aux_workers().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(w);
+                    }
+                };
+                if self.parallel_busses {
+                    run_strips(&mut aux_work, render);
+                } else {
+                    aux_work.iter_mut().for_each(render);
+                }
             }
-            if late(i) {
-                late_midi_in(&mut st, s, &self.strips, block);
-            }
-            process_strip(s, t, &mut st, &self.busses, &live_in, pos, frames, solo.muted(i) && !listening);
-            st.stamp = block;
-            fits &= !std::mem::take(&mut st.key_regrow);
-            if late(i) {
-                // Keyed from an aux, it lines up where the main mix is (the tracks and the aux
-                // returns). Its latency is left out of `track_latency`: the busses feeding the aux
-                // would otherwise wait for the key that waits for them.
-                let lmax = if pdc && !st.llm { lmax_t.saturating_add(lmax_a) } else { 0 };
-                fits &= align_late(t, &mut st, lmax, xf, frames);
-                let inst_lat = st.instrument.as_ref().map_or(0, |i| i.plugin.latency());
-                fits &= st.inst_outs.align(|_| lmax.saturating_sub(inst_lat), xf, frames);
+            for (i, mut st) in aux_work.drain(..) {
+                let Some(t) = s.tracks.get(i) else { continue };
+                fits &= !std::mem::take(&mut st.key_regrow);
+                if late(i) {
+                    // Keyed from an aux, it lines up where the main mix is (the tracks and the aux
+                    // returns). Its latency is left out of `track_latency`: the busses feeding the aux
+                    // would otherwise wait for the key that waits for them.
+                    let lmax = if pdc && !st.llm { lmax_t.saturating_add(lmax_a) } else { 0 };
+                    fits &= align_late(t, &mut st, lmax, xf, frames);
+                    let inst_lat = st.instrument.as_ref().map_or(0, |i| i.plugin.latency());
+                    fits &= st.inst_outs.align(|_| lmax.saturating_sub(inst_lat), xf, frames);
+                    self.route_strip(s, t, &mut st, pos, frames);
+                    self.listen_strip(t, &st, pos, frames);
+                    self.strips.insert(t.id, st);
+                    continue;
+                }
+                let ch = st.buf.len();
+                let lmax = if pdc && !st.llm { lmax_a } else { 0 };
+                fits &= st.align.set(lmax.saturating_sub(st.latency), ch, xf);
+                st.align.process(&mut st.buf, frames);
+                st.post_at = st.base.saturating_add(st.latency.max(lmax));
+                fits &= st.out_extra.set(0, ch, xf);
                 self.route_strip(s, t, &mut st, pos, frames);
                 self.listen_strip(t, &st, pos, frames);
                 self.strips.insert(t.id, st);
-                continue;
             }
-            let ch = st.buf.len();
-            let lmax = if pdc && !st.llm { lmax_a } else { 0 };
-            fits &= st.align.set(lmax.saturating_sub(st.latency), ch, xf);
-            st.align.process(&mut st.buf, frames);
-            st.post_at = st.base.saturating_add(st.latency.max(lmax));
-            fits &= st.out_extra.set(0, ch, xf);
-            self.route_strip(s, t, &mut st, pos, frames);
-            self.listen_strip(t, &st, pos, frames);
-            self.strips.insert(t.id, st);
         }
+        self.aux_work = aux_work;
         self.order = order;
         self.late = late_set;
         self.solo = solo;
@@ -4601,6 +4651,24 @@ fn run_strips<T: Send>(work: &mut [T], f: impl Fn(&mut T) + Sync + Send) {
     } else {
         work.iter_mut().for_each(f);
     }
+}
+
+/// The worker-pool thread this is, if it is one (tests: which workers rendered auxes).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn rayon_worker() -> Option<usize> {
+    rayon::current_thread_index()
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+fn rayon_worker() -> Option<usize> {
+    None
+}
+
+/// The worker-pool threads that have rendered an aux (tests).
+#[cfg(test)]
+fn aux_workers() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
+    static W: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> = std::sync::OnceLock::new();
+    W.get_or_init(Default::default)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -11132,6 +11200,46 @@ mod tests {
         let mut bare = realtime();
         bare.render(&s, 0, 512, &mut out);
         assert_eq!(bare.made_in_sync(), 6, "two inserts, an instrument and three Clip Effects modules");
+    }
+
+    /// Busses on the worker pool: six effect returns of one rank (each with a module) and a
+    /// group bus they all return to render on more than one worker, and the mix is bit for bit
+    /// the one rendered one aux after another.
+    #[test]
+    fn busses_render_in_parallel_and_sum_bit_for_bit_as_in_series() {
+        let (mut s, t) = session_with_dc(0.5, 48_000);
+        s.edit.click = false;
+        let group = s.add_bus("group", ChannelFormat::Stereo);
+        let g = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+        s.track_mut(g).unwrap().mixer.input = Route::Bus(group);
+        s.track_mut(g).unwrap().mixer.add_module(Insert::new("fs_sat"), None).unwrap();
+        for k in 0..6 {
+            let b = s.add_bus(&format!("fx{k}"), ChannelFormat::Stereo);
+            let a = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+            let tr = s.track_mut(a).unwrap();
+            tr.mixer.input = Route::Bus(b);
+            tr.mixer.output = Route::Bus(group);
+            tr.mixer.volume_db = -3.0 - k as f32;
+            tr.mixer.add_module(Insert::new(if k % 2 == 0 { "fs_reverb" } else { "fs_delay" }), None).unwrap();
+            s.track_mut(t).unwrap().mixer.sends[k] =
+                Some(soundcraft_model::SendSlot { level_db: -6.0, ..soundcraft_model::SendSlot::new(Route::Bus(b)) });
+        }
+        let mut serial = MixEngine::new(48_000.0, 512);
+        serial.parallel_busses = false;
+        let mut parallel = MixEngine::new(48_000.0, 512);
+        let mut a = vec![vec![0.0f32; 512]; 2];
+        let mut b = vec![vec![0.0f32; 512]; 2];
+        aux_workers().lock().unwrap().clear();
+        for k in 0..40i64 {
+            serial.render(&s, k * 512, 512, &mut a);
+            parallel.render(&s, k * 512, 512, &mut b);
+            for c in 0..2 {
+                assert!(a[c].iter().zip(&b[c]).all(|(x, y)| x.to_bits() == y.to_bits()), "block {k} channel {c}");
+            }
+        }
+        assert!(a[0].iter().any(|x| x.abs() > 1e-3), "the returns are heard");
+        let workers = aux_workers().lock().unwrap().len();
+        assert!(workers > 1 || rayon::current_num_threads() < 2, "auxes of one rank ran on {workers} worker(s)");
     }
 
     /// Renders `blocks` blocks of 512 backwards from `end` (play order: the first block is the

@@ -100,9 +100,9 @@ Varispeed is the only whole-project speed control among the four.
 | Aggregate or separate input and output devices | ● | ● | ● | ◐ | **Partial**: one output device; a different input device is drift-corrected. Left: several output devices at once, not planned here: it needs two output devices to develop and to tune the drift correction between them |
 | Recover when the device disappears | ● | ● | ● | ● | **Works**: when the output device goes away it is looked for every 2 s (on a worker thread) and the app reconnects by itself when it is back (`ui-egui/src/device_return.rs`); ASIO is never probed while a driver may be loaded, so it keeps the manual Reconnect button. Not tried with a real unplug |
 | Session rate differs from the device rate | n/a | ● | ● | n/a | **Works**: a 32-tap windowed-sinc resampler whose cut-off follows the speed (no files are converted) |
-| Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel by level on the worker pool; aux, folder and master strips are serial; worker threads have no realtime priority. Left: busses in parallel by level, designed below (Busses on the worker pool), not built; realtime priority for the workers needs a new dependency (`audio_thread_priority` or `thread-priority`) or `unsafe` outside the FFI crates: not planned here until the owner approves one |
+| Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel by level on the worker pool, and (2026-11-17, @@BUSSES@@, to the design below) so do aux and folder strips: the auxes (and tracks keyed from them) of one rank, which never feed or key one another, render together on the worker pool, then are summed into the busses and the main mix one by one in the old order, so every mix and bounce is bit for bit the same as before. The master strips stay serial (one after another by design). Left: realtime priority for the workers needs a new dependency (`audio_thread_priority` or `thread-priority`) or `unsafe` outside the FFI crates: not planned here until the owner approves one |
 | Delay compensation | ● | ● | ● | ● | **Works**: inserts, pre-fader sends, aux returns, masters, sidechain keys, hardware outputs; up to about 22 s |
-| Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer. Left: rendering the playback-only strips ahead at a larger buffer and adding them to the live strips each callback; designed below (Large playback buffer with a small live path; the same item as section 2's small-buffer row), not built: the largest engine item, 15–22 h |
+| Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer. Left: rendering the playback-only strips ahead at a larger buffer and adding them to the live strips each callback; designed below (Large playback buffer with a small live path; the same item as section 2's small-buffer row), not built: the largest engine item, 15–22 h. Round three (busses on the worker pool, 2026-11-17) did not build it: it needs plug-in instances handed between two threads and invalidation on every edit, which could not be made safe and tested in the time; it should be built behind an option, off by default, and compared sample for sample with the present render |
 | Stream audio from disk with a cache | ● | ● | ● | ● | **Works** for WAV at the session rate (cache of a quarter of RAM, 4 s read-ahead) |
 | Skip plug-ins on silent tracks | ● | ● | ● | ● | **Works**: Options › More › Suspend Plug-ins on Silence (off by default, so sessions sound as they did): an insert whose input and output have both been below −100 dBFS for a second is not run while its input stays silent, and the first sound runs it again in the same block; keyed modules and modules that send MIDI always run, and the strip's delay compensation is unchanged. A suspended module's state (a compressor's release) holds where it was |
 | CPU meter and dropout counter | ● | ● | ● | ● | **Works**; no per-plug-in or per-core breakdown |
@@ -277,7 +277,7 @@ overview is read at the file's rate and scaled. (5) *Tests.* A 44.1 kHz file pla
 8–12 h; the converted copy sounds the same, so this saves disk space and import time only. Not
 built: the owner's call whether it is worth it.
 
-**Busses on the worker pool: the design (round three, not built).** Tracks already render in
+**Busses on the worker pool: the design (round three, built 2026-11-17: the auxes of one rank render together, the rank being the planner's, so (1) needed no new order).** Tracks already render in
 parallel by the planner's levels (`sidechain::resolve` gives every strip a level: a strip waits
 only for strips of lower levels: its key sources and the busses it reads). Aux, folder and master
 strips are run afterwards one by one because each reads a bus that the earlier strips summed into
@@ -292,7 +292,7 @@ with one worker and with four; a counter shows aux strips of one level ran on mo
 worker. (4) *Not in it.* Realtime priority for the workers: it needs the `audio_thread_priority`
 or `thread-priority` crate (or `unsafe` outside the FFI crates), which the owner has not approved.
 
-**Reverse playback through the mixer: the design (round three, not built).** Shuttle Back plays
+**Reverse playback through the mixer: the design (round three, built 2026-11-17; automation is read per block, and the Scrubber's voice stays for the simulated transport without a device).** Shuttle Back plays
 each track's strip backwards on the UI side (the Scrubber's voice). To take sends, busses, the
 master and hosted inserts along, the audio thread's player renders the block backwards instead:
 (1) the clip read already takes a negative speed for varispeed; a block at speed −1 reads clips
@@ -349,6 +349,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Round three: busses render in parallel on the worker pool |
 | 2026-11-17 | minor | Round three: reverse playback through sends, busses and the master |
 | 2026-11-17 | minor | Round three: Clip Effects take any built-in effect as a chain of modules per clip |
 | 2026-11-17 | minor | Round three: the session's sample rate can be changed later |
