@@ -175,7 +175,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Session Data...",
             ["File", "Import"],
             Some("Alt+Shift+I"),
-            "{path, tracks?: [names]} — imports tracks (clips, playlists, mixer, automation, audio) from another session",
+            "{path, tracks?: [names], onto?: bool, sections?: [faders, pan, mutes, sends, inserts, delay, automation]} — imports tracks (clips, playlists, mixer, automation, audio) from another session; with `onto` each lands on this session's track of the same name instead, bringing only `sections` (default inserts, sends, faders and pan) → {tracks, unmatched, missing}",
             always,
             import_session_data
         ),
@@ -624,6 +624,9 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
     if picked.is_empty() {
         return Err(bad(id, "nothing to import"));
     }
+    if p.get("onto").and_then(Value::as_bool).unwrap_or(false) {
+        return import_onto_tracks(e, p, &path, &other, picked);
+    }
     let mut needed: Vec<SourceId> = picked
         .iter()
         .flat_map(|t| t.playlists.iter().flat_map(|pl| pl.clips.iter().flat_map(|c| c.source().into_iter().chain(c.clean_alt().map(|k| k.source)))))
@@ -713,6 +716,88 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
     missing.extend(crate::cmd::module_asset::import_track_assets(s, &out, Path::new(&path)));
     s.edit.selected_tracks = out.clone();
     Ok(json!({"tracks": out, "sources": map.len(), "missing": missing}))
+}
+
+/// What Import Session Data can bring onto an existing track: the mix snapshot's sections but
+/// routing (it would point into the other session), and its automation.
+const ONTO_SECTIONS: [&str; 7] = ["faders", "pan", "mutes", "sends", "inserts", "delay", "automation"];
+
+/// `file.import_session_data` with `onto`: each picked track of the other session lands on the
+/// track of this one with the same name (case ignored), bringing only `sections` (default
+/// inserts, sends, faders and pan); a track with no namesake here is reported, not added. Clips
+/// and audio never come this way. One undo step.
+fn import_onto_tracks(e: &mut Engine, p: &Value, path: &str, other: &Session, picked: Vec<soundcraft_model::Track>) -> Result<Value> {
+    const C: &str = "file.import_session_data";
+    let sections: Vec<&str> = match p.get("sections") {
+        None | Some(Value::Null) => vec!["inserts", "sends", "faders", "pan"],
+        Some(Value::Array(a)) => {
+            let mut out = Vec::new();
+            for v in a {
+                let s = v.as_str().and_then(|x| ONTO_SECTIONS.iter().find(|k| k.eq_ignore_ascii_case(x))).copied();
+                out.push(s.ok_or_else(|| bad(C, format!("cannot bring {v} ({})", ONTO_SECTIONS.join(", "))))?);
+            }
+            out
+        }
+        Some(_) => return Err(bad(C, "`sections` is a list")),
+    };
+    if sections.is_empty() {
+        return Err(bad(C, "choose something to bring (`sections`)"));
+    }
+    let inserts = sections.contains(&"inserts");
+    let automation = sections.contains(&"automation");
+    let mixer_sections: Vec<&str> = sections.iter().copied().filter(|s| *s != "automation").collect();
+    let s = e.session_mut();
+    let mut onto = Vec::new();
+    let mut unmatched = Vec::new();
+    for donor in picked {
+        let Some(target) = s.tracks.iter().find(|t| t.kind != TrackKind::Master && t.name.eq_ignore_ascii_case(&donor.name)).map(|t| t.id) else {
+            unmatched.push(donor.name.clone());
+            continue;
+        };
+        // Sends to the other session's busses go to this one's of the same name (made when missing).
+        let mut mixer = donor.mixer.clone();
+        for slot in mixer.sends.iter_mut().flatten() {
+            if let Route::Bus(b) = slot.target {
+                slot.target = other.bus(b).map_or(Route::None, |ob| Route::Bus(s.add_bus(&ob.name, ob.format)));
+            }
+        }
+        let snap = soundcraft_model::MixSnapshot { name: String::new(), strips: vec![soundcraft_model::SnapshotStrip { track: target, mixer }] };
+        let Some(tr) = s.track_mut(target) else { continue };
+        snap.recall_onto(tr, &mixer_sections);
+        // Which module a lane drives: none (the strip's own lanes), the instrument, or an insert.
+        let module = |l: &soundcraft_model::AutomationLane| match l.param {
+            soundcraft_model::AutoParam::Plugin { module, .. } => Some(module == soundcraft_model::INSTRUMENT_MODULE),
+            _ => None,
+        };
+        if automation {
+            // The donor's lanes replace these; an insert's lane only with the donor's inserts (its
+            // module ids are the donor's). The instrument is not imported: its lanes stay.
+            tr.automation.retain(|l| match module(l) {
+                None => false,
+                Some(instrument) => instrument || !inserts,
+            });
+            tr.automation.extend(donor.automation.iter().filter(|l| module(l).is_none() || (inserts && module(l) == Some(false))).cloned());
+        }
+        if inserts {
+            // Lanes of modules no longer on the strip go.
+            let ids: Vec<soundcraft_model::ModuleId> = tr.mixer.inserts.iter().map(|i| i.id).collect();
+            tr.automation.retain(|l| match &l.param {
+                soundcraft_model::AutoParam::Plugin { module, .. } => *module == soundcraft_model::INSTRUMENT_MODULE || ids.contains(module),
+                _ => true,
+            });
+        }
+        onto.push(target);
+    }
+    if onto.is_empty() {
+        return Err(bad(C, format!("no track here has the name of {}", unmatched.join(", "))));
+    }
+    let missing = if inserts { crate::cmd::module_asset::import_track_assets(s, &onto, Path::new(path)) } else { Vec::new() };
+    s.sanitize();
+    s.edit.selected_tracks = onto.clone();
+    for t in &onto {
+        e.automation_changed(*t, soundcraft_model::AutoParam::Volume);
+    }
+    Ok(json!({"tracks": onto, "unmatched": unmatched, "missing": missing}))
 }
 
 #[cfg(test)]
@@ -1040,6 +1125,50 @@ mod tests {
         assert!(e.session().pool.get(src).is_some());
         assert_eq!(e.session().track_by_name("Keys").unwrap().clips().len(), 1);
         assert!(e.execute("file.import_session_data", &json!({"path": path, "tracks": ["Nope"]})).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Import Session Data onto existing tracks: matched by name, only the chosen parts come
+    /// (inserts and the fader here, not the pan, not the clips), one undo step; a donor track
+    /// with no namesake is reported; automation brings the donor's lanes.
+    #[test]
+    fn import_session_data_onto_tracks_of_the_same_name() {
+        let dir = std::env::temp_dir().join(format!("sc-import-onto-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("donor.scraft").to_string_lossy().into_owned();
+        let mut donor = Engine::default();
+        donor.execute("track.new", &json!({"name": "Vox", "format": "stereo"})).unwrap();
+        donor.execute("track.new", &json!({"name": "Only There"})).unwrap();
+        let vox = donor.session().tracks[0].id;
+        donor.execute("mix.module_add", &json!({"track": vox.0, "plugin": "gain", "params": {"gain": -7.0}})).unwrap();
+        donor.session_mut().track_mut(vox).unwrap().mixer.volume_db = -4.0;
+        donor.session_mut().track_mut(vox).unwrap().mixer.pan = vec![0.5];
+        donor.execute("automation.set_point", &json!({"track": vox.0, "param": "volume", "at": 0, "value": -9.0})).unwrap();
+        crate::io::save_session(&mut donor, &path).unwrap();
+
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"name": "VOX", "format": "stereo"})).unwrap();
+        let mine = e.session().tracks[0].id;
+        let undo = e.undo_history().len();
+        let r = e.execute("file.import_session_data", &json!({"path": path, "onto": true, "sections": ["inserts", "faders"]})).unwrap();
+        assert_eq!(r["tracks"], json!([mine.0]));
+        assert_eq!(r["unmatched"], json!(["Only There"]));
+        assert_eq!(e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).count(), 1, "no track added");
+        let t = e.session().track(mine).unwrap();
+        assert_eq!(t.mixer.inserts.len(), 1);
+        assert_eq!(t.mixer.inserts[0].params["gain"], -7.0);
+        assert_eq!(t.mixer.volume_db, -4.0);
+        assert_ne!(t.mixer.pan, vec![0.5], "pan was not chosen");
+        assert!(t.automation.iter().all(|l| l.points.is_empty()), "automation was not chosen");
+        assert_eq!(e.undo_history().len(), undo + 1);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(e.session().track(mine).unwrap().mixer.inserts.is_empty());
+        e.execute("file.import_session_data", &json!({"path": path, "onto": true, "tracks": ["Vox"], "sections": ["automation"]})).unwrap();
+        let t = e.session().track(mine).unwrap();
+        assert!(t.mixer.inserts.is_empty(), "inserts were not chosen");
+        assert_eq!(t.lane(&soundcraft_model::AutoParam::Volume).map(|l| l.points.len()), Some(1));
+        assert!(e.execute("file.import_session_data", &json!({"path": path, "onto": true, "tracks": ["Only There"]})).is_err());
+        assert!(e.execute("file.import_session_data", &json!({"path": path, "onto": true, "sections": ["routing"]})).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

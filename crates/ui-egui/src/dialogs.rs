@@ -1357,6 +1357,9 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     if cmd == "file.bounce_stems" {
                         stems_choice(app, ui);
                     }
+                    if cmd == "file.import_session_data" {
+                        session_data_choice(ui);
+                    }
                     let file = soundcraft_engine::io::session_file(path);
                     let replaces = soundcraft_engine::io::replaces(&app.engine, cmd, &file);
                     if replaces {
@@ -1376,6 +1379,9 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                             if busses {
                                 v["busses"] = json!(true);
                             }
+                        }
+                        if cmd == "file.import_session_data" {
+                            SessionDataChoice::get(ui.ctx()).params(&mut v);
                         }
                         // Saved templates are listed in File › New from their folder: made on save.
                         if cmd == "session.save_template"
@@ -2157,6 +2163,61 @@ fn audiosuite_window(app: &mut SoundApp, ctx: &egui::Context) {
 
 /// Export › Stems' choice: the selected tracks rather than every unmuted one, and a stem of each
 /// bus as well (`file.bounce_stems`'s `tracks` and `busses`), kept while the app runs.
+/// Import Session Data's choice: new tracks (as the other session has them), or onto this
+/// session's tracks of the same names with only the parts ticked (by `SESSION_DATA_PARTS`).
+#[derive(Clone, Copy)]
+struct SessionDataChoice {
+    onto: bool,
+    parts: [bool; 7],
+}
+
+/// The parts Import Session Data can bring onto an existing track: (section id, label, ticked
+/// at first).
+const SESSION_DATA_PARTS: [(&str, &str, bool); 7] = [
+    ("inserts", "Inserts", true),
+    ("sends", "Sends", true),
+    ("faders", "Fader and trim", true),
+    ("pan", "Pan, width and balance", true),
+    ("mutes", "Mute and solo", false),
+    ("delay", "Track delay", false),
+    ("automation", "Automation", false),
+];
+
+impl SessionDataChoice {
+    fn id() -> egui::Id {
+        egui::Id::new("session_data_choice")
+    }
+
+    fn get(ctx: &egui::Context) -> Self {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or(SessionDataChoice { onto: false, parts: SESSION_DATA_PARTS.map(|p| p.2) })
+    }
+
+    /// What the command takes for it: nothing for new tracks.
+    fn params(self, v: &mut Value) {
+        if self.onto {
+            v["onto"] = json!(true);
+            v["sections"] = json!(SESSION_DATA_PARTS.iter().zip(self.parts).filter(|(_, on)| *on).map(|(p, _)| p.0).collect::<Vec<_>>());
+        }
+    }
+}
+
+/// The Session Data prompt's rows for [`SessionDataChoice`].
+fn session_data_choice(ui: &mut egui::Ui) {
+    let mut c = SessionDataChoice::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut c.onto, false, "As new tracks");
+        ui.radio_value(&mut c.onto, true, "Onto tracks with the same names");
+    });
+    if c.onto {
+        ui.indent("session_data_parts", |ui| {
+            for (on, (_, label, _)) in c.parts.iter_mut().zip(SESSION_DATA_PARTS) {
+                crate::widgets::checkbox(ui, on, label);
+            }
+        });
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(SessionDataChoice::id(), c));
+}
+
 struct StemsChoice;
 
 impl StemsChoice {
@@ -2260,6 +2321,18 @@ fn bounce_range_choice(app: &SoundApp, ui: &mut egui::Ui, range: &mut BounceRang
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Session Data's choice: new tracks add nothing to the command; onto existing tracks it
+    /// names the ticked parts, which the engine takes.
+    #[test]
+    fn session_data_onto_existing_tracks_names_the_ticked_parts() {
+        let mut v = json!({"path": "x"});
+        SessionDataChoice { onto: false, parts: SESSION_DATA_PARTS.map(|p| p.2) }.params(&mut v);
+        assert_eq!(v, json!({"path": "x"}));
+        SessionDataChoice { onto: true, parts: SESSION_DATA_PARTS.map(|p| p.2) }.params(&mut v);
+        assert_eq!(v["onto"], json!(true));
+        assert_eq!(v["sections"], json!(["inserts", "sends", "faders", "pan"]));
+    }
 
     #[test]
     fn capture_to_pantry_opens_for_an_instrument_track_with_the_commands_defaults() {
