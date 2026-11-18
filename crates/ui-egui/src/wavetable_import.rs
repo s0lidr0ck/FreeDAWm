@@ -110,7 +110,7 @@ pub fn target(app: &SoundApp) -> Option<TrackId> {
 
 /// Track › Import Wavetable…: the window for the selected track's synth.
 pub fn open_for_selection(app: &mut SoundApp) -> Result<Value, String> {
-    let t = target(app).ok_or("Select a track playing the Wavetable Synth")?;
+    let t = target(app).ok_or("Select a track playing Cicada (the wavetable synth)")?;
     open(app, t, None);
     Ok(json!({"track": t.0, "open": true}))
 }
@@ -199,17 +199,41 @@ fn refresh(app: &mut SoundApp) {
 
 /// Draws the stack: every wave faint, stepped up and to the right, the chosen one bold in front.
 fn stack(ui: &mut Ui, r: Rect, waves: &[Vec<f32>], step: usize) {
-    let t = Tokens::current();
+    // Cicada's own wave display: the dark well, the waves stacked back to front, the one stepped
+    // to bright.
+    let face = &crate::synth_face::CICADA;
     let p = ui.painter_at(r);
-    p.rect_filled(r, 4.0, t.counter_bg);
+    crate::synth_face::kit::display(&p, r, "Waves", face);
     let n = waves.len().max(1);
     let shift = vec2(80.0 / n as f32, -40.0 / n as f32);
-    let base = Rect::from_min_max(pos2(r.min.x + 10.0, r.min.y + 52.0), pos2(r.max.x - 92.0, r.max.y - 10.0));
+    let base = Rect::from_min_max(pos2(r.min.x + 14.0, r.min.y + 56.0), pos2(r.max.x - 96.0, r.max.y - 12.0));
     for (i, w) in waves.iter().enumerate().rev() {
         let at = base.translate(shift * i as f32);
-        let (stroke, colour) = if i == step { (2.0, t.accent) } else { (1.0, t.text_dim.gamma_multiply(0.35)) };
-        p.add(egui::Shape::line(wave_points(w, at.shrink2(vec2(0.0, 6.0))), Stroke::new(stroke, colour)));
+        let pts = wave_points(w, at.shrink2(vec2(0.0, 6.0)));
+        if i == step {
+            crate::synth_face::kit::trace(&p, pts, face.glow, 2.4);
+        } else {
+            p.add(egui::Shape::line(pts, Stroke::new(1.0, crate::synth_face::kit::alpha(face.well_ink, 0.25))));
+        }
     }
+}
+
+/// The window in Cicada's colours: its panel, print and accent on egui's widgets.
+fn cicada_style(ui: &mut Ui) {
+    let f = &crate::synth_face::CICADA;
+    let v = ui.visuals_mut();
+    v.override_text_color = Some(f.ink);
+    v.selection.bg_fill = f.accent.gamma_multiply(0.85);
+    v.selection.stroke.color = f.on_accent;
+    v.extreme_bg_color = f.well;
+    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+        w.weak_bg_fill = f.key;
+        w.bg_fill = f.key;
+        w.bg_stroke.color = f.line;
+    }
+    v.widgets.hovered.weak_bg_fill = f.key.lerp_to_gamma(f.accent, 0.15);
+    v.widgets.hovered.bg_stroke.color = f.accent;
+    v.widgets.noninteractive.bg_stroke.color = f.line;
 }
 
 /// Draws the window when open (each frame).
@@ -242,7 +266,13 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         .default_width(520.0)
         .resizable(false)
         .collapsible(false)
+        .frame(
+            egui::Frame::window(&ctx.global_style())
+                .fill(crate::synth_face::CICADA.panel_at(0.0))
+                .stroke(Stroke::new(1.0, crate::synth_face::CICADA.line)),
+        )
         .show(ctx, |ui| {
+            cicada_style(ui);
             let Some(w) = app.wavetable_import.as_mut() else { return };
             let info = w.current.as_ref().map_or(Value::Null, |c| c.1.clone());
             let user = info["user"].as_bool() == Some(true);
@@ -363,9 +393,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         Some("mix.wavetable_load") => {
             if let Some(path) = app.services.pick_open.as_ref().and_then(|pick| pick("mix.wavetable_load", &["wav", "wave"])) {
                 match app.run("mix.wavetable_load", json!({"track": track.0, "path": path})) {
-                    Ok(v) => {
-                        app.ui.status = format!("{} loaded into the Wavetable Synth ({} waves)", v["name"].as_str().unwrap_or("Table"), v["waves"])
-                    }
+                    Ok(v) => app.ui.status = format!("{} loaded into Cicada ({} waves)", v["name"].as_str().unwrap_or("Table"), v["waves"]),
                     Err(e) => app.ui.status = e,
                 }
             }
@@ -395,7 +423,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             if let Some(params) = app.wavetable_import.as_ref().map(ImportWindow::params) {
                 match app.run(cmd, params) {
                     Ok(v) => {
-                        app.ui.status = format!("{} imported into the Wavetable Synth ({} waves)", v["name"].as_str().unwrap_or("Table"), v["waves"]);
+                        app.ui.status = format!("{} imported into Cicada ({} waves)", v["name"].as_str().unwrap_or("Table"), v["waves"]);
                         open = false;
                     }
                     Err(e) => app.ui.status = e,

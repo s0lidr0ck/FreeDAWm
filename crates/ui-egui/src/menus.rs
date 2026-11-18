@@ -777,7 +777,7 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
         "ui.mix.editors_actual" => when((app.ui.editor_scale - 1.0).abs() > 1e-3, "Plugin editors are at their actual size"),
         i if i.starts_with("ui.mix.width.") => when(crate::channel_width::enabled(app, i), "Select channels in the Mix window"),
         // Import Wavetable… acts on a selected track playing the Wavetable Synth.
-        "ui.wavetable_import" => when(crate::wavetable_import::target(app).is_some(), "Select a track playing the Wavetable Synth"),
+        "ui.wavetable_import" => when(crate::wavetable_import::target(app).is_some(), "Select a track playing Cicada (the wavetable synth)"),
         // Rename… opens its dialog on the first selected track.
         "track.rename" => when(!app.engine.target_tracks().is_empty(), "Select a track"),
         // Clean Vocal's follow-ups act on a cleaned clip only.

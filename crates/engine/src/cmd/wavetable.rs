@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Wavetable",
             [],
             None,
-            "{track?, path, mode?: fixed|pitch|spectral (default fixed), frame_size?: 256|512|1024|2048|4096|8192 (fixed: default from the file's `clm ` chunk, else guessed from its length), waves?: 1..32 (pitch, spectral: default 32), name?} — makes the track's Wavetable Synth play a table made from an audio file: `fixed` reads the file as a row of single-cycle frames (as wavetable files are; more than 32: 32 spread through them), `pitch` cuts one cycle at each of up to 32 points at the pitch tracked there, `spectral` makes one clean cycle from the spectrum at each point (any sound: noise, speech, drums). The table (not the file) is kept in the session. Files up to 10 minutes; only the first minute is read → {track, name, waves, mode, frame_size, notes: [what was guessed, spread or cut]}",
+            "{track?, path, mode?: fixed|pitch|spectral (default fixed), frame_size?: 256|512|1024|2048|4096|8192 (fixed: default from the file's `clm ` chunk, else guessed from its length), waves?: 1..32 (pitch, spectral: default 32), name?} — makes the track's Cicada (wavetable synth) play a table made from an audio file: `fixed` reads the file as a row of single-cycle frames (as wavetable files are; more than 32: 32 spread through them), `pitch` cuts one cycle at each of up to 32 points at the pitch tracked there, `spectral` makes one clean cycle from the spectrum at each point (any sound: noise, speech, drums). The table (not the file) is kept in the session. Files up to 10 minutes; only the first minute is read → {track, name, waves, mode, frame_size, notes: [what was guessed, spread or cut]}",
             always,
             import_cmd
         ),
@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Clear Wavetable",
             [],
             None,
-            "{track?} — the track's Wavetable Synth goes back to its built-in tables (the Table control), its imported table removed from the session → {track}",
+            "{track?} — the track's Cicada (wavetable synth) goes back to its built-in tables (the Table control), its imported table removed from the session → {track}",
             always,
             clear_cmd
         ),
@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Wavetable",
             [],
             None,
-            "{track?, path, name?} — a wavetable WAV (frames of 2048 samples, or the size its `clm ` chunk names) becomes the track's Wavetable Synth's table: `mix.wavetable_import` with mode fixed → as that",
+            "{track?, path, name?} — a wavetable WAV (frames of 2048 samples, or the size its `clm ` chunk names) becomes the track's Cicada (wavetable synth)'s table: `mix.wavetable_import` with mode fixed → as that",
             always,
             load_cmd
         ),
@@ -81,7 +81,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Wavetable Info",
             [],
             None,
-            "{track?} — the table the track's Wavetable Synth plays → {track, user: bool (an imported table), name, waves, bank (the built-in table), error?: what is wrong with a damaged imported table}",
+            "{track?} — the table the track's Cicada (wavetable synth) plays → {track, user: bool (an imported table), name, waves, bank (the built-in table), error?: what is wrong with a damaged imported table}",
             always,
             info_cmd
         ),
@@ -172,7 +172,7 @@ fn synth_track(e: &Engine, id: &str, p: &Value) -> Result<TrackId> {
         return Err(bad(id, format!("`{}` is not an instrument track", tr.name)));
     }
     if !is_synth(&t) {
-        return Err(bad(id, format!("`{}` does not play the Wavetable Synth", tr.name)));
+        return Err(bad(id, format!("`{}` does not play Cicada (the wavetable synth)", tr.name)));
     }
     Ok(t)
 }
