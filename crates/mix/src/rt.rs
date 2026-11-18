@@ -24,8 +24,6 @@ pub enum Priority {
     ByAudioSystem,
     /// Asked and refused: the thread runs at ordinary priority (audio still plays).
     NotGranted,
-    /// Not used on this target.
-    Unavailable,
 }
 
 impl Priority {
@@ -34,7 +32,6 @@ impl Priority {
             1 => Priority::On,
             2 => Priority::ByAudioSystem,
             3 => Priority::NotGranted,
-            4 => Priority::Unavailable,
             _ => Priority::NotTried,
         }
     }
@@ -45,7 +42,6 @@ impl Priority {
             Priority::On => 1,
             Priority::ByAudioSystem => 2,
             Priority::NotGranted => 3,
-            Priority::Unavailable => 4,
         }
     }
 
@@ -56,7 +52,6 @@ impl Priority {
             Priority::On => "on",
             Priority::ByAudioSystem => "on (set by the audio system)",
             Priority::NotGranted => "not granted",
-            Priority::Unavailable => "not used here",
         }
     }
 }
@@ -74,9 +69,6 @@ pub struct RtStatus {
 impl RtStatus {
     /// "Realtime priority: on (audio thread on; 3 of 3 workers on)" and the like.
     pub fn label(&self) -> String {
-        if self.audio == Priority::Unavailable {
-            return "Realtime priority: not used in the browser".to_string();
-        }
         let workers = match self.workers {
             Priority::On => format!("{} of {} workers on", self.workers_on, self.workers_total),
             w => format!("workers {}", w.word()),
