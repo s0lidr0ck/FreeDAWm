@@ -73,6 +73,18 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             module_set
         ),
+        CommandSpec {
+            id: "clip.module_state",
+            label: "Store Clip Effects Module State",
+            menu: &[],
+            shortcut: None,
+            params: "{clip: id, module: id, state: base64 | null} → {bytes}. A hosted Clip Effects module's own state, read from its running instance (as `mix.module_state` for an insert). Not undoable and not journaled (states can be large).",
+            enabled: has_tracks,
+            run: module_state,
+            journal: false,
+            undoable: false,
+            view: false,
+        },
         cmd!(
             "clip.effects_bypass",
             "Bypass",
@@ -314,6 +326,29 @@ fn module_set(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad(ID, "no such module on the clips"));
     }
     Ok(json!({"clips": n}))
+}
+
+fn module_state(e: &mut Engine, p: &Value) -> Result<Value> {
+    const ID: &str = "clip.module_state";
+    let m = module_id(ID, p)?;
+    let clip = p.get("clip").and_then(Value::as_u64).map(ClipId).ok_or_else(|| bad(ID, "`clip` must be a clip id"))?;
+    let state = match p.get("state") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(soundcraft_model::b64::decode(s).ok_or_else(|| bad(ID, "`state` is not valid base64 (or is too large)"))?),
+        Some(_) => return Err(bad(ID, "`state` must be a base64 string or null")),
+    };
+    let c = e.session_mut().find_clip_mut(clip).ok_or_else(|| bad(ID, "no such clip"))?;
+    let x = c.modules.iter_mut().find(|x| x.id == m).ok_or_else(|| bad(ID, "no such module on the clip"))?;
+    // Only a hosted module keeps a state of its own (a built-in's is its parameters).
+    if !soundcraft_mix::is_third_party(&x.plugin) {
+        return Err(bad(ID, "only a hosted (CLAP or VST3) module keeps a state of its own"));
+    }
+    let n = state.as_ref().map_or(0, Vec::len);
+    match state {
+        Some(bytes) => x.set_state_bytes(&bytes),
+        None => x.state = None,
+    }
+    Ok(json!({"bytes": n}))
 }
 
 fn effects_bypass(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -624,6 +659,43 @@ mod tests {
         let json = serde_json::to_string(e.session()).unwrap();
         let back: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(back.find_clip(ids[0]).unwrap().1.modules, clip(&e).modules);
+    }
+
+    /// A hosted Clip Effects module's own state is stored on its clip slot (no undo step, not
+    /// journaled), saved and opened with the session; a built-in module has none; a module
+    /// saved before states existed (parameters only) opens unchanged, with none.
+    #[test]
+    fn a_hosted_clip_modules_state_is_kept_per_slot() {
+        let (mut e, _, ids) = engine_with(&[(0, 1000, 0)]);
+        let c = ids[0].0;
+        e.execute("clip.module_add", &json!({"clip": c, "plugin": "fs_reverb"})).unwrap();
+        // A hosted module, as `clip.module_add` puts one (the scan is not run in tests).
+        let mut hosted = soundcraft_model::ClipModule::new(2, "clap:test.state");
+        hosted.params.insert("gain".into(), -6.0);
+        e.session_mut().find_clip_mut(ids[0]).unwrap().modules.push(hosted.clone());
+        let undo = e.can_undo();
+        let blob = soundcraft_model::b64::encode(b"\x00plug-in state\xff");
+        let r = e.execute("clip.module_state", &json!({"clip": c, "module": 2, "state": blob})).unwrap();
+        assert_eq!(r["bytes"], 15);
+        let clip = |e: &Engine| e.session().find_clip(ids[0]).unwrap().1.clone();
+        assert_eq!(clip(&e).modules[1].state_bytes().unwrap(), b"\x00plug-in state\xff");
+        assert_eq!(e.can_undo(), undo, "not undoable");
+        assert!(e.journal.iter().all(|(id, _)| id != "clip.module_state"), "not journaled");
+        assert!(e.execute("clip.module_state", &json!({"clip": c, "module": 1, "state": blob})).is_err(), "a built-in has none");
+        assert!(e.execute("clip.module_state", &json!({"clip": c, "module": 9, "state": blob})).is_err());
+        assert!(e.execute("clip.module_state", &json!({"clip": c, "module": 2, "state": "%%"})).is_err());
+        // Saved and opened again.
+        let json = serde_json::to_string(e.session()).unwrap();
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.find_clip(ids[0]).unwrap().1.modules, clip(&e).modules);
+        // An older slot (parameters only) reads as before, and writes no state back.
+        let old = r#"{"id":2,"plugin":"clap:test.state","params":{"gain":-6.0}}"#;
+        let m: soundcraft_model::ClipModule = serde_json::from_str(old).unwrap();
+        assert_eq!(m, hosted);
+        assert_eq!(serde_json::to_string(&m).unwrap(), old);
+        // null clears it.
+        e.execute("clip.module_state", &json!({"clip": c, "module": 2, "state": null})).unwrap();
+        assert_eq!(clip(&e).modules[1].state, None);
     }
 
     #[test]

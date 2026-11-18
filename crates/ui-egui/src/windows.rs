@@ -1506,7 +1506,7 @@ pub fn clip_effects(app: &mut SoundApp, ctx: &egui::Context) {
 /// each with its bypass, order, removal and parameters.
 fn clip_modules(app: &mut SoundApp, ui: &mut egui::Ui, cid: soundcraft_model::ClipId) {
     ui.separator();
-    let mods = app.engine.session().find_clip(cid).map(|(_, c)| c.modules.clone()).unwrap_or_default();
+    let (track, mods) = app.engine.session().find_clip(cid).map(|(t, c)| (Some(t), c.modules.clone())).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Modules").strong());
         let full = mods.len() >= soundcraft_model::MAX_CLIP_MODULES;
@@ -1544,7 +1544,29 @@ fn clip_modules(app: &mut SoundApp, ui: &mut egui::Ui, cid: soundcraft_model::Cl
                 if ui.add_enabled(i + 1 < n, egui::Button::new("Down")).clicked() {
                     let _ = app.run("clip.module_set", json!({"clips": [cid.0], "module": m.id, "move": i + 1}));
                 }
+                // A hosted module's own editor window (its instance lives with the audio engine).
+                let slot = track.map(|t| (t, cid.0, m.id));
+                if let Some(slot) = slot.filter(|_| soundcraft_mix::is_third_party(&m.plugin)) {
+                    let (has, open) = app.player.as_ref().map_or((false, false), |p| (p.has_clip_editor(slot), p.clip_editor_open(slot)));
+                    let b = ui
+                        .add_enabled(has, egui::Button::new(if open { "Close Editor" } else { "Editor…" }))
+                        .on_disabled_hover_text("No editor to open: the plug-in has none, or it is not loaded (no audio engine running).");
+                    if b.clicked() {
+                        if open {
+                            app.capture_clip_slot(slot);
+                            if let Some(p) = &app.player {
+                                p.close_clip_editor(slot);
+                            }
+                        } else if let Some(Err(e)) = app.player.as_ref().map(|p| p.open_clip_editor(slot)) {
+                            app.ui.status = format!("Could not open the plug-in's editor: {e}");
+                        }
+                    }
+                }
                 if ui.button("Remove").clicked() {
+                    // Its live state stays on the module, so Undo brings it back as it was.
+                    if let Some(slot) = slot.filter(|_| soundcraft_mix::is_third_party(&m.plugin)) {
+                        app.capture_clip_slot(slot);
+                    }
                     let _ = app.run("clip.module_remove", json!({"clips": [cid.0], "module": m.id}));
                 }
             });
@@ -1581,6 +1603,10 @@ fn clip_modules(app: &mut SoundApp, ui: &mut egui::Ui, cid: soundcraft_model::Cl
                         &json!({"clips": [cid.0], "module": m.id, "params": params}),
                         &format!("cfxm:{}:{}:{}", cid.0, m.id, p.id),
                     );
+                    // Shown in the plug-in's own editor too, if it is open.
+                    if let (Some(slot), Some(pl)) = (track.map(|t| (t, cid.0, m.id)), &app.player) {
+                        pl.clip_editor_set_param(slot, p.id, v);
+                    }
                 }
             }
         });

@@ -857,11 +857,27 @@ pub struct ClipModule {
     pub params: std::collections::BTreeMap<String, f32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
+    /// A hosted (CLAP or VST3) module's own state beyond its parameters, as an insert's
+    /// [`crate::Insert::state`] (standard base64): read back from the running instance before a
+    /// save, a bounce or a copy, and restored into the instance made for the clip. Sessions from
+    /// before it have none (parameters only), and load as they did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 impl ClipModule {
     pub fn new(id: u32, plugin: impl Into<String>) -> ClipModule {
-        ClipModule { id, plugin: plugin.into(), params: std::collections::BTreeMap::new(), bypass: false }
+        ClipModule { id, plugin: plugin.into(), params: std::collections::BTreeMap::new(), bypass: false, state: None }
+    }
+
+    /// The decoded [`ClipModule::state`] (`None` when unset or not valid base64).
+    pub fn state_bytes(&self) -> Option<Vec<u8>> {
+        self.state.as_deref().and_then(crate::b64::decode)
+    }
+
+    /// Stores a plugin state blob (base64-encoded); an empty blob clears it.
+    pub fn set_state_bytes(&mut self, data: &[u8]) {
+        self.state = (!data.is_empty()).then(|| crate::b64::encode(data));
     }
 }
 

@@ -84,7 +84,7 @@ const SCOUT_RETURNS: usize = 8;
 
 /// The realtime audio thread marker lives in the mix engine, which carries it into the strips it
 /// renders on worker threads; the cpal callbacks here set it.
-pub use soundcraft_mix::{SlotKey, mark_audio_thread, on_audio_thread};
+pub use soundcraft_mix::{ClipSlot, SlotKey, mark_audio_thread, on_audio_thread};
 
 /// Meter values for the UI.
 #[derive(Debug, Clone, Default)]
@@ -98,6 +98,9 @@ pub type PluginStates = Vec<(TrackId, SlotKey, Vec<u8>)>;
 
 /// A parameter edit made in a plugin's own editor: `(track, slot, param id, value)`.
 pub type EditorEdit = (TrackId, SlotKey, String, f32);
+
+/// A parameter edit made in a Clip Effects module's own editor: the module, param id, value.
+pub type ClipEditorEdit = (ClipSlot, String, f32);
 
 /// Audio to preview ([`Player::preview`]): planar, at `rate`.
 #[derive(Debug, Default)]
@@ -2057,6 +2060,12 @@ struct Side {
     /// The built-in instances and Clip Effects modules handed to the audio thread's engine (made
     /// here, so its `sync` never creates one).
     builtins: BuiltinPrep,
+    /// Editor handles and state readers of the hosted Clip Effects modules handed over (made by
+    /// `builtins`, kept here: never on the audio thread).
+    clip_editors: HashMap<ClipSlot, Box<dyn PluginEditor>>,
+    clip_states: BTreeMap<ClipSlot, Box<dyn PluginStateReader>>,
+    /// The clip editors open at the last [`Player::clip_editors_closed`].
+    clip_open: HashSet<ClipSlot>,
 }
 
 /// Third-party instances being made ahead of a session's hand-over (the progress window's
@@ -2186,6 +2195,9 @@ impl Side {
             loan: None,
             preload: None,
             builtins: BuiltinPrep::default(),
+            clip_editors: HashMap::new(),
+            clip_states: BTreeMap::new(),
+            clip_open: HashSet::new(),
         }
     }
 
@@ -2249,6 +2261,9 @@ impl Side {
             return;
         }
         let mut instances = self.builtins.prepare(&s, self.max_block);
+        // The hosted clip modules' editors and state readers stay here.
+        let handles = std::mem::take(&mut instances.clip_handles);
+        self.seat_clip_handles(&s, handles);
         instances.instances.extend(self.prepare(&s));
         let band = self.prepare_band(&s);
         // The disk thread keeps this session's audio played from disk ready around the playhead.
@@ -3030,7 +3045,11 @@ impl Player {
     /// Closes every plugin editor window (main thread). Call before replacing the player: its
     /// instances may be dropped on the audio thread, where editor windows cannot be closed.
     pub fn close_editors(&self) {
-        for e in self.side().editors.values_mut() {
+        let mut side = self.side();
+        for e in side.editors.values_mut() {
+            e.close();
+        }
+        for e in side.clip_editors.values_mut() {
             e.close();
         }
     }
@@ -3054,7 +3073,8 @@ impl Player {
     }
 
     pub fn any_editor_open(&self) -> bool {
-        self.side().editors.values().any(|e| e.is_open())
+        let side = self.side();
+        side.editors.values().any(|e| e.is_open()) || side.clip_editors.values().any(|e| e.is_open())
     }
 
     /// Shows a parameter change made elsewhere in the plugin's open editor.
@@ -3068,6 +3088,66 @@ impl Player {
     /// (see `PluginEditor::value_text`). Main thread only.
     pub fn editor_value_text(&self, track: TrackId, slot: SlotKey, id: &str, value: f32) -> Option<String> {
         self.side().editors.get_mut(&(track, slot))?.value_text(id, value)
+    }
+
+    /// True when the hosted Clip Effects module in `slot` (track, clip, module) has its own editor.
+    pub fn has_clip_editor(&self, slot: ClipSlot) -> bool {
+        self.side().clip_editors.contains_key(&slot)
+    }
+
+    /// Opens a hosted Clip Effects module's own editor window. Main thread only.
+    pub fn open_clip_editor(&self, slot: ClipSlot) -> Result<(), String> {
+        let mut side = self.side();
+        let e = side.clip_editors.get_mut(&slot).ok_or_else(|| "this plug-in has no editor (or it is not loaded yet)".to_string())?;
+        e.open()
+    }
+
+    pub fn close_clip_editor(&self, slot: ClipSlot) {
+        if let Some(e) = self.side().clip_editors.get_mut(&slot) {
+            e.close();
+        }
+    }
+
+    pub fn clip_editor_open(&self, slot: ClipSlot) -> bool {
+        self.side().clip_editors.get(&slot).is_some_and(|e| e.is_open())
+    }
+
+    /// Shows a Clip Effects module's parameter changed elsewhere (its slider) in its open editor.
+    pub fn clip_editor_set_param(&self, slot: ClipSlot, id: &str, value: f32) {
+        if let Some(e) = self.side().clip_editors.get_mut(&slot) {
+            e.set_param(id, value);
+        }
+    }
+
+    /// Services the open Clip Effects editors (call every UI frame, as [`Player::idle`]):
+    /// the parameter edits made in them since the last call.
+    pub fn clip_editor_edits(&self) -> Vec<ClipEditorEdit> {
+        let mut out = Vec::new();
+        for (&slot, e) in self.side().clip_editors.iter_mut() {
+            out.extend(e.idle().into_iter().map(|(id, v)| (slot, id, v)));
+        }
+        out
+    }
+
+    /// The Clip Effects editors closed since the last call (by the user, or because their
+    /// module went), so their state can be stored on the clip. Call every UI frame.
+    pub fn clip_editors_closed(&self) -> Vec<ClipSlot> {
+        let mut side = self.side();
+        let open: HashSet<ClipSlot> = side.clip_editors.iter().filter(|(_, e)| e.is_open()).map(|(k, _)| *k).collect();
+        let closed = side.clip_open.difference(&open).copied().collect();
+        side.clip_open = open;
+        closed
+    }
+
+    /// Reads the live state of every hosted Clip Effects module (main thread), to store on its
+    /// [`soundcraft_model::ClipModule::state`] before a save, a bounce or a copy.
+    pub fn capture_clip_states(&self) -> Vec<(ClipSlot, Vec<u8>)> {
+        self.side().clip_states.iter_mut().filter_map(|(&k, r)| Some((k, r.save_state()?))).collect()
+    }
+
+    /// [`Player::capture_clip_states`] for one module.
+    pub fn capture_clip_state(&self, slot: ClipSlot) -> Option<Vec<u8>> {
+        self.side().clip_states.get_mut(&slot)?.save_state()
     }
 
     /// Arms a Scout capture (build the rig on this thread with `ScoutRig::new`). The audio thread
@@ -3551,6 +3631,40 @@ fn copy_meter_snapshot(source: &MeterSnapshot, out: &mut MeterSnapshot) {
 }
 
 impl Side {
+    /// Forgets the editors and state readers of hosted clip modules `s` no longer plays (an open
+    /// editor closes), then keeps those of the modules just made (replacing any older one).
+    fn seat_clip_handles(&mut self, s: &Session, handles: Vec<soundcraft_mix::ClipHandle>) {
+        let plays = |&(t, c, m): &ClipSlot| {
+            s.track(t).and_then(|tr| tr.clips().iter().find(|x| x.id.0 == c)).is_some_and(|x| {
+                x.is_audio()
+                    && x.live_modules()
+                        .iter()
+                        .take(soundcraft_model::MAX_CLIP_MODULES)
+                        .any(|y| y.id == m && soundcraft_mix::is_third_party(&y.plugin))
+            })
+        };
+        let gone: Vec<ClipSlot> = self.clip_editors.keys().chain(self.clip_states.keys()).filter(|k| !plays(k)).copied().collect();
+        for k in gone {
+            self.forget_clip(k);
+        }
+        for h in handles {
+            self.forget_clip(h.slot);
+            if let Some(e) = h.editor {
+                self.clip_editors.insert(h.slot, e);
+            }
+            if let Some(r) = h.reader {
+                self.clip_states.insert(h.slot, r);
+            }
+        }
+    }
+
+    fn forget_clip(&mut self, k: ClipSlot) {
+        self.clip_states.remove(&k);
+        if let Some(mut e) = self.clip_editors.remove(&k) {
+            e.close();
+        }
+    }
+
     fn capture_state(&mut self, key: (TrackId, SlotKey)) -> Option<Vec<u8>> {
         if self.refused.contains(&key) {
             return None;
@@ -6938,11 +7052,159 @@ mod tests {
     static PRELOAD_MADE_ON: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
     fn preload_factory(id: &str) -> Option<Box<dyn Plugin>> {
+        if id == CLIP_FAKE {
+            return Some(Box::new(ClipFake::new()));
+        }
         if !id.starts_with("clap:test.preload") {
             return None;
         }
         PRELOAD_MADE_ON.lock().unwrap().push((id.to_string(), std::thread::current().name().unwrap_or("?").to_string()));
         Some(Box::new(DropSpy { inner: soundcraft_dsp::create("gain").unwrap(), dropped_on: Arc::new(Mutex::new(None)) }))
+    }
+
+    /// A stand-in hosted (CLAP) effect for clips: the built-in gain with a state of its own (a
+    /// blob it restores and reports), an editor window, and the threads it was made on.
+    const CLIP_FAKE: &str = "clap:test.clipfake";
+    static CLIP_FAKE_INFO: std::sync::OnceLock<soundcraft_dsp::PluginInfo> = std::sync::OnceLock::new();
+    /// `(state it was made with, thread)` for every instance the factory made.
+    static CLIP_FAKE_MADE: Mutex<Vec<(Option<Vec<u8>>, String)>> = Mutex::new(Vec::new());
+
+    struct ClipFake {
+        inner: Box<dyn Plugin>,
+        state: Arc<Mutex<Vec<u8>>>,
+        open: Arc<AtomicBool>,
+        made: usize,
+    }
+
+    impl ClipFake {
+        fn new() -> ClipFake {
+            let mut made = CLIP_FAKE_MADE.lock().unwrap();
+            made.push((None, std::thread::current().name().unwrap_or("?").to_string()));
+            ClipFake {
+                inner: soundcraft_dsp::create("gain").unwrap(),
+                state: Arc::new(Mutex::new(b"defaults".to_vec())),
+                open: Arc::new(AtomicBool::new(false)),
+                made: made.len() - 1,
+            }
+        }
+    }
+
+    struct ClipFakeEditor(Arc<AtomicBool>, bool);
+
+    impl PluginEditor for ClipFakeEditor {
+        fn open(&mut self) -> Result<(), String> {
+            self.0.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+        fn close(&mut self) {
+            self.0.store(false, Ordering::Relaxed);
+        }
+        fn is_open(&self) -> bool {
+            self.0.load(Ordering::Relaxed)
+        }
+        fn idle(&mut self) -> Vec<(String, f32)> {
+            // One knob turn in the window, once it is open.
+            if self.is_open() && !std::mem::replace(&mut self.1, true) { vec![("gain".into(), -9.0)] } else { Vec::new() }
+        }
+    }
+
+    impl Plugin for ClipFake {
+        fn info(&self) -> &'static soundcraft_dsp::PluginInfo {
+            CLIP_FAKE_INFO.get_or_init(|| soundcraft_dsp::PluginInfo { id: CLIP_FAKE, name: "Clip Fake", ..self.inner.info().clone() })
+        }
+        fn prepare(&mut self, sr: f32, mb: usize, ch: usize) {
+            self.inner.prepare(sr, mb, ch);
+        }
+        fn reset(&mut self) {
+            self.inner.reset();
+        }
+        fn set_param(&mut self, id: &str, v: f32) -> bool {
+            self.inner.set_param(id, v)
+        }
+        fn param(&self, id: &str) -> Option<f32> {
+            self.inner.param(id)
+        }
+        fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+            self.inner.process(io, frames);
+        }
+        fn save_state(&mut self) -> Option<Vec<u8>> {
+            Some(self.state.lock().unwrap().clone())
+        }
+        fn load_state(&mut self, data: &[u8]) -> bool {
+            *self.state.lock().unwrap() = data.to_vec();
+            if let Some(m) = CLIP_FAKE_MADE.lock().unwrap().get_mut(self.made) {
+                m.0 = Some(data.to_vec());
+            }
+            true
+        }
+        fn editor(&mut self) -> Option<Box<dyn PluginEditor>> {
+            Some(Box::new(ClipFakeEditor(Arc::clone(&self.open), false)))
+        }
+        fn state_reader(&mut self) -> Option<Box<dyn PluginStateReader>> {
+            let state = Arc::clone(&self.state);
+            Some(Box::new(move || Some(state.lock().unwrap().clone())))
+        }
+    }
+
+    /// A session with one audio clip carrying the fake hosted effect (with `state`, if any).
+    fn clip_fake_session(state: Option<&[u8]>) -> (Session, TrackId, u64) {
+        use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 4096]] };
+        s.pool.insert(SourceId(900), Arc::new(SourceAudio::new(buf)));
+        let id = s.new_clip_id();
+        let mut c = Clip::audio(id, "clip", SourceId(900), 0, 0, 4096);
+        let mut m = soundcraft_model::ClipModule::new(1, CLIP_FAKE);
+        if let Some(st) = state {
+            m.set_state_bytes(st);
+        }
+        c.modules.push(m);
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(c);
+        (s, t, id.0)
+    }
+
+    /// A hosted effect on a clip: made on the control thread from the clip slot's saved state
+    /// (never on the audio thread), its own editor opens from the player, an edit in it comes
+    /// back as a parameter of the clip's module, its live state is read back for saving, and
+    /// the editor closes when the module is taken off. A clip slot saved with parameters only
+    /// (an older session) makes it from its defaults.
+    #[test]
+    fn a_clip_effects_plug_in_has_its_editor_and_its_state_kept_per_slot() {
+        soundcraft_mix::set_test_plugin_factory(Some(preload_factory));
+        let (s, t, clip) = clip_fake_session(Some(b"saved"));
+        let slot = (t, clip, 1);
+        let (player, mut st) = Player::offline(Arc::new(Session::default()), 48_000, 256, 2);
+        assert!(!player.has_clip_editor(slot));
+        player.update_session(Arc::new(s.clone()));
+        let me = std::thread::current().name().unwrap_or("?").to_string();
+        let made: Vec<_> = CLIP_FAKE_MADE.lock().unwrap().iter().filter(|(st, _)| st.as_deref() == Some(b"saved")).cloned().collect();
+        assert_eq!(made, vec![(Some(b"saved".to_vec()), me)], "made once, here, from the slot's state");
+        // The audio thread seats it and makes none of its own.
+        let mut out = vec![0.0f32; 2 * 256];
+        for _ in 0..4 {
+            st.fill(&mut out, 2);
+        }
+        assert_eq!(st.mix.made_in_sync(), 0, "nothing made on the audio thread");
+        // Its own editor, from the Clip Effects window.
+        assert!(player.has_clip_editor(slot) && !player.clip_editor_open(slot));
+        player.open_clip_editor(slot).unwrap();
+        assert!(player.clip_editor_open(slot) && player.any_editor_open());
+        assert_eq!(player.clip_editor_edits(), vec![(slot, "gain".to_string(), -9.0)], "a knob turned in it");
+        // The live state, for the save.
+        assert_eq!(player.capture_clip_state(slot).as_deref(), Some(&b"saved"[..]));
+        assert_eq!(player.capture_clip_states(), vec![(slot, b"saved".to_vec())]);
+        assert!(player.clip_editors_closed().is_empty());
+        // The module taken off: its editor closes and is forgotten.
+        let mut gone = s.clone();
+        gone.find_clip_mut(soundcraft_model::ClipId(clip)).unwrap().modules.clear();
+        player.update_session(Arc::new(gone));
+        assert!(!player.has_clip_editor(slot) && player.capture_clip_state(slot).is_none());
+        assert_eq!(player.clip_editors_closed(), vec![slot], "reported closed, so its state is stored");
+        // A slot saved with parameters only: made from the plug-in's defaults.
+        let (old, t2, clip2) = clip_fake_session(None);
+        player.update_session(Arc::new(old));
+        assert_eq!(player.capture_clip_state((t2, clip2, 1)).as_deref(), Some(&b"defaults"[..]));
     }
 
     /// A session with `n` fake hosted modules on one track.

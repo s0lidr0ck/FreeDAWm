@@ -27,7 +27,7 @@ use crate::{
     BusBuf, ClipFx, HEADROOM_S, MAX_CHANNELS, ModuleMeter, RELEASED_RESERVE, SlotKey, Strip, StripMeter, clip_fx_params, create_instance,
     external_midi, is_third_party, main_channels, reserved, strip_channels,
 };
-use soundcraft_dsp::Plugin;
+use soundcraft_dsp::{Plugin, PluginEditor, PluginStateReader};
 use soundcraft_model::{BusId, Route, Session, Track, TrackId, TrackKind};
 use std::collections::{HashMap, HashSet};
 
@@ -151,12 +151,30 @@ pub struct PreparedClipFx {
     pub mods: [Option<(u32, Box<dyn Plugin>)>; soundcraft_model::MAX_CLIP_MODULES],
 }
 
+/// A hosted Clip Effects module's place: track, clip (`ClipId.0`) and module id.
+pub type ClipSlot = (TrackId, u64, u32);
+
+/// What the control thread keeps of a hosted Clip Effects module it made: its own editor window
+/// and its state reader (as a track insert's, see `Plugin::editor`), taken before the instance
+/// goes to the audio thread. The host takes these out of [`Prepared`] before handing it over:
+/// they never go to the audio thread.
+pub struct ClipHandle {
+    pub slot: ClipSlot,
+    /// The plug-in's name (for the editor window's title).
+    pub name: String,
+    pub editor: Option<Box<dyn PluginEditor>>,
+    pub reader: Option<Box<dyn PluginStateReader>>,
+}
+
 /// Everything made off the audio thread for one session hand-over.
 #[derive(Default)]
 pub struct Prepared {
     /// Plugin instances (hosted and built-in), see [`crate::PreparedInstance`].
     pub instances: Vec<crate::PreparedInstance>,
     pub clip_fx: Vec<PreparedClipFx>,
+    /// The editors and state readers of the hosted Clip Effects modules in `clip_fx` (stay on
+    /// the control thread: take them out before handing the rest over).
+    pub clip_handles: Vec<ClipHandle>,
     /// Strips of tracks the engine does not have yet.
     pub strips: Vec<PreparedStrip>,
     /// Buffers of busses the engine does not have yet.
@@ -167,7 +185,12 @@ pub struct Prepared {
 
 impl Prepared {
     pub fn is_empty(&self) -> bool {
-        self.instances.is_empty() && self.clip_fx.is_empty() && self.strips.is_empty() && self.busses.is_empty() && self.room.is_none()
+        self.instances.is_empty()
+            && self.clip_fx.is_empty()
+            && self.clip_handles.is_empty()
+            && self.strips.is_empty()
+            && self.busses.is_empty()
+            && self.room.is_none()
     }
 }
 
@@ -277,7 +300,20 @@ impl BuiltinPrep {
                     let fx = ClipFx::new(sr, ch);
                     let mut mods: [Option<(u32, Box<dyn Plugin>)>; soundcraft_model::MAX_CLIP_MODULES] = Default::default();
                     for (slot, (id, plugin)) in mods.iter_mut().zip(new_mods) {
-                        *slot = fx.make(plugin).map(|p| (*id, p));
+                        // A hosted module from its saved state, its editor and state reader kept here.
+                        let hosted = is_third_party(plugin);
+                        let state = c.modules.iter().find(|m| m.id == *id).filter(|_| hosted).and_then(|m| m.state_bytes());
+                        *slot = fx.make_with(plugin, state.as_deref()).map(|mut p| {
+                            if hosted {
+                                out.clip_handles.push(ClipHandle {
+                                    slot: (t.id, c.id.0, *id),
+                                    name: p.info().name.to_string(),
+                                    editor: p.editor(),
+                                    reader: p.state_reader(),
+                                });
+                            }
+                            (*id, p)
+                        });
                     }
                     out.clip_fx.push(PreparedClipFx {
                         track: t.id,

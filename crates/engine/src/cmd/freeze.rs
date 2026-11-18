@@ -203,7 +203,7 @@ pub(crate) fn drop_unused_source(s: &mut Session, src: SourceId) {
 
 /// Commands that may change a frozen track's frozen parts: freezing and thawing, undo and redo
 /// (which restore whole documents), and storing a hosted plugin's own state (not an edit).
-const EXEMPT: [&str; 5] = ["track.freeze", "track.unfreeze", "edit.undo", "edit.redo", "mix.module_state"];
+const EXEMPT: [&str; 6] = ["track.freeze", "track.unfreeze", "edit.undo", "edit.redo", "mix.module_state", "clip.module_state"];
 
 /// What a refused record enable says.
 pub const UNFREEZE_TO_RECORD: &str = "Unfreeze the track to record on it";

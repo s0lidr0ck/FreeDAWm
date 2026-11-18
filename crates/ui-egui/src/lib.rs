@@ -2269,6 +2269,7 @@ impl SoundApp {
     pub fn capture_plugin_states(&mut self) {
         self.sync_player();
         let Some(p) = &self.player else { return };
+        let clips = p.capture_clip_states();
         for (t, key, data) in p.capture_states() {
             let module = match key {
                 SlotKey::Instrument => json!("instrument"),
@@ -2278,6 +2279,36 @@ impl SoundApp {
             if let Err(e) = self.engine.execute("mix.module_state", &json!({"track": t.0, "module": module, "state": state})) {
                 log::warn!("storing plugin state: {e}");
             }
+        }
+        // The hosted Clip Effects modules' states too, on their clips.
+        for (slot, data) in clips {
+            self.store_clip_state(slot, &data);
+        }
+    }
+
+    /// Reads one hosted Clip Effects module's live state and stores it on the clip (before its
+    /// module is taken off, and when its editor closes).
+    pub(crate) fn capture_clip_slot(&mut self, slot: soundcraft_playback::ClipSlot) {
+        self.sync_player();
+        if let Some(data) = self.player.as_ref().and_then(|p| p.capture_clip_state(slot)) {
+            self.store_clip_state(slot, &data);
+        }
+    }
+
+    /// `clip.module_state` (no undo step), unless the clip has that state already.
+    fn store_clip_state(&mut self, (_, clip, module): soundcraft_playback::ClipSlot, data: &[u8]) {
+        let stored = self
+            .engine
+            .session()
+            .find_clip(soundcraft_model::ClipId(clip))
+            .and_then(|(_, c)| c.modules.iter().find(|m| m.id == module).map(soundcraft_model::ClipModule::state_bytes));
+        // The module is gone, or already holds this state.
+        if stored.as_ref().is_none_or(|s| s.as_deref() == Some(data)) {
+            return;
+        }
+        let state = soundcraft_model::b64::encode(data);
+        if let Err(e) = self.engine.execute("clip.module_state", &json!({"clip": clip, "module": module, "state": state})) {
+            log::warn!("storing clip plug-in state: {e}");
         }
     }
 
@@ -2355,6 +2386,33 @@ impl SoundApp {
                     let _ = self.engine.execute_merged("mix.instrument_param", &json!({"track": t.0, "param": param, "value": value}), &key);
                 }
             }
+        }
+        self.apply_clip_editor_edits();
+    }
+
+    /// [`SoundApp::apply_editor_edits`] for the hosted Clip Effects modules' own editors: an edit
+    /// goes on the clip's module (`clip.module_set`, one undo step per gesture), and a closed
+    /// editor's state is stored on the clip.
+    fn apply_clip_editor_edits(&mut self) {
+        let Some(p) = &self.player else { return };
+        let (edits, closed) = (p.clip_editor_edits(), p.clip_editors_closed());
+        for ((_, clip, module), param, value) in edits {
+            let stored = self
+                .engine
+                .session()
+                .find_clip(soundcraft_model::ClipId(clip))
+                .and_then(|(_, c)| c.modules.iter().find(|m| m.id == module))
+                .and_then(|m| m.params.get(param.as_str()).copied());
+            if stored.is_some_and(|v| (v - value).abs() <= 1e-6 * v.abs().max(1.0)) {
+                continue;
+            }
+            let key = format!("cfxm:{clip}:{module}:{param}");
+            let mut params = serde_json::Map::new();
+            params.insert(param, json!(value));
+            let _ = self.engine.execute_merged("clip.module_set", &json!({"clips": [clip], "module": module, "params": params}), &key);
+        }
+        for slot in closed {
+            self.capture_clip_slot(slot);
         }
     }
 

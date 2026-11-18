@@ -89,7 +89,7 @@ mod prepare;
 mod rpn;
 pub mod rt;
 pub use live_midi::{HeldNotes, LIVE_MIDI_CAPACITY, LiveEvent, LiveMidi, MAX_MIDI_PORTS, MidiFilter, port_id};
-pub use prepare::{BuiltinPrep, Prepared, PreparedClipFx, PreparedStrip, RetiredStrips, StripRoom};
+pub use prepare::{BuiltinPrep, ClipHandle, ClipSlot, Prepared, PreparedClipFx, PreparedStrip, RetiredStrips, StripRoom};
 pub mod scout;
 pub use link::{LinkProblem, LinkRoute, describe_link, link_refusal, link_regressions, link_routes, link_routes_with, short_link_problem};
 mod sidechain;
@@ -1536,7 +1536,9 @@ impl MixEngine {
     /// (its third-party instances and a [`BuiltinPrep`]'s built-in ones and Clip Effects
     /// modules). Does not allocate unless the adopt tables must grow.
     pub fn adopt_prepared(&mut self, p: Prepared) {
-        let Prepared { instances, clip_fx, strips, busses, room } = p;
+        // `clip_handles` stays with the host (it takes them out before handing `p` over: an
+        // empty list, nothing to free here).
+        let Prepared { instances, clip_fx, strips, busses, room, clip_handles: _ } = p;
         self.adopt(instances);
         if let Some(r) = room {
             self.take_room(r);
@@ -4448,9 +4450,14 @@ impl ClipFx {
         }
     }
     fn make(&self, id: &str) -> Option<Box<dyn Plugin>> {
+        self.make_with(id, None)
+    }
+    /// [`ClipFx::make`] restoring a hosted module's saved `state` (its own, beyond its
+    /// parameters; [`soundcraft_model::ClipModule::state`]) before it is prepared.
+    fn make_with(&self, id: &str, state: Option<&[u8]>) -> Option<Box<dyn Plugin>> {
         // A hosted CLAP or VST3 module (expensive: never on the audio thread, see `make_modules`).
         if is_third_party(id) {
-            return create_instance_for(id, None, self.sr, 16_384, self.ch.max(1), self.offline).map(|n| n.plugin);
+            return create_instance_for(id, state, self.sr, 16_384, self.ch.max(1), self.offline).map(|n| n.plugin);
         }
         soundcraft_dsp::create(id).map(|mut p| {
             p.prepare(self.sr, 16_384, self.ch.max(1));
@@ -4481,7 +4488,7 @@ impl ClipFx {
             if self.mods.get(i).is_some_and(Option::is_none)
                 && clip_module_plugin(&c.plugin).is_some()
                 && (hosted || !is_third_party(&c.plugin))
-                && let Some(plugin) = self.make(&c.plugin)
+                && let Some(plugin) = self.make_with(&c.plugin, if is_third_party(&c.plugin) { c.state_bytes() } else { None }.as_deref())
                 && let Some(slot) = self.mods.get_mut(i)
             {
                 *slot = Some(ClipMod { id: c.id, on: true, fresh: true, plugin });
