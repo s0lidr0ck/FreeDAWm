@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Lyrics",
             [],
             None,
-            "{text (the whole sheet, one line per line; \"[Verse 1]\" lines are headings)} or {lines: [{id?, text}]} — sets the lyric sheet. Unchanged and edited lines keep their ids (and so their markers on the Lyrics ruler); a line given with an id keeps it",
+            "{text (the whole sheet, one line per line; \"{Verse 1}\" lines are headings, chords inline as [Am] before their syllable, a line of only chords is an instrumental bar)} or {lines: [{id?, text}]} — sets the lyric sheet. Unchanged and edited lines keep their ids (and so their markers on the Lyrics ruler); a line given with an id keeps it",
             always,
             sheet_set
         ),
@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Lyric Sheet",
             [],
             None,
-            "{} — the lyric sheet: text, and per line id, text, number (lyric lines only), heading, syllables, rhyme letter, rhyme word, rhyming words [{word, start, end (bytes), kinds: perfect|slant|multi|internal}], stress (\"da-DUM-da\"), alternates {count, active, versions} when the line has some, fit against the same line of the section's first take {partner (line number), section, flag (why it does not fit, or null)}",
+            "{} — the lyric sheet: text, and per line id, text, number (lyric lines only), heading, chord_line (only chords), chords [{name, start, end (bytes of the [..]), known}] (bracketed text; known: a chord name, else literal words), syllables, rhyme letter, rhyme word, rhyming words [{word, start, end (bytes), kinds: perfect|slant|multi|internal}], stress (\"da-DUM-da\"), alternates {count, active, versions} when the line has some, fit against the same line of the section's first take {partner (line number), section, flag (why it does not fit, or null)}",
             always,
             sheet_get
         ),
@@ -113,6 +113,11 @@ pub(crate) fn sheet_json(e: &Engine) -> Value {
                 "text": l.text,
                 "number": i.number,
                 "heading": i.heading,
+                "chord_line": i.chords,
+                "chords": soundcraft_model::inline_chords(&l.text)
+                    .into_iter()
+                    .map(|c| json!({"name": c.name, "start": c.start, "end": c.end, "known": c.known}))
+                    .collect::<Vec<_>>(),
                 "syllables": i.syllables,
                 "rhyme": i.rhyme.map(String::from),
                 "rhymes": i.rhymes,
@@ -144,7 +149,7 @@ mod tests {
     use serde_json::json;
 
     const SONG: &str =
-        "[Verse 1]\nWhen the night was long\nAnd my heart could not be still\nYou were there to sing the song\nStanding strong upon the hill";
+        "{Verse 1}\nWhen the night was long\nAnd my heart could not be still\nYou were there to sing the song\nStanding strong upon the hill";
 
     fn ids(e: &Engine) -> Vec<u64> {
         e.session().lyric_sheet.lines.iter().map(|l| l.id).collect()

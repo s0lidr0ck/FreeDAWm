@@ -54,7 +54,7 @@ fn has_places(e: &Engine) -> std::result::Result<(), String> {
 }
 
 /// The lyric line `line` (id) or `number` names.
-fn line_param(s: &Session, cmd: &str, p: &Value) -> Result<Option<u64>> {
+pub(crate) fn line_param(s: &Session, cmd: &str, p: &Value) -> Result<Option<u64>> {
     let sheet = &s.lyric_sheet;
     if let Some(id) = p.get("line").and_then(Value::as_u64) {
         return sheet.number_of(id).map(|_| Some(id)).ok_or_else(|| bad(cmd, format!("no lyric line with id {id}")));
@@ -298,7 +298,7 @@ mod tests {
     use serde_json::json;
 
     const SONG: &str =
-        "[Verse 1]\nWhen the night was long\nAnd my heart could not be still\nYou were there to sing the song\nStanding strong upon the hill";
+        "{Verse 1}\nWhen the night was long\nAnd my heart could not be still\nYou were there to sing the song\nStanding strong upon the hill";
 
     #[test]
     fn placing_retitles_deletes_and_undoes_with_the_line() {

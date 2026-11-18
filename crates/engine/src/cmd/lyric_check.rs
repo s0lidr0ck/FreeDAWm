@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn ai_prompt_command() {
         let mut e = Engine::default();
-        e.execute("lyrics.sheet_set", &json!({"text": "[Verse 1]\nWhen the night was long\nYou sang a song"})).unwrap();
+        e.execute("lyrics.sheet_set", &json!({"text": "{Verse 1}\nWhen the night was long\nYou sang a song"})).unwrap();
         let v = e.execute("lyrics.ai_prompt", &json!({"lines": [2]})).unwrap();
         assert!(v["request"].as_str().unwrap().contains("rhyme with \u{2018}long\u{2019}"));
         assert!(v["prompt"].as_str().unwrap().contains("## Rhyme scheme"));
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn hook_and_repetition_counts() {
         let mut e = Engine::default();
-        e.execute("lyrics.sheet_set", &json!({"text": "[Chorus]\nJesus, the only one\nYou are the only one\nJesus"})).unwrap();
+        e.execute("lyrics.sheet_set", &json!({"text": "{Chorus}\nJesus, the only one\nYou are the only one\nJesus"})).unwrap();
         let v = e.execute("lyrics.hook_set", &json!({"phrase": "The only one"})).unwrap();
         assert_eq!(v["count"], 2);
         assert_eq!(v["hits"][1]["number"], 2);

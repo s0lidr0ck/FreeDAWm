@@ -4,7 +4,7 @@
 //! a sheet's lines; offline rhyme suggestions.
 
 use crate::lexicon::{self, WordLookup};
-use soundcraft_model::{LineKind, line_kinds};
+use soundcraft_model::{LineKind, line_kinds, strip_chords};
 
 /// Words the vowel-group count gets wrong.
 const SYLLABLE_EXCEPTIONS: &[(&str, u32)] = &[
@@ -517,6 +517,8 @@ pub struct LineInfo {
     /// The lyric line number (none for headings and blank lines).
     pub number: Option<u32>,
     pub heading: bool,
+    /// A line of only chords (an instrumental bar).
+    pub chords: bool,
     pub syllables: u32,
     /// The rhyme letter (lines whose end words rhyme share one).
     pub rhyme: Option<char>,
@@ -532,14 +534,25 @@ pub fn analyse<'a>(lines: impl IntoIterator<Item = &'a str> + Clone) -> Vec<Line
     let mut keys: Vec<String> = Vec::new();
     let mut infos: Vec<(LineInfo, Option<usize>)> = Vec::new();
     for (text, kind) in lines.into_iter().zip(kinds) {
-        let mut info = LineInfo { number: None, heading: kind == LineKind::Heading, syllables: 0, rhyme: None, rhymes: false, word: None };
+        let mut info = LineInfo {
+            number: None,
+            heading: kind == LineKind::Heading,
+            chords: kind == LineKind::Chords,
+            syllables: 0,
+            rhyme: None,
+            rhymes: false,
+            word: None,
+        };
         let mut slot = None;
         if let LineKind::Lyric(n) = kind {
+            // The words as sung: chords are no words (positions mapped back to the line).
+            let sung = strip_chords(text);
+            let text = sung.text.as_str();
             info.number = Some(n);
             info.syllables = line_syllables(text);
             if let Some(w) = end_word(text) {
                 let at = text.rfind(w).unwrap_or(0);
-                info.word = Some((at, at + w.len()));
+                info.word = Some((sung.start_in_line(at), sung.end_in_line(at + w.len())));
                 if let Some(k) = rhyme_key(w) {
                     let i = keys.iter().position(|x| *x == k).unwrap_or_else(|| {
                         keys.push(k);
@@ -744,13 +757,13 @@ mod tests {
     #[test]
     fn lines_get_letters_numbers_and_words() {
         let sheet = [
-            "[Verse 1]",
+            "{Verse 1}",
             "When the night was long",
             "And my heart could not be still",
             "You were there to sing the song",
             "Standing strong upon the hill",
             "",
-            "[Chorus]",
+            "{Chorus}",
             "Jesus, the only one",
             "Jesus, the only one",
             "Nothing else",
@@ -765,6 +778,30 @@ mod tests {
         assert!(a[1].rhymes && !a[9].rhymes);
         assert_eq!(a[1].word.and_then(|(s, e)| sheet[1].get(s..e)), Some("long"));
         assert_eq!(a[7].word.and_then(|(s, e)| sheet[7].get(s..e)), Some("one"));
+    }
+
+    #[test]
+    fn chords_are_no_words() {
+        lexicon::wait();
+        // The same verse with chords inline and a chord-only bar between: the same numbers,
+        // syllables and letters; the rhyme word found in the line with its chords.
+        let plain = ["{Verse 1}", "When the night was long", "And my heart could not be still", "You were there to sing the song"];
+        let chorded = [
+            "{Verse 1}",
+            "[Am]When the night was [G]long",
+            "[F]  [C/E] [Dm7]",
+            "And my [C]heart could not be [G]still",
+            "You were there to sing the [Am]song",
+        ];
+        let (a, b) = (analyse(plain.iter().copied()), analyse(chorded.iter().copied()));
+        assert!(b[2].chords && b[2].number.is_none() && b[2].syllables == 0 && b[2].rhyme.is_none());
+        let strip = |v: &[LineInfo]| v.iter().filter(|i| !i.chords).map(|i| (i.number, i.syllables, i.rhyme)).collect::<Vec<_>>();
+        assert_eq!(strip(&a), strip(&b));
+        assert_eq!(b[1].word.and_then(|(s, e)| chorded[1].get(s..e)), Some("long"));
+        assert_eq!(b[4].word.and_then(|(s, e)| chorded[4].get(s..e)), Some("song"));
+        assert_eq!(b[3].word.and_then(|(s, e)| chorded[3].get(s..e)), Some("still"));
+        // An unknown bracket stays as words.
+        assert_eq!(analyse(["[Hey] you"].iter().copied())[0].syllables, 2);
     }
 
     #[test]

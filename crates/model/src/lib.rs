@@ -27,6 +27,7 @@ pub mod rate_change;
 mod scout;
 mod session;
 mod sheet;
+pub mod sheet_chords;
 mod snapshot;
 mod solo;
 mod source;
@@ -74,8 +75,9 @@ pub use session::{
 };
 pub use sheet::{
     Draft, LineKind, LyricPlace, LyricSheet, MAX_ALTERNATES, MAX_DRAFTS, MAX_SHEET_LINE_CHARS, MAX_SHEET_LINES, SheetLine, carry_ids, heading_name,
-    line_kinds, sheet_texts,
+    line_kinds, modern_line, sheet_texts,
 };
+pub use sheet_chords::{InlineChord, Stripped, inline_chords, is_chord_line, is_chord_name, legacy_heading, line_chords, strip_chords, sung_text};
 pub use snapshot::{MAX_SNAPSHOTS, MixSnapshot, SNAPSHOT_SECTIONS, SnapshotStrip};
 pub use solo::SoloScope;
 pub use source::{AssetData, AssetPool, SampleCursor, Source, SourceAudio, SourcePool, VideoSource};

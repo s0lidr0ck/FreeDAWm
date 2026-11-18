@@ -66,6 +66,7 @@ pub mod juke;
 mod looping;
 mod lyric_alt;
 pub mod lyric_check;
+pub mod lyric_chord_cmds;
 pub mod lyric_place;
 mod lyric_sheet;
 mod lyric_words;
@@ -333,6 +334,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lyric_alt::specs());
         v.extend(lyric_words::specs());
         v.extend(lyric_place::specs());
+        v.extend(lyric_chord_cmds::specs());
         v.extend(vocal::specs());
         v.extend(vocal_studio::specs());
         v.extend(comp::specs());

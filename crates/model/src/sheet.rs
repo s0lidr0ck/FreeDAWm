@@ -1,7 +1,10 @@
 //! The lyric sheet (Window › Lyrics): the song's words as written, one entry per line, each with a
 //! stable id so what refers to a line (its marker on the Lyrics ruler) survives edits around it.
-//! "[Verse 1]" lines are section headings; blank lines separate; every other line is a lyric line,
-//! numbered from 1 down the sheet.
+//! "{Verse 1}" lines are section headings; blank lines separate; a line of only chords ("[Am]
+//! [G]") is an instrumental bar; every other line is a lyric line, numbered from 1 down the sheet.
+//! Chords sit inline in square brackets before the syllable they fall on (see
+//! [`crate::sheet_chords`]). Sheets saved before headings were curly ("[Verse 1]") are converted
+//! as they are read ([`crate::legacy_heading`]).
 
 use serde::{Deserialize, Deserializer, Serialize};
 use soundcraft_time::Samples;
@@ -79,8 +82,10 @@ impl Draft {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
     Blank,
-    /// "[Verse 1]": a section heading.
+    /// "{Verse 1}": a section heading.
     Heading,
+    /// Only chords ("[Am]  [G]"): an instrumental bar, not numbered.
+    Chords,
     /// A lyric line, with its number (1-based).
     Lyric(u32),
 }
@@ -111,10 +116,10 @@ pub struct LyricSheet {
     pub hook: Option<String>,
 }
 
-/// The section name of a heading line ("[Verse 1]" is "Verse 1").
+/// The section name of a heading line ("{Verse 1}" is "Verse 1").
 pub fn heading_name(text: &str) -> Option<&str> {
     let t = text.trim();
-    t.strip_prefix('[').and_then(|r| r.strip_suffix(']')).map(str::trim)
+    t.strip_prefix('{').and_then(|r| r.strip_suffix('}')).map(str::trim)
 }
 
 impl LyricSheet {
@@ -188,6 +193,8 @@ pub fn line_kinds<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<LineKind>
                 LineKind::Blank
             } else if heading_name(t).is_some() {
                 LineKind::Heading
+            } else if crate::is_chord_line(t) {
+                LineKind::Chords
             } else {
                 n = n.saturating_add(1);
                 LineKind::Lyric(n)
@@ -289,14 +296,23 @@ fn likeness(a: &str, b: &str) -> f32 {
     shared.max(prefix)
 }
 
-/// Reads one line leniently (text and versions cleaned and capped).
+/// Reads one line leniently (text and versions cleaned and capped; an old "[Verse 1]" heading
+/// written as "{Verse 1}").
 fn tame_line(line: &mut SheetLine) {
-    line.text = clean_line(&line.text);
+    line.text = modern_line(clean_line(&line.text));
     line.alts.truncate(MAX_ALTERNATES);
     for a in &mut line.alts {
-        *a = clean_line(a);
+        *a = modern_line(clean_line(a));
     }
     line.sync_alts();
+}
+
+/// A line as written now: an old square-bracket heading becomes curly (capped like any line).
+pub fn modern_line(line: String) -> String {
+    match crate::legacy_heading(&line) {
+        Some(h) => clean_line(&h),
+        None => line,
+    }
 }
 
 fn pair_gap(old: &[SheetLine], new: &[String], gap_old: &[usize], gap_new: &[usize], ids: &mut [Option<u64>]) {
@@ -383,9 +399,9 @@ mod tests {
 
     #[test]
     fn alternates_follow_edits_and_are_tamed() {
-        let mut old = sheet(&["[Verse 1]", "When the night was long"]);
+        let mut old = sheet(&["{Verse 1}", "When the night was long"]);
         old[1].alts = vec!["When the night was long".into(), "When the day was gone".into()];
-        let new: Vec<String> = vec!["[Verse 1]".into(), "When the night was so long".into()];
+        let new: Vec<String> = vec!["{Verse 1}".into(), "When the night was so long".into()];
         let mut n = 0;
         let lines = carry_ids(&old, &new, || {
             n += 1;
@@ -415,32 +431,58 @@ mod tests {
 
     #[test]
     fn kinds_number_lyric_lines_only() {
-        let k = line_kinds(["[Verse 1]", "When the night was long", "", "And my heart", " [Chorus] ", "Jesus"]);
+        let k = line_kinds(["{Verse 1}", "When the night was long", "", "And my heart", " {Chorus} ", "Jesus"]);
         assert_eq!(k, vec![LineKind::Heading, LineKind::Lyric(1), LineKind::Blank, LineKind::Lyric(2), LineKind::Heading, LineKind::Lyric(3)]);
-        let s = LyricSheet { lines: sheet(&["[Verse 1]", "a", "b", "[Chorus]", "c"]), ..LyricSheet::default() };
+        let s = LyricSheet { lines: sheet(&["{Verse 1}", "a", "b", "{Chorus}", "c"]), ..LyricSheet::default() };
         assert_eq!(s.number_of(104), Some(3));
         assert_eq!(s.section_of(104).as_deref(), Some("Chorus"));
         assert_eq!(s.line_numbered(2).map(|l| l.id), Some(102));
+        // A chord-only line is an instrumental bar, not numbered; chords inside a line leave it a
+        // lyric line; a square-bracketed word is no heading any more.
+        let k = line_kinds(["{Intro}", "[Am]  [G/B] [C]", "[Am]Hello dark[G]ness", "[Verse 1]", "[a]"]);
+        assert_eq!(k, vec![LineKind::Heading, LineKind::Chords, LineKind::Lyric(1), LineKind::Lyric(2), LineKind::Lyric(3)]);
+    }
+
+    #[test]
+    fn old_square_bracket_headings_load_as_curly() {
+        // A sheet saved before headings were curly: its headings (in the lines, their alternates
+        // and drafts) are read as curly; chord lines and lyric lines stay as they were.
+        let old = serde_json::json!({
+            "lines": [{"id": 1, "text": "[Verse 1]"}, {"id": 2, "text": "When the night was long"}, {"id": 3, "text": "[Am]  [G]"},
+                {"id": 4, "text": " [Chorus] ", "alts": [" [Chorus] ", "[Refrain]"]}, {"id": 5, "text": "Jesus"}],
+            "placed": [{"line": 2, "start": 0, "end": 10}, {"line": 5, "start": 10, "end": 20}],
+            "drafts": [{"id": 9, "name": "First", "lines": [{"id": 1, "text": "[Verse 1]"}, {"id": 2, "text": "la"}]}],
+        });
+        let s = de_sheet(old).unwrap();
+        assert_eq!(s.text(), "{Verse 1}\nWhen the night was long\n[Am]  [G]\n {Chorus}\nJesus");
+        assert_eq!(s.lines[3].alts, vec![" {Chorus}".to_string(), "{Refrain}".to_string()]);
+        assert_eq!(s.drafts[0].text(), "{Verse 1}\nla");
+        assert_eq!(s.kinds(), vec![LineKind::Heading, LineKind::Lyric(1), LineKind::Chords, LineKind::Heading, LineKind::Lyric(2)]);
+        assert_eq!(s.section_of(5).as_deref(), Some("Chorus"));
+        assert_eq!(s.placed.len(), 2);
+        // Saved again and read back: unchanged (the conversion happens once).
+        let again = de_sheet(serde_json::to_value(&s).unwrap()).unwrap();
+        assert_eq!(again, s);
     }
 
     #[test]
     fn ids_survive_edits_inserts_and_deletes() {
-        let old = sheet(&["[Verse 1]", "When the night was long", "And my heart could not be still", "You were there"]);
+        let old = sheet(&["{Verse 1}", "When the night was long", "And my heart could not be still", "You were there"]);
         // An edited line keeps its id.
         assert_eq!(
-            carried(&old, &["[Verse 1]", "When the night was so long", "And my heart could not be still", "You were there"]),
+            carried(&old, &["{Verse 1}", "When the night was so long", "And my heart could not be still", "You were there"]),
             vec![100, 101, 102, 103]
         );
         // A line inserted above keeps the others'.
         assert_eq!(
-            carried(&old, &["New first line", "[Verse 1]", "When the night was long", "And my heart could not be still", "You were there"]),
+            carried(&old, &["New first line", "{Verse 1}", "When the night was long", "And my heart could not be still", "You were there"]),
             vec![1001, 100, 101, 102, 103]
         );
         // A deleted line takes only its own id with it.
-        assert_eq!(carried(&old, &["[Verse 1]", "When the night was long", "You were there"]), vec![100, 101, 103]);
+        assert_eq!(carried(&old, &["{Verse 1}", "When the night was long", "You were there"]), vec![100, 101, 103]);
         // An edit next to an insert pairs by words.
         assert_eq!(
-            carried(&old, &["[Verse 1]", "When the night was long", "A brand new line", "And my heart could never be still", "You were there"]),
+            carried(&old, &["{Verse 1}", "When the night was long", "A brand new line", "And my heart could never be still", "You were there"]),
             vec![100, 101, 1001, 102, 103]
         );
         // Duplicate texts keep distinct ids.

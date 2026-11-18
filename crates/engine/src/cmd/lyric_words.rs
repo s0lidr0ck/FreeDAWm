@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn replace_word_is_one_undo_step() {
         let mut e = Engine::default();
-        e.execute("lyrics.sheet_set", &json!({"text": "[Verse 1]\nStanding strong upon the hill"})).unwrap();
+        e.execute("lyrics.sheet_set", &json!({"text": "{Verse 1}\nStanding strong upon the hill"})).unwrap();
         let id = e.session().lyric_sheet.lines[1].id;
         let v = e.execute("lyrics.replace_word", &json!({"line": id, "start": 9, "end": 15, "word": "strong", "with": "tall"})).unwrap();
         assert_eq!(v["text"], "Standing tall upon the hill");
