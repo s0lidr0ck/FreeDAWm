@@ -63,14 +63,17 @@ fn press_drag_release(h: &mut Harness<'_, SoundApp>, from: Pos2, to: Pos2) {
 /// Every parameter of each synth with a panel has exactly one control on it, under its name.
 #[test]
 fn every_parameter_is_on_the_panel() {
-    for plugin in ["subtractive_synth"] {
+    for plugin in ["subtractive_synth", "wavetable_synth", "fm_synth"] {
         let (h, _) = harness(plugin);
         let info = soundcraft_dsp::plugin_info(plugin).unwrap();
         for p in info.params {
             // `get_by_label` fails on none and on more than one.
             let _ = h.get_by_label(p.name);
         }
-        let _ = h.get_by_label("Filter curve");
+        // The sources to patch with, and the panel's own switches.
+        for s in ["Amp Env", "Env 2", "LFO", "Velocity", "Mod Wheel", "Key", "Random", "Surprise", "Front", "Back", "Pin", "Follow"] {
+            let _ = h.get_by_label(s);
+        }
     }
 }
 
@@ -101,6 +104,52 @@ fn a_knob_drag_is_one_undo_step_and_a_double_click_resets() {
     }
     step(&mut h);
     assert_eq!(param(&h, t, "resonance"), 20.0, "the default");
+}
+
+fn slots(h: &Harness<'_, SoundApp>, t: TrackId) -> Vec<(String, String, f32)> {
+    let ins = h.state().engine.session().track(t).unwrap().instrument.clone().unwrap();
+    ins.modulation.slots.iter().map(|s| (s.source.clone(), s.dest.clone(), s.amount)).collect()
+}
+
+/// A source chip dragged onto a knob patches it (one undo step); dropped on a knob that takes no
+/// modulation, nothing changes.
+#[test]
+fn a_source_dragged_onto_a_knob_patches_it() {
+    let (mut h, t) = harness("subtractive_synth");
+    let (from, to) = (centre(&h, "LFO"), centre(&h, "Cutoff"));
+    press_drag_release(&mut h, from, to);
+    assert_eq!(slots(&h, t), vec![("lfo".to_string(), "cutoff".to_string(), 0.25)]);
+    h.state_mut().engine.execute("edit.undo", &json!({})).unwrap();
+    assert!(slots(&h, t).is_empty(), "one undo step");
+    for _ in 0..30 {
+        step(&mut h);
+    }
+    let (from, to) = (centre(&h, "Velocity"), centre(&h, "Filter Type"));
+    press_drag_release(&mut h, from, to);
+    assert!(slots(&h, t).is_empty(), "the filter type steps: not a destination");
+}
+
+/// Surprise adds two or three patches as one undo step; Back turns the panel round to its
+/// cables and Front back again.
+#[test]
+fn surprise_is_one_step_and_back_shows_the_cables() {
+    let (mut h, t) = harness("wavetable_synth");
+    h.get_by_label("Surprise").click();
+    step(&mut h);
+    step(&mut h);
+    let n = slots(&h, t).len();
+    assert!((2..=3).contains(&n), "{n}");
+    h.state_mut().engine.execute("edit.undo", &json!({})).unwrap();
+    assert!(slots(&h, t).is_empty());
+    h.get_by_label("Back").click();
+    step(&mut h);
+    step(&mut h);
+    let _ = h.get_by_label("Patch cables");
+    assert!(h.query_by_label("Cutoff").is_none(), "the knobs are on the front");
+    h.get_by_label("Front").click();
+    step(&mut h);
+    step(&mut h);
+    let _ = h.get_by_label("Cutoff");
 }
 
 /// The preset display's next button loads the first factory preset and shows its name.

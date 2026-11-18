@@ -11,13 +11,12 @@ use super::kit::{self, Ctx, Share, adsr, section, section_cells};
 use crate::SoundApp;
 use crate::synth_panel::{envelope_points, response_db};
 use egui::{Pos2, Rect, Sense, Ui, pos2, vec2};
-use soundcraft_model::{Insert, TrackId};
 
 /// The subtractive synth's plugin id.
 pub const ID: &str = "subtractive_synth";
 
-/// The panel's size.
-pub const SIZE: egui::Vec2 = vec2(1000.0, 2.0 * 16.0 + super::TOP_H + 14.0 + DISPLAY_H + 3.0 * (kit::SECTION_H + 16.0));
+/// The front's height: the displays and three rows of sections.
+pub const BODY_H: f32 = DISPLAY_H + 18.0 + 3.0 * (kit::SECTION_H + 16.0);
 const DISPLAY_H: f32 = 132.0;
 
 const LO_HZ: f32 = 20.0;
@@ -25,33 +24,23 @@ const HI_HZ: f32 = 20_000.0;
 const FLOOR_DB: f32 = -36.0;
 const TOP_DB: f32 = 24.0;
 
-/// Draws Burley's panel for `ins` into `r` (its [`SIZE`]).
-pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, r: Rect) {
-    let Some(info) = soundcraft_dsp::plugin_info(ID) else { return };
-    let face = &super::BURLEY;
+/// Draws Burley's front (its displays and sections) into `area`.
+pub fn body(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect) {
+    let face = cx.face;
     let p = ui.painter().clone();
-    let inner = kit::unit(&p, r, face);
-    let no = |_: &str| false;
-    let centres = std::cell::RefCell::new(Vec::new());
-    let cx = Ctx { track, ins, info, face, arcs: &[], lit: &[], patchable: &no, patching: None, centres: &centres };
-    let top = Rect::from_min_size(inner.min, vec2(inner.width(), super::TOP_H));
-    super::top_bar(app, ui, &cx, top, "Burley", "Subtractive Synthesizer", &[]);
-
-    // The displays.
-    let dy = top.bottom() + 14.0;
-    let disp = Rect::from_min_size(pos2(inner.left(), dy), vec2(inner.width(), DISPLAY_H));
+    let disp = Rect::from_min_size(area.min, vec2(area.width(), DISPLAY_H));
     let parts = kit::row(disp, &[Share::Fixed(200.0), Share::Knobs(1), Share::Fixed(260.0)]);
     if let [scope, filter, envs] = parts.as_slice() {
-        draw_scope(&p, *scope, &cx);
-        draw_filter(app, ui, *filter, &cx);
-        draw_envelopes(&p, *envs, &cx);
+        draw_scope(&p, *scope, cx);
+        draw_filter(app, ui, *filter, cx);
+        draw_envelopes(&p, *envs, cx);
     }
 
     // The sections, three rows in signal order.
     let row_h = kit::SECTION_H;
     let mut y = disp.bottom() + 18.0;
     let mut next_row = |shares: &[Share]| {
-        let rr = Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), row_h));
+        let rr = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), row_h));
         y += row_h + 16.0;
         kit::row(rr, shares)
     };
@@ -59,25 +48,30 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, r: Re
     let env1 = kit::SOURCE_COLOURS[0];
     let env2 = kit::SOURCE_COLOURS[1];
 
-    let r1 = next_row(&[Share::Knobs(1), Share::Knobs(4), Share::Knobs(3), Share::Fixed(fw)]);
-    if let [o1, o2, mix, amp] = r1.as_slice() {
+    let r1 = next_row(&[Share::Knobs(1), Share::Knobs(3), Share::Knobs(4), Share::Knobs(3), Share::Fixed(fw)]);
+    if let [o1, xm, o2, mix, amp] = r1.as_slice() {
         section(&p, *o1, "Osc 1", "", face);
         let c = section_cells(*o1, 1);
-        kit::knob(app, ui, &cx, c[0], "osc1_wave", "Wave");
+        kit::knob(app, ui, cx, c[0], "osc1_wave", "Wave");
+        section(&p, *xm, "X-Mod", "audio rate", face);
+        let c = section_cells(*xm, 3);
+        kit::knob(app, ui, cx, c[0], "xmod_source", "From");
+        kit::knob(app, ui, cx, c[1], "xmod_pitch", "Pitch");
+        kit::knob(app, ui, cx, c[2], "xmod_cutoff", "Cutoff");
         let note = format!("{:+.0} st", cx.value("osc2_semitones"));
         section(&p, *o2, "Oscillator 2", &note, face);
         let c = section_cells(*o2, 4);
-        kit::knob(app, ui, &cx, c[0], "osc2_wave", "Wave");
-        kit::knob(app, ui, &cx, c[1], "osc2_semitones", "Pitch");
-        kit::knob(app, ui, &cx, c[2], "osc2_detune", "Detune");
-        kit::switch(app, ui, &cx, c[3], "osc_sync", "Sync");
+        kit::knob(app, ui, cx, c[0], "osc2_wave", "Wave");
+        kit::knob(app, ui, cx, c[1], "osc2_semitones", "Pitch");
+        kit::knob(app, ui, cx, c[2], "osc2_detune", "Detune");
+        kit::switch(app, ui, cx, c[3], "osc_sync", "Sync");
         section(&p, *mix, "Mixer", "", face);
         let c = section_cells(*mix, 3);
-        kit::knob(app, ui, &cx, c[0], "osc_mix", "Osc Mix");
-        kit::knob(app, ui, &cx, c[1], "sub_level", "Sub");
-        kit::knob(app, ui, &cx, c[2], "noise_level", "Noise");
+        kit::knob(app, ui, cx, c[0], "osc_mix", "Osc Mix");
+        kit::knob(app, ui, cx, c[1], "sub_level", "Sub");
+        kit::knob(app, ui, cx, c[2], "noise_level", "Noise");
         section(&p, *amp, "Amp Env", "", face);
-        adsr(app, ui, &cx, *amp, ["amp_attack", "amp_decay", "amp_sustain", "amp_release"], env1);
+        adsr(app, ui, cx, *amp, ["amp_attack", "amp_decay", "amp_sustain", "amp_release"], env1);
     }
 
     let r2 = next_row(&[Share::Knobs(5), Share::Knobs(5), Share::Fixed(fw)]);
@@ -85,42 +79,43 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, r: Re
         let note = filter_short(cx.value("filter_type"));
         section(&p, *filt, "Filter", note, face);
         let c = section_cells(*filt, 5);
-        kit::knob(app, ui, &cx, c[0], "filter_type", "Type");
-        kit::knob(app, ui, &cx, c[1], "cutoff", "Cutoff");
-        kit::knob(app, ui, &cx, c[2], "resonance", "Reso");
-        kit::knob(app, ui, &cx, c[3], "filter_env_amount", "Env Amt");
-        kit::knob(app, ui, &cx, c[4], "key_track", "Key Trk");
-        let shape = choice_name(&cx, "lfo_wave");
+        kit::knob(app, ui, cx, c[0], "filter_type", "Type");
+        kit::knob(app, ui, cx, c[1], "cutoff", "Cutoff");
+        kit::knob(app, ui, cx, c[2], "resonance", "Reso");
+        kit::knob(app, ui, cx, c[3], "filter_env_amount", "Env Amt");
+        kit::knob(app, ui, cx, c[4], "key_track", "Key Trk");
+        let shape = choice_name(cx, "lfo_wave");
         section(&p, *lfo, "LFO", &shape, face);
         let c = section_cells(*lfo, 5);
-        kit::knob(app, ui, &cx, c[0], "lfo_wave", "Shape");
-        kit::knob(app, ui, &cx, c[1], "lfo_rate", "Rate");
-        kit::knob(app, ui, &cx, c[2], "lfo_pitch", "Pitch");
-        kit::knob(app, ui, &cx, c[3], "lfo_cutoff", "Cutoff");
-        kit::knob(app, ui, &cx, c[4], "lfo_amp", "Level");
+        kit::knob(app, ui, cx, c[0], "lfo_wave", "Shape");
+        kit::knob(app, ui, cx, c[1], "lfo_rate", "Rate");
+        kit::knob(app, ui, cx, c[2], "lfo_pitch", "Pitch");
+        kit::knob(app, ui, cx, c[3], "lfo_cutoff", "Cutoff");
+        kit::knob(app, ui, cx, c[4], "lfo_amp", "Level");
         section(&p, *fenv, "Env 2", "filter", face);
-        adsr(app, ui, &cx, *fenv, ["filter_attack", "filter_decay", "filter_sustain", "filter_release"], env2);
+        adsr(app, ui, cx, *fenv, ["filter_attack", "filter_decay", "filter_sustain", "filter_release"], env2);
     }
 
     let r3 = next_row(&[Share::Knobs(3), Share::Knobs(5), Share::Knobs(2)]);
     if let [uni, play, out] = r3.as_slice() {
-        let voices = choice_name(&cx, "unison");
+        let voices = choice_name(cx, "unison");
         section(&p, *uni, "Unison", if voices == "Off" { "off" } else { "" }, face);
         let c = section_cells(*uni, 3);
-        kit::knob(app, ui, &cx, c[0], "unison", "Voices");
-        kit::knob(app, ui, &cx, c[1], "unison_detune", "Detune");
-        kit::knob(app, ui, &cx, c[2], "unison_spread", "Spread");
-        let mode = choice_name(&cx, "voice_mode");
+        kit::knob(app, ui, cx, c[0], "unison", "Voices");
+        kit::knob(app, ui, cx, c[1], "unison_detune", "Detune");
+        kit::knob(app, ui, cx, c[2], "unison_spread", "Spread");
+        let mode = choice_name(cx, "voice_mode");
         section(&p, *play, "Play", &mode, face);
         let c = section_cells(*play, 5);
-        kit::knob(app, ui, &cx, c[0], "voice_mode", "Mode");
-        kit::knob(app, ui, &cx, c[1], "glide", "Glide");
-        kit::knob(app, ui, &cx, c[2], "bend_range", "Bend");
-        kit::knob(app, ui, &cx, c[3], "mod_wheel", "Vibrato");
-        kit::knob(app, ui, &cx, c[4], "velocity", "Vel Sens");
+        kit::knob(app, ui, cx, c[0], "voice_mode", "Mode");
+        kit::knob(app, ui, cx, c[1], "glide", "Glide");
+        kit::knob(app, ui, cx, c[2], "bend_range", "Bend");
+        kit::knob(app, ui, cx, c[3], "mod_wheel", "Vibrato");
+        kit::knob(app, ui, cx, c[4], "velocity", "Vel Sens");
         section(&p, *out, "Output", "", face);
         let c = section_cells(*out, 2);
-        kit::knob(app, ui, &cx, c[0], "level", "Level");
+        kit::knob(app, ui, cx, c[0], "drive", "Drive");
+        kit::knob(app, ui, cx, c[1], "level", "Level");
     }
 }
 

@@ -136,6 +136,8 @@ pub fn file(app: &mut SoundApp, path: &str) {
 pub struct Voice {
     pub plugin: String,
     pub params: Vec<(String, f32)>,
+    /// A built-in synth's modulation patch, compiled (`Plugin::set_prepared_state`); empty: none.
+    pub prepared: Vec<f64>,
 }
 
 /// The built-in instruments a preview can copy: they need no samples or files loaded.
@@ -147,9 +149,12 @@ const FALLBACK: &str = "subtractive_synth";
 /// A copy of `track`'s instrument for a preview, when it is one of [`COPYABLE`].
 pub fn track_voice(s: &Session, track: TrackId) -> Option<Voice> {
     let ins = s.track(track)?.instrument.as_ref()?;
-    COPYABLE
-        .contains(&ins.plugin.as_str())
-        .then(|| Voice { plugin: ins.plugin.clone(), params: ins.params.iter().map(|(k, v)| (k.clone(), *v)).collect() })
+    COPYABLE.contains(&ins.plugin.as_str()).then(|| Voice {
+        plugin: ins.plugin.clone(),
+        params: ins.params.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        // Its patch too: what it was made ready as for the audio thread.
+        prepared: ins.prepared.as_ref().map(|p| p.data.to_vec()).unwrap_or_default(),
+    })
 }
 
 /// The selected track's voice: the first selected track with a copyable instrument.
@@ -224,6 +229,9 @@ fn render(mut events: Events, rate: u32, max: usize, voice: Option<&Voice>) -> R
     inst.prepare(rate as f32, BLOCK, 2);
     for (k, v) in voice.map(|v| v.params.as_slice()).unwrap_or_default() {
         inst.set_param(k, *v);
+    }
+    if let Some(v) = voice.filter(|v| !v.prepared.is_empty()) {
+        inst.set_prepared_state(&v.prepared);
     }
     inst.set_offline(true);
     let mut out = vec![Vec::with_capacity(len), Vec::with_capacity(len)];
@@ -397,14 +405,14 @@ mod tests {
         assert!(super::render_midi(&file(vec![n(36, 9, 0)]), 120.0, 48_000, None).is_err(), "drums only: nothing to play");
         assert!(super::render_midi(b"not midi", 120.0, 48_000, None).is_err());
         // On the track's own instrument, with its settings: the Drum Synth plays the drum channel.
-        let drums = super::Voice { plugin: "drum_synth".into(), params: Vec::new() };
+        let drums = super::Voice { plugin: "drum_synth".into(), params: Vec::new(), prepared: Vec::new() };
         let kit = super::render_midi(&file(vec![n(36, 9, 0)]), 120.0, 48_000, Some(&drums)).unwrap();
         assert!(energy(&kit[0][..24_000]) > 0.01, "the kick sounds");
         // A synth copy with a closed filter is darker than the default synth: the settings reach it.
-        let dark = super::Voice { plugin: "subtractive_synth".into(), params: vec![("cutoff".into(), 120.0)] };
+        let dark = super::Voice { plugin: "subtractive_synth".into(), params: vec![("cutoff".into(), 120.0)], prepared: Vec::new() };
         let dull = super::render_midi(&bytes, 120.0, 48_000, Some(&dark)).unwrap();
         let hf = |c: &[f32]| c.windows(2).map(|w| (w[1] - w[0]) * (w[1] - w[0])).sum::<f32>() / energy(c).max(1e-9);
-        let same = super::Voice { plugin: "subtractive_synth".into(), params: Vec::new() };
+        let same = super::Voice { plugin: "subtractive_synth".into(), params: Vec::new(), prepared: Vec::new() };
         assert_eq!(super::render_midi(&bytes, 120.0, 48_000, Some(&same)).unwrap(), at120, "a copy at its defaults is the synth");
         let (a, b) = (hf(&dull[0][..24_000]), hf(&at120[0][..24_000]));
         assert!(a < b * 0.8, "the copy plays with the track's cutoff: {a} against {b}");
@@ -414,7 +422,7 @@ mod tests {
     fn a_preset_preview_plays_a_phrase_on_a_copy_with_the_presets_settings() {
         let energy = |c: &[f32]| c.iter().map(|x| x * x).sum::<f32>();
         for plugin in super::COPYABLE {
-            let voice = super::Voice { plugin: plugin.into(), params: Vec::new() };
+            let voice = super::Voice { plugin: plugin.into(), params: Vec::new(), prepared: Vec::new() };
             let out = super::render(super::phrase(plugin, 48_000), 48_000, 48_000 * 10, Some(&voice)).unwrap();
             assert!(out[0].len() > 48_000 * 2 && out[0].len() < 48_000 * 5, "{plugin}: a short phrase");
             assert!(energy(&out[0]) > 0.1, "{plugin} sounds");

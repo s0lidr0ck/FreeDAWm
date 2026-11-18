@@ -160,7 +160,22 @@ pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, tra
 pub(crate) fn preset_voice(info: &PluginInfo, name: &str, json: &str) -> Option<crate::audition::Voice> {
     let (_, params) = factory_recall(info, name, json)?;
     let params = params.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()? as f32))).collect();
-    Some(crate::audition::Voice { plugin: info.id.to_string(), params })
+    Some(crate::audition::Voice { plugin: info.id.to_string(), params, prepared: compiled_patch(info.id, factory_modulation(json).as_ref()) })
+}
+
+/// A preset's modulation patch (`{slots, macros}`, as the session keeps it) compiled for a
+/// preview copy of the synth; empty when there is none or it does not read.
+pub(crate) fn compiled_patch(plugin: &str, patch: Option<&Value>) -> Vec<f64> {
+    use soundcraft_dsp::plugins::synth_mod::{SlotSpec, TargetSpec, compile};
+    let Some(m) = patch.and_then(|v| serde_json::from_value::<soundcraft_model::SynthMod>(v.clone()).ok()) else { return Vec::new() };
+    let slots: Vec<SlotSpec<'_>> = m.slots.iter().map(|s| SlotSpec { source: &s.source, dest: &s.dest, amount: s.amount }).collect();
+    let targets: Vec<TargetSpec<'_>> = m
+        .macros
+        .iter()
+        .enumerate()
+        .flat_map(|(i, mac)| mac.targets.iter().map(move |t| TargetSpec { macro_index: i, dest: &t.dest, from: t.from, to: t.to }))
+        .collect();
+    compile(plugin, &slots, &targets).unwrap_or_default()
 }
 
 /// What an import did.

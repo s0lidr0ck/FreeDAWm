@@ -909,6 +909,10 @@ const DETACH_BAR_H: f32 = 22.0;
 
 /// The row over a plugin window's contents: Detach (in the main window) or Dock (in its own).
 fn detach_bar(app: &mut SoundApp, ui: &mut Ui, v: &PluginView, detached: bool) {
+    if v.key == soundcraft_mix::SlotKey::Instrument && crate::synth_face::has_panel(&v.ins.plugin) {
+        // A synth panel carries these switches in its own top strip.
+        return;
+    }
     let key = (v.tid, v.key);
     ui.horizontal(|ui| {
         ui.set_height(DETACH_BAR_H - 6.0);
@@ -1119,30 +1123,6 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
             r.response.on_disabled_hover_text(read_only.as_str());
         }
         return;
-    }
-    if instrument && info.id == crate::fm_panel::FM {
-        // The FM synth's panel: its algorithm and the operators' envelopes, over the controls.
-        let r = ui.scope(|ui| {
-            if frozen {
-                ui.disable();
-            }
-            crate::fm_panel::draw(app, ui, tid, ins);
-        });
-        if frozen {
-            r.response.on_disabled_hover_text(read_only.as_str());
-        }
-    }
-    if instrument && info.id == crate::wavetable_panel::WAVETABLE {
-        // The wavetable synth's panel: the current wave and its envelopes, over the controls.
-        let r = ui.scope(|ui| {
-            if frozen {
-                ui.disable();
-            }
-            crate::wavetable_panel::draw(app, ui, tid, ins);
-        });
-        if frozen {
-            r.response.on_disabled_hover_text(read_only.as_str());
-        }
     }
     // What the drawer offers, by the drawer's names (a FireStation engine's own
     // bypass and a model's unused switches are not here).

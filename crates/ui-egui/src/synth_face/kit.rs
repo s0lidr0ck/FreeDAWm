@@ -271,6 +271,30 @@ pub fn button(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug
     resp
 }
 
+/// A small key for the window's own switches (Detach, Pin, Follow): quieter than a [`button`],
+/// a lit dot when on.
+pub fn small_key(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug, text: &str, on: bool, face: &Face) -> Response {
+    let resp = ui.interact(r, Id::new(("synth-small-key", salt)), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, text));
+    let p = ui.painter();
+    let fill = if resp.hovered() { face.key.lerp_to_gamma(face.accent, 0.1) } else { face.key };
+    p.rect_filled(r.translate(vec2(0.0, 1.0)), cr(3.0), face.line);
+    p.rect_filled(r, cr(3.0), fill);
+    p.rect_stroke(r, cr(3.0), Stroke::new(1.0, face.line), StrokeKind::Inside);
+    let dot = pos2(r.left() + 7.0, r.center().y);
+    p.circle_filled(dot, 2.5, if on { face.accent } else { alpha(face.ink, 0.25) });
+    tracked_text(p, Rect::from_min_max(pos2(dot.x + 6.0, r.top()), r.max), Align2::LEFT_CENTER, text, 8.5, 0.1, true, true, face.ink2);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// The width a [`small_key`] needs for `text`.
+pub fn small_key_width(p: &Painter, text: &str) -> f32 {
+    tracked_width(p, text, 8.5, 0.1, true) + 20.0
+}
+
 /// The width a [`button`] needs for `text`.
 pub fn button_width(p: &Painter, text: &str) -> f32 {
     tracked_width(p, text, 10.0, 0.12, true) + 22.0
@@ -479,10 +503,11 @@ pub fn paint_knob(
 ) {
     let s = size / 58.0;
     let pt = |a: f32, r: f32| c + vec2(a.cos(), a.sin()) * r * s;
-    let n = if steps >= 2 { steps - 1 } else { 10 };
+    let stepped = (2..=12).contains(&steps);
+    let n = if stepped { steps - 1 } else { 10 };
     for i in 0..=n {
         let t = A0 + SWEEP * i as f32 / n as f32;
-        let major = steps >= 2 || i % 5 == 0;
+        let major = stepped || i % 5 == 0;
         let (r1, w, a) = if major { (26.0, 1.6, 0.9) } else { (24.5, 1.0, 0.5) };
         p.line_segment([pt(t, 22.5), pt(t, r1)], Stroke::new(w * s.max(0.8), alpha(face.ink, a)));
     }
@@ -810,11 +835,11 @@ pub fn chip(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug, 
     p.circle_filled(jack, 6.5, Color32::from_rgb(0x16, 0x13, 0x0f));
     p.circle_stroke(jack, 5.0, Stroke::new(3.0, colour));
     p.circle_stroke(jack, 6.5, Stroke::new(1.0, alpha(Color32::BLACK, 0.3)));
-    tracked_text(p, Rect::from_min_max(pos2(jack.x + 11.0, r.top()), r.max), Align2::LEFT_CENTER, text, 10.0, 0.1, true, true, face.ink);
+    tracked_text(p, Rect::from_min_max(pos2(jack.x + 10.0, r.top()), r.max), Align2::LEFT_CENTER, text, 9.0, 0.08, true, true, face.ink);
     resp
 }
 
 /// The width a [`chip`] needs for `text`.
 pub fn chip_width(p: &Painter, text: &str) -> f32 {
-    tracked_width(p, text, 10.0, 0.1, true) + 34.0
+    tracked_width(p, text, 9.0, 0.08, true) + 30.0
 }

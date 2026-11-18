@@ -1,8 +1,5 @@
 //! Drawing helpers the synth panels share: a filter's response (the synths' state-variable
-//! filter) and an ADSR drawn to its times, and the older panels' frame and line.
-
-use crate::theme::Tokens;
-use egui::{Color32, Pos2, Rect, Stroke, Ui, vec2};
+//! filter) and an ADSR drawn to its times.
 
 /// The Subtractive Synth's plugin id.
 pub const SYNTH: &str = "subtractive_synth";
@@ -49,16 +46,6 @@ pub fn envelope_points(a_ms: f32, d_ms: f32, sustain: f32, r_ms: f32) -> Vec<(f3
     pts.push((a + d + hold, release_from));
     curve(a + d + hold, r, release_from, 0.0, &mut pts);
     pts
-}
-
-pub(crate) fn frame(ui: &mut Ui, r: Rect, title: &str) {
-    let t = Tokens::current();
-    ui.painter().rect_filled(r, 6.0, t.panel_bg2);
-    ui.painter().text(r.min + vec2(8.0, 6.0), egui::Align2::LEFT_TOP, title, egui::FontId::proportional(11.0), t.text_dim);
-}
-
-pub(crate) fn line(ui: &Ui, pts: &[Pos2], color: Color32) {
-    ui.painter().add(egui::Shape::line(pts.to_vec(), Stroke::new(1.8, color)));
 }
 
 #[cfg(test)]

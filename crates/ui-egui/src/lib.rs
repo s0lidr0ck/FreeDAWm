@@ -141,7 +141,6 @@ pub mod vocal_worker;
 mod wait_note;
 pub mod waveform;
 pub mod wavetable_import;
-pub mod wavetable_panel;
 pub mod widgets;
 pub mod window_sync;
 pub mod windows;

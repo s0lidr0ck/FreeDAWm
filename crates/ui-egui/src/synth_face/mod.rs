@@ -4,16 +4,21 @@
 //! a preset display, built from one kit ([`kit`]) and coloured by its own [`kit::Face`].
 //!
 //! A panel is drawn at its own size at the top of the instrument's window (the window scrolls
-//! when it is smaller); every parameter of the synth is on it.
+//! when it is smaller); every parameter of the synth is on it. Below the sections, the macro knobs
+//! and the modulation sources ([`patch`]); the Back button turns the panel round to its cables.
 
 pub mod burley;
+pub mod cicada;
 pub mod kit;
+pub mod patch;
+pub mod steeple;
 
 use crate::SoundApp;
-use egui::{Color32, Rect, Sense, Ui, Vec2, vec2};
+use egui::{Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
 use kit::Face;
 use serde_json::json;
 use soundcraft_model::{Insert, TrackId};
+use std::cell::RefCell;
 
 const fn c(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -79,23 +84,44 @@ pub const STEEPLE: Face = Face {
     wood: (c(0x8a6a3e), c(0xc39a5e)),
 };
 
-/// The size `plugin`'s panel is drawn at, when it has one.
-pub fn size(plugin: &str) -> Option<Vec2> {
-    match plugin {
-        burley::ID => Some(burley::SIZE),
-        _ => None,
-    }
+/// Which synth a panel is, and how its front is drawn.
+pub struct Synth {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub kind: &'static str,
+    pub face: &'static Face,
+    /// The front's height between the top bar and the macros and sources row.
+    pub body_h: f32,
+    /// Draws the front (displays and sections) into the rectangle given.
+    pub body: fn(&mut SoundApp, &mut Ui, &kit::Ctx, Rect),
 }
 
-/// Whether `plugin` is drawn as an instrument panel.
-pub fn has_panel(plugin: &str) -> bool {
-    size(plugin).is_some()
+/// The three synths with panels.
+pub const SYNTHS: [Synth; 3] = [
+    Synth { id: burley::ID, name: "Burley", kind: "Subtractive Synthesizer", face: &BURLEY, body_h: burley::BODY_H, body: burley::body },
+    Synth { id: cicada::ID, name: "Cicada", kind: "Wavetable Synthesizer", face: &CICADA, body_h: cicada::BODY_H, body: cicada::body },
+    Synth { id: steeple::ID, name: "Steeple", kind: "FM Synthesizer", face: &STEEPLE, body_h: steeple::BODY_H, body: steeple::body },
+];
+
+/// The panels' width.
+pub const WIDTH: f32 = 1000.0;
+/// The panel's outer margins (top and bottom inside the unit), the gap under the top bar.
+const MARGINS: f32 = 30.0;
+const UNDER_TOP: f32 = 14.0;
+
+fn synth(plugin: &str) -> Option<&'static Synth> {
+    SYNTHS.iter().find(|s| s.id == plugin)
+}
+
+/// The size `plugin`'s panel is drawn at, when it has one.
+pub fn size(plugin: &str) -> Option<Vec2> {
+    synth(plugin).map(|s| vec2(WIDTH, MARGINS + TOP_H + UNDER_TOP + s.body_h + kit::SECTION_H + 4.0))
 }
 
 /// Draws `ins` (the instrument of `track`) as its panel, inside a scroll area as large as the
 /// window gives. `frozen`: the track is frozen (the panel is shown, its controls greyed).
 pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, frozen: bool) {
-    let Some(sz) = size(&ins.plugin) else { return };
+    let (Some(s), Some(sz)) = (synth(&ins.plugin), size(&ins.plugin)) else { return };
     let want = sz + vec2(8.0, 12.0);
     egui::ScrollArea::both().id_salt(("synth-face", track.0)).auto_shrink([true, true]).min_scrolled_width(want.x).min_scrolled_height(want.y).show(
         ui,
@@ -106,11 +132,75 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, froze
             if frozen {
                 pui.disable();
             }
-            if ins.plugin == burley::ID {
-                burley::draw(app, &mut pui, track, ins, r);
-            }
+            panel(app, &mut pui, track, ins, s, r);
         },
     );
+}
+
+/// One synth's panel in `r`: the unit, the top bar, the front (or the Back), the macros and the
+/// sources, and the patching gestures across them.
+fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synth, r: Rect) {
+    let Some(info) = soundcraft_dsp::plugin_info(s.id) else { return };
+    let face = s.face;
+    let p = ui.painter().clone();
+    let inner = kit::unit(&p, r, face);
+    let mut st = patch::state(ui.ctx(), track);
+    let (arcs, kinds) = patch::arcs(ins, face);
+    let hooks = patch::Hooks { track, ins, kinds: &kinds };
+    let dests = patch::dests(s.id);
+    let patchable = |d: &str| dests.contains(&d);
+    // What lights up: every destination while a source or macro is dragged, else what the hovered
+    // source drives.
+    let lit: Vec<String> = match (st.drag, st.hover_source) {
+        (Some((patch::Drag::Source(_) | patch::Drag::Macro(_), _)), _) => dests.iter().map(|d| (*d).to_string()).collect(),
+        (_, Some(i)) => {
+            let id = soundcraft_dsp::plugins::synth_mod::SOURCES.get(i).map_or("", |x| x.id);
+            ins.modulation
+                .slots
+                .iter()
+                .filter(|x| soundcraft_dsp::plugins::synth_mod::source_index(&x.source) == Some(i) || x.source == id)
+                .map(|x| x.dest.clone())
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    let centres = RefCell::new(Vec::new());
+    let cx = kit::Ctx { track, ins, info, face, arcs: &arcs, lit: &lit, patchable: &patchable, patching: Some(&hooks), centres: &centres };
+    let top = Rect::from_min_size(inner.min, vec2(inner.width(), TOP_H));
+    let clicked = top_bar(app, ui, &cx, top, s.name, s.kind, &[("Surprise", false), ("Front", !st.back), ("Back", st.back)]);
+    match clicked {
+        Some(0) => {
+            if let Err(e) = app.run("mix.mod_surprise", json!({"track": track.0})) {
+                app.ui.status = e;
+            }
+            st.back = false;
+            st.moved_at = ui.input(|i| i.time);
+        }
+        Some(1) => st.back = false,
+        Some(2) => st.back = true,
+        _ => {}
+    }
+    let area = Rect::from_min_max(pos2(inner.left(), top.bottom() + UNDER_TOP), inner.max);
+    if st.back {
+        let reduce = app.extra.reduce_motion;
+        patch::back(app, ui, &cx, area, &mut st, reduce);
+    } else {
+        let body = Rect::from_min_size(area.min, vec2(area.width(), s.body_h));
+        (s.body)(app, ui, &cx, body);
+        let row = Rect::from_min_max(pos2(area.left(), area.bottom() - kit::SECTION_H), area.max);
+        let parts = kit::row(row, &[kit::Share::Fixed(320.0), kit::Share::Knobs(1)]);
+        if let [m, src] = parts.as_slice() {
+            patch::macros(app, ui, &cx, *m, &mut st);
+            st.hover_source = patch::sources(ui, &cx, *src, &mut st);
+        }
+        patch::front_drop(app, ui, &cx, &mut st);
+    }
+    patch::set_state(ui.ctx(), track, st);
+}
+
+/// Whether `plugin` is drawn as an instrument panel.
+pub fn has_panel(plugin: &str) -> bool {
+    synth(plugin).is_some()
 }
 
 /// The height of a panel's top bar (lamp, badge, preset display, buttons).
@@ -123,7 +213,7 @@ pub fn top_bar(app: &mut SoundApp, ui: &mut Ui, cx: &kit::Ctx, r: Rect, name: &s
     let p = ui.painter().clone();
     kit::lamp(&p, egui::pos2(r.left() + 6.0, r.center().y), face);
     let bw = kit::badge(&p, egui::pos2(r.left() + 20.0, r.center().y), name, kind, face);
-    let mut x = r.right();
+    let mut x = r.right() - window_keys(app, ui, cx, r.right(), r.center().y) - 12.0;
     let mut clicked = None;
     for (i, (label, on)) in buttons.iter().enumerate().rev() {
         let w = kit::button_width(&p, label);
@@ -149,6 +239,50 @@ pub fn top_bar(app: &mut SoundApp, ui: &mut Ui, cx: &kit::Ctx, r: Rect, name: &s
     clicked
 }
 
+/// The window's own switches, small, in the panel's top bar (so the window reads as one
+/// instrument): Detach (or Dock when it has a window of its own), Pin and Follow, as the plug-in
+/// windows' row has them. Returns the width used, drawn right-aligned at `right`.
+fn window_keys(app: &mut SoundApp, ui: &mut Ui, cx: &kit::Ctx, right: f32, y: f32) -> f32 {
+    let key = (cx.track, soundcraft_mix::SlotKey::Instrument);
+    let detached = app.ui.detached_plugins.contains(&key);
+    let pinned = app.ui.pinned_plugins.contains(&key);
+    let following = app.ui.following_plugins.contains(&key);
+    let items: [(&str, bool, &str); 3] = [
+        (
+            if detached { "Dock" } else { "Detach" },
+            false,
+            if detached {
+                "Put this window back inside the main window"
+            } else {
+                "Move this window into a window of its own that you can put anywhere (another screen too)"
+            },
+        ),
+        ("Pin", pinned, "Keep this window on top of the others"),
+        ("Follow", following, "Show this instrument on whichever track is selected"),
+    ];
+    let p = ui.painter().clone();
+    let mut x = right;
+    let mut clicked = None;
+    for (i, (label, on, tip)) in items.iter().enumerate().rev() {
+        let w = kit::small_key_width(&p, label);
+        let r = Rect::from_min_size(pos2(x - w, y - 9.0), vec2(w, 18.0));
+        if kit::small_key(ui, r, (cx.track.0, "win", i), label, *on, cx.face).on_hover_text(*tip).clicked() {
+            clicked = Some(i);
+        }
+        x -= w + 5.0;
+    }
+    match clicked {
+        Some(0) if detached => app.ui.detached_plugins.retain(|k| *k != key),
+        Some(0) => app.ui.detached_plugins.push(key),
+        Some(1) if pinned => app.ui.pinned_plugins.retain(|k| *k != key),
+        Some(1) => app.ui.pinned_plugins.push(key),
+        Some(2) if following => app.ui.following_plugins.retain(|k| *k != key),
+        Some(2) => app.ui.following_plugins.push(key),
+        _ => {}
+    }
+    right - x
+}
+
 /// The preset display's name: the preset loaded last, or "Init" for the defaults.
 pub fn preset_name(ins: &Insert) -> String {
     if ins.preset.trim().is_empty() || ins.preset.starts_with('<') { "Init".to_string() } else { ins.preset.clone() }
@@ -162,9 +296,13 @@ fn factory_list(info: &soundcraft_dsp::PluginInfo) -> Vec<(&'static str, &'stati
 /// Loads factory preset `name` (its JSON `json`) into the instrument of `track`: every parameter
 /// set, the name shown, one undo step.
 pub fn recall(app: &mut SoundApp, track: TrackId, info: &soundcraft_dsp::PluginInfo, name: &str, json: &str) {
-    if let Some((preset, params)) = crate::fs_presets::factory_recall(info, name, json)
-        && let Err(e) = app.run("mix.instrument", json!({"track": track.0, "plugin": info.id, "params": params, "preset": preset}))
-    {
+    let Some((preset, params)) = crate::fs_presets::factory_recall(info, name, json) else { return };
+    let mut p = json!({"track": track.0, "plugin": info.id, "params": params, "preset": preset});
+    // Its modulation patch too (a recall replaces the synth's patch; none clears it).
+    if let (Some(m), Some(o)) = (crate::fs_presets::factory_modulation(json), p.as_object_mut()) {
+        o.insert("modulation".into(), m);
+    }
+    if let Err(e) = app.run("mix.instrument", p) {
         app.ui.status = e;
     }
 }
@@ -183,7 +321,8 @@ pub fn step_preset(app: &mut SoundApp, track: TrackId, info: &soundcraft_dsp::Pl
     }
 }
 
-/// The preset menu under the display's name: the factory presets by group.
+/// The preset menu under the display's name: the factory presets by group, the user's own
+/// presets, and Save as User Preset (the settings and the modulation patch).
 pub fn preset_menu(app: &mut SoundApp, ui: &mut Ui, track: TrackId, info: &soundcraft_dsp::PluginInfo) {
     for (group, list) in crate::fs_presets::factory_groups(info) {
         ui.menu_button(group, |ui| {
@@ -194,5 +333,65 @@ pub fn preset_menu(app: &mut SoundApp, ui: &mut Ui, track: TrackId, info: &sound
                 }
             }
         });
+    }
+    let users = crate::preset_house::user_names(app, info.id);
+    if !users.is_empty() {
+        ui.separator();
+        ui.label(egui::RichText::new("User").small().strong());
+        for name in users {
+            if ui.button(&name).clicked() {
+                recall_user(app, track, info, &name);
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
+    let id = egui::Id::new(("synth-save-preset", track.0));
+    let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
+    ui.horizontal(|ui| {
+        let edit = ui.add(egui::TextEdit::singleline(&mut text).hint_text("New preset name").desired_width(150.0));
+        let go = ui.add_enabled(!text.trim().is_empty(), egui::Button::new("Save")).clicked()
+            || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        if go && !text.trim().is_empty() {
+            match save_user(app, track, info, text.trim()) {
+                Ok(n) => app.ui.status = format!("Saved the preset {n}"),
+                Err(e) => app.ui.status = e,
+            }
+            text.clear();
+            ui.close();
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(id, text));
+}
+
+/// Saves the synth of `track` as user preset `name`: every parameter and its modulation patch.
+pub fn save_user(app: &mut SoundApp, track: TrackId, info: &soundcraft_dsp::PluginInfo, name: &str) -> Result<String, String> {
+    if crate::editor_kit::presets::is_factory_name(info, name) {
+        return Err(format!("{name} is a factory preset: choose another name"));
+    }
+    let ins = app.engine.session().track(track).and_then(|t| t.instrument.clone()).ok_or("The track has no instrument")?;
+    let value = |id: &str| ins.params.get(id).copied().or_else(|| info.param(id).map(|p| p.default)).unwrap_or(0.0);
+    let patch = serde_json::to_value(&ins.modulation).map_err(|e| e.to_string())?;
+    let body = crate::editor_kit::presets::user_preset_body(info, &[], value, name, "", Some(("modulation", patch)));
+    crate::preset_house::write_user(app, info.id, name, &body)
+}
+
+/// Loads user preset `name` into the synth of `track`: its parameters and its patch (one undo
+/// step).
+pub fn recall_user(app: &mut SoundApp, track: TrackId, info: &soundcraft_dsp::PluginInfo, name: &str) {
+    let Some(params) = crate::preset_house::user_params(app, info, name) else {
+        app.ui.status = format!("The preset {name} could not be read");
+        return;
+    };
+    let patch = crate::preset_house::user_dir(app, info.id)
+        .and_then(|d| std::fs::read_to_string(d.join(format!("{name}.json"))).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("modulation").filter(|m| !m.is_null()).cloned());
+    let mut p = json!({"track": track.0, "plugin": info.id, "params": params, "preset": name});
+    if let (Some(m), Some(o)) = (patch, p.as_object_mut()) {
+        o.insert("modulation".into(), m);
+    }
+    if let Err(e) = app.run("mix.instrument", p) {
+        app.ui.status = e;
     }
 }

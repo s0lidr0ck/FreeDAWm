@@ -12,15 +12,8 @@ use std::path::Path;
 /// Give each one a UI path and remove it from this list; don't add to it.
 const KNOWN_UNREACHED: &[&str] = &[
     "event.midi_note",
-    // The synths' modulation patching (engine side, 2026-11): the synth panels' Front/Back
-    // views, macro knobs and Surprise button reach these; remove each once the panel names it.
-    "mix.macro_assign",
-    "mix.macro_name",
-    "mix.mod_add",
+    // A query for scripts: the synth panels read the patch straight from the session.
     "mix.mod_info",
-    "mix.mod_remove",
-    "mix.mod_set",
-    "mix.mod_surprise",
     "mix.send_surround_pan",
     "setup.hardware",        // menu opens the Playback Engine window, which doesn't run it
     "setup.playback_engine", // same
