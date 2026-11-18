@@ -168,7 +168,7 @@ const MODES: &[&str] = &["Poly", "Mono", "Legato"];
 pub(crate) const UNISON: &[&str] = &["Off", "2", "3", "4", "5", "6", "7"];
 pub(crate) const OFF_ON: &[&str] = &["Off", "On"];
 
-static SYNTH_PARAMS: [ParamInfo; 42] = [
+static SYNTH_PARAMS: [ParamInfo; 43] = [
     choice("osc1_wave", "Osc 1", WAVES, 0),
     choice("osc2_wave", "Osc 2", WAVES, 0),
     lin("osc2_semitones", "Osc 2 Pitch", -24.0, 24.0, 0.0, Unit::Semitones),
@@ -218,7 +218,20 @@ static SYNTH_PARAMS: [ParamInfo; 42] = [
     choice("xmod_source", "X-Mod Source", XMOD_SOURCES, 0),
     lin("xmod_pitch", "X-Mod to Pitch", 0.0, 100.0, 0.0, Unit::Percent),
     lin("xmod_cutoff", "X-Mod to Cutoff", 0.0, 100.0, 0.0, Unit::Percent),
+    // Drive: the oscillators saturated on their way into the filter ([`drive`]); 0 = as before.
+    lin("drive", "Drive", 0.0, 100.0, 0.0, Unit::Percent),
 ];
+const DRIVE: usize = 42;
+
+/// The drive stage: `x` through a tanh curve pushed `1 + 9 d` times harder at drive `d` (0..1),
+/// scaled so a full-scale input comes out at full scale: quiet parts are lifted and peaks
+/// rounded off, as a driven filter input does. `d` 0 leaves `x` as it is (the caller skips it).
+#[inline]
+pub(crate) fn drive(x: f32, d: f32) -> f32 {
+    let g = 1.0 + 9.0 * d.clamp(0.0, 1.0);
+    let y = (g * x).tanh() / g.tanh();
+    if y.is_finite() { y } else { 0.0 }
+}
 const XMOD_SOURCE: usize = 39;
 const XMOD_PITCH: usize = 40;
 const XMOD_CUTOFF: usize = 41;
@@ -1097,6 +1110,7 @@ impl SubtractiveSynth {
         let key_track = self.p.v(KEY_TRACK) / 100.0;
         let sub_level = self.p.v(SUB_LEVEL) / 100.0;
         let noise_level = self.p.v(NOISE_LEVEL) / 100.0;
+        let drive_amt = self.p.v(DRIVE) / 100.0;
         let bend = if cents == 0.0 { 1.0 } else { 2f32.powf(cents / 1200.0) };
         let modded = self.mm.active();
         let sh = Shared {
@@ -1149,6 +1163,7 @@ impl SubtractiveSynth {
             let track = if key_track > 0.0 { key_track * (f32::from(v.note) - 60.0) / 12.0 } else { 0.0 };
             let fc = (cutoff * 2f32.powf(env_oct * fe + track + lfo_oct)).clamp(20.0, nyq);
             let g = (std::f32::consts::PI * fc / sr).tan();
+            let raw = if drive_amt > 0.0 { drive(raw, drive_amt) } else { raw };
             let mut y = v.svf.run(raw, g, k, kind);
             if kind == 1 {
                 y = v.svf2.run(y, g, k, 1);
@@ -1191,6 +1206,7 @@ impl SubtractiveSynth {
         let key_track = self.p.v(KEY_TRACK) / 100.0;
         let sub_level = self.p.v(SUB_LEVEL) / 100.0;
         let noise_level = self.p.v(NOISE_LEVEL) / 100.0;
+        let drive_amt = self.p.v(DRIVE) / 100.0;
         let sync = self.p.choice(OSC_SYNC) == 1;
         let x_sub = self.p.choice(XMOD_SOURCE) == 1;
         let xmod = self.xmod_on();
@@ -1273,9 +1289,10 @@ impl SubtractiveSynth {
             let fc = (cutoff * 2f32.powf(oct)).clamp(20.0, nyq);
             let g = (std::f32::consts::PI * fc / sr).tan();
             let gain = a * v.vel * lfo_amp * gain;
+            let (inl, inr) = if drive_amt > 0.0 { (drive(l + centre, drive_amt), drive(r + centre, drive_amt)) } else { (l + centre, r + centre) };
             if unison == 1 {
                 // Sync alone: one path, the same on both sides.
-                let mut y = v.svf.run(l + centre, g, k, kind);
+                let mut y = v.svf.run(inl, g, k, kind);
                 if kind == 1 {
                     y = v.svf2.run(y, g, k, 1);
                 }
@@ -1283,8 +1300,8 @@ impl SubtractiveSynth {
                 out_r += y * gain;
                 continue;
             }
-            let mut yl = v.svf.run(l + centre, g, k, kind);
-            let mut yr = v.svf_r.run(r + centre, g, k, kind);
+            let mut yl = v.svf.run(inl, g, k, kind);
+            let mut yr = v.svf_r.run(inr, g, k, kind);
             if kind == 1 {
                 yl = v.svf2.run(yl, g, k, 1);
                 yr = v.svf2_r.run(yr, g, k, 1);
@@ -1413,6 +1430,42 @@ impl Plugin for SubtractiveSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn render(set: &[(&str, f32)], unison: bool) -> Vec<f32> {
+        let mut s = SubtractiveSynth::new();
+        s.prepare(48_000.0, 256, 2);
+        for (k, v) in set {
+            assert!(s.set_param(k, *v));
+        }
+        if unison {
+            assert!(s.set_param("unison", 2.0));
+        }
+        s.note_on(0, 45, 110);
+        let mut out = Vec::new();
+        let mut io = vec![vec![0.0f32; 256]; 2];
+        for _ in 0..40 {
+            s.process(&mut io, 256);
+            out.extend_from_slice(&io[0]);
+        }
+        out
+    }
+
+    /// Drive at 0 leaves the synth as it was, sample for sample (plain and unison paths); turned
+    /// up, it saturates the oscillators into the filter: a full-scale input stays at full scale,
+    /// quieter ones are lifted, and the sound changes.
+    #[test]
+    fn drive_at_zero_changes_nothing_and_up_it_saturates() {
+        for unison in [false, true] {
+            assert_eq!(render(&[], unison), render(&[("drive", 0.0)], unison));
+            let driven = render(&[("drive", 80.0), ("cutoff", 20_000.0)], unison);
+            let clean = render(&[("cutoff", 20_000.0)], unison);
+            assert!(driven.iter().all(|x| x.is_finite()));
+            assert!(driven.iter().zip(&clean).any(|(a, b)| (a - b).abs() > 1e-3));
+        }
+        assert!((drive(1.0, 1.0) - 1.0).abs() < 1e-6 && (drive(-1.0, 0.5) + 1.0).abs() < 1e-6);
+        assert!(drive(0.1, 1.0) > 0.5, "quiet parts are lifted");
+        assert_eq!(drive(f32::NAN, 1.0), 0.0);
+    }
 
     #[test]
     fn a_full_event_queue_drops_and_counts_without_growing() {
