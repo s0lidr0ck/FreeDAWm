@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Instrument",
             [],
             None,
-            "{track?, plugin: id, params?: {id: value}} — an instrument track's instrument: built-in, `clap:`, `vst3:` or `au:` id; `params` sets built-in parameters (clamped into range; unknown ids and other fields are errors)",
+            "{track?, plugin: id, params?: {id: value}, modulation?: {slots, macros}} — an instrument track's instrument: built-in, `clap:`, `vst3:` or `au:` id; `params` sets built-in parameters (clamped into range; unknown ids and other fields are errors); `modulation` a built-in synth's patch (as a preset carries it)",
             has_selection,
             set_instrument
         ),
@@ -134,7 +134,7 @@ fn new_output_track(e: &mut Engine, p: &Value) -> Result<Value> {
 
 /// Fields `mix.instrument` reads. Anything else (a parameter written beside `plugin`, say) used to
 /// be accepted and ignored, so a synth's settings looked set while the render never changed.
-const FIELDS: [&str; 4] = ["track", "tracks", "plugin", "params"];
+const FIELDS: [&str; 5] = ["track", "tracks", "plugin", "params", "modulation"];
 
 fn set_instrument(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(k) = p.as_object().and_then(|o| o.keys().find(|k| !FIELDS.contains(&k.as_str()))) {
@@ -162,6 +162,10 @@ fn set_instrument(e: &mut Engine, p: &Value) -> Result<Value> {
             values.push((k.clone(), pi.clamp(x as f32)));
         }
     }
+    let modulation = match p.get("modulation") {
+        None => soundcraft_model::SynthMod::default(),
+        Some(v) => super::synth_mod::parse_patch("mix.instrument", info.id, v)?,
+    };
     let mut ins = Insert::new(info.id);
     for pi in info.params {
         ins.params.insert(pi.id.to_string(), pi.default);
@@ -169,6 +173,8 @@ fn set_instrument(e: &mut Engine, p: &Value) -> Result<Value> {
     for (k, v) in values {
         ins.params.insert(k, v);
     }
+    ins.modulation = modulation;
+    super::module_ceiling::prepare_insert(&mut ins);
     if let Some(tr) = e.session_mut().track_mut(t) {
         tr.instrument = Some(ins);
         // Another instrument's outputs are its own: they start on its main output.

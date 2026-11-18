@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Load Preset",
         menu: &[],
         shortcut: None,
-        params: "{track, module: id | \"instrument\", preset: name, state?: base64 (a hosted plugin's state, as `mix.module_state` stores it), params?: {id: value} (an instrument's or a hosted plugin's parameters, clamped; a hosted plugin's program)} → {bytes, set}. A hosted preset clears the module's stored parameter values except those an automation lane drives. Undoable; a hosted plugin's running instance is made again from the new state (and from the old one on undo). Not journaled (states can be large).",
+        params: "{track, module: id | \"instrument\", preset: name, state?: base64 (a hosted plugin's state, as `mix.module_state` stores it), params?: {id: value} (an instrument's or a hosted plugin's parameters, clamped; a hosted plugin's program), modulation?: {slots, macros} (a built-in synth's patch: with `params` it replaces the patch, absent = none)} → {bytes, set}. A hosted preset clears the module's stored parameter values except those an automation lane drives. Undoable; a hosted plugin's running instance is made again from the new state (and from the old one on undo). Not journaled (states can be large).",
         enabled: has_tracks,
         run: module_preset,
         journal: false,
@@ -97,6 +97,13 @@ fn module_preset(e: &mut Engine, p: &Value) -> Result<Value> {
             }
             set = checked.len();
             ins.params.extend(checked);
+            if soundcraft_dsp::plugins::synth_mod::has_matrix(&ins.plugin) {
+                // A synth's preset is its whole sound: its patch too (none when it has none).
+                ins.modulation = super::synth_mod::parse_patch(C, &ins.plugin, p.get("modulation").unwrap_or(&Value::Null))?;
+                super::module_ceiling::prepare_insert(ins);
+            } else if p.get("modulation").is_some_and(|v| !v.is_null()) {
+                return Err(bad(C, format!("`{}` has no modulation matrix", ins.plugin)));
+            }
             if hosted {
                 // A program change lives in the plugin's state: undo loads the state back.
                 ins.state_load = next_load();

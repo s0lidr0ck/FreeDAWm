@@ -304,6 +304,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(plugin_state::specs());
         v.extend(module::specs());
         v.extend(module_ceiling::specs());
+        v.extend(synth_mod::specs());
         v.extend(copyq::specs());
         v.extend(module_asset::specs());
         v.extend(module_link::specs());
