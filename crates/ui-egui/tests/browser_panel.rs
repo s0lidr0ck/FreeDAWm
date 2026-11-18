@@ -77,14 +77,14 @@ fn toggle_shows_and_hides_panel() {
 fn tabs_switch_kind() {
     let mut h = browser(app_with_tracks(&["Voice"]));
     assert_eq!(h.state().ui.browser.tab, BrowserTab::Instruments);
-    assert!(has(&h, Role::Button, "Subtractive Synth"));
+    assert!(has(&h, Role::Button, "Burley"));
     assert!(!has(&h, Role::Button, "CleanQ"));
     h.get_by_role_and_label(Role::RadioButton, "Effects").click();
     h.run_steps(3);
     assert_eq!(h.state().ui.browser.tab, BrowserTab::Effects);
     set_text(&mut h, "Clean");
     assert!(has(&h, Role::Button, "CleanQ"));
-    assert!(!has(&h, Role::Button, "Subtractive Synth"));
+    assert!(!has(&h, Role::Button, "Burley"));
 }
 
 #[test]

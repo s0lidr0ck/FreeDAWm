@@ -94,8 +94,8 @@ const MOD_WHEEL: usize = 35;
 
 pub static WAVETABLE_INFO: PluginInfo = PluginInfo {
     id: "wavetable_synth",
-    name: "Wavetable Synth",
-    short_name: "WTSynth",
+    name: "Cicada",
+    short_name: "Cicada",
     category: Category::Instrument,
     params: &WT_PARAMS,
     is_instrument: true,

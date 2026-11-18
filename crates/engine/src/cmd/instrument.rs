@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Instrument",
             [],
             None,
-            "{track?, plugin: id, params?: {id: value}} — an instrument track's instrument: built-in, `clap:`, `vst3:` or `au:` id; `params` sets built-in parameters (clamped into range; unknown ids and other fields are errors)",
+            "{track?, plugin: id, params?: {id: value}, preset?: name} — an instrument track's instrument: built-in, `clap:`, `vst3:` or `au:` id; `params` sets built-in parameters (clamped into range; unknown ids and other fields are errors); `preset` names the preset they came from (shown on a synth's preset display)",
             has_selection,
             set_instrument
         ),
@@ -134,7 +134,7 @@ fn new_output_track(e: &mut Engine, p: &Value) -> Result<Value> {
 
 /// Fields `mix.instrument` reads. Anything else (a parameter written beside `plugin`, say) used to
 /// be accepted and ignored, so a synth's settings looked set while the render never changed.
-const FIELDS: [&str; 4] = ["track", "tracks", "plugin", "params"];
+const FIELDS: [&str; 5] = ["track", "tracks", "plugin", "params", "preset"];
 
 fn set_instrument(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(k) = p.as_object().and_then(|o| o.keys().find(|k| !FIELDS.contains(&k.as_str()))) {
@@ -168,6 +168,12 @@ fn set_instrument(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     for (k, v) in values {
         ins.params.insert(k, v);
+    }
+    // The preset these settings came from (a synth panel's preset display shows it).
+    match p.get("preset") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(s)) => ins.preset = s.chars().take(128).collect(),
+        Some(_) => return Err(bad("mix.instrument", "`preset` must be a name")),
     }
     if let Some(tr) = e.session_mut().track_mut(t) {
         tr.instrument = Some(ins);
@@ -310,6 +316,21 @@ mod tests {
         let out = soundcraft_mix::render_range(e.session(), Range::new(0, 48_000 * secs), 512);
         let n = out[0].len().max(1) as f32;
         (out[0].iter().map(|x| x * x).sum::<f32>() / n).sqrt()
+    }
+
+    /// A synth panel's preset display: `preset` names the preset the settings came from, and is
+    /// a string or nothing.
+    #[test]
+    fn the_instrument_keeps_the_name_of_its_preset() {
+        let mut e = Engine::default();
+        let t = track(&mut e, "instrument");
+        e.execute("mix.instrument", &json!({"track": t.0, "plugin": "subtractive_synth", "params": {"cutoff": 420}, "preset": "Round Bass"}))
+            .unwrap();
+        let ins = e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap();
+        assert_eq!((ins.preset.as_str(), ins.params.get("cutoff").copied()), ("Round Bass", Some(420.0)));
+        assert!(e.execute("mix.instrument", &json!({"track": t.0, "plugin": "subtractive_synth", "preset": 3})).is_err());
+        e.execute("mix.instrument", &json!({"track": t.0, "plugin": "subtractive_synth"})).unwrap();
+        assert_eq!(e.session().track(t).and_then(|tr| tr.instrument.clone()).unwrap().preset, "<factory default>");
     }
 
     #[test]

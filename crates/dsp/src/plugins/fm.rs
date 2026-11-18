@@ -110,8 +110,8 @@ const LFO_MOD: usize = ALGORITHM + 9;
 
 pub static FM_INFO: PluginInfo = PluginInfo {
     id: "fm_synth",
-    name: "FM Synth",
-    short_name: "FM",
+    name: "Steeple",
+    short_name: "Steeple",
     category: Category::Instrument,
     params: &FM_PARAMS,
     is_instrument: true,

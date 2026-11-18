@@ -228,8 +228,8 @@ const MOD_WHEEL: usize = 20;
 
 pub static SYNTH_INFO: PluginInfo = PluginInfo {
     id: "subtractive_synth",
-    name: "Subtractive Synth",
-    short_name: "SubSynth",
+    name: "Burley",
+    short_name: "Burley",
     category: Category::Instrument,
     params: &SYNTH_PARAMS,
     is_instrument: true,
