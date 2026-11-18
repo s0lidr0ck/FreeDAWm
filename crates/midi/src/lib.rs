@@ -28,6 +28,8 @@ pub use smf::{MAX_EVENTS, MAX_TRACKS, Smf, SmfTrack, decode_text, read_smf, writ
 /// Ticks per quarter note used throughout the model.
 pub const PPQ: u32 = 960;
 
+pub mod note_expr;
+
 /// Errors from reading or writing MIDI data.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MidiError {

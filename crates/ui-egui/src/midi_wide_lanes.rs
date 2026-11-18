@@ -96,7 +96,7 @@ pub fn lane(
         toggle(app, lane, false);
         return;
     }
-    let shown = app.midi.ctrl_channel;
+    let shown = crate::midi_lanes::shown_channel(app, seq);
     let channel = crate::midi_lanes::write_channel(shown, seq);
     let pts = points_of(seq, lane, shown);
     // The held value as a stepped line, a dot per point.

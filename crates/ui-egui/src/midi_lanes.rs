@@ -8,6 +8,11 @@
 //! space selects the points inside, the Pencil drags a freehand line that replaces what it crosses,
 //! Delete removes the selected points. The sustain lane is on/off.
 //!
+//! With **Lanes › Channel › Follow the Selected Note** on and one note selected, the lanes show
+//! and write that note's channel and mark its length: in an MPE clip (a channel per note, see
+//! `Event › Give Notes Their Own Channels`) that is the note's own tuning, pressure and
+//! brightness (`soundcraft_midi::note_expr`).
+//!
 //! The lanes show one MIDI channel (picked under **Lanes › Channel**) or every channel, each
 //! channel its own line; new points go on the picked channel, or with every channel shown on the
 //! clip's main channel (the one most of its notes use).
@@ -195,9 +200,26 @@ pub fn write_channel(shown: Option<u8>, seq: &Sequence) -> u8 {
     shown.unwrap_or_else(|| main_channel(seq))
 }
 
+/// The channel the lanes show: the selected note's when they follow it (one note selected),
+/// else the one picked (`None`: every channel).
+pub fn shown_channel(app: &SoundApp, seq: &Sequence) -> Option<u8> {
+    followed_note(app, seq).map(|n| n.channel).or(app.midi.ctrl_channel)
+}
+
+/// The note the lanes follow: the one selected note, while they follow it.
+pub fn followed_note(app: &SoundApp, seq: &Sequence) -> Option<soundcraft_midi::Note> {
+    if !app.midi.ctrl_follow_note {
+        return None;
+    }
+    match app.midi.selected.as_slice() {
+        [i] => seq.notes.get(*i).copied(),
+        _ => None,
+    }
+}
+
 /// The selected points of `kind` on the shown channel (stale ones dropped).
 fn selected(app: &SoundApp, seq: &Sequence, kind: CtrlKind) -> Vec<usize> {
-    let ch = app.midi.ctrl_channel;
+    let ch = shown_channel(app, seq);
     match &app.midi.ctrl_sel {
         Some((k, v)) if *k == kind => {
             v.iter().copied().filter(|i| seq.ctrls.get(*i).is_some_and(|c| c.kind == kind && ch.is_none_or(|ch| c.channel == ch))).collect()
@@ -287,17 +309,29 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
         }
     }
     ui.separator();
-    ui.menu_button(channel_menu_label(app.midi.ctrl_channel), |ui| {
+    let label = if app.midi.ctrl_follow_note { "Channel: Selected Note".to_string() } else { channel_menu_label(app.midi.ctrl_channel) };
+    ui.menu_button(label, |ui| {
         let used: Vec<u8> = (0u8..16).filter(|ch| seq.ctrls.iter().any(|c| c.channel == *ch)).collect();
-        if ui.radio(app.midi.ctrl_channel.is_none(), "All Channels").clicked() {
+        let follow = ui
+            .radio(app.midi.ctrl_follow_note, "Follow the Selected Note")
+            .on_hover_text("With one note selected: its channel, over its length (in an MPE clip, the note's own expression)");
+        if follow.clicked() {
+            app.midi.ctrl_follow_note = !app.midi.ctrl_follow_note;
+            app.midi.ctrl_sel = None;
+            ui.close();
+        }
+        ui.separator();
+        if ui.radio(app.midi.ctrl_channel.is_none() && !app.midi.ctrl_follow_note, "All Channels").clicked() {
             app.midi.ctrl_channel = None;
+            app.midi.ctrl_follow_note = false;
             app.midi.ctrl_sel = None;
             ui.close();
         }
         for ch in 0u8..16 {
             let text = if used.contains(&ch) { format!("Channel {} \u{2022}", ch + 1) } else { format!("Channel {}", ch + 1) };
-            if ui.radio(app.midi.ctrl_channel == Some(ch), text).clicked() {
+            if ui.radio(app.midi.ctrl_channel == Some(ch) && !app.midi.ctrl_follow_note, text).clicked() {
                 app.midi.ctrl_channel = Some(ch);
+                app.midi.ctrl_follow_note = false;
                 app.midi.ctrl_sel = None;
                 ui.close();
             }
@@ -305,6 +339,32 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
     })
     .response
     .on_hover_text("The channel the lanes show and new points go on");
+    // The selected note's own expression (MPE): channels of its own, and clearing it.
+    if let Some(cid) = app.midi.clip {
+        let one = match app.midi.selected.as_slice() {
+            [i] => Some(*i),
+            _ => None,
+        };
+        let shared = one.is_some_and(|i| soundcraft_midi::note_expr::shares_channel(seq, i));
+        let r = ui.add_enabled(!seq.notes.is_empty(), egui::Button::new("Give Notes Their Own Channels"));
+        let r = r.on_hover_text("Each note on a channel of its own (2-16), so each carries its own bend, pressure and brightness (MPE)");
+        if r.clicked() {
+            if let Err(e) = app.run("midi.own_channels", serde_json::json!({"clip": cid.0})) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+        let r = ui.add_enabled(one.is_some() && !shared, egui::Button::new("Clear the Note's Expression"));
+        let r = r.on_disabled_hover_text("Select one note on a channel of its own");
+        if r.clicked()
+            && let Some(i) = one
+        {
+            if let Err(e) = app.run("midi.note_expr_set", serde_json::json!({"clip": cid.0, "index": i, "kind": "all", "points": []})) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+    }
     ui.separator();
     if ui.button("Show Lanes with Data").clicked() {
         for k in lanes_with_data(seq) {
@@ -382,7 +442,12 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
         let y = lg.y_of(0);
         p.line_segment([pos2(r.min.x, y), pos2(r.max.x, y)], Stroke::new(1.0, Color32::from_rgb(60, 60, 64)));
     }
-    let shown_ch = app.midi.ctrl_channel;
+    let shown_ch = shown_channel(app, seq);
+    // The followed note's length, marked behind the points.
+    if let Some(n) = followed_note(app, seq) {
+        let span = Rect::from_x_y_ranges(geo.x_of(n.start)..=geo.x_of(n.end()), r.y_range());
+        p.rect_filled(span.intersect(r), 0.0, Color32::from_rgba_unmultiplied(120, 190, 250, 22));
+    }
     let events = events_of(seq, kind, shown_ch);
     let channel = write_channel(shown_ch, seq);
     let sel = selected(app, seq, kind);

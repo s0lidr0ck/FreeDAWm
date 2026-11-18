@@ -262,6 +262,9 @@ pub struct MidiEditorState {
     /// The MIDI channel (0-15) the controller lanes show and write; `None`: every channel, each
     /// its own line, new points on the clip's main channel.
     pub ctrl_channel: Option<u8>,
+    /// The lanes follow the selected note: with one note selected they show and write its
+    /// channel (in an MPE clip, that note's own expression), its length marked.
+    pub ctrl_follow_note: bool,
     /// With a key on the Key ruler: only the scale's rows (and those of pitches with notes).
     pub fold_scale: bool,
     /// The MIDI Event List's filters, Insert row and a position being typed.
@@ -351,6 +354,7 @@ impl Default for MidiEditorState {
             lanes: Vec::new(),
             ctrl_sel: None,
             ctrl_channel: None,
+            ctrl_follow_note: false,
             fold_scale: false,
             event_list: crate::midi_event_list::EventListState::default(),
             drum_view: None,
