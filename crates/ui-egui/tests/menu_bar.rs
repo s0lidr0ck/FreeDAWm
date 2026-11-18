@@ -180,6 +180,26 @@ fn items_ending_in_dots_open_a_dialog_or_window() {
     assert!(at_once.is_empty(), "these act at once: drop their dots: {at_once:#?}");
 }
 
+/// The other half of the rule in menubar.txt's header: an item that opens a dialog or a window
+/// (the Process window, the MIDI Operations window, Strip Silence's dialog…) ends in "..." or "…".
+/// Window toggles (`window.*`, which show or hide a window, the Window menu's way) and Save
+/// Session (which asks for a path only for an unsaved session) are the exceptions.
+#[test]
+fn items_that_open_a_dialog_or_window_end_in_dots() {
+    let extra = menus::ui_aliases();
+    let mut undotted = Vec::new();
+    for (parent, n) in all_leaves() {
+        if n.kind != MenuKind::Item || menus::opens_window(&n.label) {
+            continue;
+        }
+        let id = menus::command_for_path(&n.path, &extra).unwrap_or_default();
+        if menus::opens_dialog(&id, &n.path) && !id.starts_with("window.") && id != "session.save" {
+            undotted.push(format!("{parent} > {} (`{id}`)", n.label));
+        }
+    }
+    assert!(undotted.is_empty(), "these open a dialog or window: give them dots: {undotted:#?}");
+}
+
 #[test]
 fn the_ai_menu_holds_every_ml_tool() {
     let tree = menus::tree();

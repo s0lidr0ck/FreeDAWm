@@ -148,7 +148,7 @@ Edit > Heal Separation
 Edit > Consolidate
 Edit > Split into Files = @edit.split_into_files
 Edit > Mute
-Edit > Strip Silence
+Edit > Strip Silence... = Edit > Strip Silence
 Edit > Shift...
 Edit > Fades > Create...
 Edit > Fades > Delete
@@ -459,23 +459,23 @@ Clip > Remove > Warp = Clip > Remove Warp
 Clip > Remove > Pitch Shift = Clip > Remove Pitch Shift
 
 Event > ## Time & tempo
-Event > Time Operations > Time Operations Window
+Event > Time Operations > Time Operations Window... = Event > Time Operations > Time Operations Window
 Event > Time Operations > Change Meter... = soon
 Event > Time Operations > Insert Time = Event > Time Operations > Insert Time...
 Event > Time Operations > Cut Time = Event > Time Operations > Cut Time...
-Event > Tempo Operations Window = Event > Tempo Operations > Tempo Operations Window
+Event > Tempo Operations Window... = Event > Tempo Operations > Tempo Operations Window
 Event > Add Key Change... = soon
 Event > ---
 Event > ## MIDI editing
-Event > MIDI Operations Window = Event > MIDI Operations > MIDI Operations Window
+Event > MIDI Operations Window... = Event > MIDI Operations > MIDI Operations Window
 Event > Quantize... = Event > MIDI Operations > Quantize...
 Event > Transpose... = Event > MIDI Operations > Transpose...
-Event > Change Duration = Event > MIDI Operations > Change Duration...
+Event > Change Duration... = Event > MIDI Operations > Change Duration...
 Event > Remove Duplicate Notes
 Event > Snap Notes to Scale = @midi.snap_to_scale
 Event > More MIDI > Change Velocity... = @event.change_velocity
-Event > More MIDI > Select/Split Notes = Event > MIDI Operations > Select/Split Notes...
-Event > More MIDI > Input Quantize = Event > MIDI Operations > Input Quantize...
+Event > More MIDI > Select/Split Notes... = Event > MIDI Operations > Select/Split Notes...
+Event > More MIDI > Input Quantize... = Event > MIDI Operations > Input Quantize...
 Event > More MIDI > Step Input... = @window.step_input
 Event > More MIDI > Capture MIDI = @ui.capture_midi [desktop]
 Event > More MIDI > Undo Last Pass = @ui.midi_undo_pass [desktop]
@@ -487,12 +487,12 @@ Event > More MIDI > Chord Pads... = @window.chord_pads [desktop]
 Event > More MIDI > Write Arpeggio = @event.write_arpeggio
 Event > More MIDI > Write Progression = @event.write_progression
 Event > More MIDI > ---
-Event > More MIDI > MIDI Track Offsets = Event > MIDI Track Offsets
-Event > More MIDI > MIDI Real-Time Properties = Event > MIDI Real-Time Properties
+Event > More MIDI > MIDI Track Offsets... = Event > MIDI Track Offsets
+Event > More MIDI > MIDI Real-Time Properties... = Event > MIDI Real-Time Properties
 Event > ---
 Event > ## Analyse
 Event > Detect Tempo... = @event.tempo_detect
-Event > Beat Detective
+Event > Beat Detective... = Event > Beat Detective
 Event > Identify Beat = Event > Identify Beat...
 Event > Extract Chords from Selection
 Event > ---
@@ -500,38 +500,38 @@ Event > ## Panic
 Event > All MIDI Notes Off
 
 Process > ## Tone
-Process > EQ > Channel Strip = AudioSuite > EQ > Channel Strip
-Process > EQ > EQ 1-Band = AudioSuite > EQ > EQ3 1-Band
-Process > EQ > EQ 7-Band = AudioSuite > EQ > EQ3 7-Band
-Process > Dynamics > FET Compressor = AudioSuite > Dynamics > BF-76
-Process > Dynamics > De-Esser = AudioSuite > Dynamics > Dyn3 De-Esser
-Process > Dynamics > Expander / Gate = AudioSuite > Dynamics > Dyn3 Expander/Gate
-Process > Dynamics > Maximizer = AudioSuite > Dynamics > Maxim
+Process > EQ > Channel Strip... = AudioSuite > EQ > Channel Strip
+Process > EQ > EQ 1-Band... = AudioSuite > EQ > EQ3 1-Band
+Process > EQ > EQ 7-Band... = AudioSuite > EQ > EQ3 7-Band
+Process > Dynamics > FET Compressor... = AudioSuite > Dynamics > BF-76
+Process > Dynamics > De-Esser... = AudioSuite > Dynamics > Dyn3 De-Esser
+Process > Dynamics > Expander / Gate... = AudioSuite > Dynamics > Dyn3 Expander/Gate
+Process > Dynamics > Maximizer... = AudioSuite > Dynamics > Maxim
 Process > ---
 Process > ## Time & pitch
-Process > Pitch Shift > Pitch Shift = AudioSuite > Pitch Shift > Pitch II
-Process > Pitch Shift > Time Shift = AudioSuite > Pitch Shift > Time Shift
-Process > Pitch Shift > Speed Ramp = AudioSuite > Pitch Shift > Vari-Fi
+Process > Pitch Shift > Pitch Shift... = AudioSuite > Pitch Shift > Pitch II
+Process > Pitch Shift > Time Shift... = AudioSuite > Pitch Shift > Time Shift
+Process > Pitch Shift > Speed Ramp... = AudioSuite > Pitch Shift > Vari-Fi
 Process > ---
 Process > ## Space & colour
-Process > Room Reverb = AudioSuite > Reverb > D-Verb
-Process > Mod Delay = AudioSuite > Delay > Mod Delay III
-Process > Ring Mod = AudioSuite > Modulation > Sci-Fi
-Process > Guitar Amp = AudioSuite > Harmonic > Eleven Lite
-Process > Bit Crusher = AudioSuite > Harmonic > Lo-Fi
-Process > Rectifier = AudioSuite > Harmonic > Recti-Fi
+Process > Room Reverb... = AudioSuite > Reverb > D-Verb
+Process > Mod Delay... = AudioSuite > Delay > Mod Delay III
+Process > Ring Mod... = AudioSuite > Modulation > Sci-Fi
+Process > Guitar Amp... = AudioSuite > Harmonic > Eleven Lite
+Process > Bit Crusher... = AudioSuite > Harmonic > Lo-Fi
+Process > Rectifier... = AudioSuite > Harmonic > Recti-Fi
 Process > ---
 Process > ## Utilities
-Process > Normalize = AudioSuite > Other > Normalize
-Process > Gain = AudioSuite > Other > Gain
-Process > Reverse = AudioSuite > Other > Reverse
-Process > Invert = AudioSuite > Other > Invert
-Process > More > DC Offset Removal = AudioSuite > Other > DC Offset Removal
-Process > More > Duplicate = AudioSuite > Other > Duplicate
-Process > More > Signal Generator = AudioSuite > Other > Signal Generator
+Process > Normalize... = AudioSuite > Other > Normalize
+Process > Gain... = AudioSuite > Other > Gain
+Process > Reverse... = AudioSuite > Other > Reverse
+Process > Invert... = AudioSuite > Other > Invert
+Process > More > DC Offset Removal... = AudioSuite > Other > DC Offset Removal
+Process > More > Duplicate... = AudioSuite > Other > Duplicate
+Process > More > Signal Generator... = AudioSuite > Other > Signal Generator
 Process > More > ---
-Process > More > Process History
-Process > More > Sample Editor
+Process > More > Process History... = Process > More > Process History
+Process > More > Sample Editor... = Process > More > Sample Editor
 
 AI > ## Separate [desktop]
 AI > Separate Stems… [desktop]
@@ -651,7 +651,7 @@ Setup > MIDI Mappings... = @window.midi_mappings [desktop]
 Setup > Network... = @window.network [desktop]
 Setup > ---
 Setup > ## Session & keys
-Setup > Session
+Setup > Session... = Setup > Session
 Setup > Keyboard Shortcuts...
 Setup > Preferences...
 Setup > --- [desktop]
