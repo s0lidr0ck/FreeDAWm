@@ -244,6 +244,8 @@ pub struct UiState {
     pub teleprompter_separate: bool,
     /// That window's last position and inner size, `[x, y, w, h]`.
     pub teleprompter_window: Option<[f32; 4]>,
+    /// The Teleprompter shows the lines' chords above their words (right-click it; off by default).
+    pub teleprompter_chords: bool,
     pub show_session_info: bool,
     pub show_audio_health: bool,
     /// Clip › ARA Plug-ins… (`window.ara`).
@@ -618,6 +620,7 @@ impl Default for UiState {
             show_teleprompter: false,
             teleprompter_separate: false,
             teleprompter_window: None,
+            teleprompter_chords: false,
             show_session_info: false,
             show_audio_health: false,
             show_ara: false,

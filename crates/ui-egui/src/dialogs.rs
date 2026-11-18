@@ -800,7 +800,9 @@ fn path_dialog(id: &str, home: &str, name: &str) -> Option<Dialog> {
     let ext = match id {
         "file.export_midi" | "file.export_clip_midi" => ".mid",
         "file.export_lyrics" => ".lrc",
-        "file.export_lyrics_text" => ".txt",
+        "file.export_lyrics_text" | "lyrics.export_sheet_text" => ".txt",
+        "lyrics.export_sheet_chords" => " chords.txt",
+        "lyrics.export_chordpro" => ".cho",
         "file.export_sibelius" => ".musicxml",
         "file.print_score" => ".svg",
         "file.export_clip_groups" => ".scgrp",

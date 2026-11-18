@@ -52,10 +52,11 @@ pub fn jump_key() -> egui::Id {
     egui::Id::new("soundcraft-lyrics-jump")
 }
 
-/// The marker's title: "<n> <text>".
+/// The marker's title: "<n> <text>" (the words as sung: the line's chords left out).
 pub fn title(s: &Session, line: u64) -> String {
     let sheet = &s.lyric_sheet;
-    let text = sheet.lines.iter().find(|l| l.id == line).map_or("", |l| l.text.trim());
+    let text = sheet.lines.iter().find(|l| l.id == line).map_or(String::new(), |l| soundcraft_model::sung_text(&l.text).trim().to_string());
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     match sheet.number_of(line) {
         Some(n) => format!("{n}  {text}"),
         None => text.to_string(),
@@ -281,5 +282,16 @@ mod tests {
         assert_eq!(dragged(&s, Drag { grip: Grip::Start, ..d }, 1500), (1500, 2000));
         assert_eq!(dragged(&s, Drag { grip: Grip::Start, ..d }, 9000), (1999, 2000));
         assert_eq!(dragged(&s, Drag { grip: Grip::End, ..d }, 500), (1000, 1001));
+    }
+
+    #[test]
+    fn marker_titles_leave_chords_out() {
+        let mut s = Session::default();
+        s.lyric_sheet.lines = ["{Verse 1}", "[Am] [G]", "[Am]Hello dark[G]ness my [C] old friend"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| soundcraft_model::SheetLine::new(1 + i as u64, *t))
+            .collect();
+        assert_eq!(title(&s, 3), "1  Hello darkness my old friend");
     }
 }
