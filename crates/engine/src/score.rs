@@ -158,10 +158,19 @@ pub fn clip_items(s: &Session, clip: &soundcraft_model::Clip) -> Vec<(i64, Item)
         let b = quantize(st.saturating_add(n.length).min(end)).max(a + 1);
         notes.push((a, b, n.pitch));
     }
+    // The clip's words inside its window, sung under the notes they fall on (as the printed
+    // score has them).
+    let mut words = Vec::new();
+    for w in clip.lyrics.iter().flat_map(|l| &l.words) {
+        let at = clip.start.saturating_add(w.start);
+        if at >= clip.start && at < clip.end() && !w.text.trim().is_empty() {
+            words.push((quantize(s.tempo.samples_to_ticks(at, sr)), w.text.trim().to_string()));
+        }
+    }
     let last = notes.iter().map(|x| x.1).max().unwrap_or(0).max(quantize(end));
     let bars = measure_grid(s, last);
     let mut out = Vec::new();
-    for ((ms, _, _, _, _, _), m) in bars.iter().zip(fill(&bars, &notes)) {
+    for ((ms, _, _, _, _, _), m) in bars.iter().zip(fill_sung(&bars, &notes, &words)) {
         let mut at = *ms;
         for it in m.items {
             let tick = at.saturating_mul(UNIT).saturating_sub(base);
@@ -300,6 +309,7 @@ fn split_units(mut units: i64) -> Vec<u32> {
     out
 }
 
+#[cfg(test)]
 fn fill(bars: &[Bar], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
     fill_sung(bars, notes, &[])
 }

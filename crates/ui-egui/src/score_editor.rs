@@ -525,6 +525,14 @@ fn staff(app: &mut SoundApp, ui: &mut egui::Ui, cid: ClipId) {
         for beam in &marks.beams {
             draw_beam(&p, &g, beam, flats, ink);
         }
+        // The lyrics under the staff, each word at its note; a word that would run into the one
+        // before it moves right to clear it.
+        let mut free_from = f32::NEG_INFINITY;
+        for (tick, word) in &marks.lyrics {
+            let x = (g.x_of(*tick) - 4.0).max(free_from);
+            let shown = p.text(pos2(x, y_of(-10) + 22.0), Align2::LEFT_TOP, word, regular(12.0), ink);
+            free_from = shown.max.x + 5.0;
+        }
         let beamed: Vec<i64> = marks.beams.iter().flat_map(|b| b.iter().map(|m| m.0)).collect();
         // Notes.
         for (i, n) in sequence.notes.iter().enumerate().filter(|(_, n)| n.start >= 0 && n.start < len_ticks) {
@@ -612,6 +620,8 @@ pub struct Marks {
     pub carried: Vec<(i64, u32, u8)>,
     /// Beamed groups: eighths and shorter within one beat, each (tick, sixteenths, pitches).
     pub beams: Vec<Vec<(i64, u32, Vec<u8>)>>,
+    /// The clip's lyrics, each word under the note it is sung on: (tick, text).
+    pub lyrics: Vec<(i64, String)>,
 }
 
 /// The rests, ties, carried heads and beam groups of a clip's laid-out items.
@@ -622,6 +632,9 @@ pub fn notation(items: &[(i64, soundcraft_engine::score::Item)]) -> Marks {
         if it.pitches.is_empty() {
             m.rests.push((*tick, it.units));
             continue;
+        }
+        if let Some(w) = &it.lyric {
+            m.lyrics.push((*tick, w.clone()));
         }
         if it.tie_stop {
             for p in &it.pitches {
@@ -811,6 +824,34 @@ mod tests {
         assert_eq!(m.ties.len(), 1, "{items:?}");
         assert!(m.rests.iter().any(|r| r.0 == 960), "a rest after the eighths: {:?}", m.rests);
         s.tracks.clear();
+    }
+
+    /// The score view sings the clip's lyrics under the notes they fall on: each word at its
+    /// note's tick, none on a rest or a carried head.
+    #[test]
+    fn a_clips_lyrics_go_under_their_notes() {
+        use soundcraft_midi::{Note, Sequence};
+        let s = soundcraft_model::Session::default();
+        let n = |start: i64, pitch: u8| Note {
+            probability: 100,
+            start,
+            length: 960,
+            pitch,
+            velocity: 100,
+            release_velocity: 64,
+            channel: 0,
+            muted: false,
+        };
+        let seq = Sequence { notes: vec![n(0, 60), n(960, 62), n(2880, 64)], ..Sequence::default() };
+        let len = s.tempo.tick_to_samples(3840, s.sample_rate);
+        let mut clip = soundcraft_model::Clip::midi(soundcraft_model::ClipId(1), "c", 0, len, seq);
+        let at = |tick: i64| s.tempo.tick_to_samples(tick, s.sample_rate);
+        let word = |tick: i64, text: &str| soundcraft_model::LyricWord { start: at(tick), end: at(tick + 100), text: text.into() };
+        clip.lyrics = vec![soundcraft_model::LyricLine { start: 0, end: at(3000), words: vec![word(0, "Hap"), word(960, "py"), word(2880, "day")] }];
+        let m = super::notation(&soundcraft_engine::score::clip_items(&s, &clip));
+        assert_eq!(m.lyrics, vec![(0, "Hap".to_string()), (960, "py".to_string()), (2880, "day".to_string())]);
+        clip.lyrics.clear();
+        assert!(super::notation(&soundcraft_engine::score::clip_items(&s, &clip)).lyrics.is_empty());
     }
 
     #[test]
