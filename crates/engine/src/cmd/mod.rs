@@ -243,6 +243,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pattern::specs());
         v.extend(juke::specs());
         v.extend(multisample::specs());
+        v.extend(wavetable::specs());
         v.extend(clip_clean::specs());
         v.extend(clip_props::specs());
         v.extend(clip_automation::specs());

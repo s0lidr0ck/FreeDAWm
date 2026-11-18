@@ -1072,6 +1072,11 @@ impl PreparedState {
     pub fn new_shared(shared: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
         PreparedState { shared: Some(shared), ..PreparedState::new(Vec::new()) }
     }
+
+    /// A new preparation of `data` (shared with an earlier one) and an object for the plugin.
+    pub fn with_shared(data: std::sync::Arc<[f64]>, shared: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        PreparedState { data, shared: Some(shared), ..PreparedState::new(Vec::new()) }
+    }
 }
 
 impl PartialEq for PreparedState {

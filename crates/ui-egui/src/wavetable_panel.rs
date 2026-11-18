@@ -22,8 +22,16 @@ fn param(ins: &Insert, id: &str) -> f32 {
 
 /// One cycle of `bank` at `pos` (0..1) as `n` points across `r`, peak ±1 at the top and bottom.
 pub fn wave_points(bank: usize, pos: f32, n: usize, r: Rect) -> Vec<Pos2> {
+    table_points(None, bank, pos, n, r)
+}
+
+/// [`wave_points`] from an imported table when there is one (`user`), else from `bank`.
+pub fn table_points(user: Option<&soundcraft_dsp::plugins::wavetable::user::UserTable>, bank: usize, pos: f32, n: usize, r: Rect) -> Vec<Pos2> {
     let mut y = vec![0.0f32; n.max(2)];
-    tables::draw(bank, pos, &mut y);
+    match user {
+        Some(t) => t.draw(pos, &mut y),
+        None => tables::draw(bank, pos, &mut y),
+    }
     let last = (y.len() - 1) as f32;
     y.iter()
         .enumerate()
@@ -41,7 +49,9 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert) {
     let env_r = Rect::from_min_size(pos2(amp_r.max.x + 8.0, row.min.y), vec2(row.max.x - amp_r.max.x - 8.0, row.height()));
     let bank = param(ins, "table").round().clamp(0.0, (tables::BANKS.len() - 1) as f32) as usize;
     let pos = (param(ins, "position") / 100.0).clamp(0.0, 1.0);
-    let name = tables::BANKS.get(bank).copied().unwrap_or("");
+    // An imported table plays instead of the bank (see `wavetable_import`).
+    let user = crate::wavetable_import::user_table(ins);
+    let name = user.as_ref().map_or(tables::BANKS.get(bank).copied().unwrap_or(""), |t| t.name.as_str());
     frame(ui, wave_r, &format!("Table · {name} · {:.0}%", pos * 100.0));
     let plot = wave_r.shrink2(vec2(8.0, 10.0)).with_min_y(wave_r.min.y + 22.0);
     // Frames further along, faint and stepped up and to the right behind the current one.
@@ -51,11 +61,13 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert) {
             continue;
         }
         let shift = vec2(k as f32 * 6.0, -(k as f32) * 4.0);
-        let pts: Vec<Pos2> = wave_points(bank, p, 96, plot.shrink2(vec2(12.0, 8.0))).iter().map(|q| *q + shift).collect();
+        let pts: Vec<Pos2> = table_points(user.as_deref(), bank, p, 96, plot.shrink2(vec2(12.0, 8.0))).iter().map(|q| *q + shift).collect();
         ui.painter().add(egui::Shape::line(pts, Stroke::new(1.0, t.text_dim.gamma_multiply(0.35))));
     }
     ui.painter().hline(plot.x_range(), plot.center().y, Stroke::new(1.0, t.text_dim.gamma_multiply(0.3)));
-    line(ui, &wave_points(bank, pos, 160, plot.shrink2(vec2(12.0, 8.0))), t.accent);
+    line(ui, &table_points(user.as_deref(), bank, pos, 160, plot.shrink2(vec2(12.0, 8.0))), t.accent);
+    // A dropped audio file opens Import Wavetable.
+    crate::wavetable_import::drop_target(app, ui.ctx(), wave_r, track);
     // The table as a bar along the bottom: the position, and where envelope 2 takes it.
     let bar = Rect::from_min_max(pos2(plot.min.x, plot.max.y - 3.0), pos2(plot.max.x, plot.max.y));
     ui.painter().rect_filled(bar, 1.0, t.text_dim.gamma_multiply(0.2));
@@ -68,7 +80,11 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert) {
     );
     ui.painter().circle_filled(pos2(x_of(pos), bar.center().y), 3.5, t.accent);
     let resp = ui.interact(plot, egui::Id::new(("wavetable-wave", track.0)), Sense::drag());
-    let resp = resp.on_hover_text(format!("{name} at {:.0}% · drag sideways to move the position", pos * 100.0));
+    let resp = resp
+        .on_hover_text(format!("{name} at {:.0}% · drag sideways to move the position · drop an audio file to make a table from it", pos * 100.0));
+    if resp.secondary_clicked() || resp.double_clicked() {
+        crate::wavetable_import::open(app, track, None);
+    }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Wavetable position"));
     if resp.dragged() {
         let new = ((pos + resp.drag_delta().x / plot.width()) * 100.0).clamp(0.0, 100.0);
