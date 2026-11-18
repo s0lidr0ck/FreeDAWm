@@ -94,7 +94,7 @@ impl MidiOutputs {
         MidiOutputs { backend, hub: external_midi::hub(), ports: Vec::new(), choices, reserved: Vec::new(), wanted: Vec::new(), last_scan: None }
     }
 
-    /// The system's ports (`None` where there is no MIDI backend: the web build).
+    /// The system's ports (`None` where there is no MIDI backend).
     pub fn system(choices: BTreeMap<String, bool>) -> Option<MidiOutputs> {
         system_backend().map(|b| MidiOutputs::new(b, choices))
     }
@@ -293,7 +293,6 @@ fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, st
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod system {
     use super::{MidiOutBackend, MidiSend};
 
@@ -340,38 +339,17 @@ mod system {
 
 /// The system's MIDI output backend (`None` on the web).
 pub fn system_backend() -> Option<Box<dyn MidiOutBackend>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Some(Box::new(system::Midir))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
+    Some(Box::new(system::Midir))
 }
 
 /// Opens the system's output port `name` directly (a control surface's feedback port).
 pub fn open_system_port(name: &str) -> Result<Box<dyn MidiSend>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        system::open_port(name)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        Err(format!("{name}: no MIDI output here"))
-    }
+    system::open_port(name)
 }
 
 /// The system's output port names (empty on the web).
 pub fn system_port_names() -> Vec<String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        system::port_names()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        Vec::new()
-    }
+    system::port_names()
 }
 
 /// A backend with ports a test adds and removes; what each port was sent is kept. Shared state,

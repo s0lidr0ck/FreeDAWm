@@ -62,7 +62,6 @@ pub fn record_latency(measured: Option<(i64, u32)>, manual: i64, l: Latency) -> 
 const MEASURE_SECONDS: f64 = 2.0;
 /// How long a measurement may be out before it counts as lost (the output stopped): its two
 /// seconds plus a generous margin. (On the web there is no clock to time it out with.)
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(5);
 /// Frames of the pre-click window (the noise floor), in seconds.
 const LEAD_SECONDS: f64 = 0.1;

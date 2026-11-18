@@ -240,7 +240,6 @@ pub struct InputFeed {
     overflows: AtomicU64,
     /// The input callback's reported latency (capture to callback), in ns.
     input_latency_ns: AtomicU64,
-    #[cfg(not(target_arch = "wasm32"))]
     clock: std::time::Instant,
 }
 
@@ -262,21 +261,13 @@ impl InputFeed {
             underflows: AtomicU64::new(0),
             overflows: AtomicU64::new(0),
             input_latency_ns: AtomicU64::new(0),
-            #[cfg(not(target_arch = "wasm32"))]
             clock: std::time::Instant::now(),
         }
     }
 
     /// Now on the feed's clock, in ns (never 0); 0 where there is no clock (the web).
     fn now_ns(&self) -> u64 {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            u64::try_from(self.clock.elapsed().as_nanos()).unwrap_or(u64::MAX).saturating_add(1)
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            0
-        }
+        u64::try_from(self.clock.elapsed().as_nanos()).unwrap_or(u64::MAX).saturating_add(1)
     }
 
     /// One clock: the reader pops exactly the frames asked for (see the module docs). Holds

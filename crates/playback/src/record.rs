@@ -323,9 +323,7 @@ pub struct Recorder {
     /// ones wait in `memory` for [`Recorder::take_audio`].
     in_memory: bool,
     memory: Vec<(PathBuf, Vec<u8>)>,
-    /// The callback count last seen, and since when (the browser has no `Instant`: its page says
-    /// when the microphone goes, [`ExternalInput::gone`]).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The callback count last seen, and since when.
     seen: (u64, Instant),
 }
 
@@ -629,7 +627,6 @@ impl Recorder {
             recording: Vec::new(),
             in_memory: false,
             memory: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             seen: (0, Instant::now()),
         }
     }
@@ -909,13 +906,6 @@ impl Recorder {
         self.stalled()
     }
 
-    /// The browser cannot tell (no `Instant`); its page says when the input goes.
-    #[cfg(target_arch = "wasm32")]
-    fn stalled(&mut self) -> Option<Trouble> {
-        None
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn stalled(&mut self) -> Option<Trouble> {
         let name = &self.device_name;
         let beats = self.capture.beats.load(Ordering::Relaxed);

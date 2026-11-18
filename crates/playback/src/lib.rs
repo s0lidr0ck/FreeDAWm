@@ -1,5 +1,5 @@
 //! Realtime playback through the system audio device (cpal: CoreAudio, WASAPI, PipeWire with its
-//! "All sources" input (see `pw`), ALSA, JACK, WebAudio).
+//! "All sources" input (see `pw`), ALSA, JACK).
 //!
 //! The UI thread owns a [`Player`]; the audio callback owns the [`MixEngine`] and a snapshot of
 //! the session (`Arc<Session>`) that the UI swaps whenever the document changes. Commands go to
@@ -214,7 +214,6 @@ enum Cmd {
     /// thread: `MixEngine::drain_plugins` grows the retired lists, once, at the end of the
     /// stream's life (it replaces frees on the audio thread, which are worse).
     /// (Not on the web: one thread, nothing to wait for.)
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Shutdown,
 }
 
@@ -308,7 +307,6 @@ impl Shared {
 /// True when filling a callback took longer than the device's real period (`period` frames at
 /// `device_rate`: the larger of the configured buffer and recent callbacks, not one small
 /// callback's frames): the device ran dry.
-#[cfg(not(target_arch = "wasm32"))]
 fn late(elapsed: std::time::Duration, period: usize, device_rate: f64) -> bool {
     elapsed.as_secs_f64() > period as f64 / device_rate.max(1.0)
 }
@@ -317,7 +315,6 @@ fn late(elapsed: std::time::Duration, period: usize, device_rate: f64) -> bool {
 /// callback's audio (`expected`) by more than 3/4 of the real period (`period` frames at `rate`):
 /// the device played silence in between. Callback sizes that vary (WASAPI shared mode's
 /// 480 → 240 → 480) stay inside the tolerance; audio that plays early is no gap.
-#[cfg(not(target_arch = "wasm32"))]
 fn gap(expected: std::time::Duration, actual: std::time::Duration, period: usize, rate: f64) -> bool {
     actual.as_secs_f64() - expected.as_secs_f64() > 0.75 * period as f64 / rate.max(1.0)
 }
@@ -362,7 +359,6 @@ impl Fault {
 }
 
 /// How long a playing output may go without a block before it counts as stalled.
-#[cfg(not(target_arch = "wasm32"))]
 const STALL: std::time::Duration = std::time::Duration::from_secs(2);
 /// Seconds of audio played from disk read before the transport rolls ([`Player::play`]), and
 /// the longest Play waits for them (a slow disk: the rest streams, a block late is silence).
@@ -372,16 +368,9 @@ const PREPARE_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
 /// Nanoseconds on a process-wide monotonic clock (0 on the web, which has no `Instant`): the
 /// time base of [`TransportProbe`] readings.
 pub fn clock_ns() -> u64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-        let epoch = EPOCH.get_or_init(std::time::Instant::now);
-        u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        0
-    }
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let epoch = EPOCH.get_or_init(std::time::Instant::now);
+    u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
 /// One reading of the transport through a [`TransportProbe`].
@@ -416,7 +405,6 @@ impl TransportProbe {
 
 /// True once the block count `beats` has stood still for `STALL` while playing; `seen` is the
 /// count last seen and since when.
-#[cfg(not(target_arch = "wasm32"))]
 fn stalled(seen: &mut Option<(u64, std::time::Instant)>, beats: u64, playing: bool) -> bool {
     match *seen {
         Some((b, since)) if playing && b == beats => since.elapsed() >= STALL,
@@ -623,13 +611,11 @@ struct Garbage {
     /// The answer to [`Cmd::Shutdown`]: every instance the audio thread held. Nothing follows
     /// but a lent engine's [`Cmd::Return`] drained after it, which comes as `engine` with `last`
     /// set too (the audio thread never keeps it).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     last: bool,
 }
 
 /// The silent clock's audio state. Its thread fills stereo frames, so the layout is stereo from
 /// the start (not the main's width, which the first fill would lay out again).
-#[cfg(not(target_arch = "wasm32"))]
 fn clock_state(rx: Receiver<Cmd>, shared: Arc<Shared>, session: Arc<Session>, garbage: Sender<Garbage>) -> AudioState {
     let rate = f64::from(session.sample_rate.hz());
     AudioState::new(rx, shared, session, rate, max_block_for(None), garbage).with_device_channels(2)
@@ -2042,7 +2028,6 @@ struct Side {
     /// dropped when they come back.
     measure_id: u64,
     /// When the measurement out there was sent (it times out after `measure::TIMEOUT`).
-    #[cfg(not(target_arch = "wasm32"))]
     measure_since: Option<std::time::Instant>,
     /// The live third-party instances' names (`info().name`), for the band's "auto" targets.
     names: HashMap<(TrackId, SlotKey), String>,
@@ -2186,7 +2171,6 @@ impl Side {
             measure_out: false,
             measured_feed: 0,
             measure_id: 0,
-            #[cfg(not(target_arch = "wasm32"))]
             measure_since: None,
             names: HashMap::new(),
             band_lib: None,
@@ -2465,7 +2449,6 @@ impl Side {
 }
 
 /// How long a dropped player waits for the audio thread to hand its plugin instances back.
-#[cfg(not(target_arch = "wasm32"))]
 const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Plugin stability, part 2: a replaced player's plugin instances are terminated here, on the
@@ -2474,7 +2457,6 @@ const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_millis(500)
 /// thread answers [`Cmd::Shutdown`] with the instances as its last garbage; a dead stream (the
 /// device went away) does not answer, and after [`SHUTDOWN_WAIT`] the instances go down with it
 /// as before.
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Player {
     fn drop(&mut self) {
         // A lent engine returned from now on (the render dropped after the player, on this
@@ -2510,13 +2492,9 @@ pub struct Player {
     shared: Arc<Shared>,
     fault: Arc<Fault>,
     /// The block count last seen while playing, and since when.
-    #[cfg(not(target_arch = "wasm32"))]
     watch: Mutex<Option<(u64, std::time::Instant)>>,
     tx: Sender<Cmd>,
     side: Mutex<Side>,
-    #[cfg(not(target_arch = "wasm32"))]
-    _stream: Option<cpal::Stream>,
-    #[cfg(target_arch = "wasm32")]
     _stream: Option<cpal::Stream>,
     /// The input stream opened with the output on one device (duplex), and what it feeds.
     duplex: Option<record::InputStream>,
@@ -2592,13 +2570,10 @@ impl Player {
     /// What stopped the audio output, once: a bug in the engine, or the device went away or
     /// stopped asking for audio while playing.
     pub fn trouble(&self) -> Option<OutputTrouble> {
-        #[cfg(not(target_arch = "wasm32"))]
         let stalled = {
             let playing = self.shared.playing.load(Ordering::Relaxed) && !self.silent;
             stalled(&mut self.watch.lock().unwrap_or_else(PoisonError::into_inner), self.fault.beats.load(Ordering::Relaxed), playing)
         };
-        #[cfg(target_arch = "wasm32")]
-        let stalled = false;
         self.fault.trouble(stalled)
     }
 
@@ -2693,7 +2668,6 @@ impl Player {
                         Player {
                             shared,
                             fault,
-                            #[cfg(not(target_arch = "wasm32"))]
                             watch: Mutex::new(None),
                             tx,
                             side: new_side(max_block_of(&config), grx),
@@ -2734,7 +2708,6 @@ impl Player {
         Player::silent_clock_with(shared, tx, rx, s, side, gtx)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn silent_clock_with(
         shared: Arc<Shared>,
         tx: Sender<Cmd>,
@@ -2793,7 +2766,6 @@ impl Player {
     /// A player with no device and no thread, and the audio state its commands go to, for tests
     /// of a device that stalls (nothing answers until the test fills it) in other crates. Not
     /// for use outside tests.
-    #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn stalled(session: Arc<Session>, device_rate: u32, max_block: usize, device_channels: usize) -> (Player, StalledAudio) {
         let (p, st) = Player::offline(session, device_rate, max_block, device_channels);
@@ -2802,7 +2774,6 @@ impl Player {
 
     /// A player with no device and no thread, and the audio state its commands go to, for tests
     /// to drive by hand: a `device_channels` device at `device_rate`.
-    #[cfg(not(target_arch = "wasm32"))]
     fn offline(session: Arc<Session>, device_rate: u32, max_block: usize, device_channels: usize) -> (Player, AudioState) {
         let (shared, (tx, rx), (gtx, grx)) = (Arc::new(Shared::new()), channel(), channel());
         let side = Mutex::new(Side::new(session.sample_rate.as_f64() as f32, max_block, grx));
@@ -2831,36 +2802,6 @@ impl Player {
         (p, state)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn silent_clock_with(
-        shared: Arc<Shared>,
-        tx: Sender<Cmd>,
-        _rx: Receiver<Cmd>,
-        session: Arc<Session>,
-        side: Mutex<Side>,
-        _gtx: Sender<Garbage>,
-    ) -> Player {
-        Player {
-            shared,
-            fault: Arc::default(),
-            tx,
-            side,
-            _stream: None,
-            duplex: None,
-            asio: false,
-            driver_latency: None,
-            system: "None".into(),
-            device_name: "No audio device".into(),
-            output_channel_names: Vec::new(),
-            input_name: None,
-            device_rate: session.sample_rate.hz(),
-            device_channels: 0,
-            device_buffer: None,
-            max_block: max_block_for(None),
-            silent: true,
-        }
-    }
-
     /// Sends a new session snapshot to the audio thread, with freshly created (state-restored,
     /// prepared) instances of any third-party plugin it newly needs. Call on the UI thread.
     pub fn update_session(&self, s: Arc<Session>) {
@@ -2878,23 +2819,12 @@ impl Player {
 
     /// Makes the next instance, and more while `budget` lasts (at least one per call). Where the
     /// preload stands afterwards; `None` without one. Call on the UI thread.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn preload_step(&self, budget: std::time::Duration) -> Option<PreloadProgress> {
         let mut side = self.side();
         let max_block = side.max_block;
         let pre = side.preload.as_mut()?;
         let started = std::time::Instant::now();
         while pre.step(max_block) && started.elapsed() < budget {}
-        Some(pre.progress())
-    }
-
-    /// The browser has no `Instant`: one instance per call.
-    #[cfg(target_arch = "wasm32")]
-    pub fn preload_step(&self, _budget: std::time::Duration) -> Option<PreloadProgress> {
-        let mut side = self.side();
-        let max_block = side.max_block;
-        let pre = side.preload.as_mut()?;
-        pre.step(max_block);
         Some(pre.progress())
     }
 
@@ -2940,7 +2870,6 @@ impl Player {
             returned,
             cancelled,
             taken: false,
-            #[cfg(not(target_arch = "wasm32"))]
             since: std::time::Instant::now(),
         })
     }
@@ -3359,10 +3288,7 @@ impl Player {
         buf.id = side.measure_id;
         self.tx.send(Cmd::Measure(buf)).map_err(|_| "the audio output is not running".to_string())?;
         side.measure_out = true;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            side.measure_since = Some(std::time::Instant::now());
-        }
+        side.measure_since = Some(std::time::Instant::now());
         Ok(())
     }
 
@@ -3381,7 +3307,6 @@ impl Player {
             side.measured_feed = m.feed;
             return Some(m.result());
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if side.measure_out && side.measure_since.is_some_and(|t| t.elapsed() >= measure::TIMEOUT) {
             side.abandon_measure(&self.tx);
             return Some(Err("Measure timed out: the audio output stopped".into()));
@@ -3780,7 +3705,6 @@ pub struct LendingInstances {
     cancelled: Arc<AtomicBool>,
     /// `poll` handed the engine over: nothing is on its way any more.
     taken: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     since: std::time::Instant,
 }
 
@@ -3802,12 +3726,9 @@ impl LendingInstances {
         }))
     }
 
-    /// How long the lend has been waiting for the audio thread (0 in the browser).
+    /// How long the lend has been waiting for the audio thread.
     pub fn waited(&self) -> std::time::Duration {
-        #[cfg(not(target_arch = "wasm32"))]
-        return self.since.elapsed();
-        #[cfg(target_arch = "wasm32")]
-        std::time::Duration::ZERO
+        self.since.elapsed()
     }
 }
 
@@ -3830,11 +3751,9 @@ impl Drop for LendingInstances {
 }
 
 /// The audio state of a [`Player::stalled`] player: fill it to make its "audio thread" answer.
-#[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub struct StalledAudio(AudioState);
 
-#[cfg(not(target_arch = "wasm32"))]
 impl StalledAudio {
     /// One callback of `out.len() / channels` frames.
     pub fn fill(&mut self, out: &mut [f32], channels: usize) {
@@ -3994,9 +3913,8 @@ where
     let chunk = scratch.len();
     let (failed, guard, gone) = (Arc::clone(fault), Arc::clone(shared), Arc::clone(fault));
     // The realtime workers the audio thread renders strips on (made once, here on the control
-    // thread; a no-op after the first device and in the browser).
+    // thread; a no-op after the first device).
     soundcraft_mix::rt::start_workers();
-    #[cfg(not(target_arch = "wasm32"))]
     let (rate, mut timing) = (f64::from(config.sample_rate), Timing::new(config.buffer_size));
     guarded_build(move || {
         device.build_output_stream(
@@ -4005,7 +3923,6 @@ where
                 mark_audio_thread();
                 // Realtime priority, asked for once on this thread (see `soundcraft_mix::rt`).
                 soundcraft_mix::rt::promote_audio_thread();
-                #[cfg(not(target_arch = "wasm32"))]
                 let started = std::time::Instant::now();
                 for out in data.chunks_mut(chunk) {
                     let Some(s) = scratch.get_mut(..out.len()) else { return };
@@ -4019,7 +3936,6 @@ where
                 if let Some(d) = at.playback.checked_duration_since(at.callback) {
                     guard.out_latency_ns.store(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX), Ordering::Relaxed);
                 }
-                #[cfg(not(target_arch = "wasm32"))]
                 timing.callback(&guard, at.playback, started.elapsed(), data.len() / frame, rate);
             },
             // cpal may call this on the audio thread (on ALSA in a loop while the device stays
@@ -4046,11 +3962,9 @@ pub(crate) fn guarded_build(build: impl FnOnce() -> Result<cpal::Stream, cpal::E
 }
 
 /// Callback sizes remembered to judge the device's real period.
-#[cfg(not(target_arch = "wasm32"))]
 const RECENT: usize = 8;
 
 /// The output callback's timing, to count underruns and the DSP load.
-#[cfg(not(target_arch = "wasm32"))]
 struct Timing {
     /// The playback time of the first callback; later ones are measured from it.
     origin: Option<cpal::StreamInstant>,
@@ -4063,7 +3977,6 @@ struct Timing {
     next: usize,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Timing {
     fn new(buffer: cpal::BufferSize) -> Timing {
         let configured = match buffer {
@@ -5155,7 +5068,7 @@ mod tests {
         let r = probe.read();
         assert!(r.playing);
         assert_eq!(r.rolled, 10_000, "10 000 stereo frames rolled");
-        assert!(r.at_ns > 0 || cfg!(target_arch = "wasm32"));
+        assert!(r.at_ns > 0);
         assert!(shared.playing.load(Ordering::Relaxed));
     }
 

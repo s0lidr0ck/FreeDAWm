@@ -895,7 +895,7 @@ impl MidiInputs {
         MidiInputs { backend, hub, ports: Vec::new(), choices, reserved: Vec::new(), offsets: BTreeMap::new(), last_scan: None }
     }
 
-    /// The system's ports (`None` where there is no MIDI backend: the web build).
+    /// The system's ports (`None` where there is no MIDI backend).
     pub fn system(hub: Arc<MidiHub>, choices: BTreeMap<String, bool>) -> Option<MidiInputs> {
         system_backend().map(|b| MidiInputs::new(b, hub, choices))
     }
@@ -1090,7 +1090,6 @@ impl DriverClock {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod system {
     use super::{MidiBackend, MidiConnection, PortSink};
 
@@ -1164,15 +1163,7 @@ mod system {
 /// Opens the system's input port `name` for a control surface: every message, SysEx included,
 /// goes to `to` as it comes (from the driver's thread). Dropping the connection closes the port.
 pub fn open_raw_input(name: &str, to: std::sync::mpsc::Sender<Vec<u8>>) -> Result<Box<dyn MidiConnection>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        system::open_raw(name, to)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = to;
-        Err(format!("{name}: no MIDI input here"))
-    }
+    system::open_raw(name, to)
 }
 
 /// The system's input port names (empty on the web).
@@ -1182,14 +1173,7 @@ pub fn system_port_names() -> Vec<String> {
 
 /// The system's MIDI backend (`None` on the web).
 pub fn system_backend() -> Option<Box<dyn MidiBackend>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Some(Box::new(system::Midir))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
+    Some(Box::new(system::Midir))
 }
 
 /// A backend with ports a test adds and removes, and the sinks of the ports it opened (to
