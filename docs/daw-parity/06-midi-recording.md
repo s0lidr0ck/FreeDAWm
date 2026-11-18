@@ -53,8 +53,9 @@ revision history:
    track can play an instrument on another track, and MIDI clock and timecode go out and are
    followed coming in, with MMC both ways.
 
-The built-in instruments are four (a subtractive synth, a sampler, a drum machine and a drum
-synth). There is no piano, and only the synth answers the sustain pedal and pitch bend.
+The built-in instruments are five (a subtractive synth, a sampler, Pantry the multisampler, a
+drum machine and a drum synth). There is no piano; the synth, the sampler and Pantry answer the
+sustain pedal and pitch bend, the drum instruments notes only.
 
 ## A. Devices
 
@@ -197,7 +198,7 @@ Compared in full in section 7; listed here for what matters while recording.
 | Third-party instruments | ● AAX | ● | ● AU | ● VST | **Works**: CLAP, VST3 and AU, with channels kept |
 | Piano and other sampled instruments in the box | ● | ● | ● | ● | **Not planned here**: needs sample content, which the owner is sourcing |
 | Synth | ● | ● | ● | ● | **Works**: 16 voices; velocity, sustain, pitch bend over Bend Range (0–24 semitones, 2 by default), the mod wheel as vibrato up to Mod Wheel Vibrato (0 by default: turn it up; `2a60fad`); no aftertouch |
-| Sampler | ● | ● | ● | ● | **Partial**: velocity, sustain pedal, pitch bend over Bend Range, the mod wheel as vibrato up to Mod Wheel Vibrato (0 by default); one sample, no zones. **Not planned here**: zones and multisamples are the multisample instrument (Pantry) another session is building |
+| Sampler | ● | ● | ● | ● | **Works**: the Sampler (one sample): velocity, sustain pedal, pitch bend over Bend Range, the mod wheel as vibrato up to Mod Wheel Vibrato (0 by default). Zones and multisamples: Pantry, the multisampler (velocity layers, round-robins, sustain pedal, ±2 semitone bend; captured from any instrument or loaded from SFZ and Decent Sampler libraries; [section 7](07-midi-writing.md), L) |
 | Drum machine and drum synth | ● | ● | ● | ● | **Works**: velocity layers; notes only |
 | Hardware synth as an instrument, with its latency measured | ◐ | ● | ● | ● | **Partial**: External MIDI plays it (MIDI output); its audio comes back on an ordinary audio track. **Not planned here**: measuring and compensating its latency needs a hardware synth and a loopback to develop against |
 
@@ -282,7 +283,7 @@ either wire the control or take it off the menu.
 | Low-latency path for the instrument being played; driver timestamps; per-device offset | 8–12 | Partly: driver timestamps and per-device offsets done (`2a34aa9`); bug 12 and the low-latency path open |
 | SysEx kept; bank, RPN and NRPN understood; controllers as automation | 8–12 | Partly: RPN and NRPN chased as parameters, bank before program (`mix::rpn`); controllers become automation through MIDI learn. SysEx recorded, stored, read and written in MIDI files and played to External MIDI, CLAP and VST3 (`04d455f`; VST3 and the Event List `385463f`) |
 | Devices: identical names, more than 15 ports, aliases | 4–6 | Done: bug 11 fixed, 63 ports, aliases; bug 10 fixed where the system gives a new identity (`2a34aa9`) |
-| Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Not started: the instruments live in the built-in effects work's crate (`dsp`); the piano needs a sample set whose licence allows shipping it (an owner question) |
+| Built-in instruments answer sustain, bend and mod wheel; a piano | 8–14 | Done for the synth and the sampler (sustain, Bend Range, Mod Wheel Vibrato; the Synth and Sampler rows above) and Pantry (sustain, ±2 semitone bend); the drum instruments take notes only. The piano needs a sample set whose licence allows shipping it (an owner question) |
 | MIDI take survives a crash | 3–5 | Done: spilled to the autosave folder during the take, placed by recovery (`397e268`) |
 
 **Designs for what remains of K (not built).**
@@ -536,3 +537,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-18 | minor | The Scale MIDI effect follows the chord lane |
 | 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |
 | 2026-11-18 | minor | A Script MIDI effect joins the list (section 8, Scripter) |
+| 2026-11-18 | minor | Sampler row and the instruments paragraph: Pantry, the multisampler, is on this branch |
