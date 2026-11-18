@@ -165,7 +165,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | Feature | Status | What it is, and its limits |
 |---|---|---|
 | Every command open to scripts and AI agents | **Works** | About 330 commands with documented parameters. A command-line tool runs them on a session without the window; a running app accepts them on a local port; an MCP server lets an AI agent list commands, run them, look at the session, take screenshots and click. Any menu item can be invoked by its path |
-| Remote recording with the take landing in place | **Works** | A second computer follows the transport, records locally and sends the take (lossless audio, or MIDI). The performer hears the live mix; clocks are compared during the take so the audio lands where it was played. Works on a local network or across the internet (encrypted, by one-time invite, no account). Takes survive a dropped connection or a crash. On a local network PCs pair and connect over an encrypted link bound to their keys (4d3e275); the phone's page stays on the plain link. Talkback: the control room's talk key mixes its input into the stream the performer hears, the music dimmed, while stopped too; never recorded (4d3e275). No video. A paired computer can run any command; the Network window says so and which link each uses |
+| Remote recording with the take landing in place | **Works** | A second computer follows the transport, records locally and sends the take (lossless audio, or MIDI). The performer hears the live mix; clocks are compared during the take so the audio lands where it was played. Works on a local network or across the internet (encrypted, by one-time invite, no account). Takes survive a dropped connection or a crash. On a local network PCs pair and connect over an encrypted link bound to their keys (4d3e275); the first pairing's code proves both keys and is never sent, so a computer posing as the booth cannot sit in between (SPAKE2, 30e56ba); a PC or booth with an older FreeDAWm is told to update. The phone's page stays on the plain link. Talkback: the control room's talk key mixes its input into the stream the performer hears, the music dimmed, while stopped too; never recorded (4d3e275). No video. A paired computer can run any command; the Network window says so and which link each uses |
 | Scout: measured mix advice from an AI model | **Works** | Captures loudness, true peak, spectrum, stereo and transient measures of a mix or a channel, sends them with the channel's settings to Claude using the user's own key, and draws the returned EQ suggestions on the EQ as guides. It changes nothing by itself; each suggestion can be applied on request, one undo step each. Reference profiles can be built from other recordings, per stem |
 | Local models beyond stems | **Works** | Lead from backing vocals; drums into six parts; audio to MIDI by four models (general, piano with pedal, drums, voice) with a live preview; MIDI from a text description; a whole song from a prompt. All run on the user's machine after a download; each model's licence is shown, and non-commercial ones ask for confirmation |
 | Mend: vocal de-noise and de-reverb on a live insert | **Works** | The same model as Clean Vocal, running in the chain with about 2.9 s latency or a lighter live mode. Desktop only |
@@ -189,7 +189,7 @@ Each was checked in the code. "Works" means wired end to end; none was listened 
 | 3 | QuickPunch, TrackPunch, Destructive Record and Destructive Punch have keys or commands and store a mode nothing reads; Prepare DPE Tracks consolidates for a punch that never happens | `engine/src/cmd/options.rs:22, 58-59, 125-130`; `engine/src/cmd/setup_more.rs:22, 130` | **Another section's**: punch modes are the recording work in [section 2](02-recording-audio.md); QuickPunch landed there (4b98b7f) |
 | 4 | Stored and unread: transcription lane and settings, scene and take in clip names, ARA note overlay, peripherals, video sync offset, Ableton Link in the transport, calibration mode, auto-spot | `engine/src/cmd/view_more.rs:145, 154`; `engine/src/cmd/setup_more.rs:31-53` | **Done; claim partly wrong** (8fac425): these were already off the menu bar (the 2026-10 menus clean-up); agents and scripts still reach them, and their descriptions now end "stored only: nothing in FreeDAWm reads this setting yet". The video sync offset is not one of them: the Video track and window read it (it has no window of its own) |
 | 5 | The web build has no way to record and no place that says so; MIDI windows are shown there with nothing behind them | `apps/soundcraft-web`; `ui-egui/src/lib.rs:996-999` | **Done for recording** (b5ef0ca): in the browser build Record says it cannot record there, on the button and in the status line. The MIDI windows are the MIDI recording section's ([section 6](06-midi-recording.md), row 23), which left them out of the web build's menus (352090a) |
-| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can. The encrypted local link is **done** too (4d3e275, below) |
+| 6 | On a local network, a paired computer can run any command over an unencrypted link. The pairing code is four digits with attempt limits. Fine for a studio network; worth saying in the window, and worth offering the encrypted path locally too | `net/src/hub.rs:633, 794, 1026`; `net/src/pairing.rs:1-30` | **Done** (7ed1bfd): the Network window and the pairing prompt say that a paired device can do everything the user can. The encrypted local link is **done** too (4d3e275, below), and a PC's first pairing proves both keys with the code, never sending it (30e56ba, below); the window and the prompt say so |
 | 7 | Video muxer and ProRes encoder exist in the video crate and nothing calls them | `video/src` | **Done** (3b781d6): Bounce to Movie uses both |
 
 ## Suggested order of work
@@ -284,11 +284,11 @@ same pass as the items above; these are the starting points.
   other key); the remote PC keeps the booth's key and later dials only it. Setup › Network:
   Offer the encrypted local link (on by default), Take PCs over the encrypted link only (the
   plain link then serves the phone's page alone; on by default since the owner's decision of
-  2026-11-16, a value already saved is kept), and which link each PC is on. *Not built:* the
-  password-authenticated exchange over the code (SPAKE2): no such crate is in the dependency
-  tree and hand-written key-exchange code was not wanted (a design naming the crate is below, for the owner to approve). Without it, a machine that answers the
-  very first contact with its own key (by forging the booth's mDNS record) could still sit in the
-  middle of that one pairing, as it can on the plain link today; once paired the keys are pinned.
+  2026-11-16, a value already saved is kept), and which link each PC is on. The first pairing
+  is a password-authenticated exchange over the code (SPAKE2, built 30e56ba, see the section
+  below): the code is never sent, and a machine that answers the very first contact with its own
+  key (by forging the booth's mDNS record) fails the check on both sides unless it guessed the
+  code, one guess per try; once paired the keys are pinned as before.
   PCs paired over the plain link keep working there only while Take PCs over the encrypted link
   only is off (settings saved before the option existed now have it on: such a PC pairs again,
   over the encrypted link). The phone's page stays on plain HTTP (a browser cannot speak this
@@ -367,30 +367,55 @@ same pass as the items above; these are the starting points.
     a bridge equals the in-process bounce sample for sample.
   - *First step when picked up.* The shared-memory block exchange and its test (two threads of
     one process standing in for the two processes), then the helper binary, then the option.
-- *First pairing by a password-authenticated key exchange (design, 2026-11-17; not built: needs a
-  new dependency, the owner to approve).* The weak spot left by the encrypted local link is the
-  very first contact: a machine that forges the booth's mDNS record answers with its own key and
-  could sit between the two for that one pairing. The fix is to make the four-digit code prove
-  the keys. *Crate:* `spake2` (RustCrypto's PAKEs, MIT OR Apache-2.0, pure Rust, no unsafe;
-  SPAKE2 over Ed25519). It would bring `curve25519-dalek` 4 beside the 5.0 already in the tree
-  (through iroh) and `hkdf`; no C code, nothing that opens a port or sends anything new. A
-  hand-written exchange stays ruled out. *Exchange* (in `net/src/pairing.rs`, inside the QUIC
-  connection the remote PC already opens to the key in the mDNS record, so nothing new
-  listens): the booth is side B, the remote PC side A, identities `freedawm-booth` and
-  `freedawm-pc`, password the code shown on the booth's screen. Each sends its SPAKE2 message
-  (33 bytes); each derives the shared key `k`; each then sends
-  `HMAC-SHA256(HKDF(k, "freedawm pairing confirm"), role || booth key || PC key)` over the two
-  QUIC public keys as each side sees them in the TLS session. A side whose check fails drops the
-  connection and counts a failed attempt (the attempt limits as now). The code itself is never
-  sent. A machine in the middle holds a different TLS key towards each side, so the confirm
-  messages cannot match unless it guessed the code, one online guess per attempt (at most the
-  attempt limit out of 10 000). Once confirmed, the keys are pinned exactly as now. *Kept as is:*
-  the phone's page on the plain link (a browser cannot run it), PCs already paired (their keys are
-  pinned), and nothing changes for a PC with an older FreeDAWm: the booth answers its pairing with
-  "update FreeDAWm on this computer" (a version field in the pairing hello). *Tests:* two hubs in
-  one process pair over loopback with the right code and refuse a wrong one; a third hub relaying
-  between them with its own key (the forged-record case) makes both sides fail the confirm and
-  count an attempt; a recorded exchange replayed fails; the attempt limit still locks.
+- *First pairing by a password-authenticated key exchange (built 30e56ba; the crate approved by
+  the owner 2026-11-18).* The weak spot left by the encrypted local link was the very first
+  contact: a machine that forges the booth's mDNS record answers with its own key and could sit
+  between the two for that one pairing. Now the four-digit code proves the keys. *Crates:*
+  `spake2` 0.4 (RustCrypto's PAKEs, MIT OR Apache-2.0, pure Rust, no unsafe; SPAKE2 over
+  Ed25519), with `hkdf` 0.12 (and through it `hmac` 0.12, MIT OR Apache-2.0) and `sha2` 0.10 and
+  `zeroize`, already in the tree; it brings `curve25519-dalek` 4.1 (BSD-3-Clause) and
+  `fiat-crypto` 0.2 beside the 5.0 and 0.3 already there (through iroh), and `rand_core` 0.6. No
+  C code, nothing that opens a port or sends anything new. No cryptography is hand-written: the
+  code only calls the crates and orders the fields. *Exchange* (`net/src/pairing.rs`, module
+  `exchange`; inside the QUIC connection the remote PC already opens to the key in the mDNS
+  record, so nothing new listens): the booth is side B, the remote PC side A, identities
+  `freedawm-booth` and `freedawm-pc`, password the code shown on the booth's screen. The PC
+  sends its SPAKE2 message (33 bytes, `pair.exchange`); the booth answers with its own and its
+  confirmation; the PC checks that before it sends its own (`pair.finish`, the next line on the
+  same connection). Each confirmation is
+  `HMAC-SHA256(HKDF-SHA256(k, info "freedawm pairing confirm"), role || booth key || PC key)`
+  over the two QUIC public keys as each side sees them in the TLS session (the booth's bridge
+  tells its hub both keys on the stream's first line); each field goes after a byte giving its
+  length, so the fields cannot run into each other. Compared in constant time (`hmac`'s
+  `verify_slice`). Each exchange spends one of the request's 3 tries when it starts (whoever runs
+  it learns whether its code was right), a failed check answers "wrong code, or another computer
+  is in between" and drops the connection, and a damaged message or any other line in place of
+  the confirmation ends the exchange the same way. The code itself is never sent, logged or put
+  in an error (a request printed for a log leaves it out); this side's copies of the code, `k`
+  and the confirmation key are wiped when done (the crate keeps its own copy of the password
+  inside its state without wiping it). A machine in the middle holds a different TLS key towards
+  each side, so the confirmations cannot match unless it guessed the code, one online guess per
+  try (at most 3 out of 10 000 per request, 20 requests in 10 minutes). Once confirmed, the keys
+  are pinned exactly as before. *Older FreeDAWm:* `pair.request` carries a version (`pairing:
+  2`) both ways. A PC that sends none is answered "update FreeDAWm on this computer…" before any
+  code is shown, and the old `pair.confirm` (the code in the clear) is refused without being
+  compared; a PC whose booth answers without the version says "update FreeDAWm on the booth…"
+  and never asks for the code. There is no fallback to the old way in either direction. The
+  same exchange runs when a PC pairs over the plain link (Take PCs over the encrypted link only
+  turned off): it then proves no keys, as that link has none, but the code is still never sent.
+  The phone's page keeps typing its code (a browser cannot run the exchange), and only for a
+  browser's request; a PC's request cannot be confirmed there. *Kept as is:* PCs already paired
+  (their tokens and pinned keys), pairing by invite over the internet. *Tests* (`net` crate:
+  `pairing.rs` and `tests/secure_link.rs`, two booths' and PCs' endpoints in one process over
+  loopback): the right code pairs and binds the key, and the PC reconnects with it as before
+  (also after a restart with its kept key); a wrong code fails and spends a try; a relay posing
+  as the booth with its own key towards each side (the forged-record case) fails the check on
+  the PC even with the right code, and on the booth when the PC confirms anyway, each counting a
+  try, after which the real booth still pairs; a recorded exchange replayed fails; the attempt
+  limit still locks; an older PC is told to update and its code in the clear is never compared;
+  a booth with an older FreeDAWm is never sent the code; damaged, oversized and out-of-order
+  messages are refused, count when they name a real request, and never stop the booth. *Not
+  tried:* two real computers on a real network.
 - *Editor windows, VST3 and Audio Units through the bridge (design, 2026-11-17).* *Editor:* the
   helper opens the plug-in's editor as a top-level window of its own (CLAP `gui` floating, VST3
   `IPlugView` in a window the helper makes, AU's view in an `NSWindow`), on the helper's main
@@ -491,6 +516,7 @@ includes a feature should be checked before being quoted.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | A PC's first pairing proves both PCs' keys with the code by a password-authenticated key exchange (SPAKE2); the code is never sent; older FreeDAWm on either side is told to update |
 | 2026-11-18 | minor | Mix Engine FX: a Summing menu on a bus's strip (Console, Tape, drive), off by default |
 | 2026-11-18 | minor | Track Pin keeps a track in view while the others scroll; Rename Selected Tracks by a pattern and a number |
 | 2026-11-17 | minor | Sound variations and expression maps built as track articulations chosen by a controller lane; designs for Scripter, Mix Engine FX, the field-recorder workflow and the show page; the modulators row in the work list says done |
