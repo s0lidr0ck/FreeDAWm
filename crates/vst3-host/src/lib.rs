@@ -20,8 +20,6 @@
 //! bounded by the number of distinct installed plugins actually used. Loaded binaries likewise
 //! stay mapped for the life of the process (module exit functions are never called).
 //!
-//! On `wasm32` the crate compiles to stubs: scans are empty and nothing can be created.
-//!
 //! Plugin state: [`Plugin::save_state`] stores the component state and the controller state in
 //! one blob (`SCV3` + length-prefixed parts); [`Plugin::load_state`] restores both (a bare
 //! component state is accepted too) and re-reads the parameter values.
@@ -62,15 +60,11 @@
 pub mod scan;
 pub mod vstpreset;
 
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(unsafe_code)]
 mod ffi;
-#[cfg(not(target_arch = "wasm32"))]
 mod plugin;
-#[cfg(not(target_arch = "wasm32"))]
 mod registry;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use plugin::Vst3Plugin;
 
 use soundcraft_dsp::{Category, Plugin, PluginInfo};
@@ -154,7 +148,6 @@ pub enum Vst3Error {
     Unsupported,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod api {
     use super::*;
 
@@ -211,55 +204,6 @@ mod api {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-mod api {
-    use super::*;
-
-    pub fn cached() -> Option<Vec<Vst3Descriptor>> {
-        Some(Vec::new())
-    }
-    pub fn scan_with(_opts: &ScanOptions, _progress: &ScanProgress) -> Result<Vec<Vst3Descriptor>, String> {
-        Ok(Vec::new())
-    }
-    pub fn set_scan_cache_dir(_dir: Option<PathBuf>) {}
-    pub fn clear_failed() {}
-    pub fn take_lookup_request() -> bool {
-        false
-    }
-    pub fn set_blocking_lookups(_report: Option<fn(usize, usize)>) {}
-    pub fn scan() -> Vec<Vst3Descriptor> {
-        Vec::new()
-    }
-    pub fn rescan() -> Vec<Vst3Descriptor> {
-        Vec::new()
-    }
-    pub fn add_search_dir(_dir: &Path) -> usize {
-        0
-    }
-    pub fn scan_paths(_dirs: &[PathBuf]) -> Vec<Vst3Descriptor> {
-        Vec::new()
-    }
-    pub fn scan_failures() -> Vec<(PathBuf, String)> {
-        Vec::new()
-    }
-    pub fn load_bundle(_path: &Path) -> Result<Vec<Vst3Descriptor>, Vst3Error> {
-        Err(Vst3Error::Unsupported)
-    }
-    pub fn instantiate(_id: &str) -> Result<Box<dyn Plugin>, Vst3Error> {
-        Err(Vst3Error::Unsupported)
-    }
-    pub fn plugin_info(_id: &str) -> Option<&'static PluginInfo> {
-        None
-    }
-    pub fn programs(_id: &str) -> Option<Vst3Programs> {
-        None
-    }
-    pub fn programs_known(_id: &str) -> bool {
-        false
-    }
-    pub fn shutdown() {}
-}
-
 /// Scans the standard VST3 folders, `VST3_PATH` and folders added with [`add_search_dir`]
 /// **out of process**: the `freedawm-scan` helper next to the program loads the bundles, a few
 /// per process, so a plugin that crashes or hangs while loading never takes this process down
@@ -310,7 +254,6 @@ pub fn set_blocking_lookups(report: Option<fn(usize, usize)>) {
 /// Runs `f` while holding the scan lock, as a running scan does (tests check that lookups never
 /// wait for a scan).
 #[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
 pub fn with_scan_running<R>(f: impl FnOnce() -> R) -> R {
     registry::with_scan_running(f)
 }
@@ -369,14 +312,12 @@ pub fn instantiate(id: &str) -> Result<Box<dyn Plugin>, Vst3Error> {
 
 /// Like [`instantiate`], but returns the concrete [`Vst3Plugin`] (for its extra methods, such
 /// as [`Vst3Plugin::editor_size`]).
-#[cfg(not(target_arch = "wasm32"))]
 pub fn instantiate_plugin(id: &str) -> Result<Vst3Plugin, Vst3Error> {
     registry::instantiate_plugin(id)
 }
 
 /// The binaries this process has loaded, oldest first (tests check what a call loaded).
 #[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
 pub fn loaded_paths() -> Vec<PathBuf> {
     registry::loaded_paths()
 }
@@ -384,14 +325,12 @@ pub fn loaded_paths() -> Vec<PathBuf> {
 /// Turns off the system's crash and critical-error dialogs for this process (and the processes it
 /// starts): for the scanner helper, which must end at once when a plugin crashes it.
 pub fn quiet_crash_dialogs() {
-    #[cfg(not(target_arch = "wasm32"))]
     ffi::quiet_crash_dialogs();
 }
 
 /// Dispatches this thread's window messages for `time`, as an app's event loop would: for tests
 /// and tools that open plugin editors (on the process's main thread) without one.
 #[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
 pub fn pump_editor_messages(time: std::time::Duration) {
     ffi::pump_messages(time);
 }
