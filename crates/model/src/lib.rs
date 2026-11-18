@@ -55,8 +55,8 @@ pub use midi_map::{MidiMap, MidiSource, MidiSourceKind, MidiTarget, TransportAct
 pub use mixer::{
     Bus, ChainError, ChannelFormat, DrumFamily, ForeignDevice, INSTRUMENT_MODULE, InputMonitor, InputPath, Insert, KIT_FX_BASE, KitBus, KitFx,
     KitLayout, KitPad, MAX_MODULES, MAX_TRACK_DELAY, MidiIn, MidiTransform, Mixer, ModuleId, ModuleRef, OutputPath, PanLink, PreparedState,
-    REFERENCE_KEYS, Route, SEND_SLOTS, SPACE_IR_KEY, SendSlot, SidechainSource, SpaceEdit, Speaker, StripSize, SurroundPan, channel_param_id,
-    default_input_channel, fader_db_to_pos, fader_pos_to_db, is_reference_key, split_channel_param, track_input_channel,
+    REFERENCE_KEYS, Route, SEND_SLOTS, SPACE_IR_KEY, SendSlot, SidechainSource, SpaceEdit, Speaker, StripSize, Summing, SummingModel, SurroundPan,
+    channel_param_id, default_input_channel, fader_db_to_pos, fader_pos_to_db, is_reference_key, split_channel_param, track_input_channel,
 };
 pub use modulator::{LFO_SHAPES, LFO_SYNC, MAX_MOD_TARGETS, MAX_MODULATORS, ModTarget, Modulator, ModulatorKind, lfo_value};
 pub use notes::{MAX_NOTE_CHARS, MAX_NOTES, Note, note_typed, sanitize_notes, split_tags};

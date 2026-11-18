@@ -76,6 +76,7 @@ mod delay_line;
 pub mod external_midi;
 pub mod hw_insert;
 pub mod inst_outs;
+pub mod summing;
 pub mod track_midi;
 use delay_line::DelayLine;
 mod link;
@@ -631,6 +632,9 @@ struct Strip {
     /// The track's own delay (`Mixer::delay`), before its inserts; sized in `sync`.
     track_delay: DelayLine,
     outbuf: Vec<Vec<f32>>,
+    /// Mix Engine FX: the strip's output as a summing bus's model shapes it on its way in
+    /// ([`summing::shape_into`]); sized the first time a bus with a model is fed.
+    summed: Vec<Vec<f32>>,
     failures: PluginFailures,
     /// Per-module meter values of the last block, parallel to the chain (sized in `sync`).
     mods: Vec<ModuleMeter>,
@@ -895,6 +899,7 @@ impl Strip {
             out_extra: DelayLine::default(),
             track_delay: DelayLine::default(),
             outbuf: Vec::new(),
+            summed: Vec::new(),
             failures: PluginFailures::default(),
             mods: Vec::new(),
             analysis: Vec::new(),
@@ -3114,6 +3119,8 @@ impl MixEngine {
         // Setup › Preferences… › Mixing › Pre-Fader Sends Ignore Mute: a muted (or solo-muted) track's pre-fader
         // sends still play, as cue mixes want.
         let pre_ignores_mute = s.edit.flag(PRE_SENDS_IGNORE_MUTE);
+        // Mix Engine FX: whether any bus has a summing model (none: every source adds as before).
+        let any_summing = summing::any(s);
         for (i, snd) in t.mixer.sends.iter().enumerate() {
             let Some(snd) = snd else { continue };
             if strip.silent && !(snd.pre_fader && pre_ignores_mute) {
@@ -3137,6 +3144,17 @@ impl MixEngine {
                 Dest::None => continue,
             };
             let (dst_buf, dst_fmt) = dst;
+            // Mix Engine FX: into a bus with a summing model, the source passes through it first.
+            let src: &[Vec<f32>] = match out_dest(s, &snd.target) {
+                Dest::Bus(b) if any_summing => match summing::of_bus(s, b) {
+                    Some(sm) => {
+                        summing::shape_into(src, &mut strip.summed, sm, t.id, frames);
+                        &strip.summed
+                    }
+                    None => src,
+                },
+                _ => src,
+            };
             let apos = back(if pre_fader { strip.pre_at } else { strip.post_at });
             let follows = as_output || (snd.surround.is_none() && snd.follow_main_pan);
             // An automated send changes on the timeline's PAN_STEP grid, as the pan does: any
@@ -3205,6 +3223,16 @@ impl MixEngine {
                 _ => return,
             },
             Dest::None => return,
+        };
+        let src: &[Vec<f32>] = match dest {
+            Dest::Bus(b) if any_summing => match summing::of_bus(s, b) {
+                Some(sm) => {
+                    summing::shape_into(src, &mut strip.summed, sm, t.id, frames);
+                    &strip.summed
+                }
+                None => src,
+            },
+            _ => src,
         };
         // The pan reads where its audio is on the timeline: behind by the strip's delay and the
         // extra wait of a direct output.
@@ -8548,6 +8576,52 @@ mod tests {
     /// Multi-mono unlinked: each channel takes its own value (`c1:gain` for the second) and its
     /// own lane; linked, the `c1:` values are kept but not heard, and the render is the linked
     /// one's.
+    /// Mix Engine FX: two sines through a bus whose aux has a summing model. Off it sums as
+    /// before; at drive 0 the shaped path is bit for bit the clean one; driven, the loud sum is
+    /// bent (odd harmonics: its peak comes down) and a bounce repeats exactly. Another bus with a
+    /// model leaves a clean bus as it was.
+    #[test]
+    fn a_summing_bus_shapes_what_goes_into_it_and_off_is_unchanged() {
+        let render = |summing: Option<soundcraft_model::Summing>, other: bool| {
+            let mut s = Session::default();
+            s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+            let n = 24_000;
+            let bus = s.add_bus("Drums", ChannelFormat::Stereo);
+            for (k, f) in [0.031f32, 0.047].into_iter().enumerate() {
+                let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+                let wave: Vec<f32> = (0..n).map(|i| 0.45 * (i as f32 * f).sin()).collect();
+                let src = SourceId(910 + k as u64);
+                s.pool.insert(src, Arc::new(SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![wave.clone(), wave] })));
+                let id = s.new_clip_id();
+                let tr = s.track_mut(t).unwrap();
+                tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "w", src, 0, 0, n as i64));
+                tr.mixer.output = Route::Bus(bus);
+            }
+            let aux = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, Some("Drums"));
+            s.track_mut(aux).unwrap().mixer.input = Route::Bus(bus);
+            s.track_mut(aux).unwrap().mixer.summing = summing;
+            if other {
+                // A second, driven bus with nothing in it.
+                let b2 = s.add_bus("Other", ChannelFormat::Stereo);
+                let a2 = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, Some("Other"));
+                s.track_mut(a2).unwrap().mixer.input = Route::Bus(b2);
+                s.track_mut(a2).unwrap().mixer.summing = Some(soundcraft_model::Summing { model: soundcraft_model::SummingModel::Tape, drive: 1.0 });
+            }
+            render_range(&s, Range::new(0, n as i64), 512)
+        };
+        let console = |drive| Some(soundcraft_model::Summing { model: soundcraft_model::SummingModel::Console, drive });
+        let off = render(None, false);
+        assert_eq!(render(None, true), off, "a model on another bus leaves this one clean");
+        assert_eq!(render(console(0.0), false), off, "drive 0: bit for bit the clean sum");
+        let driven = render(console(1.0), false);
+        assert_eq!(render(console(1.0), false), driven, "a bounce repeats");
+        let peak = |c: &[f32]| c.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak(&driven[0]) < peak(&off[0]) - 0.01, "the loud sum is bent: {} vs {}", peak(&driven[0]), peak(&off[0]));
+        let quiet_gap = driven[0].iter().zip(&off[0]).filter(|(_, o)| o.abs() < 0.05).map(|(d, o)| (d - o).abs()).fold(0.0f32, f32::max);
+        assert!(quiet_gap < 0.01, "quiet passes nearly clean: {quiet_gap}");
+        assert_ne!(driven[0], driven[1], "the channels' tolerances differ");
+    }
+
     #[test]
     fn an_unlinked_multi_mono_insert_gives_each_channel_its_own_values_and_lanes() {
         let render = |multi: bool, unlinked: bool, lane: bool| {

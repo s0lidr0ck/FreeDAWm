@@ -940,6 +940,10 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             crate::mix_find::spill(ui.ctx(), id);
             ui.close();
         }
+        // Mix Engine FX: the character of this strip's bus sum.
+        if matches!(track.mixer.input, soundcraft_model::Route::Bus(_)) {
+            summing_menu(app, ui, track);
+        }
         crate::edit_window::track_context_menu(app, ui, id, crate::MainWindow::Mix);
         ui.separator();
         crate::channel_width::menu(app, ui, id);
@@ -951,6 +955,30 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     // Scout's PRE/POST lights either side of the track-type label, above the name plate.
     crate::scout::strip_lights(app, ui, id, Rect::from_center_size(pos2(r.center().x, vr.max.y + 9.0), vec2(inner_w - 4.0, 11.0)));
     r
+}
+
+/// The Summing submenu of a strip that sums a bus (Mix Engine FX): off, or a console model every
+/// source passes through on its way into the bus, and how hard it is driven.
+fn summing_menu(app: &mut SoundApp, ui: &mut Ui, track: &Track) {
+    let now = track.mixer.summing;
+    ui.menu_button("Summing", |ui| {
+        if ui.add(egui::Button::new("Off (clean)").selected(now.is_none())).clicked() {
+            let _ = app.run("mix.summing", json!({"track": track.id.0, "model": "off"}));
+        }
+        for m in soundcraft_model::SummingModel::ALL {
+            if ui.add(egui::Button::new(m.label()).selected(now.is_some_and(|s| s.model == m))).clicked() {
+                let _ = app.run("mix.summing", json!({"track": track.id.0, "model": m.id()}));
+            }
+        }
+        if let Some(sm) = now {
+            let mut pct = (sm.drive * 100.0).round();
+            let r = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix(" %").text("Drive"));
+            if r.changed() {
+                let key = format!("summing:{}", track.id.0);
+                let _ = app.engine.execute_merged("mix.summing", &json!({"track": track.id.0, "model": sm.model.id(), "drive": pct / 100.0}), &key);
+            }
+        }
+    });
 }
 
 /// The strip's group box menu: tick a group to join or leave it, or make a new one with this

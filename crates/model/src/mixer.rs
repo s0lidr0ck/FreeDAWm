@@ -437,6 +437,52 @@ impl SurroundPan {
     }
 }
 
+/// The character of a bus's summing (Mix Engine FX, Studio Pro's console models).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummingModel {
+    /// A console's summing amplifiers: gentle odd harmonics as the level rises.
+    #[default]
+    Console,
+    /// Tape: rounder, earlier saturation.
+    Tape,
+}
+
+impl SummingModel {
+    pub const ALL: [SummingModel; 2] = [SummingModel::Console, SummingModel::Tape];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            SummingModel::Console => "console",
+            SummingModel::Tape => "tape",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SummingModel::Console => "Console",
+            SummingModel::Tape => "Tape",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.id().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// A bus's summing model and how hard it is driven (0 to 1).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Summing {
+    #[serde(default)]
+    pub model: SummingModel,
+    #[serde(default = "half_drive")]
+    pub drive: f32,
+}
+
+fn half_drive() -> f32 {
+    0.5
+}
+
 /// An internal mix bus (Pro Tools "bus" paths).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Bus {
@@ -1354,6 +1400,11 @@ pub struct Mixer {
     /// compensation leaves it in: it moves the track against the others on purpose.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub delay: u32,
+    /// Mix Engine FX: on a strip that sums a bus (an aux or a routing folder), the console model
+    /// every source going into that bus passes through as it is added ([`Summing`]). `None` (the
+    /// default): the bus sums cleanly, as always.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summing: Option<Summing>,
     /// How a stereo track's two pans move together when one is moved.
     #[serde(default, skip_serializing_if = "PanLink::is_off")]
     pub pan_link: PanLink,
@@ -1437,6 +1488,7 @@ impl Mixer {
             width: 1.0,
             balance: 0.0,
             delay: 0,
+            summing: None,
             pan_link: PanLink::Off,
         }
     }

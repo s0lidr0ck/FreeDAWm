@@ -46,6 +46,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             track_delay
         ),
+        cmd!(
+            "mix.summing",
+            "Summing",
+            [],
+            None,
+            "{tracks?, model: off|console|tape, drive?: 0..1 (0.5)} — Mix Engine FX on a strip that sums a bus (an aux or a routing folder): every source passes through the model as it goes into that bus; off sums cleanly → {model, drive}",
+            has_selection,
+            summing
+        ),
     ]
 }
 
@@ -123,9 +132,62 @@ fn track_delay(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"samples": n, "ms": f64::from(n) * 1000.0 / sr}))
 }
 
+fn summing(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.summing";
+    let model = p.get("model").and_then(Value::as_str).ok_or_else(|| bad(C, "`model` required: off, console or tape"))?;
+    let model = match model.trim() {
+        m if m.eq_ignore_ascii_case("off") => None,
+        m => Some(soundcraft_model::SummingModel::parse(m).ok_or_else(|| bad(C, format!("unknown model `{m}` (off, console, tape)")))?),
+    };
+    let drive = number(p, "drive").map(|d| d.clamp(0.0, 1.0) as f32);
+    let tracks = tracks_required(e, C, p)?;
+    let s = e.session();
+    // Only a strip that sums a bus: its input is one.
+    let sums = |t: &TrackId| s.track(*t).is_some_and(|tr| matches!(tr.mixer.input, soundcraft_model::Route::Bus(_)));
+    let targets: Vec<TrackId> = tracks.iter().copied().filter(sums).collect();
+    if targets.is_empty() {
+        return Err(bad(C, "only an aux or a routing folder sums a bus"));
+    }
+    let mut out = json!({"model": "off"});
+    for t in targets {
+        if let Some(tr) = e.session_mut().track_mut(t) {
+            tr.mixer.summing = model.map(|m| {
+                let was = tr.mixer.summing.map_or(0.5, |x| x.drive);
+                soundcraft_model::Summing { model: m, drive: drive.unwrap_or(was) }
+            });
+            if let Some(sm) = tr.mixer.summing {
+                out = json!({"model": sm.model.id(), "drive": sm.drive});
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summing_is_set_on_a_strip_that_sums_a_bus_only() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"name": "Gtr"})).unwrap();
+        let gtr = e.session().tracks[0].id;
+        assert!(e.execute("mix.summing", &json!({"track": gtr.0, "model": "console"})).is_err(), "a track that sums no bus");
+        let bus = e.session_mut().add_bus("Drums", soundcraft_model::ChannelFormat::Stereo);
+        let aux = e.session_mut().add_track(soundcraft_model::TrackKind::Aux, soundcraft_model::ChannelFormat::Stereo, Some("Drums"));
+        e.session_mut().track_mut(aux).unwrap().mixer.input = soundcraft_model::Route::Bus(bus);
+        let r = e.execute("mix.summing", &json!({"track": aux.0, "model": "tape", "drive": 0.8})).unwrap();
+        assert_eq!(r["model"], "tape");
+        let sm = e.session().track(aux).unwrap().mixer.summing.unwrap();
+        assert_eq!((sm.model, sm.drive), (soundcraft_model::SummingModel::Tape, 0.8));
+        e.execute("mix.summing", &json!({"track": aux.0, "model": "console"})).unwrap();
+        assert_eq!(e.session().track(aux).unwrap().mixer.summing.unwrap().drive, 0.8, "the drive stays");
+        e.execute("mix.summing", &json!({"track": aux.0, "model": "off"})).unwrap();
+        assert!(e.session().track(aux).unwrap().mixer.summing.is_none());
+        assert!(e.execute("mix.summing", &json!({"track": aux.0, "model": "valve"})).is_err());
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(e.session().track(aux).unwrap().mixer.summing.is_some());
+    }
     use soundcraft_model::{ChannelFormat, TrackKind};
 
     #[test]
