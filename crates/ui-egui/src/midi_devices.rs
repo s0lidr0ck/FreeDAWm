@@ -482,10 +482,10 @@ fn layers_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
                 }
             });
         }
-        if let Some(key) = merge {
-            if let Err(e) = app.engine.execute_merged("mix.midi_layers", &json!({"track": id.0, "layers": as_json(&next)}), &key) {
-                app.ui.status = e.to_string();
-            }
+        if let Some(key) = merge
+            && let Err(e) = app.engine.execute_merged("mix.midi_layers", &json!({"track": id.0, "layers": as_json(&next)}), &key)
+        {
+            app.ui.status = e.to_string();
         }
         if let Some(i) = remove {
             next.remove(i);
