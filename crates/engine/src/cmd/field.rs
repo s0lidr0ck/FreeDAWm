@@ -96,7 +96,7 @@ fn source_file(e: &Engine, stored: &str) -> Option<PathBuf> {
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
-    a == b || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+    crate::io::same_file(a, b)
 }
 
 fn source_take(e: &Engine, s: &Session, id: SourceId) -> Option<Take> {
@@ -172,7 +172,7 @@ fn origin(e: &Engine, p: &Value, cmd: &str) -> Result<(TrackId, Clip, Take, Opti
     let own = source_take(e, s, src).ok_or_else(|| bad(cmd, "the clip's audio file is not in the session"))?;
     let folder = match str_param(p, "folder").map(str::trim).filter(|x| !x.is_empty()) {
         Some(f) => Some(PathBuf::from(f)),
-        None => own.path.as_deref().and_then(Path::parent).filter(|d| d.is_dir()).map(Path::to_path_buf),
+        None => own.path.as_deref().and_then(Path::parent).filter(|d| crate::io::is_readable_dir(d)).map(Path::to_path_buf),
     };
     Ok((track, clip, own, folder))
 }

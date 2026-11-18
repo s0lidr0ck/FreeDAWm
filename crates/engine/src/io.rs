@@ -158,6 +158,24 @@ pub(crate) fn list_dir(dir: impl AsRef<Path>) -> Vec<PathBuf> {
     std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default()
 }
 
+/// Whether `dir` is a folder that may be read (false outside the automation read root).
+pub(crate) fn is_readable_dir(dir: impl AsRef<Path>) -> bool {
+    let dir = dir.as_ref();
+    crate::file_access::check_read(dir).is_ok() && dir.is_dir()
+}
+
+/// Whether `a` and `b` name the same file: equal paths, or the same file once resolved (only
+/// for paths that may be read).
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    if crate::file_access::check_read(a).is_err() || crate::file_access::check_read(b).is_err() {
+        return false;
+    }
+    matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
 /// Deletes the file at `path`, inside the automation write root when there is one.
 pub(crate) fn remove_path(path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
