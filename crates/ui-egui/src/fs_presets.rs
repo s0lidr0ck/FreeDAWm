@@ -114,21 +114,42 @@ pub(crate) fn factory_menu(
 /// An instrument's factory presets, by group: each sets every parameter of the track's
 /// built-in instrument (`mix.instrument` with the same plugin). Nothing for an instrument
 /// without factory presets.
+/// Each preset has a ▶ beside it that plays a short phrase on a copy of the instrument with the
+/// preset's settings, leaving the track's own as it is (again: stops it).
 pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, track: soundcraft_model::TrackId, info: &PluginInfo) {
     for (group, list) in factory_groups(info) {
         ui.menu_button(group, |ui| {
             for (name, json) in list {
-                if ui.button(*name).clicked() {
-                    if let Some((_, params)) = factory_recall(info, name, json)
-                        && let Err(e) = app.run("mix.instrument", json!({"track": track.0, "plugin": info.id, "params": params}))
+                ui.horizontal(|ui| {
+                    let what = format!("preset:{}:{name}", info.id);
+                    let on = app.audition.playing.as_deref() == Some(what.as_str());
+                    let hear = ui.selectable_label(on, "▶").on_hover_text(format!("Hear {name} without loading it"));
+                    hear.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Hear {name}")));
+                    if hear.clicked()
+                        && let Some(voice) = preset_voice(info, name, json)
                     {
-                        app.ui.status = e;
+                        crate::audition::preset(app, voice, name);
                     }
-                    ui.close();
-                }
+                    if ui.button(*name).clicked() {
+                        if let Some((_, params)) = factory_recall(info, name, json)
+                            && let Err(e) = app.run("mix.instrument", json!({"track": track.0, "plugin": info.id, "params": params}))
+                        {
+                            app.ui.status = e;
+                        }
+                        ui.close();
+                    }
+                });
             }
         });
     }
+}
+
+/// A factory preset of a built-in instrument as a preview voice: the instrument and every
+/// parameter the preset sets.
+pub(crate) fn preset_voice(info: &PluginInfo, name: &str, json: &str) -> Option<crate::audition::Voice> {
+    let (_, params) = factory_recall(info, name, json)?;
+    let params = params.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()? as f32))).collect();
+    Some(crate::audition::Voice { plugin: info.id.to_string(), params })
 }
 
 /// What an import did.

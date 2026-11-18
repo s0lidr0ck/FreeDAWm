@@ -635,7 +635,7 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                     crate::audition::file(app, &path);
                 }
                 if !is_dir && is_midi_file(&name) && r.clicked() && !r.double_clicked() {
-                    // A MIDI file is heard on the synth at the session tempo.
+                    // A MIDI file is heard at the session tempo, on the selected track's instrument.
                     crate::audition::midi_file(app, &path);
                 }
                 if r.double_clicked() {
