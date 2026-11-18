@@ -5233,12 +5233,28 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
                     // A varispeed clip reads its file at `1 / stretch` file samples a sample,
                     // band-limited (the sampler's reader): a sped-up clip no longer aliases.
                     let f = clip.material_at(rel);
-                    let v = match (live, hq_src.as_mut()) {
-                        (Some(l), _) => live_stretch_at(&mut src, l, f, pitch, live_grain).unwrap_or(0.0),
-                        (None, Some((start, r))) => band_limited_at(r, f - *start, 1.0 / stretch).unwrap_or(0.0),
-                        (None, None) => shifted_at(&mut src, f, rel, stretch, pitch, grain).unwrap_or(0.0),
+                    // The tuned render, in file time, read through the stretch in place of the
+                    // file's samples (the tuned file stretched, sample for sample); it holds the
+                    // cleaned blend already.
+                    let in_tuned = tuned.is_some_and(|t| t.sample_at(ch, f.floor() as Samples).is_some());
+                    let v = match (live, hq_src.as_mut(), tuned) {
+                        (Some(l), _, _) => live_stretch_at(&mut src, l, f, pitch, live_grain).unwrap_or(0.0),
+                        (None, Some((start, r)), _) => band_limited_at(r, f - *start, 1.0 / stretch).unwrap_or(0.0),
+                        (None, None, Some(t)) => shifted_with(
+                            &mut |x| i64::try_from(x).ok().and_then(|at| t.sample_at(ch, at)).or_else(|| src.get(x)),
+                            f,
+                            rel,
+                            stretch,
+                            pitch,
+                            grain,
+                        )
+                        .unwrap_or(0.0),
+                        (None, None, None) => shifted_at(&mut src, f, rel, stretch, pitch, grain).unwrap_or(0.0),
                     };
-                    match cleaned.as_mut().and_then(|(w, origin, c)| shifted_at(c, f - *origin as f64, rel, stretch, pitch, grain).map(|cv| (*w, cv)))
+                    match cleaned
+                        .as_mut()
+                        .filter(|_| !in_tuned)
+                        .and_then(|(w, origin, c)| shifted_at(c, f - *origin as f64, rel, stretch, pitch, grain).map(|cv| (*w, cv)))
                     {
                         Some((w, cv)) => blend(v, cv, edges.map_or(w, |e| e.weight(w, f))),
                         None => v,
@@ -5275,10 +5291,12 @@ pub fn clip_source_window(s: &Session, clip: &Clip, start: Samples, n: usize) ->
 
 /// The clip's current tuned render, when it should play: a live tuning switched to Tuned whose
 /// fingerprint (kept current by the engine) is the one the render was made from. Reads only
-/// (no allocation, lock or `Arc` drop): safe on the audio thread. A stretched clip plays untuned
-/// (Elastic clips are rendered by processing anyway).
+/// (no allocation, lock or `Arc` drop): safe on the audio thread. The render is in file time: a
+/// varispeed clip plays it through its stretch (the file read with the tuned samples in place).
+/// A clip playing other audio than its file plays untuned: an Elastic stretch still rendering
+/// (heard through the live stretcher) or a transpose's finished render.
 pub fn tuned_spans<'a>(s: &'a Session, clip: &Clip) -> Option<&'a soundcraft_model::TunedSpans> {
-    if !clip.stretch.is_finite() || (clip.stretch - 1.0).abs() >= 1e-9 {
+    if !clip.stretch.is_finite() || clip.source().is_some_and(|src| live_stretch(s, src).is_some()) || pitch_render(s, clip).is_some() {
         return None;
     }
     let tune = clip.tune_live().filter(|t| !t.original && t.fingerprint != 0)?;
@@ -5426,9 +5444,14 @@ const TRANSPOSE_GRAIN_SECS: f64 = 0.03;
 /// sample depends only on `rel`, so a locate or loop wrap plays exactly what playing through
 /// would. Not transposed, the band-limited read of `f`. Never allocates.
 fn shifted_at(src: &mut soundcraft_model::SampleCursor<'_>, f: f64, rel: Samples, stretch: f64, pitch: f64, grain: f64) -> Option<f32> {
+    shifted_with(&mut |i| src.get(i), f, rel, stretch, pitch, grain)
+}
+
+/// [`shifted_at`] reading samples through `read` (a file with a tuned render in place).
+fn shifted_with(read: &mut impl FnMut(usize) -> Option<f32>, f: f64, rel: Samples, stretch: f64, pitch: f64, grain: f64) -> Option<f32> {
     let step = pitch / stretch;
     if (pitch - 1.0).abs() < 1e-9 {
-        return band_limited_at(src, f, step);
+        return soundcraft_dsp::read_band_limited(&mut *read, f, step);
     }
     // Each grain's offset from `f` moves by `pitch − 1` file samples a sample (in the clip's
     // time), from −grain/2 to +grain/2.
@@ -5438,7 +5461,7 @@ fn shifted_at(src: &mut soundcraft_model::SampleCursor<'_>, f: f64, rel: Samples
         let phase = (sweep + k).rem_euclid(1.0);
         let g = (std::f64::consts::PI * phase).sin().powi(2) as f32;
         let at = f + (phase - 0.5) * grain;
-        if let Some(v) = band_limited_at(src, at, step) {
+        if let Some(v) = soundcraft_dsp::read_band_limited(&mut *read, at, step) {
             out = Some(out.unwrap_or(0.0) + g * v);
         }
     }

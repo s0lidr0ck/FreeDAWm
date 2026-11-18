@@ -308,3 +308,51 @@ fn a_failed_render_is_reported_refused_and_skipped() {
     let r = e.execute("vocal.notes", &json!({"clip": c.0})).unwrap();
     assert_eq!(r["messages"][0]["message"], json!(vocal::RENDER_FAILED));
 }
+
+/// A tuned clip played at another speed (varispeed) plays its tuned render through the same
+/// stretch: sample for sample what the tuned file, stretched alike, plays. The render stays in
+/// file time, so tuning first and stretching after needs no new render.
+#[test]
+fn a_varispeed_clip_plays_its_tuned_render_through_the_stretch() {
+    let (mut e, t, c, _) = session();
+    analyse(&mut e, c);
+    let n1 = notes(&e, c)[0].clone();
+    edit(&mut e, c, &n1, 100.0);
+    analyse(&mut e, c);
+    // The tuned file: the take with the render's spans written in.
+    let spans = Arc::clone(e.session().vocal.renders.get(&c).unwrap());
+    assert!(!spans.spans.is_empty());
+    let mut tuned_file = take();
+    for (i, v) in tuned_file.iter_mut().enumerate() {
+        if let Some(x) = spans.sample_at(0, i as Samples) {
+            *v = x;
+        }
+    }
+    assert_ne!(tuned_file, take(), "the render changes the file");
+    // The same clip on `file`, untuned, at `stretch`.
+    let stretched_file = |file: Vec<f32>, stretch: f64, out: Samples| {
+        let mut s = Session::default();
+        let t2 = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Vox"));
+        let src2 = soundcraft_engine::io::add_source(&mut s, "File", AudioBuffer { sample_rate: RATE, channels: vec![file] }, None, FileFormat::Wav);
+        let id = s.new_clip_id();
+        let mut cl = Clip::audio(id, "File", src2, 0, 0, out);
+        cl.stretch = stretch;
+        soundcraft_engine::edit::place_clip(&mut s, t2, cl);
+        bounce_len(&Engine::new(s), t2, out)
+    };
+
+    for stretch in [1.5, 0.8] {
+        let out = (len() as f64 * stretch) as Samples;
+        {
+            let cl = e.session_mut().find_clip_mut(c).unwrap();
+            cl.stretch = stretch;
+            cl.length = out;
+        }
+        let played = bounce_len(&e, t, out);
+        let want = stretched_file(tuned_file.clone(), stretch, out);
+        assert_eq!(played.len(), want.len());
+        let differ = played.iter().zip(&want).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+        assert_eq!(differ, 0, "stretch {stretch}: the tuned file stretched, sample for sample");
+        assert_ne!(stretched_file(take(), stretch, out), played, "stretch {stretch}: tuned, not the take");
+    }
+}

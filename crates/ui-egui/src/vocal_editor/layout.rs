@@ -82,21 +82,46 @@ pub struct Frames {
     /// The clip's window in session time.
     lo: Samples,
     hi: Samples,
+    /// A varispeed clip's stretch (1: none) and offset: frames are in file time and map to
+    /// session time through it.
+    stretch: f64,
+    offset: Samples,
 }
 
 impl Frames {
     pub fn of(clip: &Clip, hop: u32) -> Frames {
-        Frames { zero: clip.start.saturating_sub(clip.source_offset()), hop: Samples::from(hop.max(1)), lo: clip.start, hi: clip.end() }
+        let stretch = if clip.stretch.is_finite() && clip.stretch > 0.0 { clip.stretch } else { 1.0 };
+        Frames {
+            zero: clip.start.saturating_sub(clip.source_offset()),
+            hop: Samples::from(hop.max(1)),
+            lo: clip.start,
+            hi: clip.end(),
+            stretch,
+            offset: clip.source_offset(),
+        }
+    }
+
+    fn plain(&self) -> bool {
+        (self.stretch - 1.0).abs() < 1e-9
     }
 
     /// Session time of frame `f`.
     pub fn time(&self, f: u32) -> Samples {
-        self.zero.saturating_add(Samples::from(f).saturating_mul(self.hop))
+        let at = Samples::from(f).saturating_mul(self.hop);
+        if self.plain() {
+            return self.zero.saturating_add(at);
+        }
+        self.lo.saturating_add(soundcraft_time::to_samples((at - self.offset) as f64 * self.stretch))
     }
 
     /// The frame sounding at session time `at` (0 before the source).
     pub fn frame(&self, at: Samples) -> u32 {
-        u32::try_from(at.saturating_sub(self.zero).max(0) / self.hop).unwrap_or(u32::MAX)
+        let rel = if self.plain() {
+            at.saturating_sub(self.zero)
+        } else {
+            self.offset.saturating_add(soundcraft_time::to_samples((at - self.lo) as f64 / self.stretch))
+        };
+        u32::try_from(rel.max(0) / self.hop).unwrap_or(u32::MAX)
     }
 
     /// `t` clamped into the clip's window.
