@@ -859,6 +859,107 @@ pub struct Insert {
     /// it, so exporting the project again writes it back unchanged. `None` for every other module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreign: Option<ForeignDevice>,
+    /// Vault's edit of its impulse response ([`SpaceEdit`] as text: reverse, trim, stretch),
+    /// applied when the response is made ready; empty: the file as it is. The response is kept
+    /// ready per reference and edit (`AssetPool::get_edited`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub space_edit: String,
+}
+
+/// An edit of Vault's impulse response, made when it is read: the file's `start`..`end`
+/// (seconds; `end` 0 is the file's end), then `reverse`d, then played `stretch` times as long
+/// (read at a changed rate: longer is also darker, as a slowed tape). Stored on the module as
+/// text ([`Insert::space_edit`]); the default edit is empty text.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpaceEdit {
+    pub reverse: bool,
+    pub start: f64,
+    pub end: f64,
+    pub stretch: f64,
+}
+
+impl Default for SpaceEdit {
+    fn default() -> SpaceEdit {
+        SpaceEdit { reverse: false, start: 0.0, end: 0.0, stretch: 1.0 }
+    }
+}
+
+impl SpaceEdit {
+    /// The stretch range.
+    pub const STRETCH: (f64, f64) = (0.5, 2.0);
+    /// The longest trim position (Vault reads files of at most a minute).
+    pub const MAX_SECONDS: f64 = 60.0;
+
+    /// The edit kept in range: times from 0 to a minute (`end` 0 or after `start`), stretch
+    /// from half to twice.
+    pub fn clamped(self) -> SpaceEdit {
+        let t = |x: f64| if x.is_finite() { (x * 1000.0).round() / 1000.0 } else { 0.0 }.clamp(0.0, Self::MAX_SECONDS);
+        let start = t(self.start);
+        let end = t(self.end);
+        let stretch = if self.stretch.is_finite() { (self.stretch * 1000.0).round() / 1000.0 } else { 1.0 }.clamp(Self::STRETCH.0, Self::STRETCH.1);
+        SpaceEdit { reverse: self.reverse, start, end: if end > start { end } else { 0.0 }, stretch }
+    }
+
+    /// The edit as stored: only what differs from the file, in a fixed order (empty: none).
+    pub fn to_text(self) -> String {
+        let e = self.clamped();
+        let mut parts = Vec::new();
+        if e.reverse {
+            parts.push("rev=1".to_string());
+        }
+        if e.start > 0.0 {
+            parts.push(format!("start={}", e.start));
+        }
+        if e.end > 0.0 {
+            parts.push(format!("end={}", e.end));
+        }
+        if e.stretch != 1.0 {
+            parts.push(format!("stretch={}", e.stretch));
+        }
+        parts.join(",")
+    }
+
+    /// The edit stored text holds (unknown or bad parts are left at their defaults).
+    pub fn parse(text: &str) -> SpaceEdit {
+        let mut e = SpaceEdit::default();
+        for part in text.split(',') {
+            let Some((k, v)) = part.split_once('=') else { continue };
+            let n = v.trim().parse::<f64>().ok().filter(|x| x.is_finite());
+            match (k.trim(), n) {
+                ("rev", Some(x)) => e.reverse = x != 0.0,
+                ("start", Some(x)) => e.start = x,
+                ("end", Some(x)) => e.end = x,
+                ("stretch", Some(x)) => e.stretch = x,
+                _ => {}
+            }
+        }
+        e.clamped()
+    }
+
+    pub fn is_none(self) -> bool {
+        self.to_text().is_empty()
+    }
+
+    /// The edit applied to a file's channels at `rate`: the channels trimmed and turned, and the
+    /// rate to read them at (the stretch). Empty channels when the trim leaves nothing.
+    pub fn apply(self, channels: &[Vec<f32>], rate: f64) -> (Vec<Vec<f32>>, f64) {
+        let e = self.clamped();
+        let frames = channels.iter().map(Vec::len).min().unwrap_or(0);
+        let at = |secs: f64| ((secs * rate).round().max(0.0) as usize).min(frames);
+        let a = at(e.start);
+        let b = if e.end > 0.0 { at(e.end) } else { frames };
+        let out = channels
+            .iter()
+            .map(|c| {
+                let mut v = c.get(a..b.max(a)).unwrap_or(&[]).to_vec();
+                if e.reverse {
+                    v.reverse();
+                }
+                v
+            })
+            .collect();
+        (out, rate / e.stretch)
+    }
 }
 
 /// A device read from a DAWproject file, kept as written ([`Insert::foreign`]).
@@ -1114,6 +1215,7 @@ impl Insert {
             mix: 1.0,
             state_load: 0,
             foreign: None,
+            space_edit: String::new(),
         }
     }
 

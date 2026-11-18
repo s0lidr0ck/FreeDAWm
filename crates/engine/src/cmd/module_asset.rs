@@ -57,6 +57,15 @@ pub fn specs() -> Vec<CommandSpec> {
             module_action
         ),
         cmd!(
+            "mix.module_ir_edit",
+            "Edit Impulse Response",
+            [],
+            None,
+            "{track, module (a Vault), reverse?: bool, start?: s, end?: s (0: the file's end), stretch?: 0.5..2, reset?: bool} — edits the impulse response Vault plays: the file's start..end, reversed, read stretch times as long; the file itself is untouched",
+            always,
+            module_ir_edit
+        ),
+        cmd!(
             "mix.module_ir",
             "Load Module IR",
             [],
@@ -100,7 +109,7 @@ fn module_reference(e: &mut Engine, p: &Value) -> Result<Value> {
     let rate = e.session().sample_rate.hz();
     // Read and make it ready before touching the session: a bad file changes nothing.
     let made = match &reference {
-        Some(r) => Some(make_asset(key, r, rate, None).map_err(|err| EngineError::Io(format!("{C}: {err}")))?),
+        Some(r) => Some(make_asset(key, r, "", rate, None).map_err(|err| EngineError::Io(format!("{C}: {err}")))?),
         None => None,
     };
     let (frames, channels, sample_rate) = made.as_ref().map_or((0, 0, 0.0), |a| (a.frames(), a.num_channels(), a.sample_rate()));
@@ -165,7 +174,7 @@ fn module_ir(e: &mut Engine, p: &Value) -> Result<Value> {
     };
     // Read and make it ready before touching the session: a bad file changes nothing.
     let made = match &reference {
-        Some(r) => Some(make_asset(key, r, rate, None).map_err(|err| EngineError::Io(format!("{C}: {err}")))?),
+        Some(r) => Some(make_asset(key, r, "", rate, None).map_err(|err| EngineError::Io(format!("{C}: {err}")))?),
         None => None,
     };
     let s = e.session_mut();
@@ -205,7 +214,7 @@ fn vault_ir(e: &mut Engine, cmd: &str, t: soundcraft_model::TrackId, id: ModuleI
     let rate = e.session().sample_rate.hz();
     // Read and make it ready before touching the session: a bad file changes nothing.
     let made = match &reference {
-        Some(r) => Some(make_asset(SPACE_IR_KEY, r, rate, None).map_err(|err| EngineError::Io(format!("{cmd}: {err}")))?),
+        Some(r) => Some(make_asset(SPACE_IR_KEY, r, "", rate, None).map_err(|err| EngineError::Io(format!("{cmd}: {err}")))?),
         None => None,
     };
     let (frames, channels, sample_rate) = made.as_ref().map_or((0, 0, 0.0), |a| (a.frames(), a.num_channels(), a.sample_rate()));
@@ -218,7 +227,65 @@ fn vault_ir(e: &mut Engine, cmd: &str, t: soundcraft_model::TrackId, id: ModuleI
         Some(r) => ins.assets.insert(SPACE_IR_KEY.to_string(), r.clone()),
         None => ins.assets.remove(SPACE_IR_KEY),
     };
+    // A new response starts unedited.
+    ins.space_edit.clear();
     Ok(json!({"track": t, "module": id.0, "key": SPACE_IR_KEY, "ir": reference, "frames": frames, "channels": channels, "sample_rate": sample_rate}))
+}
+
+/// `mix.module_ir_edit`: reverse, trim or stretch the response a Vault module plays. The edit is
+/// made (off the audio thread, here) before the session changes: a trim that leaves nothing
+/// changes nothing.
+fn module_ir_edit(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_ir_edit";
+    let t = super::module::first_track(e, C, p)?;
+    let id = super::module::module_id(C, p)?;
+    let ins = e.session().track(t).and_then(|tr| tr.mixer.module(id)).cloned().ok_or_else(|| bad(C, format!("no module {}", id.0)))?;
+    if ins.plugin != "vault" {
+        return Err(bad(C, format!("`{}` has no impulse response to edit", ins.plugin)));
+    }
+    let reference =
+        ins.assets.get(SPACE_IR_KEY).cloned().ok_or_else(|| bad(C, "load an impulse response first: the built-in space can't be edited"))?;
+    let mut edit = soundcraft_model::SpaceEdit::parse(&ins.space_edit);
+    let num = |k: &str| -> Result<Option<f64>> {
+        match p.get(k) {
+            None => Ok(None),
+            Some(v) => v.as_f64().filter(|x| x.is_finite()).map(Some).ok_or_else(|| bad(C, format!("`{k}` must be a number"))),
+        }
+    };
+    if bool_or(p, "reset", false) {
+        edit = soundcraft_model::SpaceEdit::default();
+    }
+    if let Some(r) = p.get("reverse") {
+        edit.reverse = r.as_bool().ok_or_else(|| bad(C, "`reverse` must be true or false"))?;
+    }
+    if let Some(x) = num("start")? {
+        edit.start = x;
+    }
+    if let Some(x) = num("end")? {
+        edit.end = x;
+    }
+    if let Some(x) = num("stretch")? {
+        edit.stretch = x;
+    }
+    let text = edit.to_text();
+    let rate = e.session().sample_rate.hz();
+    let file = e.path.clone();
+    if !e.session().assets.contains_edited(SPACE_IR_KEY, &reference, &text, rate) {
+        let made = make_asset(SPACE_IR_KEY, &reference, &text, rate, file.as_deref().map(Path::new))
+            .map_err(|err| EngineError::Io(format!("{C}: {err}")))?;
+        e.session_mut().assets.insert_edited(SPACE_IR_KEY, &reference, &text, rate, AssetData(Arc::new(made)));
+    }
+    let frames = e
+        .session()
+        .assets
+        .get_edited(SPACE_IR_KEY, &reference, &text, rate)
+        .and_then(|d| d.0.downcast_ref::<Arc<dyn SampleSource>>())
+        .map_or(0, |a| a.frames());
+    super::module::find_mut(e, C, t, id)?.space_edit = text.clone();
+    let edit = soundcraft_model::SpaceEdit::parse(&text);
+    Ok(
+        json!({"track": t, "module": id.0, "edit": text, "reverse": edit.reverse, "start": edit.start, "end": edit.end, "stretch": edit.stretch, "frames": frames}),
+    )
 }
 
 /// The amp an `amp` parameter names (an index or a name), else the module's current amp.
@@ -257,12 +324,12 @@ fn read_reference(reference: &str, session_file: Option<&Path>, max_bytes: u64) 
 /// Reads, decodes and makes ready the asset a reference names for module asset key `key`, for a
 /// session at `rate`: reference audio for a reference slot, else an impulse response. Errors name
 /// what is wrong (missing, not audio, too long, unusable).
-fn make_asset(key: &str, reference: &str, rate: u32, session_file: Option<&Path>) -> std::result::Result<Arc<dyn SampleSource>, String> {
+fn make_asset(key: &str, reference: &str, edit: &str, rate: u32, session_file: Option<&Path>) -> std::result::Result<Arc<dyn SampleSource>, String> {
     if is_reference_key(key) {
         return make_reference_audio(reference, rate, session_file);
     }
     if key == SPACE_IR_KEY {
-        return make_space_ir(reference, rate, session_file);
+        return make_space_ir(reference, edit, rate, session_file);
     }
     let (bytes, ext) = read_reference(reference, session_file, MAX_IR_FILE_BYTES)?;
     let (info, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| format!("{reference}: {err}"))?;
@@ -274,14 +341,26 @@ fn make_asset(key: &str, reference: &str, rate: u32, session_file: Option<&Path>
     Ok(Arc::new(ir))
 }
 
-/// A reverb response for Vault from a file: every channel it uses, at the session rate.
-fn make_space_ir(reference: &str, rate: u32, session_file: Option<&Path>) -> std::result::Result<Arc<dyn SampleSource>, String> {
+/// A reverb response for Vault from a file: every channel it uses, at the session rate, with
+/// the module's edit (`Insert::space_edit`: trim, reverse, stretch) made first.
+fn make_space_ir(reference: &str, edit: &str, rate: u32, session_file: Option<&Path>) -> std::result::Result<Arc<dyn SampleSource>, String> {
     if reference.starts_with(BUNDLED) {
         return Err(format!("{reference}: no bundled reverb impulse responses"));
     }
     let (bytes, ext) = read_reference(reference, session_file, MAX_SPACE_FILE_BYTES)?;
     let (info, buf) = soundcraft_audio_io::decode(&bytes, ext.as_deref()).map_err(|err| format!("{reference}: {err}"))?;
-    let ir = SpaceIr::new(&buf.channels, f64::from(info.sample_rate), f64::from(rate)).map_err(|err| format!("{reference}: {err}"))?;
+    let file_rate = f64::from(info.sample_rate);
+    let ir = if edit.is_empty() {
+        SpaceIr::new(&buf.channels, file_rate, f64::from(rate))
+    } else {
+        let (channels, read_rate) = soundcraft_model::SpaceEdit::parse(edit).apply(&buf.channels, file_rate);
+        drop(buf);
+        if channels.iter().all(Vec::is_empty) {
+            return Err(format!("{reference}: the trim leaves nothing of the response"));
+        }
+        SpaceIr::new(&channels, read_rate, f64::from(rate))
+    }
+    .map_err(|err| format!("{reference}: {err}"))?;
     Ok(Arc::new(ir))
 }
 
@@ -322,8 +401,12 @@ fn make_reference_audio(reference: &str, rate: u32, session_file: Option<&Path>)
 /// just opened). Returns what could not be made, for the "missing media" report: the module keeps
 /// its reference (so the name shows what is missing) and plays without it.
 pub fn load_session_assets(s: &mut Session, session_file: Option<&Path>) -> Vec<String> {
-    let wanted: Vec<(String, String)> =
-        s.tracks.iter().flat_map(|t| t.mixer.inserts.iter()).flat_map(|i| i.assets.iter().map(|(k, r)| (k.clone(), r.clone()))).collect();
+    let wanted: Vec<(String, String, String)> = s
+        .tracks
+        .iter()
+        .flat_map(|t| t.mixer.inserts.iter())
+        .flat_map(|i| i.assets.iter().map(|(k, r)| (k.clone(), r.clone(), i.space_edit.clone())))
+        .collect();
     load_assets(s, wanted, session_file)
 }
 
@@ -368,7 +451,7 @@ pub(crate) fn import_track_assets(s: &mut Session, tracks: &[soundcraft_model::T
                         }
                     }
                 }
-                wanted.push((k.clone(), r.clone()));
+                wanted.push((k.clone(), r.clone(), ins.space_edit.clone()));
             }
         }
     }
@@ -376,12 +459,12 @@ pub(crate) fn import_track_assets(s: &mut Session, tracks: &[soundcraft_model::T
     missing
 }
 
-fn load_assets(s: &mut Session, wanted: Vec<(String, String)>, session_file: Option<&Path>) -> Vec<String> {
+fn load_assets(s: &mut Session, wanted: Vec<(String, String, String)>, session_file: Option<&Path>) -> Vec<String> {
     let rate = s.sample_rate.hz();
     let mut missing = Vec::new();
     // (kind, reference) pairs that failed: one report each, however many modules name them
     let mut failed: Vec<(u8, String)> = Vec::new();
-    for (k, r) in wanted {
+    for (k, r, edit) in wanted {
         let kind = if is_reference_key(&k) {
             1
         } else if k == SPACE_IR_KEY {
@@ -389,11 +472,11 @@ fn load_assets(s: &mut Session, wanted: Vec<(String, String)>, session_file: Opt
         } else {
             0
         };
-        if s.assets.contains_for(&k, &r, rate) || failed.iter().any(|(fk, fr)| *fk == kind && *fr == r) {
+        if s.assets.contains_edited(&k, &r, &edit, rate) || failed.iter().any(|(fk, fr)| *fk == kind && *fr == r) {
             continue;
         }
-        match make_asset(&k, &r, rate, session_file) {
-            Ok(a) => s.assets.insert_for(&k, &r, rate, AssetData(Arc::new(a))),
+        match make_asset(&k, &r, &edit, rate, session_file) {
+            Ok(a) => s.assets.insert_edited(&k, &r, &edit, rate, AssetData(Arc::new(a))),
             Err(err) => {
                 missing.push(if err.starts_with(&r) { err } else { format!("{r}: {err}") });
                 failed.push((kind, r));
@@ -711,6 +794,72 @@ mod tests {
         e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": {"path": ir.display().to_string()}})).unwrap();
         e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": null})).unwrap();
         assert!(vault_assets(&e, m).is_empty());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn vaults_response_is_trimmed_reversed_and_stretched() {
+        let d = dir("vault-edit");
+        let mut e = Engine::new(soundcraft_model::Session::default());
+        let (t, m) = vault_track(&mut e);
+        let wav = d.join("clicks.wav");
+        let tone: Vec<f32> = (0..24_000).map(|i| if i % 6000 < 40 { 0.5 } else { 0.0 }).collect();
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![tone.clone(), tone] };
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
+        std::fs::write(&wav, soundcraft_audio_io::encode(&buf, &opts).unwrap()).unwrap();
+        e.execute("file.import_audio", &json!({"path": wav.display().to_string(), "track": t, "at": 0})).unwrap();
+        assert!(e.execute("mix.module_ir_edit", &json!({"track": t, "module": m, "reverse": true})).is_err(), "the built-in space has no file");
+        let ir = d.join("hall.wav");
+        space_wav(&ir, 48_000, 0.6, 2);
+        let whole = e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": {"path": ir.display().to_string()}})).unwrap()["frames"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(whole, 28_800);
+        let plain = render(&e);
+
+        let r = e.execute("mix.module_ir_edit", &json!({"track": t, "module": m, "end": 0.3})).unwrap();
+        assert_eq!((r["edit"].as_str(), r["frames"].as_u64()), (Some("end=0.3"), Some(14_400)), "trimmed to its first 0.3 s");
+        let r = e.execute("mix.module_ir_edit", &json!({"track": t, "module": m, "stretch": 2.0})).unwrap();
+        assert_eq!(r["frames"].as_u64(), Some(28_800), "the trimmed response read twice as long");
+        e.execute("mix.module_ir_edit", &json!({"track": t, "module": m, "reset": true, "reverse": true})).unwrap();
+        let ins = e.session().tracks.last().unwrap().mixer.module(soundcraft_model::ModuleId(m as u32)).unwrap().clone();
+        assert_eq!(ins.space_edit, "rev=1");
+        let reference = ins.assets["vaultIr"].clone();
+        let made = |e: &Engine, edit: &str| {
+            e.session()
+                .assets
+                .get_edited("vaultIr", &reference, edit, 48_000)
+                .and_then(|a| a.0.downcast_ref::<std::sync::Arc<dyn soundcraft_dsp::SampleSource>>())
+                .cloned()
+                .unwrap()
+        };
+        let (fwd, rev) = (made(&e, ""), made(&e, "rev=1"));
+        let (f0, r0) =
+            (soundcraft_dsp::SampleSource::channel(fwd.as_ref(), 0).unwrap(), soundcraft_dsp::SampleSource::channel(rev.as_ref(), 0).unwrap());
+        assert_eq!(f0.len(), r0.len());
+        assert!((f0[1] - r0[r0.len() - 2]).abs() < 1e-6, "turned over");
+        let reversed = render(&e);
+        let diff: f32 = plain[0].iter().zip(&reversed[0]).map(|(a, b)| (a - b).abs()).sum();
+        assert!(diff > 1.0, "the edited response is the one heard ({diff})");
+        assert!(reversed.iter().flatten().all(|v| v.is_finite()));
+
+        // One undo step per edit; the file is untouched; a new file starts unedited.
+        e.run("edit.undo").unwrap();
+        assert_eq!(e.session().tracks.last().unwrap().mixer.module(soundcraft_model::ModuleId(m as u32)).unwrap().space_edit, "end=0.3,stretch=2");
+        assert!(e.execute("mix.module_ir_edit", &json!({"track": t, "module": m, "start": 0.6})).is_err(), "nothing left");
+        e.execute("mix.module_ir", &json!({"track": t, "module": m, "ir": {"path": ir.display().to_string()}})).unwrap();
+        assert_eq!(e.session().tracks.last().unwrap().mixer.module(soundcraft_model::ModuleId(m as u32)).unwrap().space_edit, "");
+
+        // Saved and opened again: the edit is made ready with the session.
+        e.execute("mix.module_ir_edit", &json!({"track": t, "module": m, "reverse": true})).unwrap();
+        let path = d.join("s.scraft");
+        crate::io::save_session(&mut e, &path.display().to_string()).unwrap();
+        let mut f = Engine::new(soundcraft_model::Session::default());
+        let missing = crate::io::open_session(&mut f, &path.display().to_string()).unwrap();
+        assert!(missing.is_empty(), "{missing:?}");
+        let ins = f.session().tracks.last().unwrap().mixer.inserts.iter().find(|i| i.plugin == "vault").unwrap().clone();
+        assert_eq!(ins.space_edit, "rev=1");
+        assert!(f.session().assets.contains_edited("vaultIr", &ins.assets["vaultIr"], "rev=1", 48_000));
         let _ = std::fs::remove_dir_all(d);
     }
 

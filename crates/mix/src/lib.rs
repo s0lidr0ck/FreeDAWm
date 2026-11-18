@@ -4675,7 +4675,7 @@ fn structure_fingerprint(s: &Session) -> usize {
             // which assets it works from, and which decoded data (made anew: re-sync)
             for (k, r) in &i.assets {
                 (k, r).hash(&mut h);
-                s.assets.get_for(k, r, s.sample_rate.hz()).map(|a| Arc::as_ptr(&a.0) as *const () as usize).hash(&mut h);
+                s.assets.get_edited(k, r, &i.space_edit, s.sample_rate.hz()).map(|a| Arc::as_ptr(&a.0) as *const () as usize).hash(&mut h);
             }
         }
         // Which clips have Clip Effects and which modules they need (`sync` makes them).
@@ -6145,8 +6145,8 @@ const RELEASED_RESERVE: usize = 16;
 
 /// The asset a session has ready for `reference` at `rate` (`None`: not made, or not a
 /// `SampleSource`).
-fn session_asset(s: &Session, key: &str, reference: &str, rate: u32) -> Option<Arc<dyn SampleSource>> {
-    s.assets.get_for(key, reference, rate).and_then(|d| d.0.downcast_ref::<Arc<dyn SampleSource>>()).cloned()
+fn session_asset(s: &Session, key: &str, reference: &str, edit: &str, rate: u32) -> Option<Arc<dyn SampleSource>> {
+    s.assets.get_edited(key, reference, edit, rate).and_then(|d| d.0.downcast_ref::<Arc<dyn SampleSource>>()).cloned()
 }
 
 /// Hands a module's plugin its link group's slab (`Insert::link_group`) and member index when
@@ -6174,7 +6174,7 @@ fn sync_link(slot: &mut PluginSlot, track: TrackId, ins: &soundcraft_model::Inse
 fn sync_assets(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, s: &Session, rate: u32, retired: &mut Vec<Arc<dyn SampleSource>>) {
     let same = |a: &Arc<dyn SampleSource>, b: &Arc<dyn SampleSource>| std::ptr::addr_eq(Arc::as_ptr(a), Arc::as_ptr(b));
     for (key, reference) in &ins.assets {
-        let want = session_asset(s, key, reference, rate);
+        let want = session_asset(s, key, reference, &ins.space_edit, rate);
         let at = slot.assets.iter().position(|(k, _)| k == key);
         match (want, at) {
             (Some(w), Some(i)) if same(&w, &slot.assets[i].1) => {}

@@ -8,7 +8,7 @@ use crate::theme::{Tokens, bold, regular};
 use egui::{Align2, Color32, CornerRadius, Rect, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
 use soundcraft_dsp::SampleSource;
-use soundcraft_model::{Insert, SPACE_IR_KEY, Session, TrackId};
+use soundcraft_model::{Insert, SPACE_IR_KEY, Session, SpaceEdit, TrackId};
 use std::sync::Arc;
 
 /// The quietest level the decay picture shows, in dB under the response's peak.
@@ -18,8 +18,8 @@ const FILES: [&str; 5] = ["wav", "wave", "aif", "aiff", "flac"];
 
 /// The response a Vault module names, as the session has it ready (`None`: none loaded, or its
 /// file is missing).
-fn loaded(s: &Session, reference: &str) -> Option<Arc<dyn SampleSource>> {
-    s.assets.get_for(SPACE_IR_KEY, reference, s.sample_rate.hz()).and_then(|d| d.0.downcast_ref::<Arc<dyn SampleSource>>()).cloned()
+fn loaded(s: &Session, reference: &str, edit: &str) -> Option<Arc<dyn SampleSource>> {
+    s.assets.get_edited(SPACE_IR_KEY, reference, edit, s.sample_rate.hz()).and_then(|d| d.0.downcast_ref::<Arc<dyn SampleSource>>()).cloned()
 }
 
 /// A response's width in a word.
@@ -42,7 +42,7 @@ pub(crate) fn drawer_rows(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: 
     let t = Tokens::current();
     let p = ui.painter().clone();
     let reference = ins.assets.get(SPACE_IR_KEY).cloned();
-    let asset = reference.as_deref().and_then(|r| loaded(app.engine.session(), r));
+    let asset = reference.as_deref().and_then(|r| loaded(app.engine.session(), r, &ins.space_edit));
     let text = match (&reference, &asset) {
         (None, _) => "Built-in space · load an impulse response…".to_string(),
         (Some(r), Some(_)) => ir_label(r),
@@ -94,7 +94,61 @@ pub(crate) fn drawer_rows(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: 
         }
     }
     y = pic.max.y + 8.0;
+    if reference.is_some() && asset.is_some() {
+        y = edit_row(app, ui, track, ins, inner, y);
+    }
     y
+}
+
+/// The response's edit under its picture: Reverse, the trim (start and end, seconds of the
+/// file) and the stretch (`mix.module_ir_edit`, one undo step per change).
+fn edit_row(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, inner: Rect, y: f32) -> f32 {
+    let key = ui.id().with(("vault-edit", ins.id.0));
+    let before = SpaceEdit::parse(&ins.space_edit);
+    // A change being dragged shows as it goes; it is sent once the pointer lets go.
+    let mut e: SpaceEdit = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(before);
+    let row = Rect::from_min_max(pos2(inner.min.x, y), pos2(inner.max.x, y + 22.0));
+    let mut reset = false;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            crate::widgets::checkbox(ui, &mut e.reverse, "Reverse").on_hover_text("Play the response backwards: the swell before the sound");
+            ui.add(egui::DragValue::new(&mut e.start).range(0.0..=SpaceEdit::MAX_SECONDS).speed(0.01).prefix("from ").suffix(" s"))
+                .on_hover_text("Where the response starts in the file");
+            ui.add(egui::DragValue::new(&mut e.end).range(0.0..=SpaceEdit::MAX_SECONDS).speed(0.01).prefix("to ").suffix(" s").custom_formatter(
+                |v, _| {
+                    if v <= 0.0 { "end".into() } else { format!("{v:.2}") }
+                },
+            ))
+            .on_hover_text("Where the response ends in the file (end: the whole file)");
+            ui.add(egui::DragValue::new(&mut e.stretch).range(SpaceEdit::STRETCH.0..=SpaceEdit::STRETCH.1).speed(0.005).prefix("× ").max_decimals(2))
+                .on_hover_text("Stretch: longer is a bigger, darker space, as a tape slowed down");
+            if !ins.space_edit.is_empty() && ui.small_button("Reset").on_hover_text("The file as it is").clicked() {
+                reset = true;
+            }
+        });
+    });
+    // One change per release of a drag (not one per frame of it).
+    let dragging = ui.ctx().input(|i| i.pointer.any_down());
+    let changed = e.clamped() != before;
+    if changed {
+        ui.ctx().data_mut(|d| d.insert_temp(key, e));
+    }
+    let pending: Option<SpaceEdit> = ui.ctx().data(|d| d.get_temp(key));
+    let send = if reset {
+        Some(serde_json::json!({"track": track.0, "module": ins.id.0, "reset": true}))
+    } else {
+        pending.filter(|_| !dragging).map(
+            |e| serde_json::json!({"track": track.0, "module": ins.id.0, "reverse": e.reverse, "start": e.start, "end": e.end, "stretch": e.stretch}),
+        )
+    };
+    if let Some(p) = send {
+        ui.ctx().data_mut(|d| d.remove::<SpaceEdit>(key));
+        if let Err(err) = app.run("mix.module_ir_edit", p) {
+            app.ui.status = err.to_string();
+        }
+    }
+    row.max.y + 6.0
 }
 
 /// The response's level over time: per pixel column the loudest sample of any channel, in dB

@@ -2404,7 +2404,7 @@ fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool
 /// referred to where it is.
 fn copy_module_files(s: &mut Session, dir: &Path, audio_dir: &Path, from: Option<&Path>, same_dir: bool) {
     let rate = s.sample_rate.hz();
-    let mut renamed: Vec<(String, String, String)> = Vec::new();
+    let mut renamed: Vec<(String, String, String, String)> = Vec::new();
     let mut copied: std::collections::HashMap<PathBuf, String> = std::collections::HashMap::new();
     for t in &mut s.tracks {
         for ins in &mut t.mixer.inserts {
@@ -2438,14 +2438,14 @@ fn copy_module_files(s: &mut Session, dir: &Path, audio_dir: &Path, from: Option
                         }
                     },
                 };
-                renamed.push((key.clone(), r.clone(), stored.clone()));
+                renamed.push((key.clone(), r.clone(), stored.clone(), ins.space_edit.clone()));
                 *r = stored;
             }
         }
     }
-    for (key, old, new) in renamed {
-        if let Some(data) = s.assets.get_for(&key, &old, rate).cloned() {
-            s.assets.insert_for(&key, &new, rate, data);
+    for (key, old, new, edit) in renamed {
+        if let Some(data) = s.assets.get_edited(&key, &old, &edit, rate).cloned() {
+            s.assets.insert_edited(&key, &new, &edit, rate, data);
         }
     }
 }

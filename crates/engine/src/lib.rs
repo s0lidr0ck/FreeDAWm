@@ -561,7 +561,7 @@ impl Engine {
             .tracks
             .iter()
             .flat_map(|t| t.mixer.inserts.iter())
-            .all(|i| i.assets.iter().all(|(k, r)| self.doc.assets.contains_for(k, r, rate)));
+            .all(|i| i.assets.iter().all(|(k, r)| self.doc.assets.contains_edited(k, r, &i.space_edit, rate)));
         if ready {
             return Vec::new();
         }

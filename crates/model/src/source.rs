@@ -356,6 +356,8 @@ pub struct AssetPool {
     audio: BTreeMap<String, BTreeMap<u32, AssetData>>,
     /// The same for reverb responses.
     spaces: BTreeMap<String, BTreeMap<u32, AssetData>>,
+    /// Edited reverb responses: reference -> edit (`Insert::space_edit`) -> rate -> data.
+    edited: BTreeMap<String, AssetMap>,
 }
 
 type AssetMap = BTreeMap<String, BTreeMap<u32, AssetData>>;
@@ -401,11 +403,31 @@ impl AssetPool {
     pub fn contains_for(&self, key: &str, reference: &str, rate: u32) -> bool {
         self.get_for(key, reference, rate).is_some()
     }
+    /// The asset key `key` takes from `reference` with edit `edit` (`Insert::space_edit`; only
+    /// a reverb response is edited, any other key ignores it) at `rate`. Does not allocate.
+    pub fn get_edited(&self, key: &str, reference: &str, edit: &str, rate: u32) -> Option<&AssetData> {
+        if edit.is_empty() || key != crate::SPACE_IR_KEY {
+            return self.get_for(key, reference, rate);
+        }
+        self.edited.get(reference)?.get(edit)?.get(&rate)
+    }
+    /// Stores an asset made with edit `edit` ([`AssetPool::get_edited`]).
+    pub fn insert_edited(&mut self, key: &str, reference: &str, edit: &str, rate: u32, data: AssetData) {
+        if edit.is_empty() || key != crate::SPACE_IR_KEY {
+            return self.insert_for(key, reference, rate, data);
+        }
+        self.edited.entry(reference.to_string()).or_default().entry(edit.to_string()).or_default().insert(rate, data);
+    }
+    pub fn contains_edited(&self, key: &str, reference: &str, edit: &str, rate: u32) -> bool {
+        self.get_edited(key, reference, edit, rate).is_some()
+    }
     /// The number of (kind, reference, rate) entries.
     pub fn len(&self) -> usize {
-        self.map.values().chain(self.audio.values()).chain(self.spaces.values()).map(BTreeMap::len).sum()
+        self.map.values().chain(self.audio.values()).chain(self.spaces.values()).map(BTreeMap::len).sum::<usize>()
+            + self.edited.values().flat_map(BTreeMap::values).map(BTreeMap::len).sum::<usize>()
     }
     pub fn is_empty(&self) -> bool {
         self.map.values().chain(self.audio.values()).chain(self.spaces.values()).all(BTreeMap::is_empty)
+            && self.edited.values().flat_map(BTreeMap::values).all(BTreeMap::is_empty)
     }
 }
