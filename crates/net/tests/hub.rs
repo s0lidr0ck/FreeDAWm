@@ -3,7 +3,9 @@
 
 use serde_json::{Value, json};
 use soundcraft_net::config::NetConfig;
+use soundcraft_net::follower::{pair_confirm, pair_request};
 use soundcraft_net::hub::{Hub, HubRequest, http_request, read_events};
+use soundcraft_net::pairing::exchange::LinkKeys;
 use soundcraft_net::proto::{RigStatus, TransportState};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -156,12 +158,11 @@ fn a_pc_pairs_over_the_control_channel_and_then_controls() {
     assert_eq!(v["pair"], true);
     let v = line(&mut c, &mut r, json!({"id": 2, "method": "hello", "params": {"token": "nope"}}));
     assert_eq!(v["ok"], false);
-    let v = line(&mut c, &mut r, json!({"id": 3, "method": "pair.request", "params": {"name": "Piano PC"}}));
-    let id = v["result"]["request"].as_str().unwrap().to_string();
+    // The PC's code is never sent: the key exchange, on the plain link with no keys to prove.
+    let id = pair_request(&addr.to_string(), "Piano PC").unwrap();
     let code = hub.pending_pairings()[0].code.clone();
     assert_eq!(hub.pending_pairings()[0].kind, "pc");
-    let v = line(&mut c, &mut r, json!({"id": 4, "method": "pair.confirm", "params": {"request": id, "code": code}}));
-    let token = v["result"]["token"].as_str().unwrap().to_string();
+    let (token, _) = pair_confirm(&addr.to_string(), &id, code, LinkKeys::PLAIN).unwrap();
     let v = line(&mut c, &mut r, json!({"id": 5, "method": "hello", "params": {"token": token, "name": "Piano PC"}}));
     assert_eq!(v["ok"], true, "{v}");
     assert_eq!(v["id"], 5);
@@ -190,11 +191,9 @@ fn paired_pc(hub: &Hub, addr: SocketAddr) -> (TcpStream, BufReader<TcpStream>) {
     let mut c = TcpStream::connect(addr).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     let mut r = BufReader::new(c.try_clone().unwrap());
-    let v = line(&mut c, &mut r, json!({"id": 1, "method": "pair.request", "params": {"name": "Guitar PC"}}));
-    let id = v["result"]["request"].as_str().unwrap().to_string();
+    let id = pair_request(&addr.to_string(), "Guitar PC").unwrap();
     let code = hub.pending_pairings().into_iter().find(|p| p.id == id).unwrap().code;
-    let v = line(&mut c, &mut r, json!({"id": 2, "method": "pair.confirm", "params": {"request": id, "code": code}}));
-    let token = v["result"]["token"].as_str().unwrap().to_string();
+    let (token, _) = pair_confirm(&addr.to_string(), &id, code, LinkKeys::PLAIN).unwrap();
     let v = line(&mut c, &mut r, json!({"id": 3, "method": "hello", "params": {"token": token, "name": "Guitar PC"}}));
     assert_eq!(v["ok"], true);
     (c, r)

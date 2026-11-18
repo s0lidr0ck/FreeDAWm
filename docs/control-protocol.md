@@ -945,6 +945,9 @@ inputs seen). Plain traffic, no TLS (LAN only).
 code on screen (a "Pairing request" window with Deny); typing it on the device returns a token
 (128 random bits), remembered on both sides (Setup › Network lists them with Forget). A request
 allows 3 wrong codes and expires after 2 minutes; at most 4 wait and 20 are made per 10 minutes.
+A browser sends the code (`POST /api/pair/confirm`); a PC never does: the code is the password of
+a key exchange that proves both PCs' keys (`pair.exchange`, `pair.finish` below), each exchange
+spending one of the 3 tries.
 
 HTTP (one request per connection; JSON bodies; the token in `X-Token` or `?token=`):
 
@@ -970,8 +973,10 @@ lines without an `id` get no reply):
 
 | Method | Params | Result |
 |---|---|---|
-| `pair.request` | `{name}` | `{request, pc}` (kind `pc`) |
-| `pair.confirm` | `{request, code}` | `{token, name, pc}` |
+| `pair.request` | `{name, pairing: 2}` | `{request, pc, pairing: 2}` (kind `pc`). Without `pairing` (or below 2: a FreeDAWm that would send the code itself) refused with "update FreeDAWm on this computer…" and `update: true`, before any code is shown. A PC refuses a booth whose answer has no `pairing` 2 ("update FreeDAWm on the booth…"), before any code is typed. |
+| `pair.exchange` | `{request, msg}` | `{msg, confirm}`. The first pairing's key exchange: `msg` the PC's SPAKE2 message (33 bytes, base64; side A, identities `freedawm-pc` and `freedawm-booth`, password the code on the booth's screen), answered by the booth's message and its confirmation, `HMAC-SHA256(HKDF-SHA256(k, info "freedawm pairing confirm"), role ‖ booth key ‖ PC key)` (role the sender's identity; each field after a byte giving its length; the keys are the encrypted link's two public keys as the TLS session proved them, none on the plain link). Spends one of the request's 3 tries whatever follows; a damaged message or a request without tries ends the connection. The code itself is never sent. |
+| `pair.finish` | `{confirm}` | `{token, name, pc}`: the PC's own confirmation, sent only after its check of the booth's, compared in constant time; it must be the next line on the same connection. A mismatch (a wrong code, or a machine in the middle holding another key towards each side) answers "wrong code, or another computer is in between (N tries left)" and ends the connection. Over the encrypted link the PC is then bound to its key, as before. |
+| `pair.confirm` | `{request, code}` | Refused ("update FreeDAWm on this computer…"): the code in the clear is never compared on this channel. The phone's page keeps `POST /api/pair/confirm`, for browser requests only. |
 | `hello` | `{token, name, role?: "follower", report?}` | `{pc, name, transport}`. Unpaired: `{ok: false, pair: true}`. After it, **every control-protocol method** (`engine.execute`, `session.inspect`, `ui.*`…) runs as on the `--control` channel. |
 | `sync.ping` | `{t0}` | `{b1, b2}`: the booth's take clock (s) when the ping arrived and when it answered. Refused while the booth is stopped. |
 | `follower.report` | `{state, notes, disk_free?, queued, ports, inputs, clips, sending?}` | (notification, about once a second; `inputs`: armed audio inputs, `clips` in the take recording, `sending` 0..1 while an audio take uploads) |
@@ -1054,8 +1059,8 @@ not published, documented as for development and hobby use: fine for one perform
 300 kb/s of stream; a take upload may be slowed); a URL there uses that relay (a self-hosted
 `iroh-relay` on a small VPS with UDP, never Vercel), with no code change. The LAN protocol runs
 unchanged: on the host, *Let a performer join this PC over the internet* (`internet_host`) opens a
-second hub listener on loopback only (`Hub::listen_internet`; no web page, and `pair.request` /
-`pair.confirm` refused: nobody across the internet sees the code on this screen) and every QUIC
+second hub listener on loopback only (`Hub::listen_internet`; no web page, and `pair.request`,
+`pair.exchange` and `pair.finish` refused: nobody across the internet sees the code on this screen) and every QUIC
 stream from a remote PC is bridged to it; on the performer's PC the follower connects to a local
 port bridged to the host (`Internet::bridge_to`), one QUIC connection per host. Pairing: **Invite…**
 makes a one-time secret valid 30 minutes (`Hub::new_invite_secret`) and shows the code
