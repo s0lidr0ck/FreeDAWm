@@ -34,7 +34,7 @@ exists and is stored, but nothing acts on it) · **Missing**.
 
 ## Summary
 
-Of 67 signature features checked, FreeDAWm has a working answer to 27 and a partial one to 27; the
+Of 67 signature features checked, FreeDAWm has a working answer to 28 and a partial one to 26; the
 other 13 are not planned here, each with its reason (re-counted 2026-11-18, after rounds three and
 four; the first count, of 60, found about 12, 28 and 20).
 
