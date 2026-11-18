@@ -14,6 +14,8 @@ use crate::util::{Smoother, frames_in, ms_to_samples, note_hz, sane_channels, sa
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
 
 pub mod presets;
+#[cfg(test)]
+mod reference;
 
 pub(crate) const MAX_EVENTS: usize = 512;
 
@@ -1199,65 +1201,29 @@ mod upgrade_tests {
         assert_eq!(render(&[("sub_level", 0.0), ("noise_level", 0.0)], &[(0, 60)], 4_096), render(&[], &[(0, 60)], 4_096));
     }
 
-    /// What the synth plays at its defaults and with each factory preset, as FNV-1a over the
-    /// samples' bits (stereo, a phrase with a chord, a bend and the mod wheel): recorded before
-    /// unison and hard sync were added, so their defaults must leave every sample as it was.
-    fn golden(set: &[(&str, f32)]) -> u64 {
-        let mut s = SubtractiveSynth::new();
-        s.prepare(44_100.0, 256, 2);
-        for (id, v) in set {
-            s.set_param(id, *v);
-        }
-        let mut h: u64 = 0xCBF2_9CE4_8422_2325;
-        let mut io = vec![vec![0.0f32; 256]; 2];
-        for block in 0..200usize {
-            match block {
-                0 => [48u8, 55, 60, 64].iter().enumerate().for_each(|(i, n)| s.note_on(i * 7, *n, 90 + i as u8 * 9)),
-                40 => s.midi(10, [0xE0, 0, 96]),
-                60 => s.midi(3, [0xB0, 1, 100]),
-                90 => [48u8, 55].iter().for_each(|n| s.note_off(0, *n)),
-                100 => s.note_on(100, 72, 127),
-                150 => (0..128).for_each(|n| s.note_off(5, n)),
-                _ => {}
-            }
-            s.process(&mut io, 256);
-            for c in &io {
-                for x in c {
-                    for b in x.to_bits().to_le_bytes() {
-                        h ^= u64::from(b);
-                        h = h.wrapping_mul(0x0000_0100_0000_01B3);
-                    }
-                }
-            }
-        }
-        h
-    }
-
+    /// What the synth plays at its defaults and with each of the first twelve factory presets
+    /// (a phrase with a chord, a bend and the mod wheel), as a fingerprint compared within
+    /// [`crate::plugins::golden::TOLERANCE`] (1e-4, -80 dB): see that module for why not bit for
+    /// bit. The stored fingerprints (`synth/reference.rs`) were rendered on a machine where the
+    /// same renders also matched, bit for bit, hashes taken before unison and hard sync were
+    /// added, so unison and sync at their defaults leave the sound as it was.
     #[test]
     fn the_defaults_and_the_factory_presets_sound_as_before_unison_and_sync() {
-        let mut got = vec![golden(&[])];
-        for p in presets::SYNTH_PRESETS.iter().take(GOLDEN.len() - 1) {
-            got.push(golden(p.set));
-        }
-        assert_eq!(got, GOLDEN.to_vec(), "{got:?}");
+        let sets: Vec<(&str, &[(&str, f32)])> =
+            std::iter::once(("defaults", &[][..])).chain(presets::SYNTH_PRESETS.iter().take(12).map(|p| (p.name, p.set))).collect();
+        let got: Vec<Vec<f32>> = sets
+            .iter()
+            .map(|(_, set)| {
+                let mut s = SubtractiveSynth::new();
+                for (id, v) in *set {
+                    s.set_param(id, *v);
+                }
+                crate::plugins::golden::fingerprint(&mut s)
+            })
+            .collect();
+        let names: Vec<&str> = sets.iter().map(|(n, _)| *n).collect();
+        crate::plugins::golden::check(&names, &got, reference::REF, "src/plugins/synth/reference.rs");
     }
-
-    /// [`golden`] before unison and hard sync: the defaults, then the first twelve factory presets.
-    const GOLDEN: [u64; 13] = [
-        3715586722440030317,
-        8644343548099411209,
-        11361103330836395649,
-        9310577426190126389,
-        17243079934635600449,
-        13814638314381514681,
-        17319399269672680025,
-        7137426600716816809,
-        5906201002951708181,
-        4308638506693745745,
-        14985188900884901721,
-        7884382926005052761,
-        5780801337431639761,
-    ];
 
     fn render2(set: &[(&str, f32)], notes: &[(usize, u8)], frames: usize) -> (Vec<f32>, Vec<f32>) {
         let mut s = SubtractiveSynth::new();

@@ -4,6 +4,8 @@ pub mod drums;
 pub mod dynamics;
 pub mod eq;
 pub mod fs;
+#[cfg(test)]
+mod golden;
 pub mod harmonic;
 pub mod heft;
 pub mod imprint;
