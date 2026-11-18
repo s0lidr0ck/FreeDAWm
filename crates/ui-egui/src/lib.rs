@@ -1536,8 +1536,12 @@ impl SoundApp {
         {
             return r;
         }
-        if id.starts_with("session.save") || id.starts_with("file.bounce") || matches!(id, "track.freeze" | "track.commit" | "track.bounce") {
-            // Third-party plugins keep state the session can't see: store it first.
+        if id.starts_with("session.save")
+            || id.starts_with("file.bounce")
+            || matches!(id, "track.freeze" | "track.commit" | "track.bounce" | "track.make_inactive")
+        {
+            // Third-party plugins keep state the session can't see: store it first (Make
+            // Inactive frees them, and they are made again from it when the track is active).
             self.capture_plugin_states();
         }
         if id == "mix.instrument"

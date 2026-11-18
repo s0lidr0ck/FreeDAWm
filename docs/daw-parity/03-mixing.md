@@ -58,7 +58,7 @@ K-system scales, and the master a loudness meter.
 | Fader to +12 dB | ● | ◐ | ◐ | ◐ | **Works** |
 | Per-track delay in samples or ms | ● | ● | ● | ● | **Works**: Track › Strip › Delay (`mix.track_delay`, samples or ms, up to 192 000 samples), before the inserts, left in by delay compensation |
 | Built-in channel processing (EQ, dynamics or console sound in the strip) | ◐ | ◐ | ○ | ● | **Not planned here**: the owner keeps the hidden stock EQ and compressor hidden (owner decision 4); a strip's EQ and dynamics are inserts (CleanQ, Comp), which a track preset or a chain preset puts on every new track |
-| Make a track inactive to free its plug-ins | ● | ● | ● | ● | **Partial**: rendering stops, the plug-ins stay loaded. Left: retire an inactive track's instances off the audio thread (as a deleted module's are) and make them again from their stored state when it is made active; a hosted plug-in's live state has to be read back into the session first, about 4–6 h |
+| Make a track inactive to free its plug-ins | ● | ● | ● | ● | **Works** (2026-11-18): an inactive track's inserts and instrument hold no instances: Make Inactive first stores every hosted plug-in's live state on its insert (as a save does), then the engine retires the instances (dropped off the audio thread, as a removed module's are), asks for no hosted instance and prepares no built-in one for it; made active again (or by Undo) they are made anew from the stored state and parameters and it sounds as before. A session opened with inactive tracks no longer loads their plug-ins at all. A render through the live instances (Bounce, Freeze) keeps them while it runs, since its sessions make the tracks it does not render inactive; Clip Effects modules on the track's clips stay loaded (they are built-ins) |
 
 ## B. Panning
 
@@ -503,6 +503,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-18 | minor | a clip's own automation points are added, dragged and deleted by mouse in the Edit window |
+| 2026-11-18 | minor | an inactive track frees its plug-ins and makes them again from their stored state when active |
 | 2026-11-18 | minor | hearing the control being moved: its lane is held out of playback while a pass writes it |
 | 2026-11-18 | minor | a clip's own automation is drawn over it in the Edit window |
 | 2026-11-17 | minor | a Hardware Insert not pinged says "not measured" on its slot |

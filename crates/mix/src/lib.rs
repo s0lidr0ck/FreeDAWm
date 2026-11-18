@@ -160,11 +160,13 @@ pub fn instance_ch(ins: &soundcraft_model::Insert, ch: usize) -> usize {
 }
 
 /// Every third-party plugin slot (inserts and instruments) of a session, with the channel count
-/// [`MixEngine::sync`] prepares it for. Inactive and master tracks are included (they have strips).
+/// [`MixEngine::sync`] prepares it for. Master tracks are included (they have strips); an inactive
+/// track's are not: its plug-ins are freed, and made again from their stored state when it is made
+/// active ([`frees_plugins`]).
 pub fn instance_specs(s: &Session) -> Vec<InstanceSpec> {
     let main_ch = main_channels(s);
     let mut out = Vec::new();
-    for t in &s.tracks {
+    for t in s.tracks.iter().filter(|t| !frees_plugins(t)) {
         let ch = strip_channels(t, main_ch);
         for ins in t.mixer.inserts.iter().filter(|i| is_third_party(&i.plugin)) {
             out.push(InstanceSpec {
@@ -190,6 +192,15 @@ pub fn instance_specs(s: &Session) -> Vec<InstanceSpec> {
         }
     }
     out
+}
+
+/// Whether `t`'s inserts and instrument hold no instances: an inactive track (Make Inactive)
+/// frees its plug-ins (retired off the audio thread as a removed module's are) and they are made
+/// again, from the state stored on each insert, when it is made active. A lent engine (a render
+/// through the live instances, whose sessions make the tracks it does not render inactive) keeps
+/// them.
+pub fn frees_plugins(t: &Track) -> bool {
+    t.inactive
 }
 
 /// A plugin made by [`create_instance`].
@@ -2052,8 +2063,14 @@ impl MixEngine {
             // is retired, a new one gets a new instance.
             let mut old = std::mem::take(&mut strip.plugins);
             let mut chain = Vec::with_capacity(t.mixer.inserts.len());
+            // An inactive track's plug-ins are freed (a lent engine keeps them, see `frees_plugins`).
+            let freed = frees_plugins(t) && !cx.lent;
             for ins in &t.mixer.inserts {
                 let key = SlotKey::Module(ins.id);
+                if freed {
+                    chain.push(None);
+                    continue;
+                }
                 let mut slot = old.iter_mut().find_map(|p| p.take_if(|p| p.module == ins.id));
                 // Without a host making instances (offline renders), a preset loaded into a
                 // hosted module (a new `state_load`) makes its instance anew from the state; the
@@ -2101,7 +2118,7 @@ impl MixEngine {
             for (m, ins) in strip.mods.iter_mut().zip(&t.mixer.inserts) {
                 m.module = ins.id;
             }
-            let want = t.instrument.as_ref();
+            let want = t.instrument.as_ref().filter(|_| !freed);
             let ich = ch.max(2);
             // (External MIDI is made here even for a realtime host: a new port is a new instance.)
             let load = |id: &str, l: u64| if cx.external && id != external_midi::ID { 0 } else { l };
@@ -11501,6 +11518,55 @@ mod tests {
         assert!(quiet[0].iter().all(|x| x.abs() < 1e-4), "the lane plays");
         s.track_mut(t).unwrap().automation[0].suspended = true;
         assert_eq!(render_range(&s, Range::new(0, 4096), 1024), plain, "suspended: the fader as set");
+    }
+
+    /// Make Inactive frees a track's plug-ins: its insert's and instrument's instances are
+    /// retired (to be dropped off the audio thread), no hosted instance is asked for and none is
+    /// prepared for it; made active again they are made anew from the session and it sounds as
+    /// before. A lent engine (a render through the live instances) keeps them.
+    #[test]
+    fn an_inactive_tracks_plugins_are_freed_and_made_again() {
+        let (mut s, t) = session_with_dc(0.5, 48_000);
+        s.edit.click = false;
+        let mut ins = Insert::new("compressor");
+        for (k, v) in [("threshold", -30.0), ("ratio", 10.0)] {
+            ins.params.insert(k.into(), v);
+        }
+        s.track_mut(t).unwrap().mixer.add_module(ins, None).unwrap();
+        s.track_mut(t).unwrap().mixer.add_module(Insert::new("clap:test.fake"), None).unwrap();
+        s.track_mut(t).unwrap().instrument = Some(Insert::new("subtractive_synth"));
+        assert_eq!(instance_specs(&s).len(), 1);
+        let mut prep = BuiltinPrep::default();
+        assert_eq!(prep.prepare(&s, 512).instances.len(), 2, "the compressor and the instrument");
+        let mut eng = MixEngine::new(48_000.0, 512);
+        // A realtime host's engine: what it takes out of service waits to be dropped off the audio thread.
+        eng.set_external_instances(true);
+        let before = render_block(&mut eng, &s, 0);
+        let seated = |eng: &MixEngine| {
+            let st = &eng.strips[&t];
+            (st.plugins.iter().flatten().count(), st.instrument.is_some())
+        };
+        assert_eq!(seated(&eng), (1, true), "the compressor and the instrument (the CLAP is not installed)");
+        let _ = eng.take_retired();
+        s.track_mut(t).unwrap().inactive = true;
+        render_block(&mut eng, &s, 512);
+        assert_eq!(seated(&eng), (0, false), "freed");
+        assert_eq!(eng.take_retired().len(), 2, "retired, not dropped on the audio thread");
+        assert!(instance_specs(&s).is_empty(), "no hosted instance asked for");
+        assert!(prep.prepare(&s, 512).instances.is_empty(), "none prepared");
+        s.track_mut(t).unwrap().inactive = false;
+        assert_eq!(prep.prepare(&s, 512).instances.len(), 2, "made anew when active");
+        assert_eq!(instance_specs(&s).len(), 1);
+        eng.reset();
+        assert_eq!(render_block(&mut eng, &s, 0), before, "it sounds as before");
+        assert_eq!(seated(&eng), (1, true));
+        // Lent for a render whose session makes the track inactive: the instances stay.
+        let mut lent = s.clone();
+        lent.track_mut(t).unwrap().inactive = true;
+        eng.lent = true;
+        render_block(&mut eng, &lent, 512);
+        assert_eq!(seated(&eng), (1, true), "a lent engine keeps them");
+        eng.lent = false;
     }
 
     /// An additional output is the main output again: a track with no main output and an extra

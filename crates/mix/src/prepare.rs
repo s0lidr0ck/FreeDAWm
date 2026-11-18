@@ -232,9 +232,15 @@ impl BuiltinPrep {
             if self.tracks.insert(t.id) {
                 out.strips.push(PreparedStrip { track: t.id, strip: sized_strip(s, t, ch, mb, room) });
             }
-            let inserts = t.mixer.inserts.iter().map(|i| (SlotKey::Module(i.id), i, crate::instance_ch(i, ch), 0));
+            // An inactive track's plug-ins are freed (`frees_plugins`): none is made for it.
+            let freed = crate::frees_plugins(t);
+            let inserts = t.mixer.inserts.iter().filter(|_| !freed).map(|i| (SlotKey::Module(i.id), i, crate::instance_ch(i, ch), 0));
             // An External MIDI instrument is made anew on a new state (its port); see `sync`.
-            let inst = t.instrument.iter().map(|i| (SlotKey::Instrument, i, ch.max(2), if i.plugin == external_midi::ID { i.state_load } else { 0 }));
+            let inst = t
+                .instrument
+                .iter()
+                .filter(|_| !freed)
+                .map(|i| (SlotKey::Instrument, i, ch.max(2), if i.plugin == external_midi::ID { i.state_load } else { 0 }));
             for (slot, ins, ch, load) in inserts.chain(inst) {
                 if is_third_party(&ins.plugin) {
                     continue;
