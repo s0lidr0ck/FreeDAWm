@@ -234,7 +234,8 @@ fn place_passes(s: &mut Session, tracks: &[TrackId], take: &MidiTake, events: &[
             list.extend(mine.iter().filter(|x| x.2 == pass).map(|&(at, msg, _)| (at, msg, true)).filter(|(at, _, _)| range.contains(*at)));
             if let Some(fx) = &fx {
                 let keys: Vec<(Samples, [u8; 3])> = list.iter().map(|&(at, m, _)| (at, m)).collect();
-                list = soundcraft_mix::midi_fx::print(s, fx, range, &keys).into_iter().map(|(at, m)| (at, m, true)).collect();
+                let scripts = s.track(tid).map(|t| t.midi_scripts.as_slice()).unwrap_or_default();
+                list = soundcraft_mix::midi_fx::print(s, fx, scripts, range, &keys).into_iter().map(|(at, m)| (at, m, true)).collect();
             }
             let mut seq: Sequence = crate::band_print::events_to_sequence(s, range, &list);
             if s.edit.flag(THIN_FLAG) {
@@ -485,8 +486,10 @@ pub fn printing_fx(s: &Session, track: TrackId) -> Option<Vec<soundcraft_model::
 /// past them and sound the same.
 fn printed(s: &Session, track: TrackId, range: Range, seq: &Sequence) -> Sequence {
     let fx = s.track(track).map(|t| t.midi_fx.clone()).unwrap_or_default();
+    let scripts = s.track(track).map(|t| t.midi_scripts.as_slice()).unwrap_or_default();
     let keys = soundcraft_mix::midi_fx::sequence_events(s, range.start, range.end, seq);
-    let list: Vec<(Samples, [u8; 3], bool)> = soundcraft_mix::midi_fx::print(s, &fx, range, &keys).into_iter().map(|(at, m)| (at, m, true)).collect();
+    let list: Vec<(Samples, [u8; 3], bool)> =
+        soundcraft_mix::midi_fx::print(s, &fx, scripts, range, &keys).into_iter().map(|(at, m)| (at, m, true)).collect();
     // SysEx does not go through the effects: it is kept where it was.
     let mut out = crate::band_print::events_to_sequence(s, range, &list);
     out.sysex = seq.sysex.clone();

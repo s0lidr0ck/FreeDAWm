@@ -1,5 +1,7 @@
-//! MIDI effects before a track's instrument: an arpeggiator, a chord, a scale (force to scale)
-//! and note repeat, in a short list per instrument or MIDI track ([`crate::Track::midi_fx`]).
+//! MIDI effects before a track's instrument: an arpeggiator, a chord, a scale (force to scale),
+//! note repeat and a script, in a short list per instrument or MIDI track
+//! ([`crate::Track::midi_fx`]). A script's text and its parameters' values are kept on the track
+//! ([`crate::Track::midi_scripts`], [`MidiScript`]), named by the effect's [`MidiFx::script`].
 //!
 //! The list is stored with the session; the mix runs it on the audio thread on everything the
 //! instrument is given (clips, live input, routed MIDI tracks, the Band), in list order, before
@@ -24,10 +26,12 @@ pub enum MidiFxKind {
     Scale,
     /// Each key held is played again and again on the tempo.
     NoteRepeat,
+    /// A script the user writes ([`MidiScript`]): it passes, changes, leaves out or adds events.
+    Script,
 }
 
 impl MidiFxKind {
-    pub const ALL: [MidiFxKind; 4] = [MidiFxKind::Arpeggiator, MidiFxKind::Chord, MidiFxKind::Scale, MidiFxKind::NoteRepeat];
+    pub const ALL: [MidiFxKind; 5] = [MidiFxKind::Arpeggiator, MidiFxKind::Chord, MidiFxKind::Scale, MidiFxKind::NoteRepeat, MidiFxKind::Script];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -35,16 +39,18 @@ impl MidiFxKind {
             MidiFxKind::Chord => "Chord",
             MidiFxKind::Scale => "Scale",
             MidiFxKind::NoteRepeat => "Note Repeat",
+            MidiFxKind::Script => "Script",
         }
     }
 
-    /// The command and session spelling (`arpeggiator`, `chord`, `scale`, `note_repeat`).
+    /// The command and session spelling (`arpeggiator`, `chord`, `scale`, `note_repeat`, `script`).
     pub fn key(self) -> &'static str {
         match self {
             MidiFxKind::Arpeggiator => "arpeggiator",
             MidiFxKind::Chord => "chord",
             MidiFxKind::Scale => "scale",
             MidiFxKind::NoteRepeat => "note_repeat",
+            MidiFxKind::Script => "script",
         }
     }
 
@@ -135,10 +141,73 @@ pub struct MidiFx {
     /// own scale holds.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub follow: u8,
+    /// Script: the [`MidiScript::id`] of its text on the track (0: none yet; it passes events).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub script: u32,
 }
 
 fn is_zero(v: &u8) -> bool {
     *v == 0
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+/// Most parameters a script declares.
+pub const MAX_SCRIPT_PARAMS: usize = 8;
+
+/// Longest script text kept, in bytes.
+pub const MAX_SCRIPT_LEN: usize = 64 * 1024;
+
+/// A Script MIDI effect's text and settings, kept on its track ([`crate::Track::midi_scripts`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiScript {
+    /// Named by [`MidiFx::script`]; unique on the track, from 1.
+    pub id: u32,
+    /// What the editor calls it (an example's name, or the user's).
+    #[serde(default)]
+    pub name: String,
+    /// The script (Rhai).
+    #[serde(default)]
+    pub source: String,
+    /// The values of the parameters it declares, by name (a parameter not here has its default).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<(String, f64)>,
+    /// The compiled script and what went wrong compiling it: made by the engine off the audio
+    /// thread, never saved, left out of comparisons.
+    #[serde(skip)]
+    pub runtime: ScriptRuntime,
+}
+
+impl MidiScript {
+    /// The value of parameter `name`, if one was set.
+    pub fn value(&self, name: &str) -> Option<f64> {
+        self.values.iter().find(|(n, _)| n == name).map(|v| v.1)
+    }
+}
+
+/// Where a [`MidiScript`] keeps its compiled form (the mix's own type, behind `Any`) or the
+/// compile error. Derived: two are always equal.
+#[derive(Clone, Default)]
+pub struct ScriptRuntime {
+    pub program: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    /// A fingerprint of the source the program (or the error) was made from, so a changed text
+    /// is compiled again.
+    pub made_from: Option<u64>,
+    pub error: Option<String>,
+}
+
+impl std::fmt::Debug for ScriptRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptRuntime").field("compiled", &self.program.is_some()).field("error", &self.error).finish()
+    }
+}
+
+impl PartialEq for ScriptRuntime {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 /// What a Scale effect follows on the chord lane: nothing, the chord's tones only, or a scale
@@ -172,6 +241,7 @@ impl MidiFx {
             scale: 0,
             drop: false,
             follow: 0,
+            script: 0,
         }
     }
 
@@ -213,6 +283,7 @@ impl MidiFx {
                 if s.drop { ", drop" } else { "" }
             ),
             MidiFxKind::NoteRepeat => rate.to_string(),
+            MidiFxKind::Script => String::new(),
         }
     }
 }

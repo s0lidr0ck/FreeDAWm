@@ -32,6 +32,7 @@ pub mod lyric_tools;
 pub mod lyrics;
 pub mod midi_cleanup;
 pub mod midi_record;
+pub mod midi_script;
 pub mod midi_shared;
 pub mod midi_stretch;
 #[cfg(not(target_arch = "wasm32"))]
@@ -512,6 +513,8 @@ impl Engine {
         // So are the notes' playback indexes (after the previews they index).
         crate::note_index::refresh(&mut s);
         crate::clip_midi_fx::refresh(&mut s);
+        // Script MIDI effects are compiled, not saved.
+        crate::midi_script::refresh(&mut s);
         // Vocal tuning fingerprints and caches are derived, not saved.
         crate::vocal::prune(&mut s);
         crate::vocal::refresh_fingerprints_in(&mut s);
@@ -820,6 +823,9 @@ impl Engine {
     /// Re-derives every MIDI clip's playback index made from other notes (`note_index`); a scan
     /// first, so a session whose indexes are current is not copied.
     pub(crate) fn refresh_note_index(&mut self) {
+        if crate::midi_script::any_stale(&self.doc) {
+            crate::midi_script::refresh(Arc::make_mut(&mut self.doc));
+        }
         if crate::clip_midi_fx::any_stale(&self.doc) {
             crate::clip_midi_fx::refresh(Arc::make_mut(&mut self.doc));
         }

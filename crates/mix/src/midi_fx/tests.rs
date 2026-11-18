@@ -56,7 +56,7 @@ const STEP: usize = 6_000;
 fn host(fx: &[MidiFx]) -> (Box<dyn Plugin>, Log) {
     let log = Log::default();
     let mut p: Box<dyn Plugin> = Box::new(Ear { base: 0, log: log.clone() });
-    sync(&mut p, fx, SR);
+    sync(&mut p, fx, &[], SR, 1024, false);
     p.set_transport(&Transport { tempo: 120.0, ..Transport::default() });
     (p, log)
 }
@@ -88,16 +88,16 @@ fn take(log: &Log) -> Vec<(usize, u8, u8)> {
 #[test]
 fn a_track_without_midi_effects_is_left_alone_and_an_empty_list_passes_through() {
     let mut p: Box<dyn Plugin> = Box::new(Ear { base: 0, log: Log::default() });
-    sync(&mut p, &[], SR);
+    sync(&mut p, &[], &[], SR, 1024, false);
     assert!(p.host_wrapper().is_none(), "never wrapped while it has no effect");
     // Wrapped, then emptied or bypassed: every call arrives as it was made, at once.
     let (mut p, log) = host(&[MidiFx::new(Chord)]);
-    sync(&mut p, &[fx(Chord, |f| f.bypass = true)], SR);
+    sync(&mut p, &[fx(Chord, |f| f.bypass = true)], &[], SR, 1024, false);
     p.note_on(5, 60, 90);
     p.midi_raw(7, [0x93, 62, 80]);
     p.midi(9, [0xB0, 1, 30]);
     assert_eq!(*log.lock().unwrap(), vec![(5, [0x90, 60, 90], false), (7, [0x93, 62, 80], true), (9, [0xB0, 1, 30], false)]);
-    sync(&mut p, &[], SR);
+    sync(&mut p, &[], &[], SR, 1024, false);
     log.lock().unwrap().clear();
     p.note_off(1, 60);
     assert_eq!(*log.lock().unwrap(), vec![(1, [0x80, 60, 0], false)]);
@@ -134,7 +134,7 @@ fn scale_moves_notes_to_the_nearest_in_key_or_leaves_them_out() {
     let got = log.lock().unwrap().clone();
     assert_eq!(got, vec![(0, [0x91, 59, 90], true), (5, [0x91, 59, 0], true)], "B, on its channel, raw kept");
     log.lock().unwrap().clear();
-    sync(&mut p, &[fx(Scale, |f| (f.root, f.drop) = (2, true))], SR);
+    sync(&mut p, &[fx(Scale, |f| (f.root, f.drop) = (2, true))], &[], SR, 1024, false);
     p.note_on(0, 60, 90);
     p.note_on(0, 62, 90);
     blocks(&mut p, 1, 64);
@@ -225,23 +225,23 @@ fn a_changed_setting_lets_go_and_plays_the_held_keys_through_the_new_list() {
     p.note_on(0, 60, 100);
     blocks(&mut p, 1, 64);
     take(&log);
-    sync(&mut p, &[fx(Chord, |f| f.chord = 1)], SR);
+    sync(&mut p, &[fx(Chord, |f| f.chord = 1)], &[], SR, 1024, false);
     blocks(&mut p, 1, 64);
     let got = take(&log);
     let offs: Vec<u8> = got.iter().filter(|n| n.1 == 0x80).map(|n| n.2).collect();
     let ons: Vec<u8> = got.iter().filter(|n| n.1 == 0x90).map(|n| n.2).collect();
     assert_eq!((offs.len(), ons), (3, vec![60, 63, 67]), "the major chord let go, the minor one played");
     // Unchanged settings change nothing; removing the effect plays the key as it is.
-    sync(&mut p, &[fx(Chord, |f| f.chord = 1)], SR);
+    sync(&mut p, &[fx(Chord, |f| f.chord = 1)], &[], SR, 1024, false);
     blocks(&mut p, 1, 64);
     assert!(take(&log).is_empty());
-    sync(&mut p, &[], SR);
+    sync(&mut p, &[], &[], SR, 1024, false);
     let got = take(&log);
     assert_eq!(got.iter().filter(|n| n.1 == 0x80).count(), 3);
     assert_eq!(got.iter().filter(|n| n.1 == 0x90).map(|n| n.2).collect::<Vec<_>>(), vec![60]);
     // All Notes Off forgets the keys: a later change plays nothing again.
     p.all_notes_off();
-    sync(&mut p, &[MidiFx::new(Chord)], SR);
+    sync(&mut p, &[MidiFx::new(Chord)], &[], SR, 1024, false);
     blocks(&mut p, 1, 64);
     assert!(take(&log).is_empty());
 }
@@ -292,7 +292,7 @@ fn direct_events_go_past_the_effects_in_offset_order() {
     // C's chord from the effect; the printed notes once each, as they were, in time order.
     assert_eq!(take(&log), vec![(5, 0x90, 72), (10, 0x90, 60), (10, 0x90, 64), (10, 0x90, 67), (30, 0x90, 74)]);
     // They are counted as the host's notes: a change of the list lets go of them too.
-    sync(&mut p, &[MidiFx::new(Scale)], SR);
+    sync(&mut p, &[MidiFx::new(Scale)], &[], SR, 1024, false);
     let offs: Vec<u8> = take(&log).iter().filter(|e| e.1 == 0x80).map(|e| e.2).collect();
     assert!(offs.contains(&72) && offs.contains(&74) && offs.contains(&67), "{offs:?}");
 }
@@ -303,7 +303,7 @@ fn print_gives_what_the_effects_make_of_a_take() {
     let range = soundcraft_time::Range::new(0, 48_000);
     // One key, channel 3, held for a quarter of a second, through a chord.
     let keys = [(1_000i64, [0x92, 60, 100]), (13_000, [0x82, 60, 0])];
-    let out = print(&s, &[MidiFx::new(Chord)], range, &keys);
+    let out = print(&s, &[MidiFx::new(Chord)], &[], range, &keys);
     let ons: Vec<(i64, u8)> = out.iter().filter(|e| e.1[0] == 0x92).map(|e| (e.0, e.1[1])).collect();
     assert_eq!(ons, vec![(1_000, 60), (1_000, 64), (1_000, 67)], "the shape on the key's channel, where it was played");
     let offs: Vec<(i64, u8)> = out.iter().filter(|e| e.1[0] == 0x82).map(|e| (e.0, e.1[1])).collect();
@@ -312,7 +312,7 @@ fn print_gives_what_the_effects_make_of_a_take() {
     // An arpeggiator steps on the song's grid: 1/16 at 120 bpm is 6000 samples at 48 kHz.
     let arp = fx(Arpeggiator, |f| f.rate = 3);
     let keys = [(0i64, [0x90, 60, 100]), (0, [0x90, 64, 100]), (24_000, [0x80, 60, 0]), (24_000, [0x80, 64, 0])];
-    let out = print(&s, &[arp], range, &keys);
+    let out = print(&s, &[arp], &[], range, &keys);
     let ons: Vec<i64> = out.iter().filter(|e| e.1[0] & 0xF0 == 0x90 && e.1[2] > 0).map(|e| e.0).collect();
     // (Within a sample of the grid: the step is found from the position in quarters.)
     assert_eq!(ons.len(), 5, "{out:?}");
@@ -322,7 +322,7 @@ fn print_gives_what_the_effects_make_of_a_take() {
         f.rate = 3;
         f.latch = true;
     });
-    let out = print(&s, &[latched], soundcraft_time::Range::new(0, 7_000), &keys);
+    let out = print(&s, &[latched], &[], soundcraft_time::Range::new(0, 7_000), &keys);
     let last = out.last().copied().unwrap();
     assert_eq!((last.0, last.1[0] & 0xF0), (7_000, 0x80), "{out:?}");
 }

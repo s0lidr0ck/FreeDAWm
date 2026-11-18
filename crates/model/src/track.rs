@@ -298,6 +298,9 @@ pub struct Track {
     /// everything the instrument is given; at most [`crate::MAX_MIDI_FX`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_fx: Vec<crate::MidiFx>,
+    /// The texts of its Script MIDI effects, named by their [`crate::MidiFx::script`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_scripts: Vec<crate::MidiScript>,
     /// LFOs and envelope followers that move its plug-ins' parameters, at most
     /// [`crate::MAX_MODULATORS`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -398,6 +401,7 @@ impl Track {
             layers_open: false,
             record_layer: None,
             midi_fx: Vec::new(),
+            midi_scripts: Vec::new(),
             modulators: Vec::new(),
             midi_fx_record: false,
             mpe: None,

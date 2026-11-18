@@ -36,6 +36,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     crate::set_list_ui::show(app, ctx);
     crate::control_room::show(app, ctx);
     crate::modulators_ui::show(app, ctx);
+    crate::script_editor::show(app, ctx);
 }
 
 /// Window › Mix Snapshots: store the mix under a name, recall it whole or by section, on every

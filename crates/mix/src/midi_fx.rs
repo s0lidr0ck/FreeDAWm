@@ -1,5 +1,6 @@
 //! MIDI effects ahead of a track's instrument ([`soundcraft_model::Track::midi_fx`]): an
-//! arpeggiator, a chord, a scale (force to scale) and note repeat.
+//! arpeggiator, a chord, a scale (force to scale), note repeat and a script ([`script`]: run on
+//! a worker thread, heard one block late live).
 //!
 //! **Where they run.** [`sync`] wraps the strip's instrument, once the track has a MIDI effect, in
 //! a [`MidiFxHost`]: a plugin that hands everything to the instrument it holds except the notes
@@ -35,7 +36,9 @@
 use std::sync::Arc;
 
 use soundcraft_dsp::{LinkSlab, MidiOut, Plugin, PluginEditor, PluginInfo, PluginStateReader, SampleSource, Transport, analysis};
-use soundcraft_model::{CHORD_SHAPES, MAX_MIDI_FX, MidiFx, MidiFxKind, SCALES};
+use soundcraft_model::{CHORD_SHAPES, MAX_MIDI_FX, MidiFx, MidiFxKind, MidiScript, SCALES};
+
+pub mod script;
 
 /// Most chords of the lane a Scale effect follows (the rest are left out).
 pub const MAX_CHORDS: usize = 512;
@@ -599,6 +602,8 @@ impl Stage {
         match self.fx.kind {
             MidiFxKind::Scale | MidiFxKind::Chord => self.run_instant(input, out, chords, t.samples),
             MidiFxKind::Arpeggiator | MidiFxKind::NoteRepeat => self.run_timed(input, out, frames, t, spq),
+            // (Run by the host's `script::ScriptStage`; here it would pass.)
+            MidiFxKind::Script => input.iter().for_each(|e| out.push(*e)),
         }
     }
 }
@@ -648,6 +653,12 @@ pub struct MidiFxHost {
     sr: f32,
     /// The chord lane, for a Scale that follows it ([`sync_chords`]).
     chords: ChordTable,
+    /// Beside each of `stages`: a Script effect's side (unused by other kinds).
+    scripts: [script::ScriptStage; MAX_MIDI_FX],
+    /// Rendering offline: a script is waited for and is on time.
+    offline: bool,
+    /// The largest block: how late a script is heard live.
+    max_block: usize,
 }
 
 /// A stand-in while the instrument is moved into a host (a zero-sized type: boxing it does not
@@ -701,7 +712,20 @@ impl MidiFxHost {
             transport: Transport::default(),
             sr,
             chords: ChordTable::new(),
+            scripts: std::array::from_fn(|_| script::ScriptStage::new()),
+            offline: false,
+            max_block: 1024,
         })
+    }
+
+    /// The largest block it is given (how late a script is heard live).
+    pub fn set_max_block(&mut self, max_block: usize) {
+        self.max_block = max_block.max(1);
+    }
+
+    /// The compiled script of its effect `i`, when that is a Script running one.
+    pub fn script(&self, i: usize) -> Option<&Arc<script::Program>> {
+        self.scripts.get(i).and_then(script::ScriptStage::program)
     }
 
     /// Takes the chord lane a following Scale reads (no allocation: a fixed table).
@@ -740,18 +764,45 @@ impl MidiFxHost {
         self.stages.iter().take(self.n).any(|s| !s.fx.bypass)
     }
 
-    /// Takes the track's list. A change lets go of every note the host left on, starts each effect
-    /// afresh and plays the keys still held through the new list. No allocation.
-    pub fn configure(&mut self, fx: &[MidiFx]) {
+    /// Takes the track's list (and its scripts' texts, for Script effects). A change lets go of
+    /// every note the host left on, starts each effect afresh and plays the keys still held
+    /// through the new list; a script's parameters change without that. No allocation.
+    pub fn configure(&mut self, fx: &[MidiFx], scripts: &[MidiScript]) {
         let n = fx.len().min(MAX_MIDI_FX);
-        let same = n == self.n && self.stages.iter().zip(fx).all(|(s, f)| s.fx == f.sane());
+        let program = |f: &MidiFx| {
+            scripts
+                .iter()
+                .find(|s| f.kind == MidiFxKind::Script && s.id == f.script && f.script != 0)
+                .and_then(|s| Some((script::program_of(&s.runtime)?, s)))
+        };
+        let same = n == self.n
+            && self.stages.iter().zip(fx).all(|(s, f)| s.fx == f.sane())
+            && self.scripts.iter().zip(fx).all(|(sc, f)| match (sc.program(), program(f)) {
+                (Some(a), Some((b, _))) => Arc::ptr_eq(a, &b),
+                (None, None) => true,
+                _ => false,
+            });
+        for (sc, f) in self.scripts.iter().zip(fx) {
+            if let Some((p, s)) = program(f) {
+                sc.set_params(&p.values(s));
+            }
+        }
         if same {
             return;
         }
         self.release_out();
-        for (s, f) in self.stages.iter_mut().zip(fx) {
+        let sr = self.sr;
+        for ((s, sc), f) in self.stages.iter_mut().zip(self.scripts.iter_mut()).zip(fx) {
             s.fx = f.sane();
             s.clear();
+            let p = program(f);
+            sc.set_program(p.as_ref().map(|x| &x.0), sr);
+            if let Some((p, s)) = p {
+                sc.set_params(&p.values(s));
+            }
+        }
+        for sc in self.scripts.iter_mut().skip(n) {
+            sc.set_program(None, sr);
         }
         self.n = n;
         self.input.clear();
@@ -855,6 +906,7 @@ impl MidiFxHost {
         let spq = f64::from(self.sr.max(1.0)) * 60.0 / tempo;
         let t = self.transport;
         let chords = &self.chords;
+        let (sr, lat, offline) = (self.sr, self.max_block, self.offline);
         // The input into the first buffer, then back and forth between the two.
         let [a, b] = &mut self.bufs;
         a.clear();
@@ -863,11 +915,12 @@ impl MidiFxHost {
         }
         self.input.clear();
         let mut in_a = true;
-        for s in self.stages.iter_mut().take(self.n).filter(|s| !s.fx.bypass) {
-            if in_a {
-                s.run(a.events(), b, frames, &t, spq, chords);
+        for (s, sc) in self.stages.iter_mut().zip(self.scripts.iter_mut()).take(self.n).filter(|(s, _)| !s.fx.bypass) {
+            let (from, to) = if in_a { (&*a, &mut *b) } else { (&*b, &mut *a) };
+            if s.fx.kind == MidiFxKind::Script {
+                sc.run(from.events(), to, frames, &t, sr, lat, offline);
             } else {
-                s.run(b.events(), a, frames, &t, spq, chords);
+                s.run(from.events(), to, frames, &t, spq, chords);
             }
             in_a = !in_a;
         }
@@ -908,6 +961,9 @@ impl MidiFxHost {
         for s in self.stages.iter_mut() {
             s.clear();
         }
+        for sc in self.scripts.iter_mut() {
+            sc.reset();
+        }
         self.keys = [0; 2048];
         self.out = [0; 2048];
     }
@@ -919,6 +975,7 @@ impl Plugin for MidiFxHost {
     }
     fn prepare(&mut self, sample_rate: f32, max_block: usize, channels: usize) {
         self.sr = sample_rate;
+        self.max_block = max_block.max(1);
         self.inner.prepare(sample_rate, max_block, channels);
     }
     fn reset(&mut self) {
@@ -959,6 +1016,7 @@ impl Plugin for MidiFxHost {
         self.inner.set_transport(transport);
     }
     fn set_offline(&mut self, offline: bool) {
+        self.offline = offline;
         self.inner.set_offline(offline);
     }
     fn set_lfe_channels(&mut self, mask: u64) {
@@ -1049,7 +1107,7 @@ impl Plugin for MidiFxHost {
 /// Brings a strip's instrument in line with the track's MIDI effects: wrapped in a host the first
 /// time the track has one (the only allocation, at that change), configured every time. An
 /// instrument never wrapped stays as it is while the list is empty.
-pub(crate) fn sync(plugin: &mut Box<dyn Plugin>, fx: &[MidiFx], sr: f32) {
+pub(crate) fn sync(plugin: &mut Box<dyn Plugin>, fx: &[MidiFx], scripts: &[MidiScript], sr: f32, max_block: usize, offline: bool) {
     if plugin.host_wrapper().is_none() {
         if fx.is_empty() {
             return;
@@ -1058,7 +1116,9 @@ pub(crate) fn sync(plugin: &mut Box<dyn Plugin>, fx: &[MidiFx], sr: f32) {
         *plugin = MidiFxHost::new(inner, sr);
     }
     if let Some(host) = plugin.host_wrapper().and_then(|a| a.downcast_mut::<MidiFxHost>()) {
-        host.configure(fx);
+        host.set_max_block(max_block);
+        host.offline = offline;
+        host.configure(fx, scripts);
     }
 }
 
@@ -1122,15 +1182,24 @@ const PRINT_BLOCK: usize = 256;
 /// `range`, as the mix would give the instrument while the transport plays through it: the
 /// arpeggiator and note repeat on the song's grid from the session's tempo map. Channels are
 /// kept. Notes still on at the range's end are let go there. The Random pattern rolls afresh, so
-/// it need not repeat what was heard. Allocates: off the audio thread (a take is placed with it).
-pub fn print(s: &soundcraft_model::Session, fx: &[MidiFx], range: soundcraft_time::Range, events: &[(i64, [u8; 3])]) -> Vec<(i64, [u8; 3])> {
+/// it need not repeat what was heard. A Script effect runs from `scripts` (its track's), on time
+/// (the worker is waited for). Allocates: off the audio thread (a take is placed with it).
+pub fn print(
+    s: &soundcraft_model::Session,
+    fx: &[MidiFx],
+    scripts: &[MidiScript],
+    range: soundcraft_time::Range,
+    events: &[(i64, [u8; 3])],
+) -> Vec<(i64, [u8; 3])> {
     let mut out = Vec::new();
     if range.is_empty() {
         return out;
     }
     let sr = s.sample_rate.as_f64() as f32;
     let mut host = MidiFxHost::new(Box::new(Sink { got: Vec::new() }), sr);
-    host.configure(fx);
+    host.offline = true;
+    host.set_max_block(PRINT_BLOCK);
+    host.configure(fx, scripts);
     if host.follows_chords() {
         host.set_chords(&chord_table(s));
     }

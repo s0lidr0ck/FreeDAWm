@@ -1,6 +1,6 @@
 //! The MIDI Effects submenu of an instrument or MIDI track's input menu: the track's MIDI effects
-//! ahead of its instrument (arpeggiator, chord, scale, note repeat), each with its settings, a
-//! bypass, a move up or down and a remove, and Add for a new one (`track.midi_fx_add`,
+//! ahead of its instrument (arpeggiator, chord, scale, note repeat, a script), each with its
+//! settings (a script's in the Script Editor), a bypass, a move up or down and a remove, and Add for a new one (`track.midi_fx_add`,
 //! `track.midi_fx_set`, `track.midi_fx_remove`; a drag is one undo step), and Record Effects'
 //! Output (`track.midi_fx_record`): takes keep what the effects made rather than the keys.
 //! A MIDI clip's context menu has the same submenu for the clip's own effects (`clips`).
@@ -113,6 +113,14 @@ fn effect(ui: &mut egui::Ui, i: usize, n: usize, fx: &MidiFx, asks: &mut Vec<Ask
         MidiFxKind::NoteRepeat => {
             choice(ui, "Rate", &rates, fx.rate, "rate", &mut set);
         }
+        MidiFxKind::Script => {
+            if let Owner::Track(t) = owner
+                && ui.button("Edit Script...").on_hover_text("The script's text, its parameters and the examples").clicked()
+            {
+                asks.push(("ui.script_editor", json!({"track": t.0, "index": i}), None));
+                ui.close();
+            }
+        }
     }
     if matches!(fx.kind, MidiFxKind::Arpeggiator | MidiFxKind::NoteRepeat) {
         let mut gate = fx.gate;
@@ -198,7 +206,8 @@ pub(crate) fn clip_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: ClipId) {
         }
         if list.len() < MAX_MIDI_FX {
             ui.menu_button("Add", |ui| {
-                for k in MidiFxKind::ALL {
+                // (A script goes on the track, not a clip.)
+                for k in MidiFxKind::ALL.into_iter().filter(|k| *k != MidiFxKind::Script) {
                     if ui.button(k.name()).clicked() {
                         asks.push(("track.midi_fx_add", json!({"clips": [id.0], "kind": k.key()}), None));
                         ui.close();
@@ -217,6 +226,11 @@ pub(crate) fn clip_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: ClipId) {
 
 fn run(app: &mut SoundApp, asks: Vec<Ask>) {
     for (cmd, p, key) in asks {
+        if cmd == "ui.script_editor" {
+            let t = TrackId(p["track"].as_u64().unwrap_or(0));
+            crate::script_editor::open(app, t, p["index"].as_u64().map_or(0, |i| i as usize));
+            continue;
+        }
         let r = match key {
             Some(k) => app.engine.execute_merged(cmd, &p, &k).map(|_| ()).map_err(|e| e.to_string()),
             None => app.run(cmd, p).map(|_| ()),

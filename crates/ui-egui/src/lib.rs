@@ -104,6 +104,7 @@ pub mod sampler_window;
 pub mod scope;
 pub mod score_editor;
 pub mod scout;
+mod script_editor;
 pub mod scrub;
 pub mod session_key;
 pub mod set_list_ui;
@@ -312,6 +313,9 @@ pub struct UiState {
     /// The Modulators window, open on this track's modulators.
     #[serde(skip)]
     pub modulators_window: Option<TrackId>,
+    /// The Script Editor, open on this track's MIDI effect (by index).
+    #[serde(skip)]
+    pub script_window: Option<(TrackId, usize)>,
     /// Where a detached plugin window was last, `[x, y, w, h]` by plugin id (`plugin_windows.rects`):
     /// the next detached window of that plugin opens there.
     #[serde(default, rename = "plugin_windows.rects")]
@@ -634,6 +638,7 @@ impl Default for UiState {
             pinned_plugins: Vec::new(),
             following_plugins: Vec::new(),
             modulators_window: None,
+            script_window: None,
             plugin_window_rects: HashMap::new(),
             juke_tabs: HashMap::new(),
             juke_clips: HashMap::new(),

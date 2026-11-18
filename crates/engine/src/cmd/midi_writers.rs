@@ -109,7 +109,10 @@ fn write_arpeggio(e: &mut Engine, p: &Value) -> Result<Value> {
     let range = Range::new(clip.start, clip.end());
     let keys = soundcraft_mix::midi_fx::sequence_events(s, range.start, range.end, sequence);
     let list: Vec<(soundcraft_time::Samples, [u8; 3], bool)> =
-        soundcraft_mix::midi_fx::print(s, &fx, range, &keys).into_iter().map(|(at, m)| (at, m, true)).collect();
+        soundcraft_mix::midi_fx::print(s, &fx, s.track(track).map(|t| t.midi_scripts.as_slice()).unwrap_or_default(), range, &keys)
+            .into_iter()
+            .map(|(at, m)| (at, m, true))
+            .collect();
     let mut out = crate::band_print::events_to_sequence(s, range, &list);
     if out.notes.is_empty() {
         return Err(bad(C, "the clip has no notes to arpeggiate"));

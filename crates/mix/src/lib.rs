@@ -2213,7 +2213,7 @@ impl MixEngine {
             }
             // MIDI effects ahead of the instrument (a host around it once the track has one).
             if let Some(slot) = strip.instrument.as_mut() {
-                midi_fx::sync(&mut slot.plugin, &t.midi_fx, cx.sr);
+                midi_fx::sync(&mut slot.plugin, &t.midi_fx, &t.midi_scripts, cx.sr, cx.mb, cx.offline);
                 // A Scale that follows the chord lane: the lane as it is now.
                 if t.midi_fx.iter().any(|f| f.kind == soundcraft_model::MidiFxKind::Scale && f.follow > 0) {
                     midi_fx::sync_chords(&mut *slot.plugin, &midi_fx::chord_table(s));
@@ -4732,6 +4732,14 @@ fn structure_fingerprint(s: &Session) -> usize {
         t.instrument.as_ref().map(|x| x.plugin.as_str()).hash(&mut h);
         // MIDI effects ahead of it (`sync` configures them).
         t.midi_fx.hash(&mut h);
+        // A script's program and parameters (`sync` hands them over).
+        for sc in &t.midi_scripts {
+            sc.id.hash(&mut h);
+            sc.runtime.program.as_ref().map(|p| Arc::as_ptr(p) as *const () as usize).hash(&mut h);
+            for (n, v) in &sc.values {
+                (n, v.to_bits()).hash(&mut h);
+            }
+        }
         let sample = t.instrument.as_ref().and_then(|x| x.sample);
         sample.hash(&mut h);
         // Which decoded audio it is, so new audio under the same id (another session) re-syncs.

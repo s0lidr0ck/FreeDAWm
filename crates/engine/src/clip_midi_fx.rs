@@ -37,7 +37,8 @@ pub fn any_stale(s: &Session) -> bool {
 fn render(s: &Session, c: &Clip, key: u64) -> Option<FxRender> {
     let seq = c.midi_playing()?;
     let keys = soundcraft_mix::midi_fx::sequence_events(s, c.start, c.end(), seq);
-    let events = soundcraft_mix::midi_fx::print(s, &c.midi_fx, c.range(), &keys);
+    // (A clip's own list has no Script effect: `track.midi_fx_add` refuses one on a clip.)
+    let events = soundcraft_mix::midi_fx::print(s, &c.midi_fx, &[], c.range(), &keys);
     Some(FxRender { key, events })
 }
 

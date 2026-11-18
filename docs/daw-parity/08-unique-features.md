@@ -109,7 +109,7 @@ window (Atmos), QuickPunch and TrackPunch, and Ambisonics above first order.
 | Drum Machine Designer, Alchemy, Sculpture and the rest of the instrument set | **Partial** | A capable drum machine and a one-sample sampler; nothing like the synths ([section 7](07-midi-writing.md#l-instruments-in-the-box)) |
 | Smart Controls; tablet remote with touch instruments | **Partial** | A few key knobs per insert on the mixer; transport-only phone remote |
 | Track Stacks and patches | **Works** | Routing folders sum their tracks; track and chain presets carry their samples |
-| Scripter and the Environment | **Partial** (design only) | Scripting is from outside the app only. A script MIDI effect is designed below on Rhai (`rhai`, a new dependency, so it waits for the owner); the Environment is not planned (MIDI effects, MIDI to Track and Input Transform cover its common uses) |
+| Scripter and the Environment | **Works** (Scripter); the Environment **Not planned here** | A **Script** MIDI effect (`r5script`, see the design below): input menu › MIDI Effects › Add › Script, Edit Script… opens the Script Editor (the text, Compile, the error with its line, the script's printed lines, its parameters as sliders, and four examples: Transpose, Velocity Curve, Arpeggio, Note Echo). A Rhai script sees notes, controllers, pitch bend, pressure and program changes with their song position, passes, changes, leaves out or adds events, now or later on the tempo (`send`, `send_after`), reads the tempo and whether the transport plays, keeps its own state, and declares up to eight named parameters. Commands `track.midi_fx_add` (`kind: script`, `example`) and `track.midi_script` (text, example, values; one undo step, a slider drag one step); the text and values are saved with the track and compiled again on opening. **Rhai cannot evaluate without allocating**, so a script never runs on the audio thread: it is compiled and run on one worker thread, fed and read through fixed lock-free rings, and is heard **one buffer late** live (exactly the largest block, timing kept); bounces and Record Effects' Output wait for the worker and are on time. Limits: 100,000 operations a call and 400,000 or 50 ms a block, calls 32 deep, strings 4 KB, arrays 1,024, maps 256; a script that errors or passes a limit is bypassed (events pass unchanged, the notes it left on are let go) and the error stays in the editor until it is compiled again. No file, network or process access: no such function exists, `eval` is off and modules are compiled out. Left: parameters are sliders, not automation lanes; a clip's own effect list takes no script. **The Environment** (Logic's patchable MIDI objects): not planned here; a graph editor of MIDI objects is a large window of its own, and the MIDI effects list, MIDI to Track, the input transformer and now scripts cover what it is mostly used for |
 | Spatial audio with binaural monitoring and head tracking | **Partial** | Surround panning; no binaural path |
 | A very large sound and loop library; loops follow tempo and key; one browser for everything | **Not planned here** | Content and licences, the owner's call. The browser lists plug-ins and presets; shipped content is about 20 MB |
 | Round trip with the tablet edition and with MainStage | **Not planned here** | Apple's own apps and formats |
@@ -422,7 +422,11 @@ reach; what was built is said in each.
   program change or controller instead of a key, the lane drawn with the articulations' names,
   and importing a library's map files (Cubase's `.expressionmap` is XML; Studio Pro's are
   `.soundvariation`): each a later step on this model.
-- *Scripter (Logic) (design only).* Logic's Scripter runs JavaScript on the MIDI going into an
+- *Scripter (Logic). Built (`r5script`) as designed, with the worker: Rhai's evaluation allocates
+  (values, maps, strings), so "no allocation after load" cannot hold on the audio thread and the
+  worker thread with lock-free rings and one block of latency was chosen (`mix::midi_fx::script`);
+  scripts write `handle(e)` and `process(info)`, `send(e)` and `send_after(e, beats)`; parameters
+  are sliders in the editor, not yet automatable.* Logic's Scripter runs JavaScript on the MIDI going into an
   instrument. FreeDAWm's MIDI effects run on the audio thread without allocating
   (`mix::midi_fx`); a script engine cannot promise that, so a script would run as a MIDI effect
   of its own whose engine lives on a worker thread fed by lock-free rings, one block late, or,
@@ -516,3 +520,4 @@ includes a feature should be checked before being quoted.
 | 2026-11-18 | minor | Note Expression row: per-note expression built |
 | 2026-11-18 | minor | Round four: Time Warp by dragging a bar line on the Tempo ruler |
 | 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |
+| 2026-11-18 | minor | Scripter: a Script MIDI effect in Rhai (worker thread, one buffer late live, on time in bounces), its editor and four examples; the Environment not planned here |

@@ -50,7 +50,10 @@ pub use lyrics::{
     track_has_lyrics, track_lines,
 };
 pub use markers::{Group, LocationView, MarkerKind, MemoryLocation, SetListEntry};
-pub use midi_fx::{ARP_PATTERNS, CHORD_SHAPES, FOLLOW_MODES, MAX_MIDI_FX, MIDI_FX_RATES, MidiFx, MidiFxKind, ROOT_NAMES, SCALES};
+pub use midi_fx::{
+    ARP_PATTERNS, CHORD_SHAPES, FOLLOW_MODES, MAX_MIDI_FX, MAX_SCRIPT_LEN, MAX_SCRIPT_PARAMS, MIDI_FX_RATES, MidiFx, MidiFxKind, MidiScript,
+    ROOT_NAMES, SCALES, ScriptRuntime,
+};
 pub use midi_map::{MidiMap, MidiSource, MidiSourceKind, MidiTarget, TransportAction};
 pub use mixer::{
     Bus, ChainError, ChannelFormat, DrumFamily, ForeignDevice, INSTRUMENT_MODULE, InputMonitor, InputPath, Insert, KIT_FX_BASE, KitBus, KitFx,
