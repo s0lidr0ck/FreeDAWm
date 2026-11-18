@@ -1090,6 +1090,18 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
     if info.id == "eq_7band" || info.id == "eq_1band" {
         eq_curve(ui, info.id, ins);
     }
+    if instrument && info.id == crate::synth_panel::SYNTH {
+        // The synth's panel: its filter and envelopes drawn, over the controls.
+        let r = ui.scope(|ui| {
+            if frozen {
+                ui.disable();
+            }
+            crate::synth_panel::draw(app, ui, tid, ins);
+        });
+        if frozen {
+            r.response.on_disabled_hover_text(read_only.as_str());
+        }
+    }
     // What the drawer offers, by the drawer's names (a FireStation engine's own
     // bypass and a model's unused switches are not here).
     let params = crate::module_drawer::window_params(ins, info);
