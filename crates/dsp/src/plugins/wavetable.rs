@@ -11,6 +11,7 @@ use super::synth::{
     Adsr, AdsrRates, EventKind, EventQueue, FILTERS, LFO_WAVES, MAX_EVENTS, MAX_UNISON, SILENT, Stage, Svf, UNISON, VIBRATO_HZ, event_of, lfo_shape,
     pick_voice, unison_copies,
 };
+use super::synth_mod::{self as sm, ModMatrix, VoiceMod};
 use crate::osc::{Osc, Waveform};
 use crate::params::{Params, choice, lin, log, param_plumbing};
 use crate::util::{Smoother, frames_in, ms_to_samples, note_hz, sane_channels, sane_sr};
@@ -21,7 +22,7 @@ pub mod presets;
 mod reference;
 pub mod tables;
 
-static WT_PARAMS: [ParamInfo; 36] = [
+static WT_PARAMS: [ParamInfo; 40] = [
     choice("table", "Table", tables::BANKS, 0),
     lin("position", "Position", 0.0, 100.0, 0.0, Unit::Percent),
     // What moves the position, each as a share of the whole table.
@@ -59,7 +60,53 @@ static WT_PARAMS: [ParamInfo; 36] = [
     lin("level", "Level", -48.0, 6.0, -6.0, Unit::Db),
     lin("bend_range", "Bend Range", 0.0, 24.0, 2.0, Unit::Semitones),
     lin("mod_wheel", "Mod Wheel Vibrato", 0.0, 100.0, 0.0, Unit::Cents),
+    // The macros: each a knob the modulation matrix's macro targets follow (nothing at 0).
+    lin("macro1", "Macro 1", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("macro2", "Macro 2", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("macro3", "Macro 3", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("macro4", "Macro 4", 0.0, 100.0, 0.0, Unit::Percent),
 ];
+const MACRO1: usize = 36;
+
+/// What the modulation matrix can move (parameter ids), by index.
+pub(crate) const MOD_DESTS: [&str; 18] = [
+    "osc_pitch",
+    "osc_fine",
+    "position",
+    "sub_level",
+    "noise_level",
+    "unison_detune",
+    "unison_spread",
+    "cutoff",
+    "resonance",
+    "env2_cutoff",
+    "env2_position",
+    "key_track",
+    sm::SHARED_DEST,
+    "lfo_pitch",
+    "lfo_cutoff",
+    "lfo_position",
+    "lfo_amp",
+    "level",
+];
+const D_PITCH: usize = 0;
+const D_FINE: usize = 1;
+const D_POS: usize = 2;
+const D_SUB: usize = 3;
+const D_NOISE: usize = 4;
+const D_UNI_DETUNE: usize = 5;
+const D_UNI_SPREAD: usize = 6;
+const D_CUTOFF: usize = 7;
+const D_RES: usize = 8;
+const D_ENV2_CUT: usize = 9;
+const D_ENV2_POS: usize = 10;
+const D_KEY: usize = 11;
+const D_LFO_RATE: usize = 12;
+const D_LFO_PITCH: usize = 13;
+const D_LFO_CUTOFF: usize = 14;
+const D_LFO_POS: usize = 15;
+const D_LFO_AMP: usize = 16;
+const D_LEVEL: usize = 17;
 
 const TABLE: usize = 0;
 const POSITION: usize = 1;
@@ -129,11 +176,17 @@ struct Voice {
     age: u64,
     held: bool,
     sustained: bool,
+    /// The matrix's values for this voice, and its unison copies when the matrix moves their
+    /// detune or spread.
+    m: VoiceMod,
+    copies: [(f32, f32, f32); MAX_UNISON],
 }
 
 impl Voice {
     fn new(seed: u32) -> Self {
         Self {
+            m: VoiceMod::new(),
+            copies: [(1.0, 1.0, 1.0); MAX_UNISON],
             note: 0,
             vel: 0.0,
             vel_raw: 0.0,
@@ -193,6 +246,73 @@ pub struct WavetableSynth {
     wheel: f32,
     vib_phase: f32,
     lfo_phase: f32,
+    /// The modulation matrix and its evaluation (as the Subtractive Synth's).
+    mm: ModMatrix,
+    infos: [&'static ParamInfo; sm::MAX_DESTS],
+    bases: [f32; sm::MAX_DESTS],
+    macro_off: [f32; sm::MAX_DESTS],
+    tick_left: usize,
+    lfo_rate_mod: f32,
+    rng: u32,
+}
+
+/// The values one sample shares across voices, which the matrix may change per voice.
+#[derive(Debug, Clone, Copy)]
+struct Shared {
+    /// Bend and vibrato in cents (before the LFO, pitch and fine), the LFO now, the wheel.
+    cents: f32,
+    lfo: f32,
+    wheel: f32,
+    lfo_pitch: f32,
+    pitch: f32,
+    fine: f32,
+    /// The pitch ratio from all of them.
+    ratio: f32,
+    base_pos: f32,
+    lfo_pos: f32,
+    wheel_pos: f32,
+    shared_pos: f32,
+    env2_pos: f32,
+    k: f32,
+    cutoff: f32,
+    env2_oct: f32,
+    lfo_oct: f32,
+    lfo_amp: f32,
+    key_track: f32,
+    sub_level: f32,
+    noise_level: f32,
+    gain: f32,
+}
+
+impl Shared {
+    /// `self` with what the matrix sets for the voice whose values are `m`.
+    #[inline]
+    fn modded(mut self, mm: &ModMatrix, m: &VoiceMod) -> Shared {
+        let on = |d| mm.on(d);
+        let pick = |d, v: f32| if on(d) { m.get(d) } else { v };
+        if on(D_PITCH) || on(D_FINE) || on(D_LFO_PITCH) {
+            let cents = self.cents + pick(D_LFO_PITCH, self.lfo_pitch) * self.lfo + pick(D_PITCH, self.pitch) * 100.0 + pick(D_FINE, self.fine);
+            self.ratio = 2f32.powf(cents / 1200.0);
+        }
+        if on(D_POS) || on(D_LFO_POS) {
+            self.shared_pos = pick(D_POS, self.base_pos) + pick(D_LFO_POS, self.lfo_pos) * 0.5 * self.lfo + self.wheel_pos * self.wheel;
+        }
+        self.env2_pos = pick(D_ENV2_POS, self.env2_pos);
+        self.k = pick(D_RES, self.k);
+        self.cutoff = pick(D_CUTOFF, self.cutoff);
+        self.env2_oct = pick(D_ENV2_CUT, self.env2_oct);
+        if on(D_LFO_CUTOFF) {
+            self.lfo_oct = m.get(D_LFO_CUTOFF) * self.lfo;
+        }
+        if on(D_LFO_AMP) {
+            self.lfo_amp = 1.0 - m.get(D_LFO_AMP) * 0.5 * (1.0 - self.lfo);
+        }
+        self.key_track = pick(D_KEY, self.key_track);
+        self.sub_level = pick(D_SUB, self.sub_level);
+        self.noise_level = pick(D_NOISE, self.noise_level);
+        self.gain = pick(D_LEVEL, self.gain);
+        self
+    }
 }
 
 impl Default for WavetableSynth {
@@ -229,9 +349,99 @@ impl WavetableSynth {
             wheel: 0.0,
             vib_phase: 0.0,
             lfo_phase: 0.0,
+            mm: ModMatrix::new(),
+            infos: sm::infos(WAVETABLE_INFO.id),
+            bases: [0.0; sm::MAX_DESTS],
+            macro_off: [0.0; sm::MAX_DESTS],
+            tick_left: 0,
+            lfo_rate_mod: 2.0,
+            rng: sm::RANDOM_SEED,
         };
         s.update();
         s
+    }
+
+    /// The LFO's rate now: the knob's, or what the matrix makes of it.
+    #[inline]
+    fn lfo_rate(&self) -> f32 {
+        if self.mm.on(D_LFO_RATE) { self.lfo_rate_mod } else { self.p.v(LFO_RATE) }
+    }
+
+    /// A note starts on voice `i`: its random value, and the matrix evaluated at once.
+    fn mod_note_on(&mut self, i: usize) {
+        let r = sm::next_random(&mut self.rng);
+        if let Some(v) = self.voices.get_mut(i) {
+            v.m.rnd = r;
+            v.m.fresh = true;
+        }
+        self.tick_left = 0;
+    }
+
+    /// See the Subtractive Synth's.
+    fn mod_step(&mut self) {
+        if self.tick_left == 0 {
+            self.tick_left = sm::TICK;
+            self.mod_tick();
+        }
+        self.tick_left -= 1;
+        let used = self.mm.used();
+        for v in self.voices.iter_mut().filter(|v| v.active()) {
+            v.m.advance(used);
+        }
+    }
+
+    fn mod_tick(&mut self) {
+        let p = &self.p;
+        let macros = [p.v(MACRO1) / 100.0, p.v(MACRO1 + 1) / 100.0, p.v(MACRO1 + 2) / 100.0, p.v(MACRO1 + 3) / 100.0];
+        self.mm.macro_offsets(macros, &mut self.macro_off);
+        let b = &mut self.bases;
+        b[D_PITCH] = p.v(PITCH);
+        b[D_FINE] = p.v(FINE);
+        b[D_POS] = self.position.value() * 100.0;
+        b[D_SUB] = p.v(SUB_LEVEL);
+        b[D_NOISE] = p.v(NOISE_LEVEL);
+        b[D_UNI_DETUNE] = p.v(UNISON_DETUNE);
+        b[D_UNI_SPREAD] = p.v(UNISON_SPREAD);
+        b[D_CUTOFF] = self.cutoff.value();
+        b[D_RES] = (2.0 - self.damping.value()) / 1.95 * 100.0;
+        b[D_ENV2_CUT] = p.v(ENV2_CUTOFF);
+        b[D_ENV2_POS] = p.v(ENV2_POS);
+        b[D_KEY] = p.v(KEY_TRACK);
+        b[D_LFO_RATE] = p.v(LFO_RATE);
+        b[D_LFO_PITCH] = p.v(LFO_PITCH);
+        b[D_LFO_CUTOFF] = p.v(LFO_CUTOFF);
+        b[D_LFO_POS] = p.v(LFO_POS);
+        b[D_LFO_AMP] = p.v(LFO_AMP);
+        b[D_LEVEL] = p.v(LEVEL);
+        let lfo = lfo_shape(p.choice(LFO_WAVE), self.lfo_phase);
+        if self.mm.on(D_LFO_RATE) {
+            self.lfo_rate_mod = sm::shared_value(&self.mm, D_LFO_RATE, lfo, self.wheel, &self.macro_off, self.infos[D_LFO_RATE], b[D_LFO_RATE]);
+        }
+        let unison = p.choice(UNISON_P).min(MAX_UNISON - 1) + 1;
+        let copies_moved = self.mm.on(D_UNI_DETUNE) || self.mm.on(D_UNI_SPREAD);
+        let mut src = [0.0f32; sm::N_SOURCES];
+        src[sm::SRC_LFO] = lfo;
+        src[sm::SRC_WHEEL] = self.wheel;
+        for v in self.voices.iter_mut().filter(|v| v.active()) {
+            src[sm::SRC_AMP] = v.amp.level;
+            src[sm::SRC_ENV2] = v.env2.level;
+            src[sm::SRC_VEL] = v.vel_raw;
+            src[sm::SRC_KEY] = sm::key_value(v.note);
+            src[sm::SRC_RND] = v.m.rnd;
+            sm::aim_voice(&self.mm, &mut v.m, &src, &self.macro_off, &self.bases, &self.infos, D_LFO_RATE, sm::TICK, |d, x, base| match d {
+                D_POS | D_SUB | D_NOISE | D_UNI_SPREAD | D_ENV2_POS | D_KEY | D_LFO_POS | D_LFO_AMP => x / 100.0,
+                D_RES => 2.0 - 1.95 * (x / 100.0),
+                D_ENV2_CUT => x / 100.0 * 6.0,
+                D_LFO_CUTOFF => x / 100.0 * 4.0,
+                D_LEVEL => sm::level_gain(x, base),
+                _ => x,
+            });
+            if copies_moved {
+                let detune = if self.mm.on(D_UNI_DETUNE) { v.m.get(D_UNI_DETUNE) } else { self.bases[D_UNI_DETUNE] };
+                let spread = if self.mm.on(D_UNI_SPREAD) { v.m.get(D_UNI_SPREAD) } else { self.bases[D_UNI_SPREAD] / 100.0 };
+                v.copies = unison_copies(unison, detune, spread);
+            }
+        }
     }
 
     fn update(&mut self) {
@@ -276,6 +486,7 @@ impl WavetableSynth {
             v.held = true;
             v.sustained = false;
         }
+        self.mod_note_on(idx);
         self.last_freq = Some(freq);
     }
 
@@ -339,6 +550,9 @@ impl WavetableSynth {
     /// One sample, left and right (the same unless unison spreads the copies).
     #[inline]
     fn render_sample(&mut self) -> (f32, f32) {
+        if self.mm.active() {
+            self.mod_step();
+        }
         let sr = self.sr;
         let bank = self.p.choice(TABLE).min(tables::BANKS.len() - 1);
         let unison = self.p.choice(UNISON_P).min(MAX_UNISON - 1) + 1;
@@ -347,9 +561,10 @@ impl WavetableSynth {
         let base_pos = self.position.next();
         let nyq = sr * 0.45;
         let cents = self.pitch_cents();
+        let cents_base = cents;
         self.vib_phase = (self.vib_phase + VIBRATO_HZ / sr).fract();
         let lfo = lfo_shape(self.p.choice(LFO_WAVE), self.lfo_phase);
-        self.lfo_phase = (self.lfo_phase + self.p.v(LFO_RATE) / sr).fract();
+        self.lfo_phase = (self.lfo_phase + self.lfo_rate() / sr).fract();
         let cents = cents + self.p.v(LFO_PITCH) * lfo + self.p.v(PITCH) * 100.0 + self.p.v(FINE);
         let lfo_oct = self.p.v(LFO_CUTOFF) / 100.0 * 4.0 * lfo;
         let lfo_amp = 1.0 - self.p.v(LFO_AMP) / 100.0 * 0.5 * (1.0 - lfo);
@@ -366,11 +581,40 @@ impl WavetableSynth {
         let copies = unison_copies(unison, self.p.v(UNISON_DETUNE), self.p.v(UNISON_SPREAD) / 100.0);
         // The highest copy's ratio picks the band limit for the whole stack.
         let top_ratio = copies.iter().take(unison).fold(1.0f32, |m, c| m.max(c.0));
+        let modded = self.mm.active();
+        let own_copies = self.mm.on(D_UNI_DETUNE) || self.mm.on(D_UNI_SPREAD);
+        let sh = Shared {
+            cents: cents_base,
+            lfo,
+            wheel: self.wheel,
+            lfo_pitch: self.p.v(LFO_PITCH),
+            pitch: self.p.v(PITCH),
+            fine: self.p.v(FINE),
+            ratio,
+            base_pos,
+            lfo_pos: self.p.v(LFO_POS) / 100.0,
+            wheel_pos: self.p.v(WHEEL_POS) / 100.0,
+            shared_pos,
+            env2_pos,
+            k,
+            cutoff,
+            env2_oct,
+            lfo_oct,
+            lfo_amp,
+            key_track,
+            sub_level,
+            noise_level,
+            gain: 1.0,
+        };
         let (mut out_l, mut out_r) = (0.0, 0.0);
         for v in &mut self.voices {
             if !v.active() {
                 continue;
             }
+            let Shared { ratio, shared_pos, env2_pos, k, cutoff, env2_oct, lfo_oct, lfo_amp, key_track, sub_level, noise_level, gain, .. } =
+                if modded { sh.modded(&self.mm, &v.m) } else { sh };
+            let (copies, top_ratio) =
+                if own_copies { (v.copies, v.copies.iter().take(unison).fold(1.0f32, |m, c| m.max(c.0))) } else { (copies, top_ratio) };
             if self.glide_coef > 0.0 {
                 v.freq = v.target + (v.freq - v.target) * self.glide_coef;
             } else {
@@ -407,7 +651,7 @@ impl WavetableSynth {
             let track = if key_track > 0.0 { key_track * (f32::from(v.note) - 60.0) / 12.0 } else { 0.0 };
             let fc = (cutoff * 2f32.powf(env2_oct * e2 + track + lfo_oct)).clamp(20.0, nyq);
             let g = (std::f32::consts::PI * fc / sr).tan();
-            let gain = a * v.vel * lfo_amp;
+            let gain = a * v.vel * lfo_amp * gain;
             if unison == 1 {
                 let mut y = v.svf.run(l + centre, g, k, kind);
                 if kind == 1 {
@@ -443,10 +687,21 @@ impl Plugin for WavetableSynth {
         self.reset();
     }
 
+    fn set_prepared_state(&mut self, data: &[f64]) -> bool {
+        self.mm.load(data, MOD_DESTS.len());
+        for v in &mut self.voices {
+            v.m.fresh = true;
+        }
+        self.tick_left = 0;
+        true
+    }
+
     fn reset(&mut self) {
         for (i, v) in self.voices.iter_mut().enumerate() {
             *v = Voice::new(0x2000 + i as u32 * 37);
         }
+        self.rng = sm::RANDOM_SEED;
+        self.tick_left = 0;
         self.events.clear();
         self.last_freq = None;
         for s in [&mut self.level, &mut self.cutoff, &mut self.position, &mut self.damping] {

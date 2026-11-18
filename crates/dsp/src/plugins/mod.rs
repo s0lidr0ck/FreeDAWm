@@ -25,6 +25,7 @@ pub mod sampler;
 pub mod sprawl;
 pub mod strip;
 pub mod synth;
+pub mod synth_mod;
 #[cfg(feature = "test-plugins")]
 pub mod test_link;
 mod timed;

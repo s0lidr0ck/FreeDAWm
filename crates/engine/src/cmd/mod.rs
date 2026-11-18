@@ -110,6 +110,7 @@ mod scout_apply;
 pub mod scout_profile;
 mod setup_more;
 mod surround;
+pub mod synth_mod;
 mod tab;
 pub mod tap_tempo;
 pub mod tempo;
