@@ -525,6 +525,78 @@ fn layers_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
     });
 }
 
+/// The window's Studio Setup: what is connected to each output port (a device's name and the
+/// channel it listens on), kept on this computer. The track output menus list the devices under
+/// their port, so a track picks "JV-1080 (ch 3)" rather than a port and a channel.
+fn studio_setup(app: &mut SoundApp, ui: &mut egui::Ui, ports: &[String]) {
+    let t = Tokens::current();
+    let mut all: Vec<String> = ports.to_vec();
+    all.extend(app.ui.midi_studio.keys().filter(|k| !ports.contains(k)).cloned());
+    if all.is_empty() {
+        return;
+    }
+    egui::CollapsingHeader::new("Studio Setup").id_salt("midi-studio").show(ui, |ui| {
+        ui.label(
+            egui::RichText::new("What is connected to each output (on this computer): the track output menus list these devices")
+                .small()
+                .color(t.text_dim),
+        );
+        for port in &all {
+            let gone = !ports.contains(port);
+            ui.horizontal(|ui| {
+                ui.strong(port);
+                if gone {
+                    ui.label(egui::RichText::new("(not connected)").small().color(t.text_dim));
+                }
+            });
+            let mut list = app.ui.midi_studio.get(port).cloned().unwrap_or_default();
+            let before = list.clone();
+            let mut remove = None;
+            for (i, d) in list.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.name).hint_text("Device").desired_width(140.0));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("{port} device {}", i + 1)));
+                    ui.label("Channel");
+                    ui.add(
+                        egui::DragValue::new(&mut d.channel)
+                            .range(0..=16)
+                            .custom_formatter(|v, _| if v < 0.5 { "all".into() } else { format!("{v:.0}") }),
+                    );
+                    if ui.small_button("✕").on_hover_text("Take this device off").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                list.remove(i);
+            }
+            if list.len() < MAX_STUDIO_DEVICES
+                && ui
+                    .horizontal(|ui| {
+                        ui.add_space(12.0);
+                        ui.small_button("Add Device").on_hover_text(format!("A device connected to {port}"))
+                    })
+                    .inner
+                    .clicked()
+            {
+                list.push(StudioDevice { name: String::new(), channel: 0 });
+            }
+            if list != before {
+                for d in &mut list {
+                    d.name = d.name.chars().filter(|c| !c.is_control()).take(64).collect();
+                    d.channel = d.channel.min(16);
+                }
+                if list.is_empty() {
+                    app.ui.midi_studio.remove(port);
+                } else {
+                    app.ui.midi_studio.insert(port.clone(), list);
+                }
+            }
+        }
+    });
+}
+
 /// The output port MIDI clock and timecode go to (`setup.midi_beat_clock`'s destination).
 fn sync_destination(s: &soundcraft_model::Session) -> Option<String> {
     s.edit.flags.iter().find_map(|f| f.strip_prefix("midi.beat_clock.destination=")).map(str::to_string)
@@ -797,13 +869,31 @@ pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         } else {
             egui::RichText::new(format!("MIDI: {name} (not connected)")).color(dim)
         };
-        if ui.add(egui::Button::selectable(current.as_deref() == Some(name.as_str()), label)).clicked() {
+        let devices: Vec<StudioDevice> = studio_devices(app, &name).into_iter().cloned().collect();
+        let here = current.as_deref() == Some(name.as_str());
+        let mut pick: Option<Option<u8>> = None;
+        if ui.add(egui::Button::selectable(here && (devices.is_empty() || studio_device_for(app, &name, channel).is_none()), label)).clicked() {
+            pick = Some(None);
+        }
+        // The studio setup's devices on this port: each sets the port and its channel.
+        for d in &devices {
+            let on = here && studio_device_for(app, &name, channel) == Some(d);
+            let text = egui::RichText::new(format!("    {}", studio_label(d)));
+            if ui.add(egui::Button::selectable(on, if available { text } else { text.color(dim) })).on_hover_text(format!("On {name}")).clicked() {
+                pick = Some(Some(d.channel));
+            }
+        }
+        if let Some(ch) = pick {
             // Chosen for a track: a port disabled in the window is enabled (the choice is
             // explicit); one never chosen opens because the track sends to it.
             if available && app.ui.midi_outputs.get(&name) == Some(&false) {
                 set_output_enabled(app, &name, true);
             }
-            if let Err(e) = app.run("mix.midi_output", json!({"track": id.0, "port": name})) {
+            let p = match ch {
+                Some(c) => json!({"track": id.0, "port": name, "channel": c}),
+                None => json!({"track": id.0, "port": name}),
+            };
+            if let Err(e) = app.run("mix.midi_output", p) {
                 app.ui.status = e;
             }
             ui.close();
@@ -829,6 +919,36 @@ pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         }
         ui.close();
     }
+}
+
+/// One device of the studio setup: a hardware synth, drum machine or module connected to an
+/// output port, and the channel it listens on (0: every channel).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StudioDevice {
+    pub name: String,
+    #[serde(default)]
+    pub channel: u8,
+}
+
+/// Most devices the studio setup keeps on one port.
+pub const MAX_STUDIO_DEVICES: usize = 16;
+
+/// The devices named on output port `port`, in order, with a name.
+pub fn studio_devices<'a>(app: &'a SoundApp, port: &str) -> Vec<&'a StudioDevice> {
+    app.ui.midi_studio.get(port).map(|v| v.iter().filter(|d| !d.name.trim().is_empty()).collect()).unwrap_or_default()
+}
+
+/// A studio device as the output menu names it: "JV-1080 (ch 1)", or just its name when it
+/// takes every channel.
+pub fn studio_label(d: &StudioDevice) -> String {
+    if d.channel == 0 { d.name.clone() } else { format!("{} (ch {})", d.name, d.channel) }
+}
+
+/// The studio device a track sending to `port` on `channel` plays, when one is set up there: one
+/// on that channel, else one taking every channel.
+pub fn studio_device_for<'a>(app: &'a SoundApp, port: &str, channel: u8) -> Option<&'a StudioDevice> {
+    let devs = studio_devices(app, port);
+    devs.iter().find(|d| d.channel != 0 && d.channel == channel).or_else(|| devs.iter().find(|d| d.channel == 0)).copied()
 }
 
 /// What the input port `name` is called here: its alias, else its name.
@@ -1088,6 +1208,8 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         for (name, on) in out_toggles {
             set_output_enabled(app, &name, on);
         }
+        let names: Vec<String> = outs.iter().map(|p| p.name.clone()).collect();
+        studio_setup(app, ui, &names);
         sync_row(app, ui, &outs);
         ui.separator();
         // Setup › MIDI Input Filter: the session's, for every port.
@@ -1198,6 +1320,27 @@ pub(crate) mod tests {
         assert_eq!(json["midi.aliases"]["USB MIDI Device #2"], "Drum Pads");
         assert_eq!(json["midi.offsets"]["USB MIDI Device #2"], 3.0);
         assert!(fake.is_open("USB MIDI Device #2"));
+    }
+
+    /// The studio setup names devices on an output port: a track on that port and channel plays
+    /// the one set up there (else the one taking every channel); kept per computer by port name;
+    /// a device without a name is not offered.
+    #[test]
+    fn the_studio_setup_names_the_devices_on_an_output_port() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let dev = |name: &str, channel| StudioDevice { name: name.into(), channel };
+        app.ui.midi_studio.insert("MIDI Out 1".into(), vec![dev("JV-1080", 0), dev("Drum Box", 10), dev(" ", 3)]);
+        let names: Vec<String> = studio_devices(&app, "MIDI Out 1").into_iter().map(studio_label).collect();
+        assert_eq!(names, vec!["JV-1080".to_string(), "Drum Box (ch 10)".to_string()]);
+        assert_eq!(studio_device_for(&app, "MIDI Out 1", 10).map(|d| d.name.as_str()), Some("Drum Box"));
+        assert_eq!(studio_device_for(&app, "MIDI Out 1", 2).map(|d| d.name.as_str()), Some("JV-1080"));
+        assert!(studio_devices(&app, "MIDI Out 2").is_empty());
+        let json = serde_json::to_value(&app.ui).unwrap();
+        assert_eq!(json["midi.studio"]["MIDI Out 1"][1]["name"], "Drum Box");
+        assert_eq!(json["midi.studio"]["MIDI Out 1"][1]["channel"], 10);
+        // Settings saved before it existed have none.
+        let back: crate::UiState = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(back.midi_studio.is_empty());
     }
 
     #[test]

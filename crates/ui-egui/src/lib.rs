@@ -430,6 +430,11 @@ pub struct UiState {
     /// What each MIDI input port is called here, by port name (`midi.aliases`): per machine.
     #[serde(default, rename = "midi.aliases")]
     pub midi_aliases: std::collections::BTreeMap<String, String>,
+    /// The studio setup: what is connected to each MIDI output port, by port name
+    /// (`midi.studio`): each device's name and channel, which name the targets of the track
+    /// output menus. Per machine.
+    #[serde(default, rename = "midi.studio")]
+    pub midi_studio: std::collections::BTreeMap<String, Vec<midi_devices::StudioDevice>>,
     /// Each MIDI input port's timing offset in ms, by port name (`midi.offsets`): its messages
     /// arrive that late and are placed that much earlier. Per machine.
     #[serde(default, rename = "midi.offsets")]
@@ -683,6 +688,7 @@ impl Default for UiState {
             midi_inputs: std::collections::BTreeMap::new(),
             midi_outputs: std::collections::BTreeMap::new(),
             midi_aliases: std::collections::BTreeMap::new(),
+            midi_studio: std::collections::BTreeMap::new(),
             midi_offsets: std::collections::BTreeMap::new(),
             midi_thru: true,
             show_shortcuts: false,
