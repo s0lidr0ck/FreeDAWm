@@ -42,8 +42,6 @@
 //! - `note_on(pitch, velocity)`, `note_off(pitch)`, `cc(number, value)` make events (channel 1);
 //!   `tempo()`, `playing()`, `beat()`; `print(x)` writes a line to the editor's log.
 
-#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
-
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -411,7 +409,6 @@ impl Drop for Claim {
 
 /// Wakes the worker (no lock: an atomic read and, when it sleeps, a wake-up call).
 fn wake() {
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(Some(w)) = worker::WORKER.get() {
         w.thread.unpark();
     }
@@ -637,18 +634,9 @@ impl ScriptStage {
 /// Compiles `source` on the worker (starting it the first time) and waits for it: the program,
 /// or the error with its line. Control thread only.
 pub fn compile(source: &str) -> Result<Arc<Program>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        worker::compile(source)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = source;
-        Err("Scripts do not run in the browser build".into())
-    }
+    worker::compile(source)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod worker {
     //! The worker thread: compiles scripts and runs them (see the module docs).
 

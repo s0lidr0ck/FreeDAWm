@@ -308,7 +308,7 @@ pub struct ModuleMeter {
     /// The instance was taken out of the signal path for putting out NaN or infinity.
     pub failed: bool,
     /// The share of the block's own duration the module took to process it (0.02: 2 % of one
-    /// processor core); 0 when it did not run, and always on the web build (no clock there).
+    /// processor core); 0 when it did not run.
     pub load: f32,
 }
 
@@ -318,30 +318,16 @@ impl Default for ModuleMeter {
     }
 }
 
-/// The clock [`ModuleMeter::load`] is measured with (none on the web build).
-#[cfg(not(target_arch = "wasm32"))]
+/// The clock [`ModuleMeter::load`] is measured with.
 type LoadClock = std::time::Instant;
-#[cfg(target_arch = "wasm32")]
-type LoadClock = ();
 
-#[cfg(not(target_arch = "wasm32"))]
 fn load_clock() -> Option<LoadClock> {
     Some(std::time::Instant::now())
-}
-#[cfg(target_arch = "wasm32")]
-fn load_clock() -> Option<LoadClock> {
-    None
 }
 
 /// [`ModuleMeter::load`] of a module that started at `t0` and processed `frames` at `rate`.
 fn load_since(t0: Option<LoadClock>, frames: usize, rate: f64) -> f32 {
-    #[cfg(not(target_arch = "wasm32"))]
     let spent = t0.map_or(0.0, |t| t.elapsed().as_secs_f64());
-    #[cfg(target_arch = "wasm32")]
-    let spent = {
-        let _ = t0;
-        0.0
-    };
     let block = frames as f64 / rate.max(1.0);
     if block > 0.0 { (spent / block) as f32 } else { 0.0 }
 }
@@ -4781,7 +4767,6 @@ pub fn on_audio_thread() -> bool {
 
 /// Run `f` on this thread as (or as not) the audio thread, then restore the thread's own mark
 /// (also when `f` unwinds): a pool worker renders for realtime playback and offline bounces alike.
-#[cfg(not(target_arch = "wasm32"))]
 fn as_audio_thread(audio: bool, f: impl FnOnce()) {
     struct Restore(bool);
     impl Drop for Restore {
@@ -4793,8 +4778,7 @@ fn as_audio_thread(audio: bool, f: impl FnOnce()) {
     f();
 }
 
-/// Process strips, in parallel on native targets when there are enough of them.
-#[cfg(not(target_arch = "wasm32"))]
+/// Process strips, in parallel when there are enough of them.
 fn run_strips<T: Send>(work: &mut [T], f: impl Fn(&mut T) + Sync + Send) {
     use rayon::prelude::*;
     if work.len() >= 4 {
@@ -4813,14 +4797,9 @@ fn run_strips<T: Send>(work: &mut [T], f: impl Fn(&mut T) + Sync + Send) {
 }
 
 /// The worker-pool thread this is, if it is one (tests: which workers rendered auxes).
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 fn rayon_worker() -> Option<usize> {
     rayon::current_thread_index()
-}
-
-#[cfg(all(test, target_arch = "wasm32"))]
-fn rayon_worker() -> Option<usize> {
-    None
 }
 
 /// The worker-pool threads that have rendered an aux (tests).
@@ -4828,11 +4807,6 @@ fn rayon_worker() -> Option<usize> {
 fn aux_workers() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
     static W: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> = std::sync::OnceLock::new();
     W.get_or_init(Default::default)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn run_strips<T: Send>(work: &mut [T], f: impl Fn(&mut T) + Sync + Send) {
-    work.iter_mut().for_each(f);
 }
 
 /// The channels a track's strip carries (the master the main mix's, an instrument at least two).

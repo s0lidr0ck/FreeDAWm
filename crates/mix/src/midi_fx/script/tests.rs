@@ -239,7 +239,7 @@ fn live_the_script_is_heard_one_block_later() {
     assert_eq!(ear.last(), Some(&(6, 5, [0x90, 61, 90])), "{ear:?}");
 }
 
-/// A Script effect with no program (none written yet, or the browser build) passes everything.
+/// A Script effect with no program (none written yet) passes everything.
 #[test]
 fn a_script_effect_without_a_program_passes() {
     let empty = MidiScript { id: 1, name: String::new(), source: String::new(), values: Vec::new(), runtime: ScriptRuntime::default() };

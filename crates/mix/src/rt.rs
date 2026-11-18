@@ -9,7 +9,7 @@
 //! Nothing here can stop audio: priority that is refused (no `rtprio` limit on Linux, no
 //! privileges) leaves the threads as they were, and [`status`] says so for the System Usage
 //! window. Where the audio system's own thread is realtime already (Core Audio, JACK, PipeWire)
-//! it is left alone. Not in the browser build: there [`status`] says priority is not used.
+//! it is left alone.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -24,7 +24,7 @@ pub enum Priority {
     ByAudioSystem,
     /// Asked and refused: the thread runs at ordinary priority (audio still plays).
     NotGranted,
-    /// Not used on this target (the browser build).
+    /// Not used on this target.
     Unavailable,
 }
 
@@ -39,7 +39,6 @@ impl Priority {
         }
     }
 
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn to_u8(self) -> u8 {
         match self {
             Priority::NotTried => 0,
@@ -109,9 +108,6 @@ static WORKERS_TOTAL: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 
 /// The audio thread's and the worker pool's priority now.
 pub fn status() -> RtStatus {
-    if cfg!(target_arch = "wasm32") {
-        return RtStatus { audio: Priority::Unavailable, workers: Priority::Unavailable, workers_on: 0, workers_total: 0 };
-    }
     RtStatus {
         audio: Priority::from_u8(AUDIO.load(Ordering::Relaxed)),
         workers: Priority::from_u8(WORKERS.load(Ordering::Relaxed)),
@@ -122,7 +118,6 @@ pub fn status() -> RtStatus {
 
 /// What a thread gets: left alone when the audio system made it realtime already, else what
 /// `ask` gets it (`true`: realtime granted).
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn decide(already_realtime: bool, ask: impl FnOnce() -> bool) -> Priority {
     if already_realtime {
         Priority::ByAudioSystem
@@ -133,7 +128,6 @@ fn decide(already_realtime: bool, ask: impl FnOnce() -> bool) -> Priority {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod os {
     /// The audio thread's priority (1–99, Linux SCHED_FIFO; 99 is TimeCritical on Windows). Below
     /// JACK's and PipeWire's own (88 and above) and the kernel's IRQ threads (50 is their default,
@@ -193,7 +187,6 @@ mod os {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 thread_local! {
     static ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -202,7 +195,6 @@ thread_local! {
 /// realtime priority for it (one system call; nothing allocated or logged), after that it only
 /// reads a thread-local flag. Never fails: refused priority is shown in [`status`].
 pub fn promote_audio_thread() {
-    #[cfg(not(target_arch = "wasm32"))]
     if !ASKED.replace(true) {
         let got = decide(os::is_realtime(), || os::ask(os::AUDIO));
         AUDIO.store(got.to_u8(), Ordering::Relaxed);
@@ -212,25 +204,21 @@ pub fn promote_audio_thread() {
 /// [`promote_audio_thread`] for an input device's own thread (recording through a second
 /// device): asked for the same way, not shown in [`status`] (which follows the output's).
 pub fn promote_capture_thread() {
-    #[cfg(not(target_arch = "wasm32"))]
     if !ASKED.replace(true) {
         let _ = decide(os::is_realtime(), || os::ask(os::AUDIO));
     }
 }
 
 /// The realtime worker pool, once [`start_workers`] made one whose workers got priority.
-#[cfg(not(target_arch = "wasm32"))]
 static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
 
 /// The realtime worker pool for strips rendered for the audio thread, if there is one.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn pool() -> Option<&'static rayon::ThreadPool> {
     POOL.get().and_then(Option::as_ref)
 }
 
 /// Makes `threads` workers named `freedawm-rt-N`, each asking `ask` for priority as it starts;
 /// the pool, how many got it. No pool when none did (the ordinary pool then serves as before).
-#[cfg(not(target_arch = "wasm32"))]
 fn build_pool(threads: usize, ask: fn() -> bool) -> (Option<rayon::ThreadPool>, usize) {
     let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("freedawm-rt-{i}")).build() else {
         return (None, 0);
@@ -243,11 +231,9 @@ fn build_pool(threads: usize, ask: fn() -> bool) -> (Option<rayon::ThreadPool>, 
 /// Makes the realtime worker pool (once per run; later calls do nothing). Call on the control
 /// thread before the audio device starts: it starts threads and waits for them.
 pub fn start_workers() {
-    #[cfg(not(target_arch = "wasm32"))]
     start_workers_with(|| os::ask(os::WORKER));
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn start_workers_with(ask: fn() -> bool) {
     POOL.get_or_init(|| {
         // As many as the ordinary pool has, less the audio thread's own core.
@@ -262,7 +248,7 @@ fn start_workers_with(ask: fn() -> bool) {
 
 /// Tests: makes the realtime pool with workers that report priority without asking the system
 /// (so a test never runs threads at realtime priority).
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 pub(crate) fn start_test_workers() {
     start_workers_with(|| true);
 }
@@ -299,7 +285,6 @@ mod tests {
         assert!(s(Priority::On, Priority::On, 3).hint().is_none());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_pool_whose_workers_were_all_refused_is_not_used() {
         let (pool, on) = build_pool(2, || false);
@@ -310,7 +295,6 @@ mod tests {
 
     /// The real request on a thread of its own: granted or refused, it returns, and the thread
     /// runs on (the fallback path on a machine without realtime rights, CI's usual case).
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn asking_for_realtime_never_fails_the_thread() {
         let got = std::thread::spawn(|| {
