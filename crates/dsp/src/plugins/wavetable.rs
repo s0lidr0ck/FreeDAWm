@@ -22,7 +22,7 @@ pub mod presets;
 mod reference;
 pub mod tables;
 
-static WT_PARAMS: [ParamInfo; 40] = [
+static WT_PARAMS: [ParamInfo; 42] = [
     choice("table", "Table", tables::BANKS, 0),
     lin("position", "Position", 0.0, 100.0, 0.0, Unit::Percent),
     // What moves the position, each as a share of the whole table.
@@ -65,11 +65,21 @@ static WT_PARAMS: [ParamInfo; 40] = [
     lin("macro2", "Macro 2", 0.0, 100.0, 0.0, Unit::Percent),
     lin("macro3", "Macro 3", 0.0, 100.0, 0.0, Unit::Percent),
     lin("macro4", "Macro 4", 0.0, 100.0, 0.0, Unit::Percent),
+    // Warp: what bends the table oscillator (Off: as before).
+    choice("warp_mode", "Warp", WARP_MODES, 0),
+    lin("warp_amount", "Warp Amount", 0.0, 100.0, 0.0, Unit::Percent),
 ];
+const WARP_MODE: usize = 40;
+const WARP_AMOUNT: usize = 41;
+/// Warp's modes: a sine at the note's pitch phase-modulating the table, folding its output
+/// back on itself, bending its phase, or a slave phase restarted by the note's (sync).
+pub const WARP_MODES: &[&str] = &["Off", "FM", "Fold", "Bend", "Sync"];
+/// FM's phase deviation at full amount, cycles (an index of about 2.2).
+const WARP_FM_DEPTH: f32 = 0.35;
 const MACRO1: usize = 36;
 
 /// What the modulation matrix can move (parameter ids), by index.
-pub(crate) const MOD_DESTS: [&str; 18] = [
+pub(crate) const MOD_DESTS: [&str; 19] = [
     "osc_pitch",
     "osc_fine",
     "position",
@@ -88,6 +98,7 @@ pub(crate) const MOD_DESTS: [&str; 18] = [
     "lfo_position",
     "lfo_amp",
     "level",
+    "warp_amount",
 ];
 const D_PITCH: usize = 0;
 const D_FINE: usize = 1;
@@ -107,6 +118,7 @@ const D_LFO_CUTOFF: usize = 14;
 const D_LFO_POS: usize = 15;
 const D_LFO_AMP: usize = 16;
 const D_LEVEL: usize = 17;
+const D_WARP: usize = 18;
 
 const TABLE: usize = 0;
 const POSITION: usize = 1;
@@ -176,6 +188,9 @@ struct Voice {
     age: u64,
     held: bool,
     sustained: bool,
+    /// Warp's Sync: each copy's slave phase and the rest of its last restart's correction.
+    sync_ph: [f32; MAX_UNISON],
+    sync_fix: [f32; MAX_UNISON],
     /// The matrix's values for this voice, and its unison copies when the matrix moves their
     /// detune or spread.
     m: VoiceMod,
@@ -204,6 +219,8 @@ impl Voice {
             age: 0,
             held: false,
             sustained: false,
+            sync_ph: [0.0; MAX_UNISON],
+            sync_fix: [0.0; MAX_UNISON],
         }
     }
 
@@ -218,6 +235,8 @@ impl Voice {
             *p = (i as f32 * 0.618_034).fract();
         }
         self.sub.reset();
+        self.sync_ph = self.phases;
+        self.sync_fix = [0.0; MAX_UNISON];
         for f in [&mut self.svf, &mut self.svf2, &mut self.svf_r, &mut self.svf2_r] {
             *f = Svf::default();
         }
@@ -282,6 +301,8 @@ struct Shared {
     sub_level: f32,
     noise_level: f32,
     gain: f32,
+    /// Warp's amount, 0..1.
+    warp: f32,
 }
 
 impl Shared {
@@ -311,7 +332,80 @@ impl Shared {
         self.sub_level = pick(D_SUB, self.sub_level);
         self.noise_level = pick(D_NOISE, self.noise_level);
         self.gain = pick(D_LEVEL, self.gain);
+        self.warp = pick(D_WARP, self.warp);
         self
+    }
+}
+
+/// Warp's settings for one voice and sample: the mode, the amount (0..1), the band limit read
+/// (darker by as much as the warp brightens the wave, so it does not fold back), and each mode's
+/// depth.
+#[derive(Debug, Clone, Copy)]
+struct Warp {
+    mode: usize,
+    amount: f32,
+    level: usize,
+    /// Fold's drive, Bend's exponent, Sync's slave ratio.
+    depth: f32,
+}
+
+/// `x` folded back on itself by `amount` (0..1) with drive `drive`: a smooth (sine) fold, so
+/// the harmonics it adds fall away quickly, blended in by the amount (none at 0).
+#[inline]
+fn fold(x: f32, amount: f32, drive: f32) -> f32 {
+    let y = (1.0 - amount) * x + amount * (std::f32::consts::FRAC_PI_2 * drive * x).sin();
+    if y.is_finite() { y } else { 0.0 }
+}
+
+impl Warp {
+    /// `inc`: the highest unison copy's step (cycles per sample).
+    fn new(mode: usize, amount: f32, inc: f32) -> Warp {
+        let (depth, brighter) = match mode {
+            1 => (0.0, 1.0 + std::f32::consts::TAU * WARP_FM_DEPTH * amount),
+            2 => (1.0 + 3.0 * amount, 1.0 + 2.0 * (1.0 + 3.0 * amount) * amount),
+            3 => ((2.0 * amount).exp2(), (2.0 * amount).exp2()),
+            4 => ((4.0 * amount).exp2(), (4.0 * amount).exp2()),
+            _ => (1.0, 1.0),
+        };
+        Warp { mode, amount, level: tables::level_for(inc * brighter), depth }
+    }
+
+    /// One sample of the table at phase `ph` stepping `dt`; `sp`/`fix`: the copy's Sync state.
+    #[inline]
+    fn read(&self, t: &tables::Tables, bank: usize, pos: f32, ph: f32, dt: f32, sp: &mut f32, fix: &mut f32) -> f32 {
+        let at = |p: f32| t.read(bank, pos, self.level, p);
+        match self.mode {
+            1 => at((ph + WARP_FM_DEPTH * self.amount * (std::f32::consts::TAU * ph).sin()).rem_euclid(1.0)),
+            2 => fold(at(ph), self.amount, self.depth),
+            3 => at(ph.clamp(0.0, 1.0).powf(self.depth)),
+            4 => {
+                // A slave phase up to four octaves above the note's, restarted where the note's
+                // wraps; the jump spread over the two samples around it (a PolyBLEP step, as the
+                // Subtractive Synth's hard sync).
+                let dts = (dt * self.depth).clamp(0.0, 0.49);
+                let p0 = if sp.is_finite() { sp.clamp(0.0, 0.999_999) } else { 0.0 };
+                let mut s = at(p0) + std::mem::take(fix);
+                let mut np = p0 + dts;
+                if np >= 1.0 {
+                    np -= 1.0;
+                }
+                if dt > 0.0 && ph + dt >= 1.0 {
+                    let d = ((ph + dt - 1.0) / dt).clamp(0.0, 1.0);
+                    let jump_from = (p0 + dts * (1.0 - d)).fract();
+                    let h = at(0.0) - at(jump_from);
+                    s += 0.5 * h * d * d;
+                    np = (dts * d).min(0.999_999);
+                    let e = 1.0 - d;
+                    *fix = -0.5 * h * e * e;
+                    if !fix.is_finite() {
+                        *fix = 0.0;
+                    }
+                }
+                *sp = if np.is_finite() { np } else { 0.0 };
+                s
+            }
+            _ => at(ph),
+        }
     }
 }
 
@@ -413,6 +507,7 @@ impl WavetableSynth {
         b[D_LFO_POS] = p.v(LFO_POS);
         b[D_LFO_AMP] = p.v(LFO_AMP);
         b[D_LEVEL] = p.v(LEVEL);
+        b[D_WARP] = p.v(WARP_AMOUNT);
         let lfo = lfo_shape(p.choice(LFO_WAVE), self.lfo_phase);
         if self.mm.on(D_LFO_RATE) {
             self.lfo_rate_mod = sm::shared_value(&self.mm, D_LFO_RATE, lfo, self.wheel, &self.macro_off, self.infos[D_LFO_RATE], b[D_LFO_RATE]);
@@ -433,6 +528,7 @@ impl WavetableSynth {
                 D_RES => 2.0 - 1.95 * (x / 100.0),
                 D_ENV2_CUT => x / 100.0 * 6.0,
                 D_LFO_CUTOFF => x / 100.0 * 4.0,
+                D_WARP => x / 100.0,
                 D_LEVEL => sm::level_gain(x, base),
                 _ => x,
             });
@@ -556,6 +652,7 @@ impl WavetableSynth {
         let sr = self.sr;
         let bank = self.p.choice(TABLE).min(tables::BANKS.len() - 1);
         let unison = self.p.choice(UNISON_P).min(MAX_UNISON - 1) + 1;
+        let warp_mode = self.p.choice(WARP_MODE).min(WARP_MODES.len() - 1);
         let k = self.damping.next();
         let cutoff = self.cutoff.next();
         let base_pos = self.position.next();
@@ -605,13 +702,14 @@ impl WavetableSynth {
             sub_level,
             noise_level,
             gain: 1.0,
+            warp: self.p.v(WARP_AMOUNT) / 100.0,
         };
         let (mut out_l, mut out_r) = (0.0, 0.0);
         for v in &mut self.voices {
             if !v.active() {
                 continue;
             }
-            let Shared { ratio, shared_pos, env2_pos, k, cutoff, env2_oct, lfo_oct, lfo_amp, key_track, sub_level, noise_level, gain, .. } =
+            let Shared { ratio, shared_pos, env2_pos, k, cutoff, env2_oct, lfo_oct, lfo_amp, key_track, sub_level, noise_level, gain, warp, .. } =
                 if modded { sh.modded(&self.mm, &v.m) } else { sh };
             let (copies, top_ratio) =
                 if own_copies { (v.copies, v.copies.iter().take(unison).fold(1.0f32, |m, c| m.max(c.0))) } else { (copies, top_ratio) };
@@ -626,8 +724,14 @@ impl WavetableSynth {
             let inc = (v.freq * ratio / sr).clamp(0.0, 0.49);
             let level = tables::level_for(inc * top_ratio);
             let (mut l, mut r) = (0.0, 0.0);
-            for (ph, &(cr, gl, gr)) in v.phases.iter_mut().zip(copies.iter()).take(unison) {
-                let s = self.t.read(bank, pos, level, *ph);
+            // Warp off (or at 0): the plain read, as before.
+            let warped = (warp_mode != 0 && warp > 0.0).then(|| Warp::new(warp_mode, warp.min(1.0), inc * top_ratio));
+            let sync = v.sync_ph.iter_mut().zip(v.sync_fix.iter_mut());
+            for ((ph, (sp, fix)), &(cr, gl, gr)) in v.phases.iter_mut().zip(sync).zip(copies.iter()).take(unison) {
+                let s = match &warped {
+                    Some(w) => w.read(self.t, bank, pos, *ph, inc * cr, sp, fix),
+                    None => self.t.read(bank, pos, level, *ph),
+                };
                 *ph += inc * cr;
                 if *ph >= 1.0 {
                     *ph -= 1.0;

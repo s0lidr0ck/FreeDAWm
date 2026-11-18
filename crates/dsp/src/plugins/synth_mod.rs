@@ -694,6 +694,85 @@ mod tests {
         assert!(worst < peak * 0.07, "{worst} against {peak}");
     }
 
+    /// Hann-windowed DFT magnitude of `x` at `hz` (48 kHz).
+    fn mag(x: &[f32], hz: f64) -> f64 {
+        let n = x.len() as f64;
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, v) in x.iter().enumerate() {
+            let w = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n).cos();
+            let a = std::f64::consts::TAU * hz * i as f64 / 48_000.0;
+            re += f64::from(*v) * w * a.cos();
+            im += f64::from(*v) * w * a.sin();
+        }
+        (re * re + im * im).sqrt()
+    }
+
+    /// What folds back between the harmonics of `f0` against the harmonics, dB (as the
+    /// Wavetable and FM synths' aliasing tests measure it).
+    fn aliasing_db(x: &[f32], f0: f64) -> f64 {
+        let nyq = 24_000.0;
+        let near = |f: f64| (f - (f / f0).round() * f0).abs() < 40.0;
+        let mut harm = 0.0;
+        let mut k = 1.0;
+        while k * f0 < nyq - 100.0 {
+            harm += mag(x, k * f0).powi(2);
+            k += 1.0;
+        }
+        let mut alias = 0.0;
+        let mut seen: Vec<f64> = Vec::new();
+        for h in 1..=200 {
+            for j in 1..=2 {
+                let f = (48_000.0 * j as f64 - h as f64 * f0).abs();
+                if f > 40.0 && f < nyq - 40.0 && !near(f) && !seen.iter().any(|s| (s - f).abs() < 5.0) {
+                    seen.push(f);
+                    alias += mag(x, f).powi(2);
+                }
+            }
+        }
+        10.0 * (alias.max(1e-30) / harm).log10()
+    }
+
+    /// The sound-rate cables: off they change nothing (the golden references cover the
+    /// defaults); on they are heard, and what folds back stays well down.
+    #[test]
+    fn cross_mod_and_warp_are_heard_and_keep_aliasing_down() {
+        let note = 84u8;
+        let f0 = f64::from(crate::util::note_hz(f32::from(note)));
+        let open = [("cutoff", 20_000.0), ("amp_sustain", 100.0), ("filter_env_amount", 0.0)];
+        // Subtractive: oscillator 2 (a sine at the same pitch) or the sub into oscillator 1's
+        // pitch, a saw.
+        for (src, set) in [("osc 2", [("xmod_source", 0.0), ("osc2_wave", 2.0)]), ("sub", [("xmod_source", 1.0), ("osc2_wave", 2.0)])] {
+            for depth in [30.0f32, 100.0] {
+                let mut all: Vec<(&str, f32)> = open.to_vec();
+                all.extend(set);
+                all.extend([("osc_mix", 0.0), ("osc2_detune", 0.0), ("xmod_pitch", depth)]);
+                let x = render("subtractive_synth", &[], &[], &all, &[(0, note, 127)], 20_480);
+                // The sub is an octave down: the sound repeats at half the note's frequency.
+                let fund = if src == "sub" { f0 / 2.0 } else { f0 };
+                let a = aliasing_db(&x[4_096..], fund);
+                eprintln!("Subtractive X-Mod from {src} at {depth} % to pitch, {f0:.0} Hz: aliasing {a:.1} dB");
+                assert!(a < -30.0, "{src} {depth}: {a:.1} dB");
+                assert!(x.iter().all(|v| v.is_finite()));
+            }
+        }
+        let plain = render("subtractive_synth", &[], &[], &open, &[(0, note, 127)], 8_192);
+        let swept = render("subtractive_synth", &[], &[], &[("cutoff", 800.0), ("xmod_cutoff", 60.0)], &[(0, note, 127)], 8_192);
+        assert_ne!(plain, swept);
+        assert!(swept.iter().all(|v| v.is_finite()));
+        // Wavetable: every warp mode at full on the Classic table.
+        for (mode, name) in [(1.0f32, "FM"), (2.0, "Fold"), (3.0, "Bend"), (4.0, "Sync")] {
+            let set = [("cutoff", 20_000.0), ("amp_sustain", 100.0), ("position", 30.0), ("warp_mode", mode), ("warp_amount", 100.0)];
+            let x = render("wavetable_synth", &[], &[], &set, &[(0, note, 127)], 20_480);
+            let a = aliasing_db(&x[4_096..], f0);
+            eprintln!("Wavetable Warp {name} at 100 %, {f0:.0} Hz: aliasing {a:.1} dB");
+            assert!(a < -40.0, "{name}: {a:.1} dB");
+            let off = render("wavetable_synth", &[], &[], &set[..3], &[(0, note, 127)], 8_192);
+            assert_ne!(off, x[..8_192].to_vec(), "{name} is heard");
+            let zero = render("wavetable_synth", &[], &[], &[set[0], set[1], set[2], set[3], ("warp_amount", 0.0)], &[(0, note, 127)], 8_192);
+            assert_eq!(off, zero, "{name} at 0 % is the plain sound");
+        }
+    }
+
     /// The matrix's cost: 16 voices with 16 slots against none (printed; run with
     /// `--ignored --nocapture`).
     #[test]

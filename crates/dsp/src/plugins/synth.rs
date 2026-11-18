@@ -168,7 +168,7 @@ const MODES: &[&str] = &["Poly", "Mono", "Legato"];
 pub(crate) const UNISON: &[&str] = &["Off", "2", "3", "4", "5", "6", "7"];
 pub(crate) const OFF_ON: &[&str] = &["Off", "On"];
 
-static SYNTH_PARAMS: [ParamInfo; 39] = [
+static SYNTH_PARAMS: [ParamInfo; 42] = [
     choice("osc1_wave", "Osc 1", WAVES, 0),
     choice("osc2_wave", "Osc 2", WAVES, 0),
     lin("osc2_semitones", "Osc 2 Pitch", -24.0, 24.0, 0.0, Unit::Semitones),
@@ -212,12 +212,27 @@ static SYNTH_PARAMS: [ParamInfo; 39] = [
     lin("macro2", "Macro 2", 0.0, 100.0, 0.0, Unit::Percent),
     lin("macro3", "Macro 3", 0.0, 100.0, 0.0, Unit::Percent),
     lin("macro4", "Macro 4", 0.0, 100.0, 0.0, Unit::Percent),
+    // Cross-modulation at audio rate: oscillator 2 or the sub frequency-modulates oscillator 1
+    // (linear FM, up to 90 % of its frequency each way) and sweeps the cutoff (up to four
+    // octaves each way). Both 0: as before.
+    choice("xmod_source", "X-Mod Source", XMOD_SOURCES, 0),
+    lin("xmod_pitch", "X-Mod to Pitch", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("xmod_cutoff", "X-Mod to Cutoff", 0.0, 100.0, 0.0, Unit::Percent),
 ];
+const XMOD_SOURCE: usize = 39;
+const XMOD_PITCH: usize = 40;
+const XMOD_CUTOFF: usize = 41;
+/// What cross-modulates oscillator 1 and the cutoff.
+pub(crate) const XMOD_SOURCES: &[&str] = &["Osc 2", "Sub"];
+/// X-Mod to Pitch at 100 %: the frequency swings by this share of itself each way (linear FM,
+/// so the pitch stays where it is); X-Mod to Cutoff: octaves each way.
+const XMOD_PITCH_DEPTH: f32 = 0.9;
+const XMOD_CUTOFF_OCT: f32 = 4.0;
 /// The first macro's parameter index.
 const MACRO1: usize = 35;
 
 /// What the modulation matrix can move (parameter ids, and the virtual `pitch`), by index.
-pub(crate) const MOD_DESTS: [&str; 17] = [
+pub(crate) const MOD_DESTS: [&str; 19] = [
     sm::PITCH,
     "osc2_semitones",
     "osc2_detune",
@@ -235,6 +250,8 @@ pub(crate) const MOD_DESTS: [&str; 17] = [
     "unison_detune",
     "unison_spread",
     "level",
+    "xmod_pitch",
+    "xmod_cutoff",
 ];
 const D_PITCH: usize = 0;
 const D_SEMIS2: usize = 1;
@@ -253,6 +270,8 @@ const D_LFO_AMP: usize = 13;
 const D_UNI_DETUNE: usize = 14;
 const D_UNI_SPREAD: usize = 15;
 const D_LEVEL: usize = 16;
+const D_XPITCH: usize = 17;
+const D_XCUT: usize = 18;
 const UNISON_P: usize = 31;
 const UNISON_DETUNE: usize = 32;
 const UNISON_SPREAD: usize = 33;
@@ -456,11 +475,13 @@ struct Pair {
     osc2: Osc,
     /// The second half of the last restart's PolyBLEP, added to oscillator 2's next sample.
     fix: f32,
+    /// Oscillator 2's last sample (what cross-modulates oscillator 1 next).
+    last2: f32,
 }
 
 impl Pair {
     fn new(seed: u32) -> Pair {
-        Pair { osc1: Osc::new(seed), osc2: Osc::new(seed.wrapping_mul(7919)), fix: 0.0 }
+        Pair { osc1: Osc::new(seed), osc2: Osc::new(seed.wrapping_mul(7919)), fix: 0.0, last2: 0.0 }
     }
 
     /// One sample of each oscillator; with `sync`, oscillator 2 starts again where oscillator 1
@@ -468,7 +489,9 @@ impl Pair {
     #[inline]
     fn next(&mut self, w1: Waveform, w2: Waveform, inc1: f32, inc2: f32, sync: bool) -> (f32, f32) {
         if !sync {
-            return (self.osc1.next(w1, inc1), self.osc2.next(w2, inc2));
+            let (s1, s2) = (self.osc1.next(w1, inc1), self.osc2.next(w2, inc2));
+            self.last2 = s2;
+            return (s1, s2);
         }
         let dt1 = if inc1.is_finite() { inc1.clamp(0.0, 0.49) } else { 0.0 };
         let dt2 = if inc2.is_finite() { inc2.clamp(0.0, 0.49) } else { 0.0 };
@@ -491,6 +514,7 @@ impl Pair {
                 self.fix = 0.0;
             }
         }
+        self.last2 = s2;
         (s1, s2)
     }
 }
@@ -509,6 +533,8 @@ struct Voice {
     /// The second stage of the 24 dB low-pass.
     svf2: Svf,
     sub: Osc,
+    /// The sub's last sample (when it cross-modulates).
+    last_sub: f32,
     noise: u32,
     /// Unison and hard sync: the copies of the oscillators (the first is `osc1`/`osc2`'s place
     /// when either is on), and the right side's filters.
@@ -542,6 +568,7 @@ impl Voice {
             svf2: Svf::default(),
             sub: Osc::new(seed.wrapping_mul(104_729)),
             noise: seed.wrapping_mul(2_654_435_761).max(1),
+            last_sub: 0.0,
             pairs: [Pair::new(seed); MAX_UNISON],
             svf_r: Svf::default(),
             svf2_r: Svf::default(),
@@ -568,6 +595,7 @@ impl Voice {
             p.osc2.reset();
             p.osc2.phase = (0.37 + spread).fract();
             p.fix = 0.0;
+            p.last2 = 0.0;
         }
         self.svf_r = Svf::default();
         self.svf2_r = Svf::default();
@@ -640,6 +668,9 @@ struct Shared {
     sub_level: f32,
     noise_level: f32,
     gain: f32,
+    /// Cross-modulation depths (octaves at a full-scale source).
+    xpitch: f32,
+    xcut: f32,
 }
 
 impl Shared {
@@ -673,6 +704,8 @@ impl Shared {
         self.sub_level = pick(D_SUB, self.sub_level);
         self.noise_level = pick(D_NOISE, self.noise_level);
         self.gain = pick(D_LEVEL, self.gain);
+        self.xpitch = pick(D_XPITCH, self.xpitch);
+        self.xcut = pick(D_XCUT, self.xcut);
         self
     }
 }
@@ -723,6 +756,12 @@ impl SubtractiveSynth {
         };
         s.update();
         s
+    }
+
+    /// Cross-modulation is on (its knobs, or the matrix moving them).
+    #[inline]
+    fn xmod_on(&self) -> bool {
+        self.p.v(XMOD_PITCH) > 0.0 || self.p.v(XMOD_CUTOFF) > 0.0 || self.mm.on(D_XPITCH) || self.mm.on(D_XCUT)
     }
 
     /// The LFO's rate now: the knob's, or what the matrix makes of it.
@@ -777,6 +816,8 @@ impl SubtractiveSynth {
         b[D_UNI_DETUNE] = p.v(UNISON_DETUNE);
         b[D_UNI_SPREAD] = p.v(UNISON_SPREAD);
         b[D_LEVEL] = p.v(18);
+        b[D_XPITCH] = p.v(XMOD_PITCH);
+        b[D_XCUT] = p.v(XMOD_CUTOFF);
         let lfo = lfo_shape(p.choice(LFO_WAVE), self.lfo_phase);
         if self.mm.on(D_LFO_RATE) {
             self.lfo_rate_mod = sm::shared_value(&self.mm, D_LFO_RATE, lfo, self.wheel, &self.macro_off, self.infos[D_LFO_RATE], b[D_LFO_RATE]);
@@ -798,6 +839,8 @@ impl SubtractiveSynth {
                 D_RES => 2.0 - 1.95 * (x / 100.0),
                 D_ENV => x / 100.0 * 6.0,
                 D_LFO_CUTOFF => x / 100.0 * 4.0,
+                D_XPITCH => x / 100.0 * XMOD_PITCH_DEPTH,
+                D_XCUT => x / 100.0 * XMOD_CUTOFF_OCT,
                 D_LEVEL => sm::level_gain(x, base),
                 _ => x,
             });
@@ -1009,7 +1052,7 @@ impl SubtractiveSynth {
             self.mod_step();
         }
         let unison = self.p.choice(UNISON_P).min(MAX_UNISON - 1) + 1;
-        if unison > 1 || self.p.choice(OSC_SYNC) == 1 {
+        if unison > 1 || self.p.choice(OSC_SYNC) == 1 || self.xmod_on() {
             return self.render_wide(unison);
         }
         let y = self.render_plain();
@@ -1074,6 +1117,8 @@ impl SubtractiveSynth {
             sub_level,
             noise_level,
             gain: 1.0,
+            xpitch: self.p.v(XMOD_PITCH) / 100.0 * XMOD_PITCH_DEPTH,
+            xcut: self.p.v(XMOD_CUTOFF) / 100.0 * XMOD_CUTOFF_OCT,
         };
         let mut out = 0.0;
         for v in &mut self.voices {
@@ -1147,6 +1192,8 @@ impl SubtractiveSynth {
         let sub_level = self.p.v(SUB_LEVEL) / 100.0;
         let noise_level = self.p.v(NOISE_LEVEL) / 100.0;
         let sync = self.p.choice(OSC_SYNC) == 1;
+        let x_sub = self.p.choice(XMOD_SOURCE) == 1;
+        let xmod = self.xmod_on();
         let detune = self.p.v(UNISON_DETUNE);
         let spread = self.p.v(UNISON_SPREAD) / 100.0;
         let bend = if cents == 0.0 { 1.0 } else { 2f32.powf(cents / 1200.0) };
@@ -1171,13 +1218,15 @@ impl SubtractiveSynth {
             sub_level,
             noise_level,
             gain: 1.0,
+            xpitch: self.p.v(XMOD_PITCH) / 100.0 * XMOD_PITCH_DEPTH,
+            xcut: self.p.v(XMOD_CUTOFF) / 100.0 * XMOD_CUTOFF_OCT,
         };
         let (mut out_l, mut out_r) = (0.0, 0.0);
         for v in &mut self.voices {
             if !v.active() {
                 continue;
             }
-            let Shared { bend, ratio2, mix, k, env_oct, cutoff, lfo_oct, lfo_amp, key_track, sub_level, noise_level, gain, .. } =
+            let Shared { bend, ratio2, mix, k, env_oct, cutoff, lfo_oct, lfo_amp, key_track, sub_level, noise_level, gain, xpitch, xcut, .. } =
                 if modded { sh.modded(&self.mm, &v.m) } else { sh };
             let copies = if own_copies { v.copies } else { copies };
             if self.glide_coef > 0.0 {
@@ -1189,15 +1238,28 @@ impl SubtractiveSynth {
             let fe = v.filt.next(&self.filt_rates);
             let base = v.freq * bend / sr;
             let (mut l, mut r) = (0.0, 0.0);
+            // Cross-modulation: the source's last sample (oscillator 2's of the first copy, or
+            // the sub's) for the cutoff; each copy's own oscillator 2 for its oscillator 1.
+            let x_cut_src = if x_sub { v.last_sub } else { v.pairs[0].last2 };
             for (pair, &(ratio, gl, gr)) in v.pairs.iter_mut().zip(copies.iter()).take(unison) {
-                let (s1, s2) = pair.next(w1, w2, base * ratio, base * ratio * ratio2, sync);
+                let inc1 = if xmod && xpitch != 0.0 {
+                    let s = if x_sub { v.last_sub } else { pair.last2 };
+                    base * ratio * (1.0 + xpitch * s).max(0.0)
+                } else {
+                    base * ratio
+                };
+                let (s1, s2) = pair.next(w1, w2, inc1, base * ratio * ratio2, sync);
                 let raw = s1 * (1.0 - mix) + s2 * mix;
                 l += raw * gl;
                 r += raw * gr;
             }
             let mut centre = 0.0;
-            if sub_level > 0.0 {
-                centre += sub_level * v.sub.next(Waveform::Square, base * 0.5);
+            if sub_level > 0.0 || (xmod && x_sub) {
+                let s = v.sub.next(Waveform::Square, base * 0.5);
+                v.last_sub = s;
+                if sub_level > 0.0 {
+                    centre += sub_level * s;
+                }
             }
             if noise_level > 0.0 {
                 v.noise ^= v.noise << 13;
@@ -1206,7 +1268,9 @@ impl SubtractiveSynth {
                 centre += noise_level * (v.noise as f32 / u32::MAX as f32 * 2.0 - 1.0);
             }
             let track = if key_track > 0.0 { key_track * (f32::from(v.note) - 60.0) / 12.0 } else { 0.0 };
-            let fc = (cutoff * 2f32.powf(env_oct * fe + track + lfo_oct)).clamp(20.0, nyq);
+            let oct = env_oct * fe + track + lfo_oct;
+            let oct = if xmod && xcut != 0.0 { oct + xcut * x_cut_src } else { oct };
+            let fc = (cutoff * 2f32.powf(oct)).clamp(20.0, nyq);
             let g = (std::f32::consts::PI * fc / sr).tan();
             let gain = a * v.vel * lfo_amp * gain;
             if unison == 1 {
