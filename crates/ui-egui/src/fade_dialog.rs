@@ -1,5 +1,6 @@
 //! Edit › Fades › Create…: a shape and bend for fade-ins and for fade-outs (a crossfade's
-//! incoming and outgoing sides), batch fades on clips standing inside the selection, a preview
+//! incoming and outgoing sides), where a crossfade sits against the cut (as selected, before,
+//! across or after it), batch fades on clips standing inside the selection, a preview
 //! of both curves, and presets (built-in ones and the user's, kept in `ui.json`).
 
 use serde_json::{Value, json};
@@ -37,6 +38,9 @@ pub struct FadeDialog {
     /// Fade both ends of the clips that lie wholly inside the selection.
     pub batch: bool,
     pub batch_ms: f64,
+    /// Where a crossfade sits against the cut: `selection` (as the selection lies over it),
+    /// `before`, `centered` or `after` (the selection's length on that side).
+    pub placement: &'static str,
     /// The name a new preset is saved under.
     pub name: String,
 }
@@ -50,6 +54,7 @@ impl Default for FadeDialog {
             out_curve: 0.0,
             batch: false,
             batch_ms: 10.0,
+            placement: "selection",
             name: String::new(),
         }
     }
@@ -74,12 +79,23 @@ impl FadeDialog {
             "in_curvature": self.in_curve.clamp(-1.0, 1.0),
             "out_curvature": self.out_curve.clamp(-1.0, 1.0),
         });
+        if self.placement != "selection" {
+            v["placement"] = json!(self.placement);
+        }
         if self.batch {
             v["batch_length"] = json!((self.batch_ms.clamp(0.0, 60_000.0) / 1000.0 * sr).round() as i64);
         }
         v
     }
 }
+
+/// The crossfade placements the dialog offers: id, label, hover text.
+pub const PLACEMENTS: [(&str, &str, &str); 4] = [
+    ("selection", "As Selected", "The crossfade covers the selection, wherever it lies over the cut"),
+    ("before", "Before Cut", "The selection's length, ending at the cut (pre-crossfade)"),
+    ("centered", "Across Cut", "The selection's length, centred on the cut"),
+    ("after", "After Cut", "The selection's length, starting at the cut (post-crossfade)"),
+];
 
 /// Draws the dialog's fields; true when OK was pressed.
 pub fn body(ui: &mut egui::Ui, d: &mut FadeDialog, presets: &mut Vec<FadePreset>, ok: impl FnOnce(&mut egui::Ui) -> bool) -> bool {
@@ -107,6 +123,12 @@ pub fn body(ui: &mut egui::Ui, d: &mut FadeDialog, presets: &mut Vec<FadePreset>
         });
     }
     preview(ui, d);
+    ui.horizontal(|ui| {
+        ui.label("Crossfade");
+        for (id, label, tip) in PLACEMENTS {
+            ui.selectable_value(&mut d.placement, id, label).on_hover_text(tip);
+        }
+    });
     ui.checkbox(&mut d.batch, "Also fade both ends of clips inside the selection");
     if d.batch {
         ui.add(egui::Slider::new(&mut d.batch_ms, 1.0..=1000.0).logarithmic(true).text("ms"));
@@ -161,5 +183,14 @@ mod tests {
         assert_eq!(v["batch_length"], 480);
         assert!(FadeShape::from_id(v["in_shape"].as_str().unwrap()).is_some());
         assert!(FadeShape::from_id(&FadeShape::EqualPower.label().to_lowercase()).is_some());
+    }
+
+    #[test]
+    fn the_crossfade_placement_is_sent_only_when_chosen() {
+        let mut d = FadeDialog::default();
+        assert!(d.params(48_000.0).get("placement").is_none(), "as selected: the old request");
+        d.placement = "before";
+        assert_eq!(d.params(48_000.0)["placement"], "before");
+        assert!(PLACEMENTS.iter().any(|p| p.0 == "centered") && PLACEMENTS.iter().any(|p| p.0 == "after"));
     }
 }

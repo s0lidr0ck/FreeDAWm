@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create...",
             ["Edit", "Fades"],
             Some("Cmd+F"),
-            "{shape?: linear|equal power|s-curve|exponential|logarithmic, in_shape?, out_shape?, in_curvature?: -1..1, out_curvature?: -1..1, batch_length?: samples (fades both ends of clips inside the range), tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1, alone?: bool}",
+            "{shape?: linear|equal power|s-curve|exponential|logarithmic, in_shape?, out_shape?, in_curvature?: -1..1, out_curvature?: -1..1, batch_length?: samples (fades both ends of clips inside the range), placement?: selection|before|centered|after (where a crossfade sits against the cut: as the selection lies, or the selection's length before, centred on or after it), tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1, alone?: bool}",
             has_range,
             fades_create
         ),
@@ -1318,8 +1318,14 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
         out_shape: side_shape("out_shape")?,
         out_curvature: bend("out_curvature")?,
         batch,
+        placement: match str_param(p, "placement") {
+            None => ops::XfadePlacement::Selection,
+            Some(v) => {
+                ops::XfadePlacement::from_id(v).ok_or_else(|| bad("edit.fades_create", "`placement` is selection, before, centered or after"))?
+            }
+        },
     };
-    let short: usize = tracks.iter().map(|t| ops::short_crossfades(e.session(), *t, r)).sum();
+    let short: usize = tracks.iter().map(|t| ops::short_crossfades(e.session(), *t, r, spec.placement)).sum();
     let s = e.session_mut();
     let n: usize = tracks.iter().map(|t| ops::create_fades_with(s, *t, r, &spec)).sum();
     if n == 0 {
@@ -1891,6 +1897,26 @@ mod tests {
         let v = e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_000, "end": 11_000})).unwrap();
         assert_eq!(v["short"], 1);
         assert!(v["warning"].as_str().unwrap().contains("not enough audio"));
+    }
+
+    #[test]
+    fn a_crossfade_sits_before_across_or_after_the_cut_as_chosen() {
+        let fades = |e: &Engine, t: TrackId| -> Vec<(Samples, Samples)> {
+            e.session().track(t).unwrap().clips().iter().map(|c| (c.fade_in.len, c.fade_out.len)).collect()
+        };
+        for (placement, a_end, b_start) in [("before", 10_000, 9_400), ("centered", 10_300, 9_700), ("after", 10_600, 10_000)] {
+            let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 30_000)]);
+            e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_500, "end": 10_100, "placement": placement})).unwrap();
+            let b = bounds(&e, t);
+            assert_eq!((b[0].1, b[1].0), (a_end, b_start), "{placement}");
+            assert_eq!(fades(&e, t), vec![(0, 600), (600, 0)], "{placement}: the selection's length");
+        }
+        // As selected: the selection's own sides (500 before, 100 after), as before.
+        let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 30_000)]);
+        e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_500, "end": 10_100})).unwrap();
+        let b = bounds(&e, t);
+        assert_eq!((b[0].1, b[1].0), (10_100, 9_500));
+        assert!(e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_500, "end": 10_100, "placement": "sideways"})).is_err());
     }
 
     #[test]

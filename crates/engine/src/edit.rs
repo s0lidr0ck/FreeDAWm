@@ -1306,12 +1306,50 @@ pub struct FadeSpec {
     pub out_shape: FadeShape,
     pub out_curvature: f32,
     pub batch: Option<Samples>,
+    /// Where a crossfade sits against the cut.
+    pub placement: XfadePlacement,
+}
+
+/// Where a crossfade sits against the cut it covers: as the selection lies over it (the
+/// default), or the selection's length wholly before the cut, centred on it, or wholly after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum XfadePlacement {
+    #[default]
+    Selection,
+    Before,
+    Centered,
+    After,
+}
+
+impl XfadePlacement {
+    pub fn from_id(id: &str) -> Option<XfadePlacement> {
+        Some(match id {
+            "selection" => XfadePlacement::Selection,
+            "before" | "pre" => XfadePlacement::Before,
+            "centered" | "centred" | "across" => XfadePlacement::Centered,
+            "after" | "post" => XfadePlacement::After,
+            _ => return None,
+        })
+    }
+
+    /// How far a crossfade over `range` reaches before and after the cut at `boundary` between
+    /// clips `a` and `b` (never past either clip's far edge).
+    fn sides(self, range: Range, boundary: Samples, a: &Clip, b: &Clip) -> (Samples, Samples) {
+        let len = range.len();
+        let (before, after) = match self {
+            XfadePlacement::Selection => (boundary - range.start, range.end - boundary),
+            XfadePlacement::Before => (len, 0),
+            XfadePlacement::Centered => (len / 2, len - len / 2),
+            XfadePlacement::After => (0, len),
+        };
+        (before.clamp(0, boundary - a.start), after.clamp(0, b.end() - boundary))
+    }
 }
 
 impl FadeSpec {
     /// One shape for every fade, unbent, no batch fades.
     pub fn of(shape: FadeShape) -> FadeSpec {
-        FadeSpec { in_shape: shape, in_curvature: 0.0, out_shape: shape, out_curvature: 0.0, batch: None }
+        FadeSpec { in_shape: shape, in_curvature: 0.0, out_shape: shape, out_curvature: 0.0, batch: None, placement: XfadePlacement::Selection }
     }
     fn fade_in(&self, len: Samples) -> Fade {
         Fade { len, shape: self.in_shape, curvature: self.in_curvature }
@@ -1324,7 +1362,7 @@ impl FadeSpec {
 /// [`create_fades`] with a shape and bend for each side, and batch fades on clips inside the range.
 /// The crossfades a fade over `range` on `track` would make shorter on one side than the
 /// selection asks, for want of audio beyond the cut (a clip's handle): how many.
-pub fn short_crossfades(s: &Session, track: TrackId, range: Range) -> usize {
+pub fn short_crossfades(s: &Session, track: TrackId, range: Range, placement: XfadePlacement) -> usize {
     let Some(tr) = s.track(track) else { return 0 };
     // In time order, as create_fades pairs them.
     let mut clips: Vec<&Clip> = tr.clips().iter().collect();
@@ -1337,7 +1375,7 @@ pub fn short_crossfades(s: &Session, track: TrackId, range: Range) -> usize {
             if b.start != boundary || range.start >= boundary || range.end <= boundary {
                 return false;
             }
-            let (before, after) = (boundary - range.start.max(a.start), range.end.min(b.end()) - boundary);
+            let (before, after) = placement.sides(range, boundary, a, b);
             let a_handle = material_len(s, a).map_or(0, |n| a.timeline_span(n.saturating_sub(a.source_offset())).saturating_sub(a.length));
             let b_handle = b.timeline_span(b.source_offset());
             after > a_handle || before > b_handle
@@ -1366,8 +1404,7 @@ pub fn create_fades_with(s: &mut Session, track: TrackId, range: Range, spec: &F
         let (Some(a), Some(b)) = (pl.clips.get(i).cloned(), pl.clips.get(i + 1).cloned()) else { continue };
         let boundary = a.end();
         if b.start == boundary && range.start < boundary && range.end > boundary {
-            let before = boundary - range.start.max(a.start);
-            let after = range.end.min(b.end()) - boundary;
+            let (before, after) = spec.placement.sides(range, boundary, &a, &b);
             let a_handle = handles.iter().find(|h| h.0 == a.id).map_or(0, |h| h.1);
             let b_handle = b.timeline_span(b.source_offset());
             // Extend each clip into the other's territory using its handles.
