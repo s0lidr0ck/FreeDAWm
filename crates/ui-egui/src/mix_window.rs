@@ -122,37 +122,31 @@ pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
     crate::widgets::begin_wheel_scrolls(ui.ctx());
     crate::channel_width::bar(app, ui);
     crate::mix_find::bar(app, ui);
+    // Track › Pin: pinned strips stay at the left in session order while the others scroll; at
+    // most half the width is pinned (the rest of the pinned ones scroll).
+    let (pinned, ids) = pinned_split(app, &ids, ui.available_width() * 0.5);
+    let r = ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 1.0;
+        for &id in &pinned {
+            strip_and_drawers(app, ui, id, snap.as_ref(), chain_h, pitch_row);
+        }
+    });
+    if !pinned.is_empty() {
+        // The pinned strips' edge: the others scroll under it.
+        let x = r.response.rect.max.x + 1.0;
+        let y = r.response.rect.y_range();
+        ui.painter().vline(x, y, Stroke::new(2.0, Tokens::current().accent.gamma_multiply(0.6)));
+    }
+    let pinned_w = if pinned.is_empty() { 0.0 } else { r.response.rect.width() + 4.0 };
+    let area = Rect::from_min_max(pos2(ui.max_rect().min.x + pinned_w, r.response.rect.min.y), ui.max_rect().max);
+    ui.advance_cursor_after_rect(area);
+    let mut rest_ui = ui.new_child(egui::UiBuilder::new().max_rect(area));
+    let ui = &mut rest_ui;
     egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
             for &id in &ids {
-                let r = strip(app, ui, id, snap.as_ref(), chain_h, pitch_row);
-                // A track selected in the Edit window scrolls into view here.
-                if app.window_sync.reveal_mix == Some(id) {
-                    ui.scroll_to_rect(r, None);
-                    app.window_sync.reveal_mix = None;
-                }
-                // A musician strip's band drawer sits right of it, before any module drawer.
-                if app.ui.band_drawers.contains(&id) {
-                    let session = app.engine.session_arc();
-                    if let Some(track) = session.track(id)
-                        && let Some(k) = crate::band::musician_of(track)
-                    {
-                        crate::band::drawer(app, ui, track, k);
-                    }
-                }
-                // An open drawer sits right of its strip; the strips after it shift right.
-                if let Some(module) = app.ui.drawers.get(&id).copied() {
-                    let session = app.engine.session_arc();
-                    if let Some(track) = session.track(id) {
-                        let meters = snap.as_ref().and_then(|s| s.tracks.get(&id));
-                        // A frozen module's drawer is read-only and greyed (the drawer does it, so
-                        // its header menu can still move the freeze point or unfreeze). Its
-                        // controls follow their automation as the fader does.
-                        let shown = shown_params(app, track);
-                        crate::module_drawer::drawer(app, ui, &shown, module, meters);
-                    }
-                }
+                strip_and_drawers(app, ui, id, snap.as_ref(), chain_h, pitch_row);
             }
             // A track with no strip here (hidden, in a closed folder) is not waited for.
             if app.window_sync.reveal_mix.is_some_and(|r| !ids.contains(&r)) {
@@ -166,6 +160,56 @@ pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
         });
     });
     crate::widgets::end_wheel_scrolls(ui.ctx());
+}
+
+/// The strips of `ids` split into those pinned at the left (Track › Pin, in session order, while
+/// they fit in `room` points) and the others, which scroll.
+pub(crate) fn pinned_split(app: &SoundApp, ids: &[TrackId], room: f32) -> (Vec<TrackId>, Vec<TrackId>) {
+    let s = app.engine.session();
+    let mut used = 0.0;
+    let (mut pinned, mut rest) = (Vec::new(), Vec::new());
+    for &id in ids {
+        let Some(t) = s.track(id) else { continue };
+        let w = strip_width(t.mixer.strip_size, !app.ui.narrow_mix) + 1.0;
+        if t.pinned && used + w <= room {
+            used += w;
+            pinned.push(id);
+        } else {
+            rest.push(id);
+        }
+    }
+    (pinned, rest)
+}
+
+/// One strip with the drawers open beside it (a musician's band drawer, a module drawer).
+fn strip_and_drawers(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapshot>, chain_h: f32, pitch_row: f32) {
+    let r = strip(app, ui, id, snap, chain_h, pitch_row);
+    // A track selected in the Edit window scrolls into view here.
+    if app.window_sync.reveal_mix == Some(id) {
+        ui.scroll_to_rect(r, None);
+        app.window_sync.reveal_mix = None;
+    }
+    // A musician strip's band drawer sits right of it, before any module drawer.
+    if app.ui.band_drawers.contains(&id) {
+        let session = app.engine.session_arc();
+        if let Some(track) = session.track(id)
+            && let Some(k) = crate::band::musician_of(track)
+        {
+            crate::band::drawer(app, ui, track, k);
+        }
+    }
+    // An open drawer sits right of its strip; the strips after it shift right.
+    if let Some(module) = app.ui.drawers.get(&id).copied() {
+        let session = app.engine.session_arc();
+        if let Some(track) = session.track(id) {
+            let meters = snap.and_then(|s| s.tracks.get(&id));
+            // A frozen module's drawer is read-only and greyed (the drawer does it, so
+            // its header menu can still move the freeze point or unfreeze). Its
+            // controls follow their automation as the fader does.
+            let shown = shown_params(app, track);
+            crate::module_drawer::drawer(app, ui, &shown, module, meters);
+        }
+    }
 }
 
 /// The strip's snowflake key: a click freezes the whole chain, or unfreezes a frozen track (whole
