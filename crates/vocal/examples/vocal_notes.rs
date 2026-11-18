@@ -7,12 +7,6 @@
 //! (`[cents | null, level_db, voiced_prob]` per 5 ms frame) and `classic` / `musical` note lists
 //! (`{start, end, scoop, core, centre}` in frames, centre in MIDI cents).
 
-#[cfg(target_arch = "wasm32")]
-fn main() {
-    println!("vocal_notes: desktop only");
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::process::ExitCode {
     match desktop::run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -23,7 +17,6 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod desktop {
     use serde_json::{Value, json};
     use soundcraft_vocal::musical::core_range;
