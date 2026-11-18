@@ -399,21 +399,12 @@ fn match_loop(e: &mut Engine, cid: soundcraft_model::ClipId, info: &soundcraft_a
 }
 
 /// Loads an audio file's bytes into an instrument track's Sampler as one undo step ("Load
-/// Sampler Sample"): for files that have no path, such as one dropped into the browser. The same
-/// checks as `mix.sampler_load`; not journaled, since the bytes can be large.
+/// Sampler Sample"), for audio that has no path. The same checks as `mix.sampler_load`; not
+/// journaled, since the bytes can be large.
 pub fn load_sampler_bytes(e: &mut Engine, track: TrackId, name: &str, bytes: &[u8]) -> Result<Value> {
     let before = e.session_arc();
     let r = crate::cmd::sampler::attach(e, track, name, bytes, None, Vec::new())?;
     e.push_undo("Load Sampler Sample", before);
-    Ok(r)
-}
-
-/// Loads a dropped file's bytes into slot `(pad, layer, robin)` (each from 0) of `track`'s Juke,
-/// as one undo step.
-pub fn load_kit_bytes(e: &mut Engine, track: TrackId, slot: (usize, usize, usize), name: &str, bytes: &[u8]) -> Result<Value> {
-    let before = e.session_arc();
-    let r = crate::cmd::juke::attach_sample(e, track, slot, name, bytes, None)?;
-    e.push_undo("Load Pad Sample", before);
     Ok(r)
 }
 
@@ -2873,11 +2864,10 @@ pub(crate) fn decode_file(files: &mut DecodedFiles, p: &Path, rate: u32) -> std:
         .clone()
 }
 
-// ─── Hosts without a filesystem (the browser) ─────────────────────────────────────────────────
+// ─── Session bundles ─────────────────────────────────────────────────────────────────────────
 
 /// Extension of a session bundle: one zip file holding the `.fdawm` session and its
-/// `Audio Files/`, the same layout as a saved session folder. The browser has no folders, so it
-/// saves and opens sessions as bundles.
+/// `Audio Files/`, the same layout as a saved session folder.
 pub const BUNDLE_EXTENSION: &str = "fdawmz";
 /// The bundle extension before the FreeDAWm rename: such bundles still open (holding a
 /// `.scraft`), and one opened keeps its name.
@@ -2941,7 +2931,7 @@ pub fn bundle_extension_for(name: &str) -> &'static str {
     if legacy { LEGACY_BUNDLE_EXTENSION } else { BUNDLE_EXTENSION }
 }
 
-/// Open a session from bytes (the browser has no paths): a bundle ([`session_bundle`]) or a bare
+/// Open a session from bytes: a bundle ([`session_bundle`]) or a bare
 /// `.fdawm` (or `.scraft`), whose audio is then reported missing. A `.scraftz` bundle keeps its
 /// extension, so it saves back under the same name. Returns the missing media, like
 /// [`open_session`].
@@ -2954,72 +2944,8 @@ pub fn open_session_bytes(e: &mut Engine, name: &str, bytes: &[u8]) -> Result<Ve
     open_session_parts(e, name, &text, files)
 }
 
-/// What a session kept in the browser's storage is made of ([`session_store_parts`]): the
-/// session's JSON, its audio files not stored yet (path, WAV bytes), and every audio file it
-/// uses (so the store can drop the others).
-#[derive(Debug, Clone, Default)]
-pub struct StoreParts {
-    pub json: String,
-    pub new_files: Vec<(String, Vec<u8>)>,
-    pub used: Vec<String>,
-}
-
-/// The session as files for the browser's own storage, kept between visits: each source's audio
-/// as a 32-bit float WAV under `Audio Files/`, named by its id and a fingerprint of its audio (so
-/// a file once stored never changes and is written once), and the session's JSON pointing at
-/// them. Only files not in `stored` are encoded. Opened again by [`open_session_parts`].
-pub fn session_store_parts(session: &Session, stored: &std::collections::BTreeSet<String>) -> Result<StoreParts> {
-    let mut s = session.clone();
-    let mut out = StoreParts::default();
-    for src in &mut s.sources {
-        let Some(audio) = s.pool.get(src.id) else { continue };
-        let buf = audio.buffer();
-        let target = format!("Audio Files/{}-{:016x}.wav", src.id.0, audio_fingerprint(&buf));
-        if !stored.contains(&target) && !out.new_files.iter().any(|(p, _)| *p == target) {
-            let opts = EncodeOptions {
-                format: FileFormat::Wav,
-                bit_depth: soundcraft_audio_io::BitDepth::Float32,
-                dither: false,
-                bwf: None,
-                bitrate_kbps: 0,
-            };
-            let bytes = soundcraft_audio_io::encode(&buf, &opts).map_err(|err| EngineError::Io(err.to_string()))?;
-            out.new_files.push((target.clone(), bytes));
-        }
-        if !out.used.contains(&target) {
-            out.used.push(target.clone());
-        }
-        src.path = target;
-        src.unsaved = false;
-        src.format = FileFormat::Wav;
-    }
-    out.json = s.to_json().map_err(|err| EngineError::Io(err.to_string()))?;
-    Ok(out)
-}
-
-/// A cheap fingerprint of some audio: its shape and every 97th sample of each channel (FNV-1a).
-fn audio_fingerprint(b: &AudioBuffer) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut put = |bytes: &[u8]| {
-        for x in bytes {
-            h ^= u64::from(*x);
-            h = h.wrapping_mul(0x0100_0000_01b3);
-        }
-    };
-    put(&b.sample_rate.to_le_bytes());
-    put(&(b.channels.len() as u64).to_le_bytes());
-    for c in &b.channels {
-        put(&(c.len() as u64).to_le_bytes());
-        for v in c.iter().step_by(97) {
-            put(&v.to_bits().to_le_bytes());
-        }
-    }
-    h
-}
-
 /// Opens a session from its JSON `text` and the files beside it (relative path → bytes): a
-/// bundle's insides, or what the browser kept ([`session_store_parts`]). Returns the media that
-/// could not be found or read.
+/// bundle's insides. Returns the media that could not be found or read.
 pub fn open_session_parts(e: &mut Engine, name: &str, text: &str, mut files: std::collections::HashMap<String, Vec<u8>>) -> Result<Vec<String>> {
     let mut s = Session::from_json(text).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
     let mut missing = Vec::new();
@@ -3582,17 +3508,6 @@ pub struct TakeFile {
 
 /// Place recorded take files as `plan` says, as one undo step ("Record").
 pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, PathBuf)>) -> Vec<soundcraft_model::ClipId> {
-    place_recording_with(e, plan, takes, &mut |_| None)
-}
-
-/// [`place_recording`] where `memory` gives the bytes of takes recorded in memory (the browser
-/// build has no files), by path: each becomes a new source of its own, saved with the session.
-pub fn place_recording_with(
-    e: &mut Engine,
-    plan: &Recording,
-    takes: Vec<(TrackId, PathBuf)>,
-    memory: &mut dyn FnMut(&Path) -> Option<Vec<u8>>,
-) -> Vec<soundcraft_model::ClipId> {
     let (start, latency) = plan.placement();
     let takes = takes
         .into_iter()
@@ -3615,7 +3530,7 @@ pub fn place_recording_with(
         stamp_time_reference(p, start.saturating_sub(*l).saturating_add(tc));
     }
     let punches: Vec<Range> = if plan.punches.is_empty() { plan.punch.into_iter().collect() } else { plan.punches.clone() };
-    add_recording_from(e, start, takes, plan.pass, &punches, memory)
+    add_recording_in(e, start, takes, plan.pass, &punches)
 }
 
 /// Turn recorded take files into clips at `start`, as one undo step ("Record"); each file is the
@@ -3638,32 +3553,10 @@ fn add_recording_in(
     pass: Option<Samples>,
     punches: &[Range],
 ) -> Vec<soundcraft_model::ClipId> {
-    add_recording_from(e, start, takes, pass, punches, &mut |_| None)
-}
-
-/// [`add_recording_in`] with takes recorded in memory (see [`place_recording_with`]).
-fn add_recording_from(
-    e: &mut Engine,
-    start: Samples,
-    takes: Vec<(TrackId, PathBuf, Samples)>,
-    pass: Option<Samples>,
-    punches: &[Range],
-    memory: &mut dyn FnMut(&Path) -> Option<Vec<u8>>,
-) -> Vec<soundcraft_model::ClipId> {
     let before = e.session_arc();
     let mut out = Vec::new();
     for (tid, path, latency) in takes {
         let name = path.file_stem().and_then(|x| x.to_str()).unwrap_or("Take");
-        if let Some(bytes) = memory(&path) {
-            let decoded = soundcraft_audio_io::decode(&bytes, None).map_err(|err| format!("{name}: {err}"));
-            let Ok((_, buf)) = decoded.inspect_err(|err| e.message(err.clone())) else { continue };
-            if e.session().track(tid).is_some_and(|t| t.frozen_audio().is_none()) {
-                let s = e.session_mut();
-                let src = add_source(s, name, buf, None, FileFormat::Wav);
-                place_take(s, tid, src, name, start, pass, punches, latency, &mut out);
-            }
-            continue;
-        }
         // A take in a project's (or autosave's) `Audio Files`: deleted when nothing names it any
         // more (undone, or its track deleted while it recorded).
         if path.parent().and_then(Path::file_name).is_some_and(|n| n == "Audio Files") && !e.recorded_takes.contains(&path) {
@@ -4614,45 +4507,6 @@ mod record_tests {
         let punch = Some(Range::new(1_200, 1_400));
         assert_eq!(live_span(1_000, None, punch, 500, 100), Some((900, Range::new(1_200, 1_400))));
     }
-
-    #[test]
-    fn a_take_recorded_in_memory_lands_as_a_source_the_browser_keeps() {
-        // The browser build: the take's bytes, no file. It is placed as a file's would be (the
-        // round trip off its start), as a new source of the session, which the browser's store
-        // then keeps like any other.
-        let mut e = Engine::default();
-        let vox = armed(&mut e, "Vox", "mono", "In 1");
-        let path = PathBuf::from("Audio Files/Vox_01.wav");
-        let mut bytes = soundcraft_audio_io::wav_float_header(1, 48_000, 4_800).unwrap();
-        bytes.extend((0..4_800).flat_map(|i| (i as f32 / 4_800.0).to_le_bytes()));
-        let plan = Recording {
-            start: 1_000,
-            pass: None,
-            punch: None,
-            rate: 48_000,
-            takes: Vec::new(),
-            latency: 100,
-            loop_from: None,
-            punches: Vec::new(),
-            pre: 0,
-        };
-        let mut handed = 0;
-        let mut memory = |p: &Path| {
-            handed += 1;
-            (p == path).then(|| bytes.clone())
-        };
-        let clips = place_recording_with(&mut e, &plan, vec![(vox, path.clone())], &mut memory);
-        assert_eq!((clips.len(), handed), (1, 1));
-        let s = e.session();
-        let clip = s.track(vox).unwrap().clips()[0].clone();
-        assert_eq!((clip.start, clip.length), (1_000, 4_700), "the round trip comes off its start");
-        let src = s.sources.iter().find(|x| x.name == "Vox_01").unwrap();
-        assert!(src.unsaved && s.pool.get(src.id).is_some(), "a source of the session, saved with it");
-        assert!(e.recorded_takes.is_empty(), "no file to clean up after");
-        let parts = session_store_parts(s, &Default::default()).unwrap();
-        assert_eq!(parts.new_files.len(), 1, "the browser's store keeps it");
-        assert_eq!(e.undo_label(), Some("Record"));
-    }
 }
 
 #[cfg(test)]
@@ -5573,43 +5427,6 @@ mod strip_tests {
 #[cfg(test)]
 mod bundle_tests {
     use super::*;
-
-    #[test]
-    fn a_session_kept_in_parts_writes_each_audio_file_once_and_opens_again() {
-        let mut e = crate::demo::demo_engine();
-        let none = std::collections::BTreeSet::new();
-        let first = session_store_parts(e.session(), &none).unwrap();
-        assert!(!first.new_files.is_empty());
-        assert_eq!(first.new_files.len(), first.used.len(), "every source's audio, once");
-        assert!(first.used.iter().all(|p| p.starts_with("Audio Files/") && p.ends_with(".wav")));
-        // Kept: an edit that adds no audio writes no audio again.
-        let stored: std::collections::BTreeSet<String> = first.new_files.iter().map(|(p, _)| p.clone()).collect();
-        e.execute("mix.volume", &serde_json::json!({"track": "Kick", "db": -7.0})).unwrap();
-        let second = session_store_parts(e.session(), &stored).unwrap();
-        assert!(second.new_files.is_empty(), "{:?}", second.new_files.iter().map(|f| &f.0).collect::<Vec<_>>());
-        assert_eq!(second.used, first.used);
-        // Opened again from the parts, as the next visit does.
-        let files: std::collections::HashMap<String, Vec<u8>> = first.new_files.into_iter().collect();
-        let mut r = Engine::default();
-        let missing = open_session_parts(&mut r, "Midnight Groove.fdawmz", &second.json, files).unwrap();
-        assert!(missing.is_empty(), "{missing:?}");
-        assert_eq!(r.session().track_by_name("Kick").unwrap().mixer.volume_db, -7.0);
-        for src in &e.session().sources {
-            let (a, b) = (e.session().pool.get(src.id).unwrap(), r.session().pool.get(src.id).unwrap());
-            assert_eq!(a.buffer().channels, b.buffer().channels, "{}", src.name);
-        }
-        // Audio that changes gets a new file name (the old one is no longer used).
-        let src = e.session().sources[0].id;
-        let mut buf = e.session().pool.get(src).unwrap().buffer().into_owned();
-        if let Some(x) = buf.channels.get_mut(0).and_then(|c| c.get_mut(0)) {
-            *x += 0.25;
-        }
-        let mut changed = e.session().clone();
-        changed.pool.insert(src, std::sync::Arc::new(SourceAudio::new(buf)));
-        let third = session_store_parts(&changed, &stored).unwrap();
-        assert_eq!(third.new_files.len(), 1);
-        assert!(!stored.contains(&third.new_files[0].0));
-    }
 
     #[test]
     fn bundle_round_trips_session_and_audio() {
