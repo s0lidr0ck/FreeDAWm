@@ -1166,12 +1166,12 @@ pub fn open_raw_input(name: &str, to: std::sync::mpsc::Sender<Vec<u8>>) -> Resul
     system::open_raw(name, to)
 }
 
-/// The system's input port names (empty on the web).
+/// The system's input port names.
 pub fn system_port_names() -> Vec<String> {
     system_backend().map(|mut b| b.ports()).unwrap_or_default()
 }
 
-/// The system's MIDI backend (`None` on the web).
+/// The system's MIDI backend.
 pub fn system_backend() -> Option<Box<dyn MidiBackend>> {
     Some(Box::new(system::Midir))
 }

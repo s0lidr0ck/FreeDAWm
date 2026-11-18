@@ -213,7 +213,6 @@ enum Cmd {
     /// refused (the spare goes back, the channel closes). The one allocation on the audio
     /// thread: `MixEngine::drain_plugins` grows the retired lists, once, at the end of the
     /// stream's life (it replaces frees on the audio thread, which are worse).
-    /// (Not on the web: one thread, nothing to wait for.)
     Shutdown,
 }
 
@@ -365,8 +364,7 @@ const STALL: std::time::Duration = std::time::Duration::from_secs(2);
 const PREPARE_SECS: f64 = 1.0;
 const PREPARE_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// Nanoseconds on a process-wide monotonic clock (0 on the web, which has no `Instant`): the
-/// time base of [`TransportProbe`] readings.
+/// Nanoseconds on a process-wide monotonic clock: the time base of [`TransportProbe`] readings.
 pub fn clock_ns() -> u64 {
     static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let epoch = EPOCH.get_or_init(std::time::Instant::now);
@@ -2351,8 +2349,8 @@ impl Side {
     }
 
     /// Sends a rig to the audio thread in the command `make` builds (`ScoutArm`, `ScoutLoop`).
-    /// With `SCOUT_RETURNS` rigs already out, or no audio thread (the web's silent clock), it is
-    /// refused here and comes straight back unfinished, never captured. True when it was sent.
+    /// With `SCOUT_RETURNS` rigs already out, or no audio thread, it is refused here and comes
+    /// straight back unfinished, never captured. True when it was sent.
     fn arm(&mut self, tx: &Sender<Cmd>, rig: Box<ScoutRig>, make: impl FnOnce(Box<ScoutRig>) -> Cmd) -> bool {
         self.collect_scout();
         if self.scout_out >= SCOUT_RETURNS {
@@ -6356,7 +6354,7 @@ mod tests {
         assert!(!shared.playing.load(Ordering::Relaxed), "nothing plays");
         assert_eq!(shared.position.load(Ordering::Relaxed), 777);
         assert!(side.take_scout().is_some_and(|r| !r.finished()), "the rig comes back unfinished");
-        // No audio thread (the web's silent clock): the send fails.
+        // No audio thread: the send fails.
         side.scout_out = 0;
         drop(st);
         assert!(!side.scout_loop(&shared, &tx, rig(&s, t, Some(range.start), Some(range.end)), range));
@@ -7408,8 +7406,8 @@ mod lend_tests {
 
     #[test]
     fn a_lend_the_audio_thread_never_takes_ends_when_the_channel_closes() {
-        // No audio thread at all (the web's silent clock): the lend command is dropped unsent,
-        // so the channel closes and the loan is over.
+        // No audio thread at all: the lend command is dropped unsent, so the channel closes and
+        // the loan is over.
         let s = Arc::new(Session::default());
         let (p, st) = Player::offline(Arc::clone(&s), 48_000, 256, 2);
         drop(st);

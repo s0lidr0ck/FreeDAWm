@@ -337,7 +337,7 @@ mod system {
     }
 }
 
-/// The system's MIDI output backend (`None` on the web).
+/// The system's MIDI output backend.
 pub fn system_backend() -> Option<Box<dyn MidiOutBackend>> {
     Some(Box::new(system::Midir))
 }
@@ -347,7 +347,7 @@ pub fn open_system_port(name: &str) -> Result<Box<dyn MidiSend>, String> {
     system::open_port(name)
 }
 
-/// The system's output port names (empty on the web).
+/// The system's output port names.
 pub fn system_port_names() -> Vec<String> {
     system::port_names()
 }

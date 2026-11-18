@@ -265,7 +265,7 @@ impl InputFeed {
         }
     }
 
-    /// Now on the feed's clock, in ns (never 0); 0 where there is no clock (the web).
+    /// Now on the feed's clock, in ns (never 0).
     fn now_ns(&self) -> u64 {
         u64::try_from(self.clock.elapsed().as_nanos()).unwrap_or(u64::MAX).saturating_add(1)
     }
