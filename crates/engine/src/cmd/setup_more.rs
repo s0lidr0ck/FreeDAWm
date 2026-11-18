@@ -96,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "I/O...",
             ["Setup"],
             None,
-            "{action?: list|create_bus|rename_bus|delete_bus|create_output|rename_output|delete_output|set_output_channel|set_output_format|create_input|rename_input|delete_input|set_input_channel|set_input_format|auto_inputs, name?, new_name?, format?: busses and outputs any format, default stereo (set_output_format: any format, not the main's: use setup.main_format); inputs mono|stereo, default mono, first_channel?: 0..1023, channels?: 1..64 (auto_inputs)}",
+            "{action?: list|create_bus|rename_bus|delete_bus|create_output|rename_output|delete_output|set_output_channel|set_output_format|create_input|rename_input|delete_input|set_input_channel|set_input_format|auto_inputs, name?, new_name?, format?: busses and outputs any format, default stereo (set_output_format: any format, not the main's: use setup.main_format); inputs any format up to 16 channels, default mono, first_channel?: 0..1023, channels?: 1..64 (auto_inputs)}",
             always,
             io_setup
         ),
