@@ -109,6 +109,23 @@ pub(crate) struct Capture {
     pub(crate) pre_ready: AtomicBool,
     /// Frames the writer put before the current take's first frame.
     pre_frames: AtomicU64,
+    /// Takes armed or disarmed while the take records ([`Recorder::add_take`],
+    /// [`Recorder::end_take`]): the UI thread and the writer only, never the audio thread.
+    late: Mutex<LateTakes>,
+}
+
+/// Takes started or ended while a recording runs (Arm or disarm during a take). The device
+/// input's every channel is in each frame of the ring already, so a track armed late only needs
+/// its own file, written from the frame the writer is at.
+#[derive(Default)]
+struct LateTakes {
+    /// Opened by the UI thread, for the writer to start at its next frame.
+    add: Vec<TakeWriter>,
+    /// Tracks whose take ends at the writer's next frame.
+    end: Vec<TrackId>,
+    /// Each late take's file and the take frame its first frame is (none of the pre-recorded
+    /// input in it); a take armed before the first frame is an ordinary one and not listed.
+    placed: Vec<(PathBuf, u64)>,
 }
 
 /// Pre-record's ring of the device input's last frames ([`Capture::history`]), interleaved.
@@ -250,6 +267,7 @@ impl Capture {
             pre_len: AtomicUsize::new(0),
             pre_ready: AtomicBool::new(false),
             pre_frames: AtomicU64::new(0),
+            late: Mutex::new(LateTakes::default()),
         }
     }
 
@@ -298,6 +316,9 @@ pub struct Recorder {
     pub channels: usize,
     /// The take writer, and what each track's take holds so far.
     writer: Option<(Writer, Vec<(TrackId, Arc<Mutex<LiveTake>>)>)>,
+    /// How the takes are written (for a take armed late), and the tracks whose take records now.
+    format: TakeFormat,
+    recording: Vec<TrackId>,
     /// Takes are written into memory, a step at a time ([`Recorder::external`]); the finished
     /// ones wait in `memory` for [`Recorder::take_audio`].
     in_memory: bool,
@@ -319,6 +340,10 @@ enum Writer {
 /// The writer's work between two looks at the ring: whole frames into every take.
 struct Steps {
     takes: Vec<TakeWriter>,
+    /// Takes disarmed while recording: finished, header written.
+    ended: Vec<TakeWriter>,
+    /// Frames of the take written so far (after the pre-recorded input).
+    frames: u64,
     /// Popped samples not yet a whole frame.
     block: Vec<f32>,
     channels: usize,
@@ -329,7 +354,7 @@ struct Steps {
 
 impl Steps {
     fn new(takes: Vec<TakeWriter>, channels: usize) -> Steps {
-        Steps { takes, block: Vec::new(), channels, reported: false, pre_done: false }
+        Steps { takes, ended: Vec::new(), frames: 0, block: Vec::new(), channels, reported: false, pre_done: false }
     }
 
     /// Once the take has started, what pre-record kept goes first into every take, once. The
@@ -350,15 +375,38 @@ impl Steps {
         shared.pre_frames.store(frames as u64, Ordering::Release);
     }
 
+    /// Takes armed since the last look start at the frame the writer is at (a take armed before
+    /// the first frame is an ordinary one: it gets the pre-recorded input too); takes disarmed end
+    /// there, their header written.
+    fn follow_arms(&mut self, shared: &Capture) {
+        let mut late = shared.late.lock().unwrap_or_else(PoisonError::into_inner);
+        for id in std::mem::take(&mut late.end) {
+            if let Some(at) = self.takes.iter().rposition(|t| t.id == id) {
+                let mut t = self.takes.remove(at);
+                t.write_header();
+                self.ended.push(t);
+            }
+        }
+        let is_late = self.frames > 0 || self.pre_done;
+        for t in std::mem::take(&mut late.add) {
+            if is_late {
+                late.placed.push((t.path.clone(), self.frames));
+            }
+            self.takes.push(t);
+        }
+    }
+
     /// Write what the ring holds; the first failure is reported to `shared` once.
     fn run(&mut self, shared: &Capture) {
         // The ring holds interleaved samples and a pop can end mid-frame: write whole frames and
         // keep the remainder for the next pop, so channels never shift.
         shared.ring.pop_all(&mut self.block);
         self.put_pre_record(shared);
+        self.follow_arms(shared);
         let whole = self.block.len() - self.block.len() % self.channels.max(1);
         let (block, channels) = (&self.block[..whole], self.channels);
         self.takes.iter_mut().for_each(|t| t.write(block, channels));
+        self.frames = self.frames.saturating_add((whole / channels.max(1)) as u64);
         self.block.drain(..whole);
         if !self.reported
             && let Some(e) = self.takes.iter().find_map(|t| t.error.clone())
@@ -372,7 +420,7 @@ impl Steps {
     /// In-memory takes' bytes come back beside them.
     fn finish(self) -> (Takes, Vec<(PathBuf, Vec<u8>)>) {
         let (mut done, mut problem, mut memory) = (Vec::new(), None, Vec::new());
-        for mut t in self.takes {
+        for mut t in self.ended.into_iter().chain(self.takes) {
             t.write_header();
             problem = problem.or(t.error);
             match (t.frames, t.file) {
@@ -575,6 +623,8 @@ impl Recorder {
             taps: 0,
             internal: false,
             writer: None,
+            format: TakeFormat::default(),
+            recording: Vec::new(),
             in_memory: false,
             memory: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -717,6 +767,9 @@ impl Recorder {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let live = takes.iter().map(|t| (t.id, Arc::clone(&t.live))).collect();
+        self.recording = takes.iter().map(|t| t.id).collect();
+        self.format = format.clone();
+        *self.capture.late.lock().unwrap_or_else(PoisonError::into_inner) = LateTakes::default();
         self.capture.ring.clear();
         *self.capture.failed.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.capture.started.store(false, Ordering::Release);
@@ -783,10 +836,57 @@ impl Recorder {
         self.capture.started.load(Ordering::Acquire).then(|| self.capture.start_mix.load(Ordering::Relaxed))
     }
 
-    /// What the take recording onto `track` holds so far.
+    /// What the take recording onto `track` holds so far (its latest, armed again during the
+    /// take).
     pub fn live_take(&self, track: TrackId) -> Option<MutexGuard<'_, LiveTake>> {
-        let (_, take) = self.writer.as_ref()?.1.iter().find(|(id, _)| *id == track)?;
+        let (_, take) = self.writer.as_ref()?.1.iter().rev().find(|(id, _)| *id == track)?;
         Some(take.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Whether `track` has a take recording now.
+    pub fn records(&self, track: TrackId) -> bool {
+        self.writer.is_some() && self.recording.contains(&track)
+    }
+
+    /// The tracks whose take records now.
+    pub fn recording_tracks(&self) -> &[TrackId] {
+        if self.writer.is_some() { &self.recording } else { &[] }
+    }
+
+    /// Arm during a take: a take onto `track` of the frame's channels `inputs` (the device's: a
+    /// recorded bus's channels are only in the frame when armed at Record) into a new file at
+    /// `path`, from the frame the writer is at. Errors when nothing records, a channel is not in
+    /// the frame, or the file cannot be made.
+    pub fn add_take(&mut self, track: TrackId, inputs: Vec<usize>, path: PathBuf) -> Result<(), String> {
+        let Some((_, live)) = &mut self.writer else { return Err("not recording".into()) };
+        if inputs.iter().any(|&i| i >= self.channels && i != usize::MAX) || self.internal {
+            return Err("a track armed during a take records the device input only".into());
+        }
+        let t = match self.in_memory {
+            true => TakeWriter::in_memory(track, inputs, path, self.sample_rate, &self.format),
+            false => TakeWriter::create_as(track, inputs, path, self.sample_rate, &self.format),
+        }?;
+        live.push((track, Arc::clone(&t.live)));
+        self.capture.late.lock().unwrap_or_else(PoisonError::into_inner).add.push(t);
+        self.recording.push(track);
+        Ok(())
+    }
+
+    /// Disarm during a take: `track`'s take ends at the frame the writer is at (its file keeps
+    /// what it recorded).
+    pub fn end_take(&mut self, track: TrackId) {
+        if !self.records(track) {
+            return;
+        }
+        self.recording.retain(|t| *t != track);
+        self.capture.late.lock().unwrap_or_else(PoisonError::into_inner).end.push(track);
+    }
+
+    /// For a take armed during the recording (by its file): the take frame its first frame is,
+    /// once the writer has started it. `None` for a take armed at Record.
+    pub fn late_start(&self, path: &std::path::Path) -> Option<u64> {
+        let late = self.capture.late.lock().unwrap_or_else(PoisonError::into_inner);
+        late.placed.iter().find(|(p, _)| p == path).map(|(_, f)| *f)
     }
 
     /// Why the input can't go on, if it can't: the device went away or, while recording, stopped
@@ -1123,6 +1223,43 @@ mod tests {
         assert_eq!(decode(&done[0].1), vec![channel(1), channel(2)]);
         assert_eq!(decode(&done[1].1), vec![[vec![0.5; 100], vec![0.25; 50], channel(0)].concat()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Arm and disarm during a take: a track armed while it records gets its own file from the
+    /// frame the writer is at (its start told by `late_start`), one disarmed stops there; both
+    /// come back from `finish` with the rest.
+    #[test]
+    fn a_take_armed_or_disarmed_while_recording_starts_or_ends_there() {
+        let shared = Arc::new(Capture::new(SampleRing::new(1 << 16)));
+        let mut r = Recorder::attached(Arc::clone(&shared), "In".into(), 48_000, 48_000, 2);
+        r.in_memory = true;
+        r.arm(vec![(TrackId(1), vec![0], PathBuf::from("Vox_01.wav"))]).unwrap();
+        assert!(r.records(TrackId(1)) && !r.records(TrackId(2)));
+        let input: Vec<f32> = (0..2 * 3_000).map(|i| i as f32 / 10_000.0).collect();
+        let mut owed = 0;
+        let (a, rest) = input.split_at(2 * 1_000);
+        let (b, c) = rest.split_at(2 * 1_000);
+        shared.capture(a, &mut owed);
+        r.pump();
+        r.add_take(TrackId(2), vec![1], PathBuf::from("Gtr_01.wav")).unwrap();
+        assert!(r.records(TrackId(2)));
+        assert!(r.add_take(TrackId(3), vec![5], PathBuf::from("Bass_01.wav")).is_err(), "not a channel of the frame");
+        shared.capture(b, &mut owed);
+        r.pump();
+        assert_eq!(r.late_start(std::path::Path::new("Gtr_01.wav")), Some(1_000));
+        assert_eq!(r.late_start(std::path::Path::new("Vox_01.wav")), None, "armed at Record");
+        r.end_take(TrackId(1));
+        assert_eq!(r.recording_tracks(), &[TrackId(2)]);
+        shared.capture(c, &mut owed);
+        let (done, problem) = r.finish();
+        assert_eq!(problem, None);
+        let channel = |k: usize, from: usize, to: usize| input.iter().skip(k).step_by(2).skip(from).take(to - from).copied().collect::<Vec<f32>>();
+        let audio =
+            |r: &mut Recorder, p: &str| soundcraft_audio_io::decode(&r.take_audio(std::path::Path::new(p)).unwrap(), None).unwrap().1.channels;
+        assert_eq!(done.iter().map(|d| d.0).collect::<Vec<_>>(), vec![TrackId(1), TrackId(2)]);
+        assert_eq!(audio(&mut r, "Vox_01.wav"), vec![channel(0, 0, 2_000)], "ends where it was disarmed");
+        assert_eq!(audio(&mut r, "Gtr_01.wav"), vec![channel(1, 1_000, 3_000)], "starts where it was armed");
+        assert!(r.add_take(TrackId(2), vec![1], PathBuf::from("Gtr_02.wav")).is_err(), "not recording");
     }
 
     #[test]

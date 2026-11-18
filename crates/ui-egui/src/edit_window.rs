@@ -2452,7 +2452,9 @@ fn draw_live_take(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &
         None if s.edit.loop_record && !sel.is_empty() => (sel.start, Some(sel.len()), 0),
         None => (app.record_start, None, 0),
     };
-    let Some((origin, span)) = soundcraft_engine::io::live_span(start, pass, app.punch, len, latency) else { return };
+    // A take armed during the recording starts where it was armed.
+    let late = app.take_plan.as_ref().and_then(|p| p.takes.iter().rev().find(|t| t.track == track.id)).and_then(|t| t.late).unwrap_or(0);
+    let Some((origin, span)) = soundcraft_engine::io::live_span(start.saturating_add(late), pass, app.punch, len, latency) else { return };
     let r = Rect::from_min_max(pos2(x_of(s, tl, span.start), lane.min.y + 1.0), pos2(x_of(s, tl, span.end), lane.max.y - 1.0));
     let t = Tokens::current();
     let (body, _, wave) = clip_colors([t.rec.r(), t.rec.g(), t.rec.b()], false);

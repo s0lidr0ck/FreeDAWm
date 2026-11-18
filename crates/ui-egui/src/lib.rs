@@ -1098,6 +1098,8 @@ pub struct SoundApp {
     /// Input capture, opened on first record.
     pub recorder: Option<soundcraft_playback::record::Recorder>,
     record_start: Samples,
+    /// Tracks armed during this take that cannot join it (said once).
+    late_refused: Vec<TrackId>,
     /// Punch range to trim the take to (pre/post-roll recordings).
     punch: Option<Range>,
     recorder_failed: bool,
@@ -1352,6 +1354,7 @@ impl SoundApp {
             step: step_input::StepInput::default(),
             recorder: None,
             record_start: 0,
+            late_refused: Vec::new(),
             punch: None,
             recorder_failed: false,
             device_notice_pending: true,
@@ -1936,6 +1939,7 @@ impl SoundApp {
     }
 
     fn start_recording(&mut self, countoff: bool) {
+        self.late_refused.clear();
         if let Some(why) = record_unavailable(cfg!(target_arch = "wasm32")) {
             self.ui.status = why.into();
             return;
@@ -2072,6 +2076,90 @@ impl SoundApp {
         }
     }
 
+    /// Arm or disarm during a take: a track armed while the take records gets a take of its own
+    /// from where it was armed, one disarmed stops recording there (Pro Tools, Cubase, Logic and
+    /// Studio Pro allow both). Not while loop recording (its passes are fixed at Record), nor for
+    /// a track recording a bus (its channels join the frame only at Record): said once.
+    /// Each late take's start goes into the plan once the writer has started it.
+    pub(crate) fn follow_record_arms(&mut self) {
+        if !self.engine.transport.recording {
+            return;
+        }
+        let Some(plan) = &self.take_plan else { return };
+        let Some(r) = &self.recorder else { return };
+        let looping = plan.pass.is_some();
+        let s = self.engine.session();
+        let armed = |t: &soundcraft_model::Track| t.mixer.record_arm && t.kind == soundcraft_model::TrackKind::Audio && !t.inactive;
+        let new: Vec<TrackId> =
+            s.tracks.iter().filter(|t| armed(t) && !r.records(t.id) && !self.late_refused.contains(&t.id)).map(|t| t.id).collect();
+        let gone: Vec<TrackId> = r.recording_tracks().iter().copied().filter(|t| !s.track(*t).is_some_and(armed)).collect();
+        if looping {
+            if let Some(t) = new.first().copied() {
+                self.late_refused.push(t);
+                self.ui.status = "Loop recording: tracks armed now record from the next Record".into();
+            }
+            return;
+        }
+        let name = soundcraft_engine::io::sanitize_name(&self.engine.session().name);
+        let unsaved_dir = self.autosave_dir.as_ref().map_or_else(std::env::temp_dir, |d| d.join(name));
+        let device = r.channels;
+        for t in new {
+            let planned = soundcraft_engine::io::plan_late_take(&self.engine, &unsaved_dir, device, t);
+            let Some(r) = &mut self.recorder else { return };
+            let added = match planned {
+                // No take for it (a remote recorder's input): nothing to say.
+                Ok(None) => Err(String::new()),
+                Ok(Some((inputs, path))) => r.add_take(t, inputs.clone(), path.clone()).map(|()| (inputs, path)),
+                Err(e) => Err(e),
+            };
+            match added {
+                Ok((inputs, path)) => {
+                    let (format, depth, bwf) = soundcraft_engine::io::take_format(self.engine.session());
+                    if let Some(plan) = &mut self.take_plan {
+                        plan.takes.push(soundcraft_engine::io::Take {
+                            track: t,
+                            path,
+                            channels: inputs.len(),
+                            internal: false,
+                            from_device: false,
+                            tap_latency: 0,
+                            file: Some(soundcraft_engine::io::TakeFile { format, depth, bwf: bwf.is_some() }),
+                            late: None,
+                        });
+                    }
+                }
+                Err(e) => {
+                    self.late_refused.push(t);
+                    if !e.is_empty() {
+                        self.ui.status = e;
+                    }
+                }
+            }
+        }
+        if let Some(r) = &mut self.recorder {
+            for t in gone {
+                r.end_take(t);
+            }
+        }
+        self.place_late_takes();
+    }
+
+    /// The start of each take armed during the recording, from the writer, into the plan (so a
+    /// recovered take is placed right too).
+    fn place_late_takes(&mut self) {
+        let (Some(r), Some(plan)) = (&self.recorder, &mut self.take_plan) else { return };
+        let mut changed = false;
+        for t in plan.takes.iter_mut().filter(|t| t.late.is_none()) {
+            if let Some(f) = r.late_start(&t.path) {
+                t.late = Some(i64::try_from(f).unwrap_or(i64::MAX));
+                changed = true;
+            }
+        }
+        if changed && let Some(root) = self.autosave_dir.clone() {
+            self.queue_autosave(root);
+        }
+    }
+
     /// Arm the input for the record-enabled tracks; a session never saved records into its
     /// autosave folder. Returns the takes it records.
     /// A track whose input is a bus records it from the mix (internal recording), with no input
@@ -2103,6 +2191,7 @@ impl SoundApp {
                 from_device: plan.from_device(*track),
                 tap_latency: 0,
                 file: Some(file),
+                late: None,
             })
             .collect();
         if let Some(p) = &self.player {
@@ -2786,6 +2875,12 @@ impl SoundApp {
         });
         // Pre-record: the input kept from before Record leads each take file (the clips' handle).
         plan.pre = pre;
+        // Takes armed during the recording start where they were armed.
+        if let Some(r) = &self.recorder {
+            for t in plan.takes.iter_mut().filter(|t| t.late.is_none()) {
+                t.late = r.late_start(&t.path).map(|f| i64::try_from(f).unwrap_or(i64::MAX));
+            }
+        }
         self.punch = None;
         self.autosaved_rev = 0;
         // A remote recorder sends these to the booth (`net_ui`).
@@ -3191,6 +3286,7 @@ impl SoundApp {
         self.watch_input();
         if self.engine.transport.recording {
             self.refine_take_plan();
+            self.follow_record_arms();
             midi_devices::collect(self);
             midi_devices::preview_loop(self);
         } else {

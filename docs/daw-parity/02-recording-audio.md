@@ -1,6 +1,6 @@
 # Four-DAW parity, section 2: recording audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-17 · **Change:** minor (round three) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-18 · **Change:** minor (round three) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -50,7 +50,7 @@ depth and write a timestamp into it**, and **smooth the punch points**.
 | Arm one, several or all tracks | ● | ● | ● | ● | **Works**; arming is an undo step, which the four do not do |
 | Arming follows the selected track | ○ | ● | ● | ● | **Works**: Options › Recording › Arm Follows Selection: selecting tracks arms them (not a record-safe one) and disarms the others; not while a take records, and clicking off every track leaves the arms alone |
 | Record-safe (a track that cannot be armed) | ● | ○ | ○ | ◐ | **Works**: Record Safe on the R key's right-click menu, or Cmd-click (macOS) / Ctrl+Shift-click: a padlock on the key, the track is disarmed and cannot be armed until it is turned off (`mix.record_safe`); saved with the session |
-| Arm or disarm during a take | ● | ◐ | ◐ | ● | **Partial**: allowed, but the set of recorded tracks is fixed when Record is pressed. Left: the recorder opens one file per armed track and sizes its lock-free ring for their inputs at Record; a track armed mid-take needs a file opened then and a ring with room for it, and a disarmed track's take should end at the disarm point |
+| Arm or disarm during a take | ● | ◐ | ◐ | ● | **Works** (2026-11-18): a track armed while a take records starts a take of its own there: each recording frame already holds every device input channel, so the writer opens the track's file and writes from the frame it is at; the take is placed from where it was armed (`Take::late`, kept in the take plan so a recovered take is placed too) and drawn from there while it records. A track disarmed (or deleted) during the take stops there: its file and clip end at that frame; armed again, it starts another take. Not while loop recording (its passes are fixed at Record: the status line says the track records from the next Record), and not for a track recording a bus or through its inserts (those channels join the frame only at Record) |
 | Named hardware inputs, mono and stereo | ● | ● | ● | ● | **Works** (Setup › I/O) |
 | Multichannel (surround) inputs | ● | ● | ● | ● | **Works**: an input in Setup › I/O can be any format up to 16 channels (LCR, quad, 5.1, 7.1, Ambisonics…); a track of that width hears and records every channel. A mono input feeds every channel of a wider track; a wider input feeds the track's channels in order and leaves those past it silent (a stereo input on a quad track: the rears), heard and recorded alike (bug 10, fixed) |
 | One input on several tracks | ● | ● | ● | ● | **Works** |
@@ -220,6 +220,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | arm or disarm during a take |
 | 2026-11-17 | minor | round three follow-up: recording at another speed designed, not planned here (needs hardware and listening) |
 | 2026-11-17 | minor | round three follow-up: feedback protection trips only at clipping; a track wider than its input is silent past it (bug 10 fixed); an input at another rate is read band-limited; Solo Take auditions a take in place of the comp |
 | 2026-11-17 | minor | round three follow-up: audio pre-record (Options › Recording › Pre-Record) |

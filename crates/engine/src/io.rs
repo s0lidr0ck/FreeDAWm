@@ -3602,6 +3602,30 @@ pub struct Take {
     /// saved before it existed): a plain 32-bit float WAV.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<TakeFile>,
+    /// Armed during the take (Arm or disarm during a take): its first frame is this many frames
+    /// after the take's first, and it holds none of the pre-recorded input. `None`: armed at
+    /// Record (and plans saved before it existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late: Option<Samples>,
+}
+
+/// A track armed while a take records (not by loop recording, whose passes are fixed at Record):
+/// its channels of the recording frame and its take file, as [`plan_recording`] plans them. A
+/// track recording a bus or through its inserts is refused (those channels join the frame only
+/// at Record). `None` for a track no take is planned for (not armed, or recorded elsewhere: a
+/// remote recorder's input).
+pub fn plan_late_take(
+    e: &Engine,
+    unsaved_dir: &Path,
+    input_channels: usize,
+    track: TrackId,
+) -> std::result::Result<Option<(Vec<usize>, PathBuf)>, String> {
+    let plan = plan_recording(e, unsaved_dir, input_channels)?;
+    if plan.is_tap(track) {
+        let name = e.session().track(track).map_or_else(String::new, |t| t.name.clone());
+        return Err(format!("{name} records a bus or through its inserts: arm it before Record"));
+    }
+    Ok(plan.takes.into_iter().find(|(t, ..)| *t == track).map(|(_, inputs, path)| (inputs, path)))
 }
 
 /// A take file's type and bit depth, and whether it has a `bext` chunk.
@@ -3633,7 +3657,12 @@ pub fn place_recording_with(
                 Some(x) => plan.placement_for(x.tap_latency.saturating_add(if x.from_device { plan.latency } else { 0 })).1,
                 None => latency,
             };
-            (t, p, l.saturating_add(plan.pre.max(0)))
+            // Armed during the take: it starts that much later (a negative offset places a take
+            // later), without the pre-recorded input.
+            match plan.takes.iter().find(|x| x.path == p).and_then(|x| x.late) {
+                Some(late) => (t, p, l.saturating_sub(late.max(0))),
+                None => (t, p, l.saturating_add(plan.pre.max(0))),
+            }
         })
         .collect::<Vec<_>>();
     // Each take's BWF time reference: where its first frame belongs, from the timecode start.
@@ -4048,7 +4077,16 @@ mod record_tests {
             pass: None,
             punch: Some(Range::new(1_400, 1_600)),
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: take.clone(),
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+            }],
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
@@ -4067,7 +4105,16 @@ mod record_tests {
             pass: rs.pass,
             punch: rs.punch,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.to_path_buf(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: take.to_path_buf(),
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+            }],
             latency: 0,
             loop_from: rs.loop_from,
             punches: Vec::new(),
@@ -4229,8 +4276,8 @@ mod record_tests {
             punch: None,
             rate: 48_000,
             takes: vec![
-                Take { track: vox, path: hw.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None },
-                Take { track: print, path: bus.clone(), channels: 1, internal: true, from_device: false, tap_latency: 20, file: None },
+                Take { track: vox, path: hw.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None, late: None },
+                Take { track: print, path: bus.clone(), channels: 1, internal: true, from_device: false, tap_latency: 20, file: None, late: None },
             ],
             latency: 300,
             loop_from: None,
@@ -4265,7 +4312,16 @@ mod record_tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: true, from_device: true, tap_latency: 64, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: take.clone(),
+                channels: 1,
+                internal: true,
+                from_device: true,
+                tap_latency: 64,
+                file: None,
+                late: None,
+            }],
             latency: 300,
             loop_from: None,
             punches: Vec::new(),
@@ -4310,7 +4366,16 @@ mod record_tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: path.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: path.clone(),
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+            }],
             latency: 100,
             loop_from: None,
             punches: Vec::new(),
@@ -4344,7 +4409,16 @@ mod record_tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: take.clone(),
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+            }],
             latency: 0,
             loop_from: None,
             punches,
@@ -4363,6 +4437,57 @@ mod record_tests {
         // The old audio stays between the punches and fades across them.
         let old: Vec<_> = t.clips().iter().filter(|c| !ids.contains(&c.id)).map(|c| (c.start, c.end())).collect();
         assert_eq!(old, [(0, 1_000 + h), (3_000 - h, 5_000 + h), (6_000 - h, 8_000 + h), (9_000, 10_000)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Arm during a take: a take armed 3000 frames into the recording is placed from there (less
+    /// the round trip, as every take), without the pre-recorded input the others lead with; the
+    /// late take a plan names is planned like any other but refused for a track recording a bus.
+    #[test]
+    fn a_take_armed_during_the_recording_starts_where_it_was_armed() {
+        let dir = test_dir("late-arm");
+        let (vox_take, gtr_take) = (dir.join("Audio Files/Vox_01.wav"), dir.join("Audio Files/Gtr_01.wav"));
+        write_take(&vox_take, 10_000);
+        write_take(&gtr_take, 4_000);
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let gtr = armed(&mut e, "Gtr", "mono", "In 1");
+        let take = |track, path: &PathBuf, late| Take {
+            track,
+            path: path.clone(),
+            channels: 1,
+            internal: false,
+            from_device: false,
+            tap_latency: 0,
+            file: None,
+            late,
+        };
+        let rec = Recording {
+            start: 1_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: vec![take(vox, &vox_take, None), take(gtr, &gtr_take, Some(3_000))],
+            latency: 100,
+            loop_from: None,
+            punches: Vec::new(),
+            pre: 500,
+        };
+        let ids = place_recording(&mut e, &rec, vec![(vox, vox_take), (gtr, gtr_take)]);
+        assert_eq!(ids.len(), 2);
+        let clip = |t| {
+            let c = e.session().track(t).unwrap().clips().iter().find(|c| ids.contains(&c.id)).unwrap().clone();
+            (c.start, c.source_offset(), c.length)
+        };
+        // Vox: file frame 600 (pre 500 + round trip 100) at 1000.
+        assert_eq!(clip(vox), (1_000, 600, 10_000 - 600));
+        // Gtr: its first frame is take frame 3000 (at 4000), less the round trip: at 3900.
+        assert_eq!(clip(gtr), (3_900, 0, 4_000));
+        let (inputs, path) = plan_late_take(&e, &dir, 2, gtr).unwrap().unwrap();
+        assert_eq!(inputs, vec![0]);
+        assert!(path.to_string_lossy().contains("Gtr_"), "{path:?}");
+        e.execute("mix.record_arm", &json!({"tracks": [gtr.0], "value": false})).unwrap();
+        assert_eq!(plan_late_take(&e, &dir, 2, gtr), Ok(None), "not armed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
