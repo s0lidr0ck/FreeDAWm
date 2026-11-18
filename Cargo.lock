@@ -6451,6 +6451,8 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "serde",
+ "serde_json",
+ "soundcraft-ara-host",
  "soundcraft-dsp",
  "soundcraft-plugin-scan",
  "thiserror 2.0.21",

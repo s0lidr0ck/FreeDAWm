@@ -15,6 +15,7 @@
 #![allow(clippy::unnecessary_cast)]
 
 use crate::{Vst3Error, scan};
+use soundcraft_ara_host::{FactoryPtr, sys as ara};
 use soundcraft_dsp::Transport;
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::ManuallyDrop;
@@ -525,6 +526,57 @@ impl Bundle {
         out
     }
 
+    /// Makes the `ARA::IMainFactory` object of class `cid` (an "ARA Main Factory Class") and
+    /// asks it for its ARA factory. The object is kept (and this binary with it) for as long as
+    /// the returned value lives: the factory is only valid while the object that gave it is.
+    pub fn ara_main_factory(self: &Arc<Self>, cid: &[u8; 16]) -> Result<AraMain, String> {
+        let mut obj: *mut c_void = std::ptr::null_mut();
+        let iid = ara::vst3_tuid(ara::IMainFactory_iid);
+        // SAFETY: valid factory; `cid` and `iid` are 16 readable bytes each; `obj` is writable.
+        let r = unsafe { self.factory.createInstance(cid.as_ptr().cast::<c_char>(), iid.as_ptr().cast::<c_char>(), &mut obj) };
+        if !ok(r) || obj.is_null() {
+            return Err("its ARA main factory class cannot be created".into());
+        }
+        // SAFETY: a COM object starts with its vtable pointer; IMainFactory's vtable is FUnknown's
+        // three functions then `getFactory` (ARAVST3.h).
+        let vtbl = unsafe { obj.cast::<*const ara::IMainFactoryVtbl>().read() };
+        if vtbl.is_null() {
+            // An object without a vtable cannot even be released: leak it.
+            return Err("its ARA main factory object has no vtable".into());
+        }
+        let mut main = AraMain { obj, vtbl, factory: None, _bundle: self.clone() };
+        // SAFETY: `obj` is a live IMainFactory (we hold its one reference); `getFactory` takes
+        // nothing and returns a pointer valid while the object lives (kept in `main`).
+        let raw = unsafe { ((*vtbl).getFactory)(obj) };
+        // SAFETY: the ARA contract: null or a factory valid while `obj` lives; `main` keeps
+        // `obj` (and the binary, through the bundle) for as long as the pointer is used.
+        let factory = unsafe { FactoryPtr::new(raw) }.ok_or_else(|| "its ARA main factory gave no ARA factory".to_string())?;
+        main.factory = Some(factory);
+        Ok(main)
+    }
+
+    /// Which ARA entry interfaces the audio module class `cid` offers: `IPlugInEntryPoint`
+    /// (ARA 1 binding) and `IPlugInEntryPoint2` (ARA 2 binding with roles). The component is
+    /// created, asked, and released without being initialised (VST3 allows that).
+    pub fn ara_entry_points(&self, cid: &[u8; 16]) -> (bool, bool) {
+        let Some(component) = self.create::<sv::IComponent>(cid) else { return (false, false) };
+        let unknown = component.as_ptr().cast::<c_void>();
+        let has = |words: [u32; 4]| {
+            let iid = ara::vst3_tuid(words);
+            let mut out: *mut c_void = std::ptr::null_mut();
+            // SAFETY: a live component (we hold a reference); every COM object starts with a
+            // vtable whose first function is `queryInterface`; `iid` and `out` are valid.
+            let r = unsafe { ((*unknown.cast::<*const ara::FUnknownVtbl>().read()).queryInterface)(unknown, &iid, &mut out) };
+            if !ok(r) || out.is_null() {
+                return false;
+            }
+            // SAFETY: on success `out` holds one reference we own; give it back.
+            unsafe { ((*out.cast::<*const ara::FUnknownVtbl>().read()).release)(out) };
+            true
+        };
+        (has(ara::IPlugInEntryPoint_iid), has(ara::IPlugInEntryPoint2_iid))
+    }
+
     /// Creates an object of class `cid` and queries interface `I` on it.
     fn create<I: Interface>(&self, cid: &[u8; 16]) -> Option<ComPtr<I>> {
         let mut obj: *mut c_void = std::ptr::null_mut();
@@ -633,6 +685,33 @@ impl Bundle {
             }),
         });
         Ok(inst)
+    }
+}
+
+/// A plug-in's `ARA::IMainFactory` object and the ARA factory it gave. Keeps the object (one
+/// reference, released on drop) and the binary loaded while it lives.
+pub(crate) struct AraMain {
+    obj: *mut c_void,
+    vtbl: *const ara::IMainFactoryVtbl,
+    factory: Option<FactoryPtr>,
+    _bundle: Arc<Bundle>,
+}
+
+// SAFETY: the object is only used to release it, once, in `drop`; VST3 reference counting is
+// thread-safe. The factory pointer is static data of the binary.
+unsafe impl Send for AraMain {}
+
+impl AraMain {
+    pub fn factory(&self) -> Option<FactoryPtr> {
+        self.factory
+    }
+}
+
+impl Drop for AraMain {
+    fn drop(&mut self) {
+        // SAFETY: the reference `ara_main_factory` got from `createInstance`, released once; the
+        // vtable pointer was read from the live object (checked non-null).
+        unsafe { ((*self.vtbl).base.release)(self.obj) };
     }
 }
 

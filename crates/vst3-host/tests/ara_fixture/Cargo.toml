@@ -1,0 +1,20 @@
+# A tiny ARA VST3 plug-in used only by soundcraft-vst3-host's ARA tests (`tests/ara_fixture_e2e.rs`).
+# Not part of the workspace (the empty [workspace] table makes it its own root); the test builds it
+# with `cargo build` and loads the resulting library. Its ARA side is soundcraft-ara-host's test
+# plug-in, reached through ARA's VST3 interfaces. Never shipped.
+[package]
+name = "vst3-ara-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+vst3 = "0.3"
+soundcraft-ara-host = { path = "../../../ara-host", features = ["test-plugin"] }
+
+[workspace]

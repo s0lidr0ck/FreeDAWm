@@ -28,6 +28,8 @@ fn descriptor(id: &str, name: &str, path: &Path) -> Vst3Descriptor {
         category: Category::Other,
         is_instrument: false,
         path: path.to_path_buf(),
+        ara: None,
+        ara_checked: true,
     }
 }
 
