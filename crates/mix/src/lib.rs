@@ -1825,6 +1825,17 @@ impl MixEngine {
         Some((self.busses.get(&bus)?.buf.as_slice(), self.bus_latency(bus)))
     }
 
+    /// [`MixEngine::main_print`] for what `tap` takes: the main mix, a bus, or a hardware output
+    /// (as sent to the device, after the wait for the master faders' inserts, with the main mix's
+    /// latency). `None` for an unknown bus or output.
+    pub fn tap_print(&self, tap: Tap) -> Option<(&[Vec<f32>], usize)> {
+        match tap {
+            Tap::Bus(b) => self.bus_print(b),
+            Tap::Output(i) if i > 0 => Some((self.hw.get(i)?.as_slice(), self.latency)),
+            _ => Some(self.main_print()),
+        }
+    }
+
     pub fn hardware_out(&self) -> &[Vec<Vec<f32>>] {
         &self.hw
     }
@@ -2996,6 +3007,18 @@ impl MixEngine {
     /// slowest aux return when an aux returns onto this bus.
     fn bus_latency(&self, bus: BusId) -> usize {
         self.track_latency + if self.aux_fed.contains(&bus) { self.aux_latency } else { 0 }
+    }
+
+    /// Copy one rendered block of hardware output `i` into `out`. A missing output stays silent.
+    fn copy_output(&self, i: usize, frames: usize, out: &mut [Vec<f32>]) {
+        let src = self.hw.get(i).map_or(&[][..], Vec::as_slice);
+        for (k, o) in out.iter_mut().enumerate() {
+            let c = src.get(k);
+            for (j, d) in o.iter_mut().take(frames).enumerate() {
+                let v = c.and_then(|c| c.get(j)).copied().unwrap_or(0.0);
+                *d = if v.is_finite() { v } else { 0.0 };
+            }
+        }
     }
 
     /// Copy one rendered block of `bus` into `out`. A missing bus stays silent.
@@ -6912,7 +6935,15 @@ pub fn render_bus(s: &Session, bus: BusId, range: Range, block: usize) -> Vec<Ve
     render_in_memory(s, Some(bus), range, block)
 }
 
-fn render_in_memory(s: &Session, bus: Option<BusId>, range: Range, block: usize) -> Vec<Vec<f32>> {
+/// Offline render of hardware output `output` (an index into [`Session::outputs`]; 0 is the main
+/// output, the main mix) over `range`: what the tracks and sends routed to it play, lined up with
+/// the timeline as the main mix is (the same delay compensation). An unknown output is silent.
+pub fn render_output(s: &Session, output: usize, range: Range, block: usize) -> Vec<Vec<f32>> {
+    render_in_memory(s, Tap::Output(output), range, block)
+}
+
+fn render_in_memory(s: &Session, bus: impl Into<Tap>, range: Range, block: usize) -> Vec<Vec<f32>> {
+    let bus = bus.into();
     let nch = source_channels(s, bus);
     let len = usize::try_from(range.len().max(0)).unwrap_or(0).min(MAX_RENDER_SAMPLES / nch.max(1));
     let mut out: Vec<Vec<f32>> = (0..nch).map(|_| Vec::with_capacity(len)).collect();
@@ -6925,11 +6956,43 @@ fn render_in_memory(s: &Session, bus: Option<BusId>, range: Range, block: usize)
     out
 }
 
-/// Channels of the main mix, or of `bus` (none for an unknown bus).
-pub fn source_channels(s: &Session, bus: Option<BusId>) -> usize {
-    match bus {
-        Some(id) => s.bus(id).map_or(0, |b| b.format.channels()),
-        None => main_channels(s),
+/// What a render or a real-time print takes: the main mix, a bus, or a hardware output (an index
+/// into [`Session::outputs`], whose first is the main output: the main mix).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tap {
+    #[default]
+    Main,
+    Bus(BusId),
+    Output(usize),
+}
+
+impl From<Option<BusId>> for Tap {
+    fn from(b: Option<BusId>) -> Tap {
+        b.map_or(Tap::Main, Tap::Bus)
+    }
+}
+
+impl Tap {
+    /// The bus tapped, if it is one.
+    pub fn bus(self) -> Option<BusId> {
+        match self {
+            Tap::Bus(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// The main mix itself (the main output is the main mix).
+    pub fn is_main(self) -> bool {
+        matches!(self, Tap::Main | Tap::Output(0))
+    }
+}
+
+/// Channels of the main mix, of `bus`, or of a hardware output (none for an unknown one).
+pub fn source_channels(s: &Session, bus: impl Into<Tap>) -> usize {
+    match bus.into() {
+        Tap::Bus(id) => s.bus(id).map_or(0, |b| b.format.channels()),
+        Tap::Output(0) | Tap::Main => main_channels(s),
+        Tap::Output(i) => s.outputs.get(i).map_or(0, |o| o.format.channels().clamp(1, MAX_CHANNELS)),
     }
 }
 
@@ -7076,7 +7139,7 @@ pub struct RangeRender {
     /// The engine is the host's, lent (see [`LiveInstances`]): it goes back when the render is
     /// dropped or [`RangeRender::into_live`] takes it.
     live: Option<LiveInstances>,
-    bus: Option<BusId>,
+    bus: Tap,
     tmp: Vec<Vec<f32>>,
     start: Samples,
     done: usize,
@@ -7098,9 +7161,9 @@ impl RangeRender {
         self.eng.module_midi_in(t)
     }
 
-    /// Renders the main mix over `range`, or `bus` when one is named, through instances of its
-    /// own (third-party ones made from their stored state).
-    pub fn new(s: &Session, bus: Option<BusId>, range: Range, block: usize) -> Self {
+    /// Renders the main mix over `range`, or `bus` when one is named (a bus or a hardware output,
+    /// see [`Tap`]), through instances of its own (third-party ones made from their stored state).
+    pub fn new(s: &Session, bus: impl Into<Tap>, range: Range, block: usize) -> Self {
         let mut eng = Box::new(MixEngine::new(s.sample_rate.as_f64() as f32, block));
         eng.offline = true;
         RangeRender::over(eng, None, s, bus, range)
@@ -7109,7 +7172,8 @@ impl RangeRender {
     /// Renders through the host's live instances (see [`LiveInstances`]), at their sample rate
     /// and block size. A session at another rate is refused: the render then uses instances of
     /// its own, as [`RangeRender::new`] does, and the engine goes straight back.
-    pub fn with_instances(s: &Session, bus: Option<BusId>, range: Range, mut live: LiveInstances) -> Self {
+    pub fn with_instances(s: &Session, bus: impl Into<Tap>, range: Range, mut live: LiveInstances) -> Self {
+        let bus = bus.into();
         let rate = s.sample_rate.as_f64() as f32;
         if (live.sample_rate() - rate).abs() > 0.5 {
             log::warn!("render through the live instances refused: the session runs at {rate} Hz, the instances at {} Hz", live.sample_rate());
@@ -7121,7 +7185,8 @@ impl RangeRender {
         }
     }
 
-    fn over(mut eng: Box<MixEngine>, live: Option<LiveInstances>, s: &Session, bus: Option<BusId>, range: Range) -> Self {
+    fn over(mut eng: Box<MixEngine>, live: Option<LiveInstances>, s: &Session, bus: impl Into<Tap>, range: Range) -> Self {
+        let bus = bus.into();
         let nch = source_channels(s, bus);
         // Seat every module at the automation of the start, as a Locate does (offline bounces
         // start with a reset): no glide from the plugins' defaults on the first block.
@@ -7167,11 +7232,15 @@ impl RangeRender {
     fn render(&mut self, s: &Session, pos: Samples, n: usize) {
         self.last = (pos, n);
         match self.bus {
-            Some(id) => {
+            Tap::Bus(id) => {
                 self.eng.render(s, pos, n, &mut []);
                 self.eng.copy_bus(id, n, &mut self.tmp);
             }
-            None => self.eng.render(s, pos, n, &mut self.tmp),
+            Tap::Output(i) if i > 0 => {
+                self.eng.render(s, pos, n, &mut []);
+                self.eng.copy_output(i, n, &mut self.tmp);
+            }
+            _ => self.eng.render(s, pos, n, &mut self.tmp),
         }
     }
 
@@ -7187,8 +7256,9 @@ impl RangeRender {
         if self.done == 0 {
             // The first block tells the mix's latency: render that much more and drop the head.
             self.latency = match self.bus {
-                Some(b) => self.eng.bus_latency(b),
-                None => self.eng.latency,
+                Tap::Bus(b) => self.eng.bus_latency(b),
+                // A hardware output waits for the master faders' inserts, as the main mix does.
+                Tap::Main | Tap::Output(_) => self.eng.latency,
             };
             self.total = self.total.saturating_add(self.latency);
         }
@@ -8439,6 +8509,37 @@ mod tests {
         assert!(cue(&mut eng, &s, 6 * 512).0.abs() < 1e-6, "muted");
         s.edit.set_flag(PRE_SENDS_IGNORE_MUTE, true);
         assert!((cue(&mut eng, &s, 7 * 512).0 - 0.5).abs() < 1e-3, "the pre-fader send ignores the mute");
+    }
+
+    /// A bounce can take a hardware output: what is routed there, lined up with the timeline as
+    /// the main mix is (here with another track's latent insert delaying the whole mix), the same
+    /// as that track bounced from the main mix; an unknown output is silent, output 0 is the main
+    /// mix; a real-time print takes the same buffer with the main mix's latency.
+    #[test]
+    fn a_bounce_takes_a_hardware_output_with_its_latency() {
+        let (mut s, t) = session_with_dc(0.5, 4800);
+        s.edit.click = false;
+        let o = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        s.track_mut(o).unwrap().mixer.add_module(Insert::new("pitch_shifter"), None).unwrap();
+        let main = s.clone();
+        s.outputs.push(soundcraft_model::OutputPath { name: "Cue".into(), format: ChannelFormat::Stereo, first_channel: 2 });
+        s.track_mut(t).unwrap().mixer.output = Route::Hardware("Cue".into());
+        let range = Range::new(0, 4096);
+        let out = render_output(&s, 1, range, 512);
+        let want = render_range(&main, range, 512);
+        assert_eq!(out.len(), 2);
+        assert!(out[0][0].abs() > 0.1, "no latency head left in: {}", out[0][0]);
+        for c in 0..2 {
+            let worst = out[c].iter().zip(&want[c]).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
+            assert!(worst < 1e-6, "channel {c}: {worst}");
+        }
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.render(&s, 0, 512, &mut vec![vec![0.0; 512]; 2]);
+        assert!(eng.latency > 0, "the pitch shifter delays the mix");
+        assert_eq!(eng.tap_print(Tap::Output(1)).map(|(b, l)| (b.len(), l)), Some((2, eng.latency)));
+        assert_eq!(eng.tap_print(Tap::Output(0)).map(|(b, _)| b.len()), Some(2), "the main output is the main mix");
+        assert!(render_output(&s, 7, range, 512).is_empty(), "no such output");
+        assert_eq!(source_channels(&s, Tap::Output(1)), 2);
     }
 
     /// A VCA can follow another VCA: the outer one's fader and mute reach the inner one's

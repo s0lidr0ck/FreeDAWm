@@ -1101,17 +1101,21 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     if matches!(format.as_str(), "mp3" | "opus") && app.engine.session().main_format().channels() > 2 {
                         ui.label(egui::RichText::new("MP3 and Opus hold stereo: the bounce is folded down").color(Tokens::current().text_dim));
                     }
-                    // The source: the main mix or any bus.
-                    let busses: Vec<(String, usize)> = app.engine.session().busses.iter().map(|b| (b.name.clone(), b.format.channels())).collect();
+                    // The source: the main mix, any bus, or a hardware output (I/O Setup's, past
+                    // the main output: what is routed to it, with the main mix's latency).
+                    let mut busses: Vec<(String, usize)> = app.engine.session().busses.iter().map(|b| (b.name.clone(), b.format.channels())).collect();
+                    let outputs = app.engine.session().outputs.iter().skip(1).map(|o| (format!("output:{}", o.name), o.format.channels()));
+                    busses.extend(outputs);
                     if source != "main" && !busses.iter().any(|(n, _)| n == source) {
                         *source = "main".into();
                     }
+                    let label = |n: &str| n.strip_prefix("output:").map_or_else(|| n.to_string(), |o| format!("Output: {o}"));
                     ui.horizontal(|ui| {
-                        let shown = if source == "main" { "Main Mix".to_string() } else { source.clone() };
+                        let shown = if source == "main" { "Main Mix".to_string() } else { label(source) };
                         egui::ComboBox::from_label("Source").selected_text(shown).show_ui(ui, |ui| {
                             ui.selectable_value(source, "main".to_string(), "Main Mix");
                             for (n, _) in &busses {
-                                ui.selectable_value(source, n.clone(), n.as_str());
+                                ui.selectable_value(source, n.clone(), label(n));
                             }
                         });
                         ui.add(egui::DragValue::new(tail).range(0.0..=soundcraft_engine::cmd::MAX_BOUNCE_TAIL_SECS as f32).speed(0.1).suffix(" s"));

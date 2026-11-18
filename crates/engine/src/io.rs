@@ -880,7 +880,7 @@ pub struct Bounce {
     /// The main file (the first of `outs`).
     path: PathBuf,
     range: Range,
-    bus: Option<BusId>,
+    bus: soundcraft_mix::Tap,
     fold: Option<ChannelFormat>,
     normalize: Normalize,
     /// Measuring the peak (or loudness) to normalize to, the first of two passes.
@@ -1065,7 +1065,7 @@ impl Bounce {
         path: &Path,
         r: Range,
         opts: &EncodeOptions,
-        bus: Option<BusId>,
+        bus: impl Into<soundcraft_mix::Tap>,
         normalize: impl Into<Normalize>,
         fold_stereo: bool,
     ) -> Result<Bounce> {
@@ -1079,13 +1079,14 @@ impl Bounce {
         path: &Path,
         r: Range,
         opts: &EncodeOptions,
-        bus: Option<BusId>,
+        bus: impl Into<soundcraft_mix::Tap>,
         normalize: impl Into<Normalize>,
         fold_stereo: bool,
         export: &Export,
     ) -> Result<Bounce> {
         const C: &str = "file.bounce_mix";
         let normalize = normalize.into();
+        let bus = bus.into();
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
             return Err(EngineError::BadParams(C.into(), "bounces are limited to 4 hours".into()));
         }
@@ -1308,8 +1309,13 @@ impl Bounce {
         self.range
     }
 
-    /// The bus bounced, or `None` for the main mix.
+    /// The bus bounced, or `None` for the main mix or a hardware output.
     pub fn bus(&self) -> Option<BusId> {
+        self.bus.bus()
+    }
+
+    /// What is bounced: the main mix, a bus or a hardware output.
+    pub fn tap(&self) -> soundcraft_mix::Tap {
         self.bus
     }
 
@@ -1578,12 +1584,14 @@ const MAX_BOUNCE_SECS: f64 = 4.0 * 3600.0;
 /// The format, channel count and fold-down source of a bounce of the main mix or `bus`: every
 /// channel (a mono or stereo main mix as stereo), or an ITU stereo fold-down of a surround source
 /// when `fold_stereo`.
-fn bounce_layout(s: &Session, bus: Option<BusId>, fold_stereo: bool) -> (ChannelFormat, usize, Option<ChannelFormat>) {
+fn bounce_layout(s: &Session, bus: soundcraft_mix::Tap, fold_stereo: bool) -> (ChannelFormat, usize, Option<ChannelFormat>) {
+    use soundcraft_mix::Tap;
     let nch = soundcraft_mix::source_channels(s, bus);
     let fmt = match bus {
-        Some(id) => s.bus(id).map_or(ChannelFormat::Stereo, |b| b.format),
-        None if nch <= 2 => ChannelFormat::Stereo,
-        None => s.main_format(),
+        Tap::Bus(id) => s.bus(id).map_or(ChannelFormat::Stereo, |b| b.format),
+        Tap::Output(i) if i > 0 => s.outputs.get(i).map_or(ChannelFormat::Stereo, |o| o.format),
+        _ if nch <= 2 => ChannelFormat::Stereo,
+        _ => s.main_format(),
     };
     if fold_stereo && nch > 2 { (ChannelFormat::Stereo, 2, Some(fmt)) } else { (fmt, nch, None) }
 }

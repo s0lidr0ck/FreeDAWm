@@ -10,7 +10,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 
-use soundcraft_model::BusId;
+use soundcraft_mix::Tap;
 use soundcraft_time::{Range, Samples};
 
 use crate::feed::SampleRing;
@@ -22,7 +22,7 @@ const RING_SECONDS: usize = 4;
 pub struct PrintTap {
     ring: SampleRing,
     channels: usize,
-    bus: Option<BusId>,
+    bus: Tap,
     range: Range,
     /// The timeline position the next captured frame is (`range.start` until the first).
     next: AtomicI64,
@@ -33,8 +33,10 @@ pub struct PrintTap {
 }
 
 impl PrintTap {
-    /// A print of `channels` of the main mix (or `bus`) over `range`, its ring sized for `rate`.
-    pub fn new(range: Range, bus: Option<BusId>, channels: usize, rate: u32) -> PrintTap {
+    /// A print of `channels` of the main mix (or `bus`: a bus or a hardware output) over `range`,
+    /// its ring sized for `rate`.
+    pub fn new(range: Range, bus: impl Into<Tap>, channels: usize, rate: u32) -> PrintTap {
+        let bus = bus.into();
         let channels = channels.clamp(1, 64);
         let cap = (rate as usize).saturating_mul(channels).saturating_mul(RING_SECONDS);
         PrintTap {
@@ -52,7 +54,8 @@ impl PrintTap {
         self.range
     }
 
-    pub fn bus(&self) -> Option<BusId> {
+    /// What is printed: the main mix, a bus or a hardware output.
+    pub fn tap(&self) -> Tap {
         self.bus
     }
 

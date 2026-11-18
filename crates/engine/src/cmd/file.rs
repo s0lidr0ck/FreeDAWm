@@ -102,7 +102,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 crate::io::import_video_bytes(e, &path, bytes, at)
             }
         ),
-        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name, normalize?: false (peak to -0.1 dBFS), loudness?: target LUFS (-40..0; integrated, BS.1770: gain only, held back so the true peak stays under true_peak), true_peak?: dBTP ceiling for loudness (-9..0, default -1), dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30), sample_rate?: Hz to convert to (8000-384000), dither?: tpdf|shaped|off (true/false), channels?: as_mixed|mono|split (a mono file per channel), also?: [more formats written in the same pass], tags?: {title, artist, album, date, comment} (ID3 in MP3, LIST/INFO and bext in WAV), import?: false (add the bounce to the session on new tracks), realtime?: false (the app plays the range through the audio device and prints it as heard, hardware inserts included; without a device, and outside the app, it renders offline)} → {path, files, imported, ...}", always, bounce),
+        cmd!(noundo "file.bounce_mix", "Bounce Mix...", ["File"], Some("Cmd+Alt+B"), "{path, format?: wav|aiff|flac|mp3|opus (default: the path's extension), bit_depth?: 16|24|32f, bitrate?: kbps for mp3 (32-320, default 320) or opus (6-510, default 160), start?, end? (default: the loop when one exists, else the whole session), source?: main|bus name|hardware output name (I/O Setup; `output:name` when a bus has that name), normalize?: false (peak to -0.1 dBFS), loudness?: target LUFS (-40..0; integrated, BS.1770: gain only, held back so the true peak stays under true_peak), true_peak?: dBTP ceiling for loudness (-9..0, default -1), dither?: true, fold_down?: stereo (mp3 and opus hold mono or stereo), tail?: seconds past the range (0-30), sample_rate?: Hz to convert to (8000-384000), dither?: tpdf|shaped|off (true/false), channels?: as_mixed|mono|split (a mono file per channel), also?: [more formats written in the same pass], tags?: {title, artist, album, date, comment} (ID3 in MP3, LIST/INFO and bext in WAV), import?: false (add the bounce to the session on new tracks), realtime?: false (the app plays the range through the audio device and prints it as heard, hardware inserts included; without a device, and outside the app, it renders offline)} → {path, files, imported, ...}", always, bounce),
         cmd!(noundo "file.bounce_stems", "Bounce Stems...", [], None, "{dir, format?: wav|aiff|flac|mp3|opus, bit_depth?: 16|24|32f, bitrate?: kbps for mp3 or opus, start?, end?, fold_down?: stereo, tracks?: [track] (default: every unmuted audio, instrument and MIDI track), busses?: true (every bus) | [bus name]: a stem of each bus as summed}", has_tracks, |e, p| {
             let files = stems_job(e, p)?.run()?;
             Ok(json!({"files": files}))
@@ -318,15 +318,26 @@ fn import_audio_target(e: &Engine, p: &Value) -> Result<Option<TrackId>> {
     selected.map(Some).ok_or_else(|| bad("file.import_audio", "`new_tracks: false` needs `track` or a selected audio track"))
 }
 
-/// `source` omitted or `main` is the main mix. Any other name is a bus, and an unknown bus is an error.
-fn bounce_bus(e: &Engine, p: &Value) -> Result<Option<soundcraft_model::BusId>> {
+/// `source` omitted or `main` is the main mix. Any other name is a bus, else a hardware output
+/// of the I/O Setup (by its name, or `output:` and its name when a bus has the same name); an
+/// unknown name is an error. The first output is the main mix.
+fn bounce_bus(e: &Engine, p: &Value) -> Result<soundcraft_mix::Tap> {
+    use soundcraft_mix::Tap;
     let Some(name) = str_param(p, "source").map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(None);
+        return Ok(Tap::Main);
     };
     if name.eq_ignore_ascii_case("main") {
-        return Ok(None);
+        return Ok(Tap::Main);
     }
-    e.session().bus_by_name(name).map(|b| Some(b.id)).ok_or_else(|| bad("file.bounce_mix", format!("unknown bus `{name}`")))
+    let s = e.session();
+    let output = |n: &str| s.outputs.iter().position(|o| o.name.eq_ignore_ascii_case(n.trim())).map(Tap::Output);
+    if let Some(n) = name.strip_prefix("output:") {
+        return output(n).ok_or_else(|| bad("file.bounce_mix", format!("unknown output `{}`", n.trim())));
+    }
+    s.bus_by_name(name)
+        .map(|b| Tap::Bus(b.id))
+        .or_else(|| output(name))
+        .ok_or_else(|| bad("file.bounce_mix", format!("unknown bus or output `{name}`")))
 }
 
 /// `fold_down: "stereo"` bounces an ITU stereo fold-down of a surround mix.
@@ -918,6 +929,17 @@ mod tests {
         assert!(main_peak - stem_peak > 6.0 && main_peak - stem_peak < 18.0, "main {main_peak} stem {stem_peak}");
         assert_ne!(empty_bytes, main_bytes);
         assert!(empty_peak < -100.0, "{empty_peak}");
+        // A hardware output by name (nothing routed to it here: silent), or `output:` and its name.
+        e.session_mut().outputs.push(soundcraft_model::OutputPath {
+            name: "Cue".into(),
+            first_channel: 2,
+            format: soundcraft_model::ChannelFormat::Stereo,
+        });
+        let (cue_bytes, cue_peak) = bounce(&mut e, "cue.wav", Some("Cue"));
+        assert_eq!(cue_bytes, bounce(&mut e, "cue2.wav", Some("output:Cue")).0);
+        assert!(cue_peak < -100.0, "{cue_peak}");
+        let err = e.execute("file.bounce_mix", &json!({"path": dir.join("x.wav").to_string_lossy(), "source": "output:Nope"})).unwrap_err();
+        assert!(err.to_string().contains("unknown output"), "{err}");
         let missing = dir.join("missing.wav");
         let err = e
             .execute("file.bounce_mix", &json!({"path": missing.to_string_lossy(), "source": "NoSuchBus", "start": 0, "end": 4800, "dither": false}))

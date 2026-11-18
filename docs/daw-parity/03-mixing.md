@@ -37,7 +37,7 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 | E. Groups, VCAs, solo | Path-aware solo in place, AFL/PFL on a listen bus, solo safe, momentary solo, relative groups with a choice of attributes, nested VCAs | Small |
 | F. Automation | All modes write; trim lane; wide editing set; fader section sample-accurate and delay-compensated; plug-in values delay-compensated, hosted plug-ins' sample-accurate; faders follow | **Large**: built-in plug-ins block-rate |
 | G. Metering | Peak with hold and clip lights, no peak missed, pre- or post-fader, RMS/VU/K/PPM scales, a master loudness meter with loudness range | Small |
-| H. Mixdown and export | Offline and real-time bounce of the mix or a bus to five formats in one pass, with a tail, rate conversion, dither choice, mono or split files, tags and Add to Session; stems of chosen tracks and busses; DAWproject | Small: no AAF or OMF |
+| H. Mixdown and export | Offline and real-time bounce of the mix, a bus or a hardware output to five formats in one pass, with a tail, rate conversion, dither choice, mono or split files, tags and Add to Session; stems of chosen tracks and busses; DAWproject | Small: no AAF or OMF |
 | I. Surround | Beds to 9.1.6, a surround panner, fold-down | **Large**: all four now render Atmos objects and binaural |
 | J. Mixer state and window | Undo for every move, track and chain presets, per-track delay, snapshots, find and spill | Small |
 
@@ -183,7 +183,7 @@ K-system scales, and the master a loudness meter.
 |---|:-:|:-:|:-:|:-:|---|
 | Offline bounce, with progress and cancel | ● | ● | ● | ● | **Works**, through the live plug-in instances |
 | Real-time bounce (for outboard gear) | ● | ● | ● | ● | **Works** (2026-11-17, to the design below): Bounce Mix › "In real time" plays the range through the audio device and prints the main mix or a bus as it plays (`playback::print`, after the master's chain, without the click or the monitor stage), then writes the print through the offline bounce's writer, so every option applies. Editing waits behind the progress window; Cancel stops it; a pass that falls behind or is stopped writes nothing. Held in memory, so as long as Consolidate allows (about 93 min stereo at 48 kHz). Tested against a test device and against the offline bounce; through outboard gear needs hardware |
-| Choose the source: any bus or output | ● | ● | ● | ● | **Partial**: the main mix and busses, in the dialog; hardware outputs are not offered. Left: a bounce source that taps a hardware output's buffer (`RangeRender` takes a bus only) with that output's latency, about 3–4 h |
+| Choose the source: any bus or output | ● | ● | ● | ● | **Works** (2026-11-18): the main mix, any bus, or a hardware output of the I/O Setup (Bounce Mix's Source menu lists them as "Output: name"; `file.bounce_mix` takes `source` as a bus or output name, or `output:name` when a bus has the same name). An output is bounced as it goes to the device: what the tracks and sends routed to it play, after the wait for the master faders' inserts, lined up with the timeline by the main mix's latency, offline (`RangeRender` over a `Tap`) and in a real-time bounce alike |
 | Range: selection, loop, markers, whole session | ● | ● | ● | ● | **Works**: the selection is the loop range (one thing in FreeDAWm), so Loop bounces it |
 | Keep the reverb tail | ◐ | ● | ● | ● | **Works**: a tail of up to 30 s past the range, set in the dialog (`tail`) |
 | WAV, AIFF, FLAC, MP3 and a modern codec | ● | ● | ● | ● | **Works**: WAV, AIFF, FLAC, MP3, Opus |
@@ -503,6 +503,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-18 | minor | a clip's own automation points are added, dragged and deleted by mouse in the Edit window |
+| 2026-11-18 | minor | a bounce can take a hardware output, with its latency |
 | 2026-11-18 | minor | an inactive track frees its plug-ins and makes them again from their stored state when active |
 | 2026-11-18 | minor | hearing the control being moved: its lane is held out of playback while a pass writes it |
 | 2026-11-18 | minor | a clip's own automation is drawn over it in the Edit window |

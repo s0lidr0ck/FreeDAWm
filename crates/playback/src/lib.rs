@@ -1515,10 +1515,7 @@ impl AudioState {
         self.mix.render(&self.session, at, n, main);
         // A real-time bounce: the source as rendered, before the monitor stage (no allocation).
         if let Some(p) = self.print.as_ref().filter(|_| self.playing) {
-            let (src, latency) = match p.bus() {
-                Some(b) => self.mix.bus_print(b).unwrap_or((&[], self.mix.latency)),
-                None => self.mix.main_print(),
-            };
+            let (src, latency) = self.mix.tap_print(p.tap()).unwrap_or((&[], self.mix.latency));
             p.capture(src, self.pos, latency, n);
         }
         // The remote mix stream: the host's main mix out to the network thread, the performer's
@@ -3153,7 +3150,7 @@ impl Player {
     /// real-time bounce. The caller plays the range ([`Player::play`]), drains the tap
     /// ([`print::PrintTap::drain`]) until it is done, then ends the print ([`Player::end_print`]).
     /// While a print is attached the click is off and skip ranges play.
-    pub fn print(&self, range: Range, bus: Option<soundcraft_model::BusId>, channels: usize) -> Arc<print::PrintTap> {
+    pub fn print(&self, range: Range, bus: impl Into<soundcraft_mix::Tap>, channels: usize) -> Arc<print::PrintTap> {
         let tap = Arc::new(print::PrintTap::new(range, bus, channels, self.session_rate()));
         let _ = self.tx.send(Cmd::Print(Some(Arc::clone(&tap))));
         tap

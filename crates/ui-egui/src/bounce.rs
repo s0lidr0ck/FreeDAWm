@@ -49,9 +49,9 @@ impl PrintPass {
 /// playback is off for the pass; the progress window locks editing; Cancel stops it.
 fn start_print(app: &mut SoundApp, job: soundcraft_engine::io::Bounce) {
     let Some(p) = &app.player else { return };
-    let channels = soundcraft_mix::source_channels(app.engine.session(), job.bus());
+    let channels = soundcraft_mix::source_channels(app.engine.session(), job.tap());
     let range = job.range();
-    let tap = p.print(range, job.bus(), channels);
+    let tap = p.print(range, job.tap(), channels);
     app.start_play(range.start, None, None);
     app.bounce = Some(job);
     app.print = Some(PrintPass { tap, audio: Vec::new(), rolled: false });
