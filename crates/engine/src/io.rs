@@ -2993,13 +2993,37 @@ pub fn open_session_parts(e: &mut Engine, name: &str, text: &str, mut files: std
 /// Unpack a bundle: the one session (`.fdawm`, or `.scraft` in an older bundle) at its top level
 /// and the files beside it, by relative path.
 fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String, Vec<u8>>)> {
+    let (mut text, mut files) = (None, std::collections::HashMap::new());
+    bundle_entries(std::io::Cursor::new(bytes), |rel, r| {
+        let mut data = Vec::new();
+        r.read_to_end(&mut data).map_err(|err| EngineError::Io(format!("bundle: {rel}: {err}")))?;
+        if is_bundle_session(rel) && text.is_none() {
+            text = Some(String::from_utf8(data).map_err(|_| EngineError::Io(format!("bundle: {rel} is not text")))?);
+        } else {
+            files.insert(rel.to_string(), data);
+        }
+        Ok(())
+    })?;
+    let text = text.ok_or_else(|| EngineError::Io("bundle: no .fdawm session inside".into()))?;
+    Ok((text, files))
+}
+
+/// Whether `rel` (a path inside a bundle) is a session file at its top level.
+fn is_bundle_session(rel: &str) -> bool {
+    !rel.contains('/') && soundcraft_model::is_session_path(rel)
+}
+
+/// Each file of a bundle (folders are skipped) with its relative path and a reader of its bytes,
+/// within the limits every bundle reader keeps: at most [`MAX_BUNDLE_ENTRIES`] entries and
+/// [`MAX_BUNDLE_BYTES`] in all, and never a byte past a file's declared size (it is hostile too).
+fn bundle_entries<R: std::io::Read + std::io::Seek>(reader: R, mut each: impl FnMut(&str, &mut dyn std::io::Read) -> Result<()>) -> Result<()> {
     use std::io::Read as _;
     let zerr = |err: zip::result::ZipError| EngineError::Io(format!("bundle: {err}"));
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(zerr)?;
+    let mut z = zip::ZipArchive::new(reader).map_err(zerr)?;
     if z.len() > MAX_BUNDLE_ENTRIES {
         return Err(EngineError::Io("bundle: too many files".into()));
     }
-    let (mut text, mut files, mut total) = (None, std::collections::HashMap::new(), 0u64);
+    let mut total = 0u64;
     for i in 0..z.len() {
         let mut f = z.by_index(i).map_err(zerr)?;
         if f.is_dir() {
@@ -3011,18 +3035,118 @@ fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String
         if total > MAX_BUNDLE_BYTES {
             return Err(EngineError::Io("bundle: too large".into()));
         }
-        let mut data = Vec::new();
-        // The declared size is hostile too: never read past it.
-        f.by_ref().take(size).read_to_end(&mut data).map_err(|err| EngineError::Io(format!("bundle: {rel}: {err}")))?;
-        let is_session = !rel.contains('/') && soundcraft_model::is_session_path(&rel);
-        if is_session && text.is_none() {
-            text = Some(String::from_utf8(data).map_err(|_| EngineError::Io(format!("bundle: {rel} is not text")))?);
-        } else {
-            files.insert(rel, data);
+        each(&rel, &mut f.by_ref().take(size))?;
+    }
+    Ok(())
+}
+
+/// The bytes of the bundle at `path`, for [`open_session_bytes`]; a file larger than any bundle
+/// may unpack to (with room for the zip's own records) is refused unread.
+pub fn read_bundle_file(path: &str) -> Result<Vec<u8>> {
+    read_file_max(path, MAX_BUNDLE_BYTES.saturating_add(64 << 20))
+}
+
+/// Whether `path` names a session bundle (`.fdawmz`, or `.scraftz` from before the rename).
+pub fn is_bundle_path(path: impl AsRef<Path>) -> bool {
+    path.as_ref().extension().and_then(|x| x.to_str()).is_some_and(|x| BUNDLE_EXTENSIONS.iter().any(|b| x.eq_ignore_ascii_case(b)))
+}
+
+/// Whether the file at `path` is a session bundle: by its extension, else by the zip signature
+/// at its start (a bundle renamed to `.fdawm`).
+pub fn is_bundle_file(path: &str) -> bool {
+    use std::io::Read as _;
+    if is_bundle_path(path) {
+        return true;
+    }
+    let mut head = [0u8; 4];
+    open_read(path).is_ok_and(|mut f| f.read_exact(&mut head).is_ok()) && head == *b"PK\x03\x04"
+}
+
+/// A bundle unpacked by [`unpack_bundle`]: the session file and the folder holding it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unpacked {
+    pub session: String,
+    pub folder: String,
+}
+
+/// Unpacks the bundle at `path` into a new folder beside it, named after it (`Song.fdawmz` →
+/// `Song/`, or `Song 2/` and so on when that exists: an existing folder is never written into),
+/// as a saved session folder: `<name>.fdawm` and its `Audio Files/`. Desktop sessions live in
+/// folders, so a bundle opens from there and saves there. A damaged bundle, one past the limits
+/// of [`bundle_entries`], or one naming a file outside its own folder (`..`, an absolute path)
+/// is refused, and the new folder is removed again.
+pub fn unpack_bundle(path: &str) -> Result<Unpacked> {
+    let p = Path::new(path);
+    let file = open_read(p)?;
+    let stem = sanitize_name(p.file_stem().and_then(|x| x.to_str()).unwrap_or("Untitled"));
+    let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let folder = new_folder_beside(parent, &stem)?;
+    let unpacked = unpack_into(std::io::BufReader::new(file), &folder, &stem);
+    match unpacked {
+        Ok(session) => Ok(Unpacked { session: session.to_string_lossy().into_owned(), folder: folder.to_string_lossy().into_owned() }),
+        Err(err) => {
+            let _ = std::fs::remove_dir_all(&folder);
+            Err(err)
         }
     }
-    let text = text.ok_or_else(|| EngineError::Io("bundle: no .fdawm session inside".into()))?;
-    Ok((text, files))
+}
+
+/// A new, empty folder `parent/name` (or `name 2`, `name 3`…, the first that does not exist).
+fn new_folder_beside(parent: &Path, name: &str) -> Result<PathBuf> {
+    for k in 1..=999 {
+        let dir = parent.join(if k == 1 { name.to_string() } else { format!("{name} {k}") });
+        crate::file_access::check_write(&dir).map_err(EngineError::Io)?;
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(EngineError::Io(format!("{}: {err}", dir.display()))),
+        }
+    }
+    Err(EngineError::Io(format!("{}: no free folder name for “{name}”", parent.display())))
+}
+
+/// Writes the bundle's files into `folder` (which is new and empty), the session as
+/// `<stem>.fdawm`. Returns the session file.
+fn unpack_into<R: std::io::Read + std::io::Seek>(reader: R, folder: &Path, stem: &str) -> Result<PathBuf> {
+    let mut session = None;
+    bundle_entries(reader, |rel, r| {
+        let target = if is_bundle_session(rel) && session.is_none() {
+            let t = folder.join(format!("{stem}.{}", soundcraft_model::SESSION_EXTENSION));
+            session = Some(t.clone());
+            t
+        } else {
+            folder.join(bundle_rel_path(rel)?)
+        };
+        let ioerr = |err: std::io::Error| EngineError::Io(format!("bundle: {rel}: {err}"));
+        if let Some(dir) = target.parent() {
+            std::fs::create_dir_all(dir).map_err(ioerr)?;
+        }
+        let mut out = std::fs::File::create_new(&target).map_err(ioerr)?;
+        std::io::copy(r, &mut out).map_err(ioerr)?;
+        Ok(())
+    })?;
+    session.ok_or_else(|| EngineError::Io("bundle: no .fdawm session inside".into()))
+}
+
+/// A path inside a bundle as a relative path that stays inside the folder it is unpacked into:
+/// plain names joined by `/`; anything else (`..`, `.`, an absolute path, a drive, a backslash)
+/// is refused.
+fn bundle_rel_path(rel: &str) -> Result<PathBuf> {
+    let refuse = || EngineError::Io(format!("bundle: refused the file name “{rel}”"));
+    if rel.is_empty() || rel.contains(['\\', ':', '\0']) {
+        return Err(refuse());
+    }
+    let mut out = PathBuf::new();
+    for part in rel.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(refuse());
+        }
+        out.push(part);
+    }
+    if !out.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+        return Err(refuse());
+    }
+    Ok(out)
 }
 
 /// The record-enabled audio tracks, each with the device input channels it records (resolved by
@@ -5624,5 +5748,143 @@ mod smf_tempo_tests {
         assert_eq!(f.channels, vec!["Boom".to_string(), "Lav".to_string()]);
         let back: Session = serde_json::from_str(&serde_json::to_string(e.session()).unwrap()).unwrap();
         assert_eq!(back.field_info.get(&src.0), Some(&f));
+    }
+}
+
+#[cfg(test)]
+mod unpack_tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write as _;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("soundcraft-unpack-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A bundle of the demo session with `extra` files (name, bytes) beside it.
+    fn bundle_with(extra: &[(&str, &[u8])]) -> Vec<u8> {
+        let e = crate::demo::demo_engine();
+        let (bytes, _) = session_bundle(e.session()).unwrap();
+        let (text, files) = read_bundle(&bytes).unwrap();
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, data) in files.iter().map(|(n, d)| (n.as_str(), d.as_slice())).chain(extra.iter().copied()) {
+            w.start_file(name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.start_file("Song.fdawm", opts).unwrap();
+        w.write_all(text.as_bytes()).unwrap();
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn session_open_unpacks_a_bundle_into_a_new_folder_beside_it() {
+        let dir = scratch("open");
+        let mut e = crate::demo::demo_engine();
+        e.execute("mix.volume", &json!({"track": "Kick", "db": -7.0})).unwrap();
+        let (bytes, _) = session_bundle(e.session()).unwrap();
+        let path = dir.join("Midnight Groove.fdawmz");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut r = Engine::default();
+        let v = r.execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap();
+        let folder = dir.join("Midnight Groove");
+        assert_eq!(v["unpacked"].as_str(), Some(folder.to_string_lossy().as_ref()));
+        assert_eq!(v["missing"].as_array().map(Vec::len), Some(0), "{v}");
+        let session = folder.join("Midnight Groove.fdawm");
+        assert_eq!(r.path.as_deref(), Some(session.to_string_lossy().as_ref()), "it saves into the folder, not the bundle");
+        assert!(folder.join("Audio Files").is_dir());
+        assert_eq!(r.session().track_by_name("Kick").unwrap().mixer.volume_db, -7.0);
+        for src in &e.session().sources {
+            let (a, b) = (e.session().pool.get(src.id).unwrap(), r.session().pool.get(src.id).unwrap());
+            assert_eq!(a.buffer().channels, b.buffer().channels, "{}", src.name);
+        }
+        // It saves where it was unpacked, and opens from there again.
+        r.execute("mix.volume", &json!({"track": "Kick", "db": -3.0})).unwrap();
+        r.execute("session.save", &json!({})).unwrap();
+        let mut again = Engine::default();
+        again.execute("session.open", &json!({"path": session.to_string_lossy()})).unwrap();
+        assert_eq!(again.session().track_by_name("Kick").unwrap().mixer.volume_db, -3.0);
+        // Opened again, the bundle never writes into the folder it made before.
+        let v = Engine::default().execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(v["unpacked"].as_str(), Some(dir.join("Midnight Groove 2").to_string_lossy().as_ref()));
+        let mut kept = Engine::default();
+        let v = kept.execute("session.open", &json!({"path": session.to_string_lossy()})).unwrap();
+        assert!(v.get("unpacked").is_none(), "a session file opens as itself");
+        assert_eq!(kept.session().track_by_name("Kick").unwrap().mixer.volume_db, -3.0, "the first folder is untouched");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_bundle_and_a_renamed_one_open_too() {
+        let dir = scratch("old");
+        let bytes = bundle_with(&[]);
+        for name in ["Old.SCRAFTZ", "Renamed.fdawm"] {
+            std::fs::write(dir.join(name), &bytes).unwrap();
+            let mut r = Engine::default();
+            let v = r.execute("session.open", &json!({"path": dir.join(name).to_string_lossy()})).unwrap();
+            let stem = Path::new(name).file_stem().unwrap().to_string_lossy().into_owned();
+            assert_eq!(v["unpacked"].as_str(), Some(dir.join(&stem).to_string_lossy().as_ref()), "{name}");
+            assert!(dir.join(&stem).join(format!("{stem}.fdawm")).is_file(), "{name}");
+            assert!(!r.session().tracks.is_empty());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_bundle_is_refused_and_leaves_nothing_behind() {
+        let dir = scratch("damaged");
+        let good = bundle_with(&[]);
+        let cut = &good[..good.len() / 2];
+        let no_session = {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            w.start_file("Audio Files/a.wav", zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(b"RIFF").unwrap();
+            w.finish().unwrap().into_inner()
+        };
+        for (i, bytes) in [&b"PK\x03\x04 not really a zip"[..], b"", cut, &no_session].into_iter().enumerate() {
+            let path = dir.join(format!("Bad{i}.fdawmz"));
+            std::fs::write(&path, bytes).unwrap();
+            let mut r = crate::demo::demo_engine();
+            assert!(r.execute("session.open", &json!({"path": path.to_string_lossy()})).is_err(), "case {i}");
+            assert!(!dir.join(format!("Bad{i}")).exists(), "case {i}: the new folder is removed");
+            assert!(r.session().track_by_name("Kick").is_some(), "case {i}: the open session stays");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bundle_naming_a_file_outside_its_folder_is_refused() {
+        let dir = scratch("escape");
+        let outside = dir.join("evil.txt");
+        for (i, name) in
+            ["../evil.txt", "Audio Files/../../evil.txt", "/tmp/evil.txt", "C:/evil.txt", "..\\evil.txt", "./x.wav"].into_iter().enumerate()
+        {
+            let path = dir.join(format!("Trick{i}.fdawmz"));
+            std::fs::write(&path, bundle_with(&[(name, b"gotcha")])).unwrap();
+            let err = Engine::default().execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap_err();
+            assert!(err.to_string().contains("refused"), "{name}: {err}");
+            assert!(!outside.exists(), "{name}");
+            assert!(!dir.join(format!("Trick{i}")).exists(), "{name}: the new folder is removed");
+        }
+        assert!(bundle_rel_path("Audio Files/Kick.wav").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bundle_past_the_limits_is_refused() {
+        let dir = scratch("limits");
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for k in 0..=MAX_BUNDLE_ENTRIES {
+            w.start_file(format!("f{k}"), zip::write::SimpleFileOptions::default()).unwrap();
+        }
+        let path = dir.join("Many.fdawmz");
+        std::fs::write(&path, w.finish().unwrap().into_inner()).unwrap();
+        let err = Engine::default().execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap_err();
+        assert!(err.to_string().contains("too many files"), "{err}");
+        assert!(!dir.join("Many").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -283,6 +283,14 @@ are refused with `Finish or cancel the open first`: `session.new` / `session.ope
 window waits for the open. Plugins that fail to load are named in the post-open messages
 ("plugin not loaded: …") beside the missing media.
 
+A session bundle (`.fdawmz`, or `.scraftz` from before the rename: one zip file holding the
+session and its `Audio Files/`, as the old browser version saved them) opens too: `session.open`
+unpacks it into a new folder beside it named after it (`Song.fdawmz` → `Song/`, or `Song 2/` when
+that exists; an existing folder is never written into), opens `<name>.fdawm` from there, and adds
+`unpacked: <folder>` to its result; the status line says where it went. A damaged bundle, one over
+10,000 files or 1 GiB, or one naming a file outside its own folder is refused and leaves nothing
+behind. FreeDAWm does not save bundles.
+
 `file.import_dawproject {path}` (File › Import › DAWproject…) is session-replacing too: from the UI
 it returns `{opening: true}` and loads behind the same progress window ("Opening <name>…": Reading
 session → Loading audio (the archive's audio files) → Waveforms → Plugins → Finishing), then shows

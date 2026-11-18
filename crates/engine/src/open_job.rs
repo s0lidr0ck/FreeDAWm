@@ -167,6 +167,8 @@ pub struct LoadedSession {
     pub request: OpenRequestKind,
     /// A DAWproject import's report and the plugin automation still to resolve.
     pub import: Option<Box<DawImport>>,
+    /// The folder a session bundle was unpacked into to open it ([`crate::io::unpack_bundle`]).
+    pub unpacked: Option<String>,
 }
 
 /// What a DAWproject import carries to the install, besides the session.
@@ -193,21 +195,28 @@ pub fn load_session(req: OpenRequest, progress: &mut dyn FnMut(OpenProgress)) ->
     progress(OpenProgress::new(OpenPhase::Reading, 0, 0, req.display_name()));
     match req {
         OpenRequest::Open { path } => {
+            // A session bundle opens from a folder of its own, unpacked beside it.
+            let (path, unpacked) = if crate::io::is_bundle_file(&path) {
+                let u = crate::io::unpack_bundle(&path)?;
+                (u.session, Some(u.folder))
+            } else {
+                (path, None)
+            };
             let (session, missing) = crate::io::load_session_file_reporting(&path, Path::new(&path), false, progress)?;
-            Ok(LoadedSession { session, path: Some(path), missing, request: OpenRequestKind::Open, import: None })
+            Ok(LoadedSession { session, path: Some(path), missing, request: OpenRequestKind::Open, import: None, unpacked })
         }
         OpenRequest::Revert { path } => {
             let (session, missing) = crate::io::load_session_file_reporting(&path, Path::new(&path), false, progress)?;
-            Ok(LoadedSession { session, path: Some(path), missing, request: OpenRequestKind::Revert, import: None })
+            Ok(LoadedSession { session, path: Some(path), missing, request: OpenRequestKind::Revert, import: None, unpacked: None })
         }
         OpenRequest::Template { path, name } => {
             let (mut session, missing) = crate::io::load_session_file_reporting(&path, Path::new(&path), true, progress)?;
             session.name = name;
             session.folder = None;
-            Ok(LoadedSession { session, path: None, missing, request: OpenRequestKind::Template, import: None })
+            Ok(LoadedSession { session, path: None, missing, request: OpenRequestKind::Template, import: None, unpacked: None })
         }
         OpenRequest::Fresh { session } => {
-            Ok(LoadedSession { session: *session, path: None, missing: Vec::new(), request: OpenRequestKind::Fresh, import: None })
+            Ok(LoadedSession { session: *session, path: None, missing: Vec::new(), request: OpenRequestKind::Fresh, import: None, unpacked: None })
         }
         OpenRequest::DawProject { path } => {
             let imported = crate::dawproject::import_path(&path, crate::dawproject::import::installed_from_caches(), progress)
@@ -219,6 +228,7 @@ pub fn load_session(req: OpenRequest, progress: &mut dyn FnMut(OpenProgress)) ->
                 missing: Vec::new(),
                 request: OpenRequestKind::DawProject,
                 import: Some(Box::new(DawImport { report, pending })),
+                unpacked: None,
             })
         }
     }
@@ -228,7 +238,7 @@ pub fn load_session(req: OpenRequest, progress: &mut dyn FnMut(OpenProgress)) ->
 /// cleared, transport reset), the missing media is reported, and the command's result is
 /// returned as `session.open` / `session.new` / `session.close` / `session.revert` return it.
 pub fn install_loaded(e: &mut Engine, loaded: LoadedSession) -> Value {
-    let LoadedSession { mut session, path, missing, request, import } = loaded;
+    let LoadedSession { mut session, path, missing, request, import, unpacked } = loaded;
     // A DAWproject import: plugin automation whose ranges are known now (the host made the
     // plugins first) is written, and the report goes into the Notes tab.
     let report = import.map(|imp| {
@@ -247,7 +257,10 @@ pub fn install_loaded(e: &mut Engine, loaded: LoadedSession) -> Value {
     }
     let s = e.session();
     match request {
-        OpenRequestKind::Open => json!({"name": s.name, "tracks": s.tracks.len(), "missing": missing}),
+        OpenRequestKind::Open => match unpacked {
+            Some(folder) => json!({"name": s.name, "tracks": s.tracks.len(), "missing": missing, "unpacked": folder}),
+            None => json!({"name": s.name, "tracks": s.tracks.len(), "missing": missing}),
+        },
         OpenRequestKind::Revert => json!({}),
         OpenRequestKind::Template => json!({"name": s.name, "sample_rate": s.sample_rate.hz(), "tracks": s.tracks.len(), "missing": missing}),
         OpenRequestKind::Fresh => json!({"name": s.name, "sample_rate": s.sample_rate.hz()}),
