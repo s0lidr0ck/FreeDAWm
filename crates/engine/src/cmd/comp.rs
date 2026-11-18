@@ -16,14 +16,27 @@ pub const JOIN_FADE_SECONDS: f64 = 0.010;
 /// Refusal of a layer delete while the comp still plays part of it.
 pub const LAYER_IN_COMP: &str = "Remove it from the comp first";
 
+/// The flag of Show Only Takes Matching Selection: with a selection made, a track's open take
+/// layers are only those with audio inside it (the others are hidden, not changed).
+pub const MATCHING_TAKES: &str = "comp.matching_takes_only";
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            noundo "comp.matching_takes",
+            "Show Only Takes Matching Selection",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — with a selection, the selected tracks' open take layers are only the ones with audio inside it",
+            always,
+            |e, p| super::more_util::toggle_flag(e, p, MATCHING_TAKES)
+        ),
         cmd!(
             "comp.swipe",
             "Comp",
             [],
             None,
-            "{track, layer: playlist index, start, end, add?: false} (that range of the layer replaces the comp there; `add`: only where the comp is empty)",
+            "{track, layer: playlist index, start, end, add?: false, alone?: false} (that range of the layer replaces the comp there; `add`: only where the comp is empty; the tracks of an active edit group comp the same layer there too unless `alone`)",
             has_tracks,
             swipe
         ),
@@ -65,8 +78,48 @@ pub fn specs() -> Vec<CommandSpec> {
             has_tracks,
             make_comp
         ),
+        cmd!(
+            "comp.flatten",
+            "Flatten Comp",
+            [],
+            None,
+            "{track?} — the comp's segments become plain clips (crossfades kept) and the take layers are deleted",
+            has_tracks,
+            flatten
+        ),
         cmd!(noundo "comp.layers", "Show Layers", [], None, "{track?, open?: toggle}", has_tracks, show_layers),
+        cmd!(
+            noundo "comp.audition",
+            "Solo Take",
+            [],
+            None,
+            "{track?, layer: playlist index | null} — plays that take layer in place of the comp until let go (null, or the same layer again); not saved, the comp is untouched",
+            has_tracks,
+            audition
+        ),
     ]
+}
+
+/// Flatten Comp: the comp (the active playlist) stays as it plays, its segments no longer tied
+/// to a take, and every other playlist (the take layers) goes.
+fn flatten(e: &mut Engine, p: &Value) -> Result<Value> {
+    let t = track_of(e, "comp.flatten", p)?;
+    let s = e.session_mut();
+    let Some(tr) = s.track_mut(t) else { return Err(bad("comp.flatten", "no track")) };
+    if tr.playlists.len() <= 1 {
+        return Err(bad("comp.flatten", "the track has no take layers to flatten"));
+    }
+    let active = tr.active_playlist.min(tr.playlists.len() - 1);
+    let gone = tr.playlists.len() - 1;
+    let comp = tr.playlists.swap_remove(active);
+    tr.playlists = vec![comp];
+    tr.active_playlist = 0;
+    tr.record_layer = None;
+    tr.layers_open = false;
+    for c in tr.playlists.iter_mut().flat_map(|pl| pl.clips.iter_mut()) {
+        c.from_layer = None;
+    }
+    Ok(json!({"deleted": gone}))
 }
 
 fn track_of(e: &Engine, id: &str, p: &Value) -> Result<TrackId> {
@@ -187,7 +240,30 @@ fn swipe(e: &mut Engine, p: &Value) -> Result<Value> {
     let r = range_param(e, "comp.swipe", p)?;
     let add = bool_or(p, "add", false);
     let ids = swipe_range(e.session_mut(), t, layer, r, add).map_err(|m| bad("comp.swipe", m))?;
-    Ok(json!({"clips": ids, "layer": layer}))
+    // Grouped tracks comp together (drums): the other tracks of an active edit group take the
+    // same layer over the same range where it has audio, in the same undo step, unless `alone`.
+    let mates = if bool_or(p, "alone", false) { Vec::new() } else { edit_group_mates(e.session(), t) };
+    let mut grouped = Vec::new();
+    for m in mates {
+        let s = e.session_mut();
+        if s.track(m).is_some_and(|tr| tr.is_layer(layer) && layer_has_audio(tr, layer, r)) && swipe_range(s, m, layer, r, add).is_ok() {
+            grouped.push(m.0);
+        }
+    }
+    Ok(json!({"clips": ids, "layer": layer, "grouped": grouped}))
+}
+
+/// The other tracks that share an active edit group with `t` (Track › Group… with Edit on),
+/// none while groups are suspended.
+fn edit_group_mates(s: &Session, t: TrackId) -> Vec<TrackId> {
+    if s.edit.flag(super::GROUPS_SUSPENDED) {
+        return Vec::new();
+    }
+    s.tracks
+        .iter()
+        .map(|tr| tr.id)
+        .filter(|id| *id != t && s.groups.iter().any(|g| g.active && g.edit && g.members.contains(&t) && g.members.contains(id)))
+        .collect()
 }
 
 /// The layer `dir` (`down` = later in the list) of the one the comp plays at `r`, among the layers
@@ -383,6 +459,20 @@ fn make_comp(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clips": ids}))
 }
 
+/// Solo a take: the layer plays in place of the comp (`Track::heard_clips`) until let go.
+fn audition(e: &mut Engine, p: &Value) -> Result<Value> {
+    let t = track_of(e, "comp.audition", p)?;
+    let Some(tr) = e.session_mut().track_mut(t) else { return Err(bad("comp.audition", "no track")) };
+    let layer = match p.get("layer") {
+        Some(Value::Null) | None => None,
+        Some(v) => Some(
+            v.as_u64().and_then(|l| usize::try_from(l).ok()).filter(|l| tr.is_layer(*l)).ok_or_else(|| bad("comp.audition", "no such take layer"))?,
+        ),
+    };
+    tr.audition_layer = if layer == tr.audition_layer { None } else { layer };
+    Ok(json!({"layer": tr.audition_layer}))
+}
+
 fn show_layers(e: &mut Engine, p: &Value) -> Result<Value> {
     let t = track_of(e, "comp.layers", p)?;
     let Some(tr) = e.session_mut().track_mut(t) else { return Err(bad("comp.layers", "no track")) };
@@ -425,6 +515,45 @@ mod tests {
 
     fn comp(e: &Engine, t: TrackId) -> Vec<(Samples, Samples, Option<usize>)> {
         e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end(), c.from_layer)).collect()
+    }
+
+    /// Comping grouped tracks (drums): a swipe on one track of an active edit group comps the
+    /// same layer over the same range on the others, in one undo step; `alone` and a suspended
+    /// group leave them be.
+    #[test]
+    fn grouped_tracks_comp_together() {
+        let (mut e, t) = four_takes();
+        let o = TrackId(e.execute("track.new", &json!({"name": "OH", "format": "mono"})).unwrap()["tracks"][0].as_u64().unwrap());
+        let s = e.session_mut();
+        for k in 1..=4u64 {
+            let id = s.new_clip_id();
+            let n = add_layer(s, o, None).unwrap();
+            s.track_mut(o).unwrap().playlists[n].clips.push(Clip::audio(id, format!("oh{k}"), SourceId(500 + k), 10_000, 0, LEN));
+        }
+        e.execute("track.group", &json!({"tracks": [t.0, o.0], "name": "Drums"})).unwrap();
+        let r = e.execute("comp.swipe", &json!({"track": t.0, "layer": 2, "start": 50_000, "end": 150_000})).unwrap();
+        assert_eq!(r["grouped"], json!([o.0]));
+        assert_eq!(comp(&e, o).iter().filter(|c| c.2 == Some(2)).count(), 1, "the overheads comp take 2 too");
+        assert_eq!(comp(&e, o).iter().map(|c| (c.0, c.1)).collect::<Vec<_>>(), comp(&e, t).iter().map(|c| (c.0, c.1)).collect::<Vec<_>>());
+        e.undo();
+        assert!(comp(&e, o).is_empty() && comp(&e, t).is_empty(), "one undo step");
+        e.execute("comp.swipe", &json!({"track": t.0, "layer": 2, "start": 50_000, "end": 150_000, "alone": true})).unwrap();
+        assert!(comp(&e, o).is_empty(), "alone: only the track swiped");
+    }
+
+    #[test]
+    fn flatten_keeps_the_comp_as_plain_clips_and_deletes_the_takes() {
+        let (mut e, t) = four_takes();
+        e.execute("comp.swipe", &json!({"track": t.0, "layer": 1, "start": 0, "end": LEN})).unwrap();
+        e.execute("comp.swipe", &json!({"track": t.0, "layer": 3, "start": 100_000, "end": 200_000})).unwrap();
+        let before: Vec<(Samples, Samples)> = comp(&e, t).iter().map(|c| (c.0, c.1)).collect();
+        assert_eq!(e.execute("comp.flatten", &json!({"track": t.0})).unwrap()["deleted"], 4);
+        let tr = e.session().track(t).unwrap();
+        assert_eq!((tr.playlists.len(), tr.active_playlist, tr.record_layer), (1, 0, None));
+        assert_eq!(comp(&e, t), before.iter().map(|&(a, b)| (a, b, None)).collect::<Vec<_>>());
+        assert!(e.execute("comp.flatten", &json!({"track": t.0})).is_err(), "nothing left to flatten");
+        e.undo();
+        assert_eq!(e.session().track(t).unwrap().playlists.len(), 5);
     }
 
     #[test]
@@ -542,5 +671,26 @@ mod tests {
         e.execute("comp.swipe", &json!({"track": t.0, "layer": 2, "start": 0, "end": 100_000})).unwrap();
         e.execute("comp.layer_make_comp", &json!({"track": t.0, "layer": 3})).unwrap();
         assert_eq!(comp(&e, t), [(0, LEN, Some(3))]);
+    }
+
+    /// Solo Take: the layer plays in place of the comp until let go, without changing the comp.
+    #[test]
+    fn a_soloed_take_is_heard_in_place_of_the_comp() {
+        let mut e = Engine::default();
+        let t = e.execute("track.new", &json!({"name": "Vox"})).unwrap()["tracks"][0].as_u64().unwrap();
+        e.execute("comp.layer_new", &json!({"track": t})).unwrap();
+        let s = e.session_mut();
+        let id = s.new_clip_id();
+        let tr = s.track_mut(TrackId(t)).unwrap();
+        tr.playlists[1].clips.push(soundcraft_model::Clip::audio(id, "take", SourceId(1), 0, 0, 100));
+        assert!(tr.heard_clips().is_empty(), "the comp is empty");
+        let before = e.session().track(TrackId(t)).unwrap().playlists.clone();
+        assert_eq!(e.execute("comp.audition", &json!({"track": t, "layer": 1})).unwrap()["layer"], 1);
+        let tr = e.session().track(TrackId(t)).unwrap();
+        assert_eq!(tr.heard_clips().len(), 1, "the take is heard");
+        assert!(tr.clips().is_empty() && tr.playlists == before, "the comp is untouched");
+        assert!(e.execute("comp.audition", &json!({"track": t, "layer": 0})).is_err(), "the comp is no take");
+        e.execute("comp.audition", &json!({"track": t, "layer": 1})).unwrap();
+        assert!(e.session().track(TrackId(t)).unwrap().heard_clips().is_empty(), "the same layer again lets go");
     }
 }

@@ -1,12 +1,13 @@
 # FreeDAWm — instructions for agents
 
 FreeDAWm is an open-source, pure-Rust digital audio workstation with a familiar Edit/Mix
-workflow. It runs natively on macOS, Windows, Linux and FreeBSD, and in the browser via WASM.
+workflow. It runs natively on macOS, Windows, Linux and FreeBSD. (The browser build was removed in
+November 2026.)
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first: build, `cargo xtask ci`, the never-crash and asset
 rules, and how commands, menus and tests fit together all apply to agents too. The short version:
 
-- **Gate:** `cargo xtask ci` (fmt, clippy `-D warnings`, tests, assets, layers, wasm) passes before
+- **Gate:** `cargo xtask ci` (fmt, clippy `-D warnings`, tests, assets, layers) passes before
   every commit; while working, test the crates you touch (`cargo test -p <crate> <filter>`).
 - **Never crash:** no `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/`unimplemented!` in
   non-test code, no `unsafe` outside the FFI helper crates, `Result` + `?`, hostile input handled

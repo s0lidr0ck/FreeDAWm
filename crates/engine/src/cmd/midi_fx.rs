@@ -1,13 +1,19 @@
 //! MIDI effects ahead of a track's instrument (`soundcraft_model::MidiFx`): an arpeggiator, a
-//! chord, a scale and note repeat, run by the mix on everything the instrument is given (clips,
-//! live input, routed MIDI tracks). Instrument and MIDI tracks only; at most
+//! chord, a scale, note repeat and a script, run by the mix on everything the instrument is given
+//! (clips, live input, routed MIDI tracks). Instrument and MIDI tracks only; at most
 //! [`soundcraft_model::MAX_MIDI_FX`] per track. Each command is one undo step (a drag in the
-//! menu's controls is merged into one by the UI).
+//! menu's controls is merged into one by the UI). A Script effect's text lives on the track
+//! (`Track::midi_scripts`) and is set, compiled and given parameter values with
+//! `track.midi_script`; a clip's own list takes no script.
 
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_model::{ARP_PATTERNS, CHORD_SHAPES, MAX_MIDI_FX, MIDI_FX_RATES, MidiFx, MidiFxKind, SCALES};
+use soundcraft_mix::midi_fx::script::{EXAMPLES, program_of};
+use soundcraft_model::{ARP_PATTERNS, CHORD_SHAPES, MAX_MIDI_FX, MAX_SCRIPT_LEN, MIDI_FX_RATES, MidiFx, MidiFxKind, MidiScript, SCALES};
+
+/// What a new Script effect starts with.
+pub const SCRIPT_TEMPLATE: &str = "// Each event going into the instrument comes to handle(e). send(e) passes it on,\n// changed or not; an event not sent is left out. See the examples for more.\nfn handle(e) {\n    send(e);\n}\n";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -16,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add MIDI Effect",
             [],
             None,
-            "{tracks?, kind: arpeggiator | chord | scale | note_repeat, at?: index} — a MIDI effect ahead of the instrument of each instrument or MIDI track, last in its list or at `at` (at most 4) → {midi_fx}",
+            "{tracks?, clips?, kind: arpeggiator | chord | scale | note_repeat | script, at?: index, example?: name (a script's text: Transpose, Velocity Curve, Arpeggio, Note Echo)} — a MIDI effect ahead of the instrument of each instrument or MIDI track (or, with `clips`, on those MIDI clips' notes only; not a script), last in its list or at `at` (at most 4) → {midi_fx}",
             has_selection,
             add
         ),
@@ -25,20 +31,170 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set MIDI Effect",
             [],
             None,
-            "{tracks?, index, bypass?, rate?: 0..6 (1/4 1/8 1/8T 1/16 1/16T 1/32 1/32T), pattern?: 0..4 (up down up/down as-played random), octaves?: 1..4, gate?: 5..100 (%), latch?, chord?: 0..11, root?: 0..11, scale?: 0..11, drop?, kind?, to?: index (move it there)} — a MIDI effect's settings → {midi_fx}",
+            "{tracks?, clips?, index, bypass?, rate?: 0..6 (1/4 1/8 1/8T 1/16 1/16T 1/32 1/32T), pattern?: 0..4 (up down up/down as-played random), octaves?: 1..4, gate?: 5..100 (%), latch?, chord?: 0..11, root?: 0..11, scale?: 0..11, drop?, kind?, to?: index (move it there)} — a MIDI effect's settings → {midi_fx}",
             has_selection,
             set
+        ),
+        cmd!(
+            "track.midi_script",
+            "Edit MIDI Script",
+            [],
+            None,
+            "{tracks?, index, source?: text (compiled), example?: name (Transpose, Velocity Curve, Arpeggio, Note Echo), name?, values?: {parameter: number}} — a Script MIDI effect's text and its parameters' values; the text is compiled off the audio thread and an error says its line (the effect then passes its events) → {name, source, error, params: [{name, min, max, default, value}], failed}",
+            has_selection,
+            script
         ),
         cmd!(
             "track.midi_fx_remove",
             "Remove MIDI Effect",
             [],
             None,
-            "{tracks?, index?: (default: all)} — takes a MIDI effect (or all) off the tracks → {midi_fx}",
+            "{tracks?, clips?, index?: (default: all)} — takes a MIDI effect (or all) off the tracks (or the clips) → {midi_fx}",
             has_selection,
             remove
         ),
+        cmd!(
+            "track.midi_fx_record",
+            "Record Effects' Output",
+            [],
+            None,
+            "{tracks?, value?: bool (default: toggle the first)} — takes on these tracks keep what their MIDI effects make of the keys (the clip then plays past the effects) instead of the keys as played → {value}",
+            has_selection,
+            record
+        ),
+        cmd!(
+            "track.mpe",
+            "MPE Zone",
+            [],
+            None,
+            "{tracks?, zone?: off|lower|upper, members?: 1..15, bend?: semitones 0..96 (members, default 48), master_bend?: 0..96 (default 2)} — sets the tracks' instruments up for MPE: the MPE Configuration Message and pitch-bend ranges are sent to them → {mpe}",
+            has_selection,
+            mpe
+        ),
+        cmd!(
+            "track.articulations",
+            "Articulations",
+            [],
+            None,
+            "{tracks?, add?: {name, keyswitch: note}, index?: n (with name?/keyswitch? to change it, or remove: true), cc?: 0..119 (the lane that chooses, default 3), clear?: bool} — the tracks' sound variations: articulations switched by keyswitch, chosen in clips by a controller lane whose value is the articulation's index → {articulations}",
+            has_selection,
+            articulations
+        ),
     ]
+}
+
+fn articulations(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.articulations";
+    let tracks = midi_tracks(e, C, p)?;
+    let first = tracks.first().and_then(|t| e.session().track(*t)).and_then(|t| t.articulations.clone());
+    let note = |v: &Value, k: &str| -> Result<Option<u8>> {
+        match v.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(n) => {
+                n.as_u64().filter(|n| *n <= 127).map(|n| Some(n as u8)).ok_or_else(|| bad(C, format!("`{k}` is a MIDI note number, 0 to 127")))
+            }
+        }
+    };
+    let name = |v: &Value| v.get("name").and_then(Value::as_str).map(|n| n.trim().chars().take(60).collect::<String>()).filter(|n| !n.is_empty());
+    let mut a = first.unwrap_or_default();
+    if p.get("clear").and_then(Value::as_bool) == Some(true) {
+        for t in &tracks {
+            if let Some(tr) = e.session_mut().track_mut(*t) {
+                tr.articulations = None;
+            }
+        }
+        return Ok(json!({"articulations": null}));
+    }
+    if let Some(cc) = note(p, "cc")? {
+        if cc > 119 {
+            return Err(bad(C, "`cc` is 0 to 119 (120 and up are channel mode messages)"));
+        }
+        a.cc = cc;
+    }
+    if let Some(add) = p.get("add") {
+        let n = name(add).ok_or_else(|| bad(C, "`add` needs a `name`"))?;
+        let k = note(add, "keyswitch")?.ok_or_else(|| bad(C, "`add` needs a `keyswitch` note"))?;
+        if a.items.len() >= soundcraft_model::MAX_ARTICULATIONS {
+            return Err(bad(C, "a track holds at most 128 articulations"));
+        }
+        a.items.push(soundcraft_model::Articulation { name: n, keyswitch: k });
+    }
+    if let Some(i) = p.get("index").and_then(Value::as_u64) {
+        let i = usize::try_from(i).unwrap_or(usize::MAX);
+        if i >= a.items.len() {
+            return Err(bad(C, format!("no articulation {i}: the track has {}", a.items.len())));
+        }
+        if p.get("remove").and_then(Value::as_bool) == Some(true) {
+            a.items.remove(i);
+        } else if let Some(it) = a.items.get_mut(i) {
+            if let Some(n) = name(p) {
+                it.name = n;
+            }
+            if let Some(k) = note(p, "keyswitch")? {
+                it.keyswitch = k;
+            }
+        }
+    }
+    for t in &tracks {
+        if let Some(tr) = e.session_mut().track_mut(*t) {
+            tr.articulations = Some(a.clone());
+        }
+    }
+    Ok(json!({"articulations": a}))
+}
+
+fn mpe(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.mpe";
+    let tracks = midi_tracks(e, C, p)?;
+    let now = tracks.first().and_then(|t| e.session().track(*t)).and_then(|t| t.mpe);
+    let num = |k: &str, max: u64| -> Result<Option<u8>> {
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_u64().filter(|n| *n <= max).map(|n| Some(n as u8)).ok_or_else(|| bad(C, format!("`{k}` is a whole number up to {max}"))),
+        }
+    };
+    let (members, bend, master_bend) = (num("members", 15)?, num("bend", 96)?, num("master_bend", 96)?);
+    if members == Some(0) {
+        return Err(bad(C, "`members` is 1 to 15 (zone `off` turns MPE off)"));
+    }
+    let zone = match p.get("zone").and_then(Value::as_str) {
+        Some("off") => None,
+        Some("lower") => Some(false),
+        Some("upper") => Some(true),
+        Some(z) => return Err(bad(C, format!("unknown zone `{z}`: off, lower or upper"))),
+        None => Some(now.is_some_and(|z| z.upper)),
+    };
+    let value = zone.map(|upper| {
+        let base = now.unwrap_or_default();
+        soundcraft_model::MpeZone {
+            upper,
+            members: members.unwrap_or(base.members),
+            bend: bend.unwrap_or(base.bend),
+            master_bend: master_bend.unwrap_or(base.master_bend),
+        }
+    });
+    for t in &tracks {
+        if let Some(tr) = e.session_mut().track_mut(*t) {
+            tr.mpe = value;
+        }
+    }
+    Ok(json!({"mpe": value}))
+}
+
+fn record(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.midi_fx_record";
+    let tracks = midi_tracks(e, C, p)?;
+    let now = tracks.first().and_then(|t| e.session().track(*t)).is_some_and(|t| t.midi_fx_record);
+    let value = match p.get("value") {
+        None | Some(Value::Null) => !now,
+        Some(v) => v.as_bool().ok_or_else(|| bad(C, "`value` is true or false"))?,
+    };
+    for t in &tracks {
+        if let Some(tr) = e.session_mut().track_mut(*t) {
+            tr.midi_fx_record = value;
+        }
+    }
+    Ok(json!({"value": value}))
 }
 
 /// The tracks, each an instrument or MIDI track.
@@ -50,22 +206,71 @@ fn midi_tracks(e: &Engine, c: &str, p: &Value) -> Result<Vec<TrackId>> {
     Ok(tracks)
 }
 
-fn list_of(e: &Engine, t: Option<&TrackId>) -> Value {
-    json!(t.and_then(|t| e.session().track(*t)).map(|t| t.midi_fx.clone()).unwrap_or_default())
+/// Whose MIDI effects a command changes: tracks' (the default), or with `clips` those MIDI
+/// clips' own.
+#[derive(Debug, Clone, Copy)]
+enum Target {
+    Track(TrackId),
+    Clip(ClipId),
+}
+
+/// The lists a command changes: `clips` (MIDI clips) when given, else `tracks` (instrument and
+/// MIDI tracks).
+fn targets(e: &Engine, c: &str, p: &Value) -> Result<Vec<Target>> {
+    if p.get("clips").is_some() {
+        let ids = super::clip_ids_param(e, p);
+        if ids.is_empty() {
+            return Err(bad(c, "`clips`: which MIDI clips"));
+        }
+        for id in &ids {
+            let clip = e.session().find_clip(*id).map(|x| x.1).ok_or_else(|| bad(c, format!("no clip {}", id.0)))?;
+            if clip.midi_playing().is_none() {
+                return Err(bad(c, format!("`{}` is not a MIDI clip: MIDI effects go on MIDI clips", clip.name)));
+            }
+        }
+        return Ok(ids.into_iter().map(Target::Clip).collect());
+    }
+    Ok(midi_tracks(e, c, p)?.into_iter().map(Target::Track).collect())
+}
+
+fn list(e: &Engine, t: Target) -> Option<(&str, &Vec<MidiFx>)> {
+    match t {
+        Target::Track(id) => e.session().track(id).map(|t| (t.name.as_str(), &t.midi_fx)),
+        Target::Clip(id) => e.session().find_clip(id).map(|(_, c)| (c.name.as_str(), &c.midi_fx)),
+    }
+}
+
+fn list_mut(e: &mut Engine, t: Target) -> Option<&mut Vec<MidiFx>> {
+    match t {
+        Target::Track(id) => e.session_mut().track_mut(id).map(|t| &mut t.midi_fx),
+        Target::Clip(id) => e.session_mut().find_clip_mut(id).map(|c| &mut c.midi_fx),
+    }
+}
+
+fn list_of(e: &Engine, t: Option<&Target>) -> Value {
+    json!(t.and_then(|t| list(e, *t)).map(|(_, l)| l.clone()).unwrap_or_default())
 }
 
 fn add(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "track.midi_fx_add";
-    let tracks = midi_tracks(e, C, p)?;
-    let kind = str_param(p, "kind").and_then(MidiFxKind::from_key).ok_or_else(|| bad(C, "`kind` is arpeggiator, chord, scale or note_repeat"))?;
-    if let Some(t) = tracks.iter().filter_map(|t| e.session().track(*t)).find(|t| t.midi_fx.len() >= MAX_MIDI_FX) {
-        return Err(bad(C, format!("`{}` already has {MAX_MIDI_FX} MIDI effects", t.name)));
+    let tracks = targets(e, C, p)?;
+    let kind =
+        str_param(p, "kind").and_then(MidiFxKind::from_key).ok_or_else(|| bad(C, "`kind` is arpeggiator, chord, scale, note_repeat or script"))?;
+    no_script_on_clips(C, kind, &tracks)?;
+    let example = example_param(C, p)?;
+    if let Some((name, _)) = tracks.iter().filter_map(|t| list(e, *t)).find(|(_, l)| l.len() >= MAX_MIDI_FX) {
+        return Err(bad(C, format!("`{name}` already has {MAX_MIDI_FX} MIDI effects")));
     }
     let at = p.get("at").and_then(Value::as_u64);
     for t in &tracks {
-        if let Some(tr) = e.session_mut().track_mut(*t) {
-            let i = at.map_or(tr.midi_fx.len(), |a| usize::try_from(a).unwrap_or(usize::MAX).min(tr.midi_fx.len()));
-            tr.midi_fx.insert(i, MidiFx::new(kind));
+        if let Some(l) = list_mut(e, *t) {
+            let i = at.map_or(l.len(), |a| usize::try_from(a).unwrap_or(usize::MAX).min(l.len()));
+            l.insert(i, MidiFx::new(kind));
+        }
+        if let Target::Track(id) = t
+            && let Some(tr) = e.session_mut().track_mut(*id)
+        {
+            fix_scripts(tr, example);
         }
     }
     Ok(json!({"midi_fx": list_of(e, tracks.first())}))
@@ -73,11 +278,11 @@ fn add(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn set(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "track.midi_fx_set";
-    let tracks = midi_tracks(e, C, p)?;
+    let tracks = targets(e, C, p)?;
     let index =
         p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "`index`: which MIDI effect (0 first)"))?;
-    if let Some(t) = tracks.iter().filter_map(|t| e.session().track(*t)).find(|t| index >= t.midi_fx.len()) {
-        return Err(bad(C, format!("`{}` has {} MIDI effect(s); no index {index}", t.name, t.midi_fx.len())));
+    if let Some((name, l)) = tracks.iter().filter_map(|t| list(e, *t)).find(|(_, l)| index >= l.len()) {
+        return Err(bad(C, format!("`{name}` has {} MIDI effect(s); no index {index}", l.len())));
     }
     let int = |key: &str, lo: i64, hi: i64| -> Result<Option<u8>> {
         match p.get(key) {
@@ -105,14 +310,18 @@ fn set(e: &mut Engine, p: &Value) -> Result<Value> {
     let root = int("root", 0, 11)?;
     let scale = int("scale", 0, SCALES.len() as i64 - 1)?;
     let (bypass, latch, drop) = (flag("bypass")?, flag("latch")?, flag("drop")?);
+    let follow = int("follow", 0, soundcraft_model::FOLLOW_MODES.len() as i64 - 1)?;
     let kind = match str_param(p, "kind") {
         None => None,
-        Some(k) => Some(MidiFxKind::from_key(k).ok_or_else(|| bad(C, "`kind` is arpeggiator, chord, scale or note_repeat"))?),
+        Some(k) => Some(MidiFxKind::from_key(k).ok_or_else(|| bad(C, "`kind` is arpeggiator, chord, scale, note_repeat or script"))?),
     };
+    if let Some(k) = kind {
+        no_script_on_clips(C, k, &tracks)?;
+    }
     let to = p.get("to").and_then(Value::as_u64).map(|x| usize::try_from(x).unwrap_or(usize::MAX));
     for t in &tracks {
-        let Some(tr) = e.session_mut().track_mut(*t) else { continue };
-        let Some(f) = tr.midi_fx.get_mut(index) else { continue };
+        let Some(l) = list_mut(e, *t) else { continue };
+        let Some(f) = l.get_mut(index) else { continue };
         let set = |dst: &mut u8, v: Option<u8>| {
             if let Some(v) = v {
                 *dst = v;
@@ -125,31 +334,174 @@ fn set(e: &mut Engine, p: &Value) -> Result<Value> {
         set(&mut f.chord, chord);
         set(&mut f.root, root);
         set(&mut f.scale, scale);
+        set(&mut f.follow, follow);
         f.bypass = bypass.unwrap_or(f.bypass);
         f.latch = latch.unwrap_or(f.latch);
         f.drop = drop.unwrap_or(f.drop);
         f.kind = kind.unwrap_or(f.kind);
         if let Some(to) = to {
-            let fx = tr.midi_fx.remove(index);
-            let to = to.min(tr.midi_fx.len());
-            tr.midi_fx.insert(to, fx);
+            let fx = l.remove(index);
+            let to = to.min(l.len());
+            l.insert(to, fx);
+        }
+        if let Target::Track(id) = t
+            && let Some(tr) = e.session_mut().track_mut(*id)
+        {
+            fix_scripts(tr, None);
         }
     }
     Ok(json!({"midi_fx": list_of(e, tracks.first())}))
 }
 
-fn remove(e: &mut Engine, p: &Value) -> Result<Value> {
-    const C: &str = "track.midi_fx_remove";
+/// A clip's own list takes no script (it is rendered ahead, without the track's scripts).
+fn no_script_on_clips(c: &str, kind: MidiFxKind, targets: &[Target]) -> Result<()> {
+    if kind == MidiFxKind::Script && targets.iter().any(|t| matches!(t, Target::Clip(_))) {
+        return Err(bad(c, "a Script effect goes on a track, not a clip"));
+    }
+    Ok(())
+}
+
+/// The built-in example `example` names, if given.
+fn example_param(c: &str, p: &Value) -> Result<Option<(&'static str, &'static str)>> {
+    match str_param(p, "example") {
+        None => Ok(None),
+        Some(n) => EXAMPLES
+            .iter()
+            .copied()
+            .find(|x| x.0.eq_ignore_ascii_case(n.trim()))
+            .map(Some)
+            .ok_or_else(|| bad(c, format!("no example named `{n}`: {}", EXAMPLES.iter().map(|x| x.0).collect::<Vec<_>>().join(", ")))),
+    }
+}
+
+/// Gives each Script effect on `tr` a text of its own (the template, or `example` for a new one)
+/// and drops texts no effect names.
+fn fix_scripts(tr: &mut soundcraft_model::Track, example: Option<(&str, &str)>) {
+    let mut next = tr.midi_scripts.iter().map(|s| s.id).max().unwrap_or(0);
+    for f in tr.midi_fx.iter_mut().filter(|f| f.kind == MidiFxKind::Script) {
+        if f.script != 0 && tr.midi_scripts.iter().any(|s| s.id == f.script) {
+            continue;
+        }
+        next = next.saturating_add(1);
+        f.script = next;
+        let (name, source) = example.unwrap_or(("Script", SCRIPT_TEMPLATE));
+        tr.midi_scripts.push(MidiScript { id: next, name: name.into(), source: source.into(), values: Vec::new(), runtime: Default::default() });
+    }
+    let named: Vec<u32> = tr.midi_fx.iter().map(|f| f.script).filter(|s| *s != 0).collect();
+    tr.midi_scripts.retain(|s| named.contains(&s.id));
+}
+
+/// What `track.midi_script` answers for `sc`.
+fn script_info(sc: &MidiScript) -> Value {
+    let prog = program_of(&sc.runtime);
+    let params: Vec<Value> = prog
+        .as_ref()
+        .map(|p| {
+            let values = p.values(sc);
+            p.params()
+                .iter()
+                .zip(values)
+                .map(|(d, v)| json!({"name": d.name, "min": d.min, "max": d.max, "default": d.default, "value": v}))
+                .collect()
+        })
+        .unwrap_or_default();
+    let status = prog.as_ref().map(|p| p.status());
+    json!({
+        "name": sc.name,
+        "source": sc.source,
+        "error": sc.runtime.error.clone().or_else(|| status.as_ref().and_then(|s| s.error.clone())),
+        "failed": sc.runtime.error.is_some() || prog.as_ref().is_some_and(|p| p.failed()),
+        "params": params,
+    })
+}
+
+fn script(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.midi_script";
     let tracks = midi_tracks(e, C, p)?;
-    let index = p.get("index").and_then(Value::as_u64).map(|i| usize::try_from(i).unwrap_or(usize::MAX));
+    let index =
+        p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "`index`: which MIDI effect (0 first)"))?;
+    for t in &tracks {
+        let tr = e.session().track(*t).ok_or_else(|| bad(C, "no such track"))?;
+        if tr.midi_fx.get(index).map(|f| f.kind) != Some(MidiFxKind::Script) {
+            return Err(bad(C, format!("`{}` has no Script effect at index {index}", tr.name)));
+        }
+    }
+    let example = example_param(C, p)?;
+    let source = match p.get("source") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_str().ok_or_else(|| bad(C, "`source` is the script's text"))?.to_string()),
+    };
+    if source.as_ref().is_some_and(|s| s.len() > MAX_SCRIPT_LEN) {
+        return Err(bad(C, format!("a script is at most {} KB", MAX_SCRIPT_LEN / 1024)));
+    }
+    let name = str_param(p, "name").map(|n| n.trim().chars().take(60).collect::<String>()).filter(|n| !n.is_empty());
+    let values: Vec<(String, f64)> = match p.get("values") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Object(m)) => m
+            .iter()
+            .map(|(k, v)| v.as_f64().filter(|x| x.is_finite()).map(|x| (k.clone(), x)).ok_or_else(|| bad(C, format!("`values.{k}` is a number"))))
+            .collect::<Result<_>>()?,
+        Some(_) => return Err(bad(C, "`values` is {parameter: number}")),
+    };
+    let mut first = None;
     for t in &tracks {
         let Some(tr) = e.session_mut().track_mut(*t) else { continue };
+        fix_scripts(tr, None);
+        let Some(id) = tr.midi_fx.get(index).map(|f| f.script) else { continue };
+        let Some(sc) = tr.midi_scripts.iter_mut().find(|s| s.id == id) else { continue };
+        let mut text_changed = false;
+        if let Some((n, src)) = example {
+            sc.name = n.to_string();
+            sc.source = src.to_string();
+            sc.values.clear();
+            text_changed = true;
+        }
+        if let Some(src) = &source {
+            sc.source.clone_from(src);
+            text_changed = true;
+        }
+        if let Some(n) = &name {
+            sc.name.clone_from(n);
+        }
+        for (k, v) in &values {
+            match sc.values.iter_mut().find(|x| &x.0 == k) {
+                Some(x) => x.1 = *v,
+                None => sc.values.push((k.clone(), *v)),
+            }
+        }
+        if text_changed || sc.runtime.made_from.is_none() {
+            // Compiled now (not only after the step), so the answer carries the error; Compile
+            // again on an unchanged text starts it afresh (a script that failed runs again).
+            crate::midi_script::compile(sc);
+        }
+        // Values for parameters the script no longer declares are not kept.
+        if let Some(prog) = program_of(&sc.runtime) {
+            sc.values.retain(|(k, _)| prog.params().iter().any(|d| &d.name == k));
+        }
+        if first.is_none() {
+            first = Some(script_info(sc));
+        }
+    }
+    Ok(first.unwrap_or(Value::Null))
+}
+
+fn remove(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.midi_fx_remove";
+    let tracks = targets(e, C, p)?;
+    let index = p.get("index").and_then(Value::as_u64).map(|i| usize::try_from(i).unwrap_or(usize::MAX));
+    for t in &tracks {
+        let Some(l) = list_mut(e, *t) else { continue };
         match index {
-            Some(i) if i < tr.midi_fx.len() => {
-                tr.midi_fx.remove(i);
+            Some(i) if i < l.len() => {
+                l.remove(i);
             }
             Some(_) => {}
-            None => tr.midi_fx.clear(),
+            None => l.clear(),
+        }
+        if let Target::Track(id) = t
+            && let Some(tr) = e.session_mut().track_mut(*id)
+        {
+            fix_scripts(tr, None);
         }
     }
     Ok(json!({"midi_fx": list_of(e, tracks.first())}))
@@ -158,8 +510,111 @@ fn remove(e: &mut Engine, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use crate::Engine;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use soundcraft_model::MidiFxKind;
+
+    #[test]
+    fn articulations_are_added_changed_removed_and_undone() {
+        let mut e = Engine::default();
+        let id = e.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        let arts = |e: &Engine| e.session().track(soundcraft_model::TrackId(id)).unwrap().articulations.clone();
+        e.execute("track.articulations", &json!({"tracks": [id], "add": {"name": "Legato", "keyswitch": 24}})).unwrap();
+        let r = e.execute("track.articulations", &json!({"tracks": [id], "add": {"name": "Pizzicato", "keyswitch": 26}})).unwrap();
+        assert_eq!(r["articulations"]["cc"], 3, "the lane that chooses, by default");
+        e.execute("track.articulations", &json!({"tracks": [id], "index": 1, "name": "Staccato", "keyswitch": 25})).unwrap();
+        let a = arts(&e).unwrap();
+        assert_eq!(a.items.iter().map(|i| (i.name.as_str(), i.keyswitch)).collect::<Vec<_>>(), vec![("Legato", 24), ("Staccato", 25)]);
+        assert!(e.execute("track.articulations", &json!({"tracks": [id], "cc": 121})).is_err());
+        assert!(e.execute("track.articulations", &json!({"tracks": [id], "index": 5, "remove": true})).is_err());
+        assert!(e.execute("track.articulations", &json!({"tracks": [id], "add": {"name": "X"}})).is_err());
+        e.execute("track.articulations", &json!({"tracks": [id], "index": 0, "remove": true})).unwrap();
+        assert_eq!(arts(&e).unwrap().items.len(), 1);
+        assert!(e.undo());
+        assert_eq!(arts(&e).unwrap().items.len(), 2);
+        e.execute("track.articulations", &json!({"tracks": [id], "clear": true})).unwrap();
+        assert_eq!(arts(&e), None);
+    }
+
+    #[test]
+    fn an_mpe_zone_is_set_changed_turned_off_and_undone() {
+        let mut e = Engine::default();
+        let id = e.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        let zone = |e: &Engine| e.session().track(soundcraft_model::TrackId(id)).unwrap().mpe;
+        assert_eq!(zone(&e), None);
+        e.execute("track.mpe", &json!({"tracks": [id], "zone": "lower"})).unwrap();
+        assert_eq!(zone(&e), Some(soundcraft_model::MpeZone::default()), "15 members, 48 semitones, master 2");
+        let r = e.execute("track.mpe", &json!({"tracks": [id], "zone": "upper", "members": 7, "bend": 24})).unwrap();
+        assert_eq!(r["mpe"]["members"], 7);
+        assert_eq!(zone(&e).map(|z| (z.upper, z.members, z.bend, z.master_bend)), Some((true, 7, 24, 2)));
+        assert!(e.execute("track.mpe", &json!({"tracks": [id], "members": 0})).is_err());
+        assert!(e.execute("track.mpe", &json!({"tracks": [id], "bend": 97})).is_err());
+        e.execute("track.mpe", &json!({"tracks": [id], "zone": "off"})).unwrap();
+        assert_eq!(zone(&e), None);
+        assert!(e.undo());
+        assert_eq!(zone(&e).map(|z| z.members), Some(7));
+        let audio = e.execute("track.new", &json!({"kind": "audio"})).unwrap()["tracks"][0].as_u64().unwrap();
+        assert!(e.execute("track.mpe", &json!({"tracks": [audio], "zone": "lower"})).is_err(), "no instrument");
+    }
+
+    /// A Script effect: added with an example, its text compiled (an error says its line and the
+    /// effect passes), its parameters set, kept with the session and compiled again on opening;
+    /// its text goes with the effect; a clip takes none.
+    #[test]
+    fn a_script_effect_is_written_compiled_saved_and_opened() {
+        let mut e = Engine::default();
+        let id = e.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        let tid = soundcraft_model::TrackId(id);
+        e.execute("track.midi_fx_add", &json!({"tracks": [id], "kind": "script", "example": "transpose"})).unwrap();
+        let t = e.session().track(tid).unwrap().clone();
+        assert_eq!(t.midi_fx[0].kind, MidiFxKind::Script);
+        assert_eq!((t.midi_scripts.len(), t.midi_scripts[0].name.as_str(), t.midi_fx[0].script), (1, "Transpose", t.midi_scripts[0].id));
+        assert!(t.midi_scripts[0].runtime.program.is_some(), "compiled after the step");
+        let r = e.execute("track.midi_script", &json!({"tracks": [id], "index": 0, "values": {"Semitones": 5}})).unwrap();
+        assert_eq!(r["params"][0]["name"], "Semitones");
+        assert_eq!(r["params"][0]["value"], 5.0);
+        assert_eq!(r["error"], Value::Null);
+        // A bad text: kept, with its error; the effect passes.
+        let r = e.execute("track.midi_script", &json!({"tracks": [id], "index": 0, "source": "fn handle(e) {\n send(e\n}"})).unwrap();
+        assert!(r["error"].as_str().unwrap().contains("line"), "{r}");
+        assert_eq!(r["failed"], true);
+        assert!(e.session().track(tid).unwrap().midi_scripts[0].runtime.program.is_none());
+        assert!(e.undo());
+        assert!(e.session().track(tid).unwrap().midi_scripts[0].runtime.program.is_some(), "undo brings back the compiled one");
+        // Saved and opened: the text and values are kept, compiled again.
+        let text = serde_json::to_string(e.session()).unwrap();
+        assert!(!text.contains("runtime"), "the compiled form is not saved");
+        let back: soundcraft_model::Session = serde_json::from_str(&text).unwrap();
+        let mut e2 = Engine::default();
+        e2.replace_session(back);
+        let sc = &e2.session().track(tid).unwrap().midi_scripts[0];
+        assert_eq!((sc.source.as_str(), sc.value("Semitones")), (soundcraft_mix::midi_fx::script::EXAMPLES[0].1, Some(5.0)));
+        assert!(sc.runtime.program.is_some());
+        // A copy of the track runs a compiled script of its own.
+        let dup = e2.execute("track.duplicate", &json!({"tracks": [id]}));
+        assert!(dup.is_ok(), "{dup:?}");
+        if dup.is_ok() {
+            let ptrs: Vec<usize> = e2
+                .session()
+                .tracks
+                .iter()
+                .flat_map(|t| t.midi_scripts.iter())
+                .filter_map(|s| s.runtime.program.as_ref().map(|p| std::sync::Arc::as_ptr(p) as *const () as usize))
+                .collect();
+            assert_eq!(ptrs.len(), 2, "both compiled");
+            assert_ne!(ptrs[0], ptrs[1], "each its own");
+        }
+        // Removed: its text goes too. A clip takes no script; nor an unknown example.
+        e.execute("track.midi_fx_remove", &json!({"tracks": [id], "index": 0})).unwrap();
+        assert!(e.session().track(tid).unwrap().midi_scripts.is_empty());
+        assert!(e.execute("track.midi_fx_add", &json!({"tracks": [id], "kind": "script", "example": "nope"})).is_err());
+        assert!(e.execute("track.midi_script", &json!({"tracks": [id], "index": 0, "source": "x"})).is_err(), "no Script effect there");
+        let c = e.session_mut().new_clip_id();
+        crate::edit::place_clip(e.session_mut(), tid, soundcraft_model::Clip::midi(c, "c", 0, 48_000, soundcraft_midi::Sequence::default()));
+        assert!(e.execute("track.midi_fx_add", &json!({"clips": [c.0], "kind": "script"})).is_err());
+        // A session from before scripts opens unchanged.
+        let old: soundcraft_model::MidiFx = serde_json::from_str(r#"{"kind":"chord","chord":2}"#).unwrap();
+        assert_eq!(old.script, 0);
+    }
 
     #[test]
     fn add_set_move_remove_and_undo() {

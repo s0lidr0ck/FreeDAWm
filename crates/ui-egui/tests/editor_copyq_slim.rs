@@ -1,4 +1,4 @@
-//! CopyQ's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, what it shows,
+//! CopyQ's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, what it shows,
 //! the More section, and the full editor's own gestures.
 
 mod editor_support;

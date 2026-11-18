@@ -4,6 +4,7 @@
 mod editor_support;
 
 use editor_support::*;
+use egui::accesskit::Role;
 use egui::{Modifiers, Pos2, Rect, Shape, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -36,20 +37,21 @@ fn cleanq_editor_keeps_its_vst_size() {
     let (h, t, m) = open("fs_cleanq", vec2(1800.0, 1000.0), "dark");
     let f = frame(&h, t, m);
     assert_eq!(f.size(), vec2(1010.0, 560.0), "kDefaultWidth x kDefaultHeight");
-    // The strips' top: the highest shape painted in Pad's column (under the Mix top bar and the
-    // Channel width bar).
+    // The strips' top: the highest shape painted in Pad's column under the bars above the strips
+    // (the Mix top bar, the Channel width bar and, last, the Find bar: its label and field).
     let pad = h.get_by_label("Pad strip").rect();
+    let find = h.get_by_label("Find").rect();
+    let bars_bottom = h
+        .query_all_by_role(Role::TextInput)
+        .map(|n| n.rect())
+        .filter(|r| r.top() <= find.bottom() && r.bottom() >= find.top())
+        .fold(find.bottom(), |b, r| b.max(r.bottom()));
     let strip_top = h
         .output()
         .shapes
         .iter()
         .map(|c| c.shape.visual_bounding_rect().intersect(c.clip_rect))
-        .filter(|r| {
-            r.is_positive()
-                && r.min.x >= pad.left() - 2.0
-                && r.max.x <= pad.right() + 2.0
-                && r.min.y > 20.0 + soundcraft_ui_egui::toolbar::MIX_HEIGHT + soundcraft_ui_egui::channel_width::BAR_H
-        })
+        .filter(|r| r.is_positive() && r.min.x >= pad.left() - 2.0 && r.max.x <= pad.right() + 2.0 && r.min.y > bars_bottom)
         .map(|r| r.min.y)
         .fold(f32::INFINITY, f32::min);
     assert!((f.top() - strip_top).abs() < 5.0, "the editor starts at the strips' top ({} vs {strip_top})", f.top());

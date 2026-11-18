@@ -36,7 +36,7 @@ fn gcd(mut a: u64, mut b: u64) -> u64 {
 }
 
 /// Converts planar audio from one rate to another, a block at a time.
-pub(crate) struct Resampler {
+pub struct Resampler {
     /// Output rate / input rate, reduced: output `n` reads input time `n * down / up`.
     up: u64,
     down: u64,
@@ -55,7 +55,7 @@ pub(crate) struct Resampler {
 
 impl Resampler {
     /// A converter from `from` Hz to `to` Hz for `channels` channels (both rates non-zero).
-    pub(crate) fn new(from: u32, to: u32, channels: usize) -> Resampler {
+    pub fn new(from: u32, to: u32, channels: usize) -> Resampler {
         let (from, to) = (u64::from(from.max(1)), u64::from(to.max(1)));
         let g = gcd(from, to);
         let ratio = to as f64 / from as f64;
@@ -107,7 +107,7 @@ impl Resampler {
 
     /// Feeds the first `frames` frames of `block` (missing samples are silence) and appends every
     /// output frame they complete to `out` (one `Vec` per channel).
-    pub(crate) fn process(&mut self, block: &[Vec<f32>], frames: usize, out: &mut [Vec<f32>]) {
+    pub fn process(&mut self, block: &[Vec<f32>], frames: usize, out: &mut [Vec<f32>]) {
         for (c, h) in self.hist.iter_mut().enumerate() {
             let src = block.get(c).map_or(&[][..], |ch| ch.get(..frames.min(ch.len())).unwrap_or_default());
             h.extend_from_slice(src);
@@ -118,7 +118,7 @@ impl Resampler {
     }
 
     /// Flushes the held-back input (the input ends in silence) into `out`.
-    pub(crate) fn finish(&mut self, out: &mut [Vec<f32>]) {
+    pub fn finish(&mut self, out: &mut [Vec<f32>]) {
         self.run(true, out);
     }
 

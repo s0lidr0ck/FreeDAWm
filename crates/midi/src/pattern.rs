@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Note, PPQ, Sequence, XorShift};
+use crate::{CtrlEvent, CtrlKind, CtrlShape, Note, PPQ, Sequence, XorShift};
 
 /// Most lanes a pattern holds.
 pub const MAX_LANES: usize = 32;
@@ -21,6 +21,152 @@ pub const STEPS_PER_BAR: [u8; 5] = [8, 12, 16, 24, 32];
 pub const MAX_ROLL: u8 = 4;
 /// The MIDI channel pattern notes are written on (channel 10, drums).
 pub const CHANNEL: u8 = 9;
+/// The channel a melodic pattern's notes are written on (channel 1).
+pub const MELODIC_CHANNEL: u8 = 0;
+/// A step's longest gate, in percent of the step (200: it runs into the next step's length).
+pub const MAX_GATE: u8 = 200;
+/// The gate a step plays when none is set: half the step (a hit's length).
+pub const DEFAULT_GATE: u8 = 50;
+/// Most variations (A–H) a pattern holds, `lanes` (A) among them.
+pub const MAX_VARIATIONS: usize = 8;
+/// Most bars the switch lane names a variation for.
+pub const MAX_SWITCH_BARS: usize = 1024;
+/// Most value rows (controller and parameter rows) a pattern holds.
+pub const MAX_ROWS: usize = 16;
+/// Most characters of a parameter row's automation id.
+pub const MAX_ROW_ID: usize = 256;
+
+/// What a value row sets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
+pub enum RowTarget {
+    /// A control change (0–127) on the pattern's channel.
+    Cc(u8),
+    /// Pitch bend, -8192–8191 (0: none), on the pattern's channel.
+    PitchBend,
+    /// Channel pressure (aftertouch), 0–127, on the pattern's channel.
+    Pressure,
+    /// An automatable parameter of the clip's track, by its automation id (`plugin:m3:cutoff`,
+    /// `volume`, …): the value is the parameter's own. The engine writes it as the clip's
+    /// automation lane for that parameter.
+    Param(String),
+}
+
+impl RowTarget {
+    /// The range a step's value is clamped to (a parameter's is any finite value).
+    pub fn range(&self) -> (f32, f32) {
+        match self {
+            RowTarget::Cc(_) | RowTarget::Pressure => (0.0, 127.0),
+            RowTarget::PitchBend => (-8192.0, 8191.0),
+            RowTarget::Param(_) => (-1.0e9, 1.0e9),
+        }
+    }
+
+    /// The controller kind a MIDI row writes (`None` for a parameter row).
+    pub fn ctrl_kind(&self) -> Option<CtrlKind> {
+        match self {
+            RowTarget::Cc(n) => Some(CtrlKind::Cc(*n)),
+            RowTarget::PitchBend => Some(CtrlKind::PitchBend),
+            RowTarget::Pressure => Some(CtrlKind::ChannelPressure),
+            RowTarget::Param(_) => None,
+        }
+    }
+}
+
+/// A value row: a value per step for a controller or a parameter, looping over its own length at
+/// its own rate like a note lane. An empty step holds the value before it; the values step (no
+/// glide).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ValueRow {
+    pub target: RowTarget,
+    /// A value per step (`None`: the value before it holds); their count is the row's loop
+    /// length (1–[`MAX_STEPS`]).
+    pub steps: Vec<Option<f32>>,
+    pub direction: Direction,
+    pub rate: Rate,
+    pub mute: bool,
+}
+
+impl Default for ValueRow {
+    fn default() -> ValueRow {
+        ValueRow { target: RowTarget::Cc(1), steps: vec![None; 16], direction: Direction::Forward, rate: Rate::Normal, mute: false }
+    }
+}
+
+impl ValueRow {
+    /// An empty row of `length` steps for `target`.
+    pub fn new(target: RowTarget, length: usize) -> ValueRow {
+        ValueRow { target, steps: vec![None; length.clamp(1, MAX_STEPS)], ..ValueRow::default() }
+    }
+
+    pub fn sanitize(&mut self) {
+        match &mut self.target {
+            RowTarget::Cc(n) => *n = (*n).min(127),
+            RowTarget::Param(id) => {
+                if id.len() > MAX_ROW_ID {
+                    let mut end = MAX_ROW_ID;
+                    while !id.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    id.truncate(end);
+                }
+            }
+            RowTarget::PitchBend | RowTarget::Pressure => {}
+        }
+        self.steps.truncate(MAX_STEPS);
+        if self.steps.is_empty() {
+            self.steps.push(None);
+        }
+        let (lo, hi) = self.target.range();
+        let midi = self.target.ctrl_kind().is_some();
+        for v in &mut self.steps {
+            *v = v.filter(|x| x.is_finite()).map(|x| {
+                let x = x.clamp(lo, hi);
+                if midi { x.round() } else { x }
+            });
+        }
+    }
+}
+
+/// A value row's values over a clip: `(tick, value)` where the value changes, ticks in
+/// `0..at.length`, the first at tick 0 when any value is in effect there.
+pub fn row_values(pattern: &Pattern, row: &ValueRow, at: &Expand) -> Vec<(i64, f32)> {
+    let mut out: Vec<(i64, f32)> = Vec::new();
+    if row.mute || at.length <= 0 || at.ticks_per_bar <= 0 || !STEPS_PER_BAR.contains(&pattern.steps_per_bar) {
+        return out;
+    }
+    let grid = at.ticks_per_bar as f64 / f64::from(pattern.steps_per_bar);
+    let step_len = grid * row.rate.factor();
+    let len = row.steps.len().max(1) as i64;
+    // From a whole loop before the clip, so a value set earlier holds at its start.
+    let first = ((at.phase as f64) / step_len).floor() as i64 - len;
+    let last = (((at.phase + at.length) as f64) / step_len).ceil() as i64;
+    let mut held: Option<f32> = None;
+    for k in first..=last {
+        let mut rng = step_rng(pattern.seed, MAX_LANES * MAX_VARIATIONS, k, 2);
+        let idx = lane_index(row.direction, row.steps.len(), k, &mut rng);
+        let Some(v) = row.steps.get(idx).copied().flatten() else { continue };
+        let tick = (k as f64 * step_len - at.phase as f64).round() as i64;
+        if tick >= at.length {
+            break;
+        }
+        if tick <= 0 {
+            held = Some(v);
+            continue;
+        }
+        if let Some(h) = held.take() {
+            out.push((0, h));
+        }
+        if out.last().is_none_or(|(_, last)| *last != v) && out.len() < at.max_notes {
+            out.push((tick, v));
+        }
+    }
+    if let Some(h) = held {
+        out.insert(0, (0, h));
+    }
+    out
+}
 
 /// The order a lane plays its steps in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,11 +240,32 @@ pub struct Step {
     /// A quieter grace hit just before the step.
     pub flam: bool,
     pub condition: Condition,
+    /// The note this step plays in place of its lane's (a melodic pattern's steps each hold one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<u8>,
+    /// How long the note sounds, in percent of the step (or of a roll's hit): 1–[`MAX_GATE`].
+    #[serde(skip_serializing_if = "is_default_gate")]
+    pub gate: u8,
+}
+
+fn is_default_gate(g: &u8) -> bool {
+    *g == DEFAULT_GATE
 }
 
 impl Default for Step {
     fn default() -> Step {
-        Step { on: false, velocity: 100, accent: false, probability: 100, offset: 0, roll: 1, flam: false, condition: Condition::Always }
+        Step {
+            on: false,
+            velocity: 100,
+            accent: false,
+            probability: 100,
+            offset: 0,
+            roll: 1,
+            flam: false,
+            condition: Condition::Always,
+            pitch: None,
+            gate: DEFAULT_GATE,
+        }
     }
 }
 
@@ -113,6 +280,8 @@ impl Step {
         self.probability = self.probability.min(100);
         self.offset = self.offset.clamp(-50, 50);
         self.roll = self.roll.clamp(1, MAX_ROLL);
+        self.pitch = self.pitch.map(|p| p.min(127));
+        self.gate = self.gate.clamp(1, MAX_GATE);
         if let Condition::Every { nth, of } = &mut self.condition {
             *of = (*of).clamp(1, 16);
             *nth = (*nth).clamp(1, *of);
@@ -163,13 +332,54 @@ pub struct Pattern {
     pub seed: u64,
     /// Fill bars come every this many bars (the last of each group); 0: none.
     pub fill_every: u8,
+    /// A melodic pattern (a Step Sequence clip): its notes go out on channel 1 for any instrument
+    /// rather than on the drum channel, and its steps hold pitches.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub melodic: bool,
+    /// Variation A's lanes (a pattern without variations has only these).
     pub lanes: Vec<Lane>,
+    /// Variations B–H, each a full grid of its own lanes (at most [`MAX_VARIATIONS`] − 1).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub variations: Vec<Vec<Lane>>,
+    /// The variation the clip plays (0 = A), where the switch lane names none.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub play: u8,
+    /// The switch lane: per bar of the pattern (from its first bar), the variation that bar plays
+    /// instead of `play`; `None` (or a bar past the end) plays `play`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub switches: Vec<Option<u8>>,
+    /// Value rows (controllers and parameters), shared by every variation (at most
+    /// [`MAX_ROWS`]). Patterns saved before rows existed have none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<ValueRow>,
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
 }
 
 impl Default for Pattern {
     fn default() -> Pattern {
-        Pattern { steps_per_bar: 16, shuffle: 0, accent: 20, humanize: 0, seed: 1, fill_every: 0, lanes: Vec::new() }
+        Pattern {
+            steps_per_bar: 16,
+            shuffle: 0,
+            accent: 20,
+            humanize: 0,
+            seed: 1,
+            fill_every: 0,
+            melodic: false,
+            lanes: Vec::new(),
+            variations: Vec::new(),
+            play: 0,
+            switches: Vec::new(),
+            rows: Vec::new(),
+        }
     }
+}
+
+/// A variation's letter (0 = A … 7 = H).
+pub fn variation_name(v: usize) -> char {
+    char::from(b'A' + (v.min(25) as u8))
 }
 
 impl Pattern {
@@ -181,15 +391,54 @@ impl Pattern {
         self.shuffle = self.shuffle.min(100);
         self.accent = self.accent.min(127);
         self.humanize = self.humanize.min(100);
-        self.lanes.truncate(MAX_LANES);
-        for lane in &mut self.lanes {
-            lane.note = lane.note.min(127);
-            lane.steps.truncate(MAX_STEPS);
-            if lane.steps.is_empty() {
-                lane.steps.push(Step::default());
+        self.variations.truncate(MAX_VARIATIONS - 1);
+        for lanes in std::iter::once(&mut self.lanes).chain(self.variations.iter_mut()) {
+            lanes.truncate(MAX_LANES);
+            for lane in lanes {
+                lane.note = lane.note.min(127);
+                lane.steps.truncate(MAX_STEPS);
+                if lane.steps.is_empty() {
+                    lane.steps.push(Step::default());
+                }
+                lane.steps.iter_mut().for_each(Step::sanitize);
             }
-            lane.steps.iter_mut().for_each(Step::sanitize);
         }
+        let count = self.variation_count();
+        if usize::from(self.play) >= count {
+            self.play = 0;
+        }
+        self.switches.truncate(MAX_SWITCH_BARS);
+        for s in &mut self.switches {
+            if s.is_some_and(|v| usize::from(v) >= count) {
+                *s = None;
+            }
+        }
+        while self.switches.last() == Some(&None) {
+            self.switches.pop();
+        }
+        self.rows.truncate(MAX_ROWS);
+        self.rows.iter_mut().for_each(ValueRow::sanitize);
+    }
+
+    /// How many variations the pattern has (A counts: at least 1).
+    pub fn variation_count(&self) -> usize {
+        1 + self.variations.len()
+    }
+
+    /// Variation `v`'s lanes (0 = A).
+    pub fn lanes_of(&self, v: usize) -> Option<&Vec<Lane>> {
+        if v == 0 { Some(&self.lanes) } else { self.variations.get(v - 1) }
+    }
+
+    pub fn lanes_of_mut(&mut self, v: usize) -> Option<&mut Vec<Lane>> {
+        if v == 0 { Some(&mut self.lanes) } else { self.variations.get_mut(v - 1) }
+    }
+
+    /// The variation pattern bar `bar` plays (bars before the first play `play`).
+    pub fn variation_at_bar(&self, bar: i64) -> usize {
+        let named = usize::try_from(bar).ok().and_then(|b| self.switches.get(b).copied().flatten());
+        let v = usize::from(named.unwrap_or(self.play));
+        if v < self.variation_count() { v } else { 0 }
     }
 
     /// A new seed, so every chance is drawn again.
@@ -227,6 +476,19 @@ fn unit(r: &mut XorShift) -> f64 {
     (r.next_signed() + 1.0) / 2.0
 }
 
+/// Which step of `lane` plays at its `k`-th position counted on its own rate's grid (where a
+/// recorded hit at that position belongs); a Random lane has no fixed answer, so it takes the
+/// step at that position going forward.
+pub fn step_at(lane: &Lane, k: i64) -> usize {
+    let dir = if lane.direction == Direction::Random { Direction::Forward } else { lane.direction };
+    lane_index(dir, lane.steps.len(), k, &mut XorShift::new(1))
+}
+
+/// The length of one of `lane`'s steps on a grid of `grid` ticks (its rate applied).
+pub fn step_ticks(lane: &Lane, grid: f64) -> f64 {
+    grid * lane.rate.factor()
+}
+
 /// Which step of a lane of `len` steps plays at its `k`-th position.
 fn lane_index(dir: Direction, len: usize, k: i64, rng: &mut XorShift) -> usize {
     let n = len.max(1) as i64;
@@ -256,10 +518,16 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
     let grid = at.ticks_per_bar as f64 / f64::from(p.steps_per_bar);
     let flam_ticks = f64::from(PPQ) / 16.0;
     let humanize = f64::from(p.humanize) / 100.0;
-    'lanes: for (li, lane) in p.lanes.iter().enumerate() {
+    let channel = if p.melodic { MELODIC_CHANNEL } else { CHANNEL };
+    // Only the variations some bar plays are expanded; each keeps the hits of the bars it plays.
+    let several = p.variation_count() > 1;
+    let lanes = (0..p.variation_count()).flat_map(|v| p.lanes_of(v).into_iter().flatten().enumerate().map(move |(li, l)| (v, li, l)));
+    'lanes: for (v, li, lane) in lanes {
         if lane.mute {
             continue;
         }
+        // Variation A draws its dice as a pattern without variations does.
+        let li = li + v * MAX_LANES;
         let step_len = grid * lane.rate.factor();
         let len = lane.steps.len();
         // Positions whose (nudged) hits can land in the clip: one step of slack each side.
@@ -275,6 +543,9 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
             }
             let start = k as f64 * step_len;
             let bar = (start / at.ticks_per_bar as f64).floor() as i64;
+            if several && p.variation_at_bar(bar) != v {
+                continue;
+            }
             let fill = p.fill_every > 0 && (bar + 1).rem_euclid(i64::from(p.fill_every)) == 0;
             let plays = match step.condition {
                 Condition::Always => true,
@@ -300,23 +571,17 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
                 let jitter_v = humanize * human.next_signed() * 12.0;
                 let t = start + swing + nudge + f64::from(h) * sub + jitter_t - at.phase as f64;
                 let vel = (f64::from(base_vel) + jitter_v).round().clamp(1.0, 127.0) as u8;
-                let length = (sub / 2.0).max(1.0).round() as i64;
+                // The default gate keeps the arithmetic of patterns made before gates existed.
+                let held = if step.gate == DEFAULT_GATE { sub / 2.0 } else { sub * f64::from(step.gate) / 100.0 };
+                let length = held.max(1.0).round() as i64;
+                let pitch = step.pitch.unwrap_or(lane.note);
                 let mut push = |t: f64, velocity: u8| -> bool {
                     let tick = t.round() as i64;
                     if (0..at.length).contains(&tick) {
                         if seq.notes.len() >= at.max_notes {
                             return false;
                         }
-                        seq.notes.push(Note {
-                            probability: 100,
-                            pitch: lane.note,
-                            velocity,
-                            muted: false,
-                            release_velocity: 64,
-                            channel: CHANNEL,
-                            start: tick,
-                            length,
-                        });
+                        seq.notes.push(Note { probability: 100, pitch, velocity, muted: false, release_velocity: 64, channel, start: tick, length });
                     }
                     true
                 };
@@ -327,6 +592,15 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
                     break 'lanes;
                 }
             }
+        }
+    }
+    for row in &p.rows {
+        let Some(kind) = row.target.ctrl_kind() else { continue };
+        for (tick, v) in row_values(&p, row, at) {
+            if seq.ctrls.len() >= at.max_notes {
+                break;
+            }
+            seq.ctrls.push(CtrlEvent { tick, channel, kind, value: v as i32, shape: CtrlShape::Step });
         }
     }
     seq.sort();
@@ -437,6 +711,73 @@ mod tests {
     }
 
     #[test]
+    fn variations_play_where_the_clip_and_its_switch_lane_say() {
+        let mut b = Lane::new(38, 16);
+        b.steps[0] = Step::hit(90);
+        let mut p = four_on_the_floor();
+        p.variations.push(vec![b]);
+        let bars = |p: &Pattern| -> Vec<(i64, u8)> {
+            let seq = expand(p, &at(3));
+            let mut v: Vec<(i64, u8)> = seq.notes.iter().map(|n| (n.start / BAR, n.pitch)).collect();
+            v.dedup();
+            v
+        };
+        assert_eq!(bars(&p), vec![(0, 36), (1, 36), (2, 36)], "A plays where nothing says otherwise");
+        p.switches = vec![None, Some(1)];
+        assert_eq!(bars(&p), vec![(0, 36), (1, 38), (2, 36)], "the switch lane plays B in bar 2 only");
+        p.play = 1;
+        assert_eq!(bars(&p), vec![(0, 38), (1, 38), (2, 38)]);
+        p.switches = vec![Some(0)];
+        assert_eq!(bars(&p), vec![(0, 36), (1, 38), (2, 38)]);
+        // Variation A's dice do not move when variations are added.
+        let mut chance = Pattern::default();
+        let mut hats = Lane::new(42, 16);
+        hats.steps.iter_mut().for_each(|s| *s = Step { probability: 50, ..Step::hit(90) });
+        chance.lanes.push(hats.clone());
+        let plain = expand(&chance, &at(4));
+        chance.variations.push(vec![hats]);
+        assert_eq!(expand(&chance, &at(4)), plain);
+        chance.play = 1;
+        assert_ne!(expand(&chance, &at(4)), plain, "B draws its own dice");
+    }
+
+    #[test]
+    fn melodic_steps_hold_their_pitch_and_gate_on_channel_one() {
+        let mut lane = Lane::new(60, 4);
+        lane.steps[0] = Step { pitch: Some(64), gate: 100, ..Step::hit(90) };
+        lane.steps[1] = Step::hit(80);
+        lane.steps[2] = Step { pitch: Some(67), gate: 25, ..Step::hit(70) };
+        let p = Pattern { melodic: true, lanes: vec![lane], ..Pattern::default() };
+        let seq = expand(&p, &at(1));
+        let got: Vec<(i64, u8, i64, u8)> = seq.notes.iter().map(|n| (n.start, n.pitch, n.length, n.channel)).collect();
+        let step = BAR / 16;
+        assert_eq!(got[..3], [(0, 64, step, 0), (step, 60, step / 2, 0), (2 * step, 67, step / 4, 0)]);
+        assert_eq!(got.len(), 12, "the four-step row loops over the bar");
+        // A drum pattern's steps sound as before: half a step on channel 10.
+        let drums = expand(&four_on_the_floor(), &at(1));
+        assert!(drums.notes.iter().all(|n| n.length == BAR / 32 && n.channel == CHANNEL));
+        let json = serde_json::to_string(&four_on_the_floor()).unwrap_or_default();
+        assert!(!json.contains("gate") && !json.contains("pitch") && !json.contains("melodic"), "the saved form of a drum pattern is unchanged");
+    }
+
+    #[test]
+    fn hostile_variations_are_sanitized() {
+        let mut p = four_on_the_floor();
+        p.variations = vec![vec![Lane { steps: Vec::new(), ..Lane::default() }]; 20];
+        p.play = 30;
+        p.switches = vec![Some(12); 5000];
+        p.sanitize();
+        assert_eq!(p.variation_count(), MAX_VARIATIONS);
+        assert_eq!(p.play, 0);
+        assert!(p.switches.is_empty(), "switches to missing variations are dropped");
+        assert!(p.variations.iter().flatten().all(|l| !l.steps.is_empty()));
+        let json = r#"{"lanes":[],"play":1}"#;
+        let q: Pattern = serde_json::from_str(json).unwrap_or_default();
+        assert_eq!(q.variation_at_bar(0), 0, "a missing variation plays A");
+        assert_eq!(variation_name(7), 'H');
+    }
+
+    #[test]
     fn note_limit_is_respected() {
         let mut p = four_on_the_floor();
         p.lanes[0].steps.iter_mut().for_each(|s| *s = Step { roll: 4, ..Step::hit(100) });
@@ -448,8 +789,19 @@ mod tests {
     fn hostile_patterns_are_sanitized() {
         let mut p = Pattern { steps_per_bar: 7, shuffle: 255, humanize: 255, ..Pattern::default() };
         p.lanes = vec![Lane { note: 200, steps: Vec::new(), ..Lane::default() }; 40];
-        p.lanes[0].steps =
-            vec![Step { velocity: 0, probability: 255, offset: -128, roll: 0, condition: Condition::Every { nth: 9, of: 0 }, ..Step::hit(1) }; 100];
+        p.lanes[0].steps = vec![
+            Step {
+                velocity: 0,
+                probability: 255,
+                offset: -128,
+                roll: 0,
+                condition: Condition::Every { nth: 9, of: 0 },
+                pitch: Some(200),
+                gate: 0,
+                ..Step::hit(1)
+            };
+            100
+        ];
         let seq = expand(&p, &at(2));
         assert!(seq.notes.iter().all(|n| n.pitch <= 127 && (1..=127).contains(&n.velocity) && (0..2 * BAR).contains(&n.start)));
     }
@@ -464,6 +816,73 @@ mod tests {
         assert_eq!(p.lanes[0].steps[0], Step { on: true, ..Step::default() });
     }
 
+    #[test]
+    fn value_rows_write_controllers_where_their_values_change() {
+        let mut p = four_on_the_floor();
+        let mut row = ValueRow::new(RowTarget::Cc(74), 4);
+        row.steps[0] = Some(10.0);
+        row.steps[2] = Some(100.0);
+        p.rows.push(row);
+        let mut bend = ValueRow::new(RowTarget::PitchBend, 8);
+        bend.rate = Rate::Half;
+        bend.steps[1] = Some(-9000.0);
+        p.rows.push(bend);
+        p.sanitize();
+        let seq = expand(&p, &at(1));
+        let step = BAR / 16;
+        let cc: Vec<(i64, i32)> = seq.ctrls.iter().filter(|c| c.kind == CtrlKind::Cc(74)).map(|c| (c.tick, c.value)).collect();
+        // A 4-step loop: 10 at steps 0, 4, 8, 12 and 100 at 2, 6, 10, 14.
+        let want: Vec<(i64, i32)> = (0..8).map(|i| (i * 2 * step, if i % 2 == 0 { 10 } else { 100 })).collect();
+        assert_eq!(cc, want);
+        // The bend row's only value holds from one loop to the next, so it is written once, at
+        // the clip's start, clamped.
+        let pb: Vec<(i64, i32)> = seq.ctrls.iter().filter(|c| c.kind == CtrlKind::PitchBend).map(|c| (c.tick, c.value)).collect();
+        assert_eq!(pb, vec![(0, -8192)]);
+        assert!(seq.ctrls.iter().all(|c| c.channel == CHANNEL));
+        // The notes are those of the pattern without rows.
+        assert_eq!(seq.notes, expand(&four_on_the_floor(), &at(1)).notes);
+    }
+
+    #[test]
+    fn a_trimmed_clip_starts_with_the_value_in_effect() {
+        let mut p = Pattern::default();
+        let mut row = ValueRow::new(RowTarget::Pressure, 16);
+        row.steps[0] = Some(64.0);
+        p.rows.push(row);
+        let step = BAR / 16;
+        let seq = expand(&p, &Expand { phase: 3 * step, ..at(1) });
+        let v: Vec<(i64, i32)> = seq.ctrls.iter().map(|c| (c.tick, c.value)).collect();
+        assert_eq!(v, vec![(0, 64)]);
+        // Parameter rows make no controller events; their values come from row_values.
+        let mut q = Pattern::default();
+        let mut row = ValueRow::new(RowTarget::Param("plugin:m1:cutoff".into()), 2);
+        row.steps = vec![Some(0.25), Some(0.75)];
+        q.rows.push(row.clone());
+        assert!(expand(&q, &at(1)).ctrls.is_empty());
+        assert_eq!(row_values(&q, &row, &at(1)).len(), 16);
+    }
+
+    #[test]
+    fn hostile_rows_are_sanitized_and_old_patterns_have_none() {
+        let mut p = Pattern::default();
+        for _ in 0..40 {
+            p.rows.push(ValueRow { target: RowTarget::Cc(200), steps: vec![Some(f32::NAN), Some(1e9), Some(-5.0)], ..ValueRow::default() });
+        }
+        p.rows.push(ValueRow { steps: Vec::new(), ..ValueRow::default() });
+        p.sanitize();
+        assert_eq!(p.rows.len(), MAX_ROWS);
+        assert_eq!(p.rows[0].target, RowTarget::Cc(127));
+        assert_eq!(p.rows[0].steps, vec![None, Some(127.0), Some(0.0)]);
+        let old: Pattern = serde_json::from_str(r#"{"lanes":[]}"#).unwrap_or_default();
+        assert!(old.rows.is_empty());
+        let saved = serde_json::to_string(&old).unwrap_or_default();
+        assert!(!saved.contains("rows"));
+        let mut r = Pattern::default();
+        r.rows.push(ValueRow::new(RowTarget::Param("volume".into()), 4));
+        let back: Pattern = serde_json::from_str(&serde_json::to_string(&r).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(back.rows, r.rows);
+    }
+
     fn arb_step() -> impl Strategy<Value = Step> {
         (any::<bool>(), any::<u8>(), any::<bool>(), any::<u8>(), any::<i8>(), any::<u8>(), any::<bool>()).prop_map(
             |(on, velocity, accent, probability, offset, roll, flam)| Step {
@@ -475,6 +894,8 @@ mod tests {
                 roll,
                 flam,
                 condition: Condition::Always,
+                pitch: None,
+                gate: DEFAULT_GATE,
             },
         )
     }

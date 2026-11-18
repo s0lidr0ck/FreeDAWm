@@ -53,6 +53,33 @@ pub fn specs() -> Vec<CommandSpec> {
             module_post_fader
         ),
         cmd!(
+            "mix.module_multi_mono",
+            "Multi-Mono",
+            [],
+            None,
+            "{track?, module: id, value?: bool, linked?: bool} — on a track of more than one channel the module runs one mono instance per channel, linked (every one takes its parameters and automation) or with `linked: false` unlinked (each channel past the first has its own values and lanes, `c1:<param>` for the second; they start from the module's); toggles when neither is given → {multi_mono, linked}",
+            has_selection,
+            module_multi_mono
+        ),
+        cmd!(noundo
+            "mix.module_channel",
+            "Edit Channel",
+            [],
+            None,
+            "{track?, module: id, channel: 0-based} — which channel of a multi-mono unlinked module its plugin window shows and edits: mix.module_param and mix.module_params write that channel's values",
+            has_tracks,
+            module_channel
+        ),
+        cmd!(
+            "mix.module_mix",
+            "Insert Wet/Dry Mix",
+            [],
+            None,
+            "{track?, module: id, value: 0..1} — blends the module's output (1, the default) with its input (0), the input delayed by the module's latency → {mix}",
+            has_selection,
+            module_mix
+        ),
+        cmd!(
             "mix.module_param",
             "Set Module Parameter",
             [],
@@ -220,7 +247,10 @@ pub(super) fn chain_remove(tr: &mut Track, id: ModuleId) -> Option<usize> {
 pub(super) fn do_bypass(e: &mut Engine, cmd: &str, t: TrackId, id: ModuleId, value: Option<bool>) -> Result<Value> {
     let ins = find_mut(e, cmd, t, id)?;
     ins.bypass = value.unwrap_or(!ins.bypass);
-    Ok(json!({"bypass": ins.bypass}))
+    let on = ins.bypass;
+    // Written while a pass runs, as any control moved.
+    e.automation_changed(t, AutoParam::bypass(id));
+    Ok(json!({"bypass": on}))
 }
 
 pub(super) fn do_param(e: &mut Engine, cmd: &str, t: TrackId, id: ModuleId, p: &Value) -> Result<Value> {
@@ -228,8 +258,26 @@ pub(super) fn do_param(e: &mut Engine, cmd: &str, t: TrackId, id: ModuleId, p: &
     let value = p.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, "`value` must be a number"))? as f32;
     let ins = find_mut(e, cmd, t, id)?;
     let info = super::clap::plugin_info(&ins.plugin).ok_or_else(|| bad(cmd, "unknown plugin"))?;
-    let pi = info.params.iter().find(|x| x.id == param).ok_or_else(|| bad(cmd, format!("`{}` has no parameter `{param}`", info.id)))?;
+    // Multi-mono unlinked: a `c<n>:` id, or a plain one while the plugin window edits another
+    // channel, is that channel's own value (its derived parameters are the channel's own too).
+    let unlinked = ins.multi_mono && ins.multi_mono_unlinked;
+    let (channel, own) = match soundcraft_model::split_channel_param(&param) {
+        Some((n, own)) if unlinked => (n, own.to_string()),
+        Some(_) => return Err(bad(cmd, format!("`{param}` is a channel's value: the module is not multi-mono unlinked"))),
+        None if unlinked => (usize::from(ins.edit_channel), param.clone()),
+        None => (0, param.clone()),
+    };
+    let pi = info.params.iter().find(|x| x.id == own).ok_or_else(|| bad(cmd, format!("`{}` has no parameter `{own}`", info.id)))?;
     let v = value.clamp(pi.min, pi.max);
+    if channel > 0 {
+        let key = soundcraft_model::channel_param_id(channel, &own);
+        let before = ins.params.clone();
+        ins.params.insert(key.clone(), v);
+        derive_channel_params(e, t, id, channel, &before, std::slice::from_ref(&own), ParamEdit::Edit);
+        e.automation_changed(t, AutoParam::Plugin { module: id, param: key });
+        return Ok(json!({"value": v, "channel": channel}));
+    }
+    let param = own;
     let before = ins.params.clone();
     ins.params.insert(param.clone(), v);
     derive_params(e, t, id, &before, std::slice::from_ref(&param), ParamEdit::Edit);
@@ -259,6 +307,84 @@ pub(super) fn derive_params(e: &mut Engine, t: TrackId, id: ModuleId, before: &B
     let locked = |p: &str| laned.iter().any(|l| l == p);
     let mut d = Derive::new(info, before, &mut ins.params, &mut ins.memory, changed, edit, &locked);
     derive(&mut d);
+}
+
+/// Channel `n`'s view of a multi-mono unlinked module's values: each plain id's `c<n>:` value
+/// where the channel has one, else the module's (the first channel's).
+fn channel_values(params: &BTreeMap<String, f32>, n: usize) -> BTreeMap<String, f32> {
+    let mut out: BTreeMap<String, f32> =
+        params.iter().filter(|(k, _)| soundcraft_model::split_channel_param(k).is_none()).map(|(k, v)| (k.clone(), *v)).collect();
+    for (k, v) in params {
+        if let Some((c, own)) = soundcraft_model::split_channel_param(k)
+            && c == n
+        {
+            out.insert(own.to_string(), *v);
+        }
+    }
+    out
+}
+
+/// Channel `n`'s derived-parameter memory (`c<n>:` keys); a channel with none yet starts from
+/// the first channel's.
+fn channel_memory(memory: &BTreeMap<String, f32>, n: usize) -> BTreeMap<String, f32> {
+    let own: BTreeMap<String, f32> = memory
+        .iter()
+        .filter_map(|(k, v)| soundcraft_model::split_channel_param(k).filter(|(c, _)| *c == n).map(|(_, own)| (own.to_string(), *v)))
+        .collect();
+    if !own.is_empty() {
+        return own;
+    }
+    memory.iter().filter(|(k, _)| soundcraft_model::split_channel_param(k).is_none()).map(|(k, v)| (k.clone(), *v)).collect()
+}
+
+/// Puts channel `n`'s memory back under its `c<n>:` keys (replacing the channel's old ones).
+fn store_channel_memory(memory: &mut BTreeMap<String, f32>, n: usize, own: BTreeMap<String, f32>) {
+    memory.retain(|k, _| soundcraft_model::split_channel_param(k).is_none_or(|(c, _)| c != n));
+    memory.extend(own.into_iter().map(|(k, v)| (soundcraft_model::channel_param_id(n, &k), v)));
+}
+
+/// [`derive_params`] for channel `n` (1 or more) of a multi-mono unlinked module: the plugin's
+/// derived-parameter logic (Dist's Link) runs on that channel's values and memory, and what it
+/// writes lands in the channel's `c<n>:` values, so each channel derives its own. `before`: all
+/// of the module's values before the edit; `changed`: the plugin's own ids the edit set.
+pub(super) fn derive_channel_params(
+    e: &mut Engine,
+    t: TrackId,
+    id: ModuleId,
+    n: usize,
+    before: &BTreeMap<String, f32>,
+    changed: &[String],
+    edit: ParamEdit,
+) {
+    let Some(tr) = e.session_mut().track_mut(t) else { return };
+    let reads = tr.mixer.automation_mode.reads();
+    // The channel's lanes (`c<n>:drive`) lock its own ids.
+    let laned: Vec<String> = tr
+        .automation
+        .iter()
+        .filter(|l| reads && !l.points.is_empty())
+        .filter_map(|l| match &l.param {
+            AutoParam::Plugin { module, param } if *module == id => {
+                soundcraft_model::split_channel_param(param).filter(|(c, _)| *c == n).map(|(_, own)| own.to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    let Some(ins) = tr.mixer.module_mut(id) else { return };
+    let (Some(derive), Some(info)) = (soundcraft_dsp::param_deriver(&ins.plugin), soundcraft_dsp::plugin_info(&ins.plugin)) else { return };
+    let was = channel_values(before, n);
+    let mut now = channel_values(&ins.params, n);
+    let edited = now.clone();
+    let mut memory = channel_memory(&ins.memory, n);
+    let locked = |p: &str| laned.iter().any(|l| l == p);
+    let mut d = Derive::new(info, &was, &mut now, &mut memory, changed, edit, &locked);
+    derive(&mut d);
+    for (k, v) in now {
+        if edited.get(&k) != Some(&v) {
+            ins.params.insert(soundcraft_model::channel_param_id(n, &k), v);
+        }
+    }
+    store_channel_memory(&mut ins.memory, n, memory);
 }
 
 /// The most keys a `mix.module_params {memory}` may carry (Dist's bank holds 36).
@@ -305,8 +431,34 @@ pub(super) fn do_params(e: &mut Engine, cmd: &str, t: TrackId, id: ModuleId, p: 
         Some(_) => return Err(bad(cmd, "`memory` must be an object")),
     };
     let restoring = memory.is_some();
+    // Multi-mono unlinked with the plugin window on another channel: the values (a preset, a
+    // paste, an A/B side) are that channel's.
+    let channel = if ins.multi_mono && ins.multi_mono_unlinked { usize::from(ins.edit_channel) } else { 0 };
+    if channel > 0 {
+        if let Some(m) = memory {
+            store_channel_memory(
+                &mut ins.memory,
+                channel,
+                m.into_iter().filter(|(k, _)| soundcraft_model::split_channel_param(k).is_none()).collect(),
+            );
+        }
+        let before = ins.params.clone();
+        let mut changed = Vec::new();
+        for (k, v) in &obj {
+            if let (Some(pi), Some(f)) = (info.params.iter().find(|x| x.id == k.as_str()), v.as_f64().filter(|f| f.is_finite())) {
+                ins.params.insert(soundcraft_model::channel_param_id(channel, k), (f as f32).clamp(pi.min, pi.max));
+                changed.push(k.clone());
+            }
+        }
+        let n = changed.len();
+        let edit = if preset.is_some() || restoring { ParamEdit::Preset } else { ParamEdit::Edit };
+        derive_channel_params(e, t, id, channel, &before, &changed, edit);
+        return Ok(json!({"set": n, "channel": channel}));
+    }
     if let Some(m) = memory {
-        ins.memory = m;
+        // The other channels' memories (`c<n>:` keys) stay theirs.
+        ins.memory.retain(|k, _| soundcraft_model::split_channel_param(k).is_some());
+        ins.memory.extend(m.into_iter().filter(|(k, _)| soundcraft_model::split_channel_param(k).is_none()));
     }
     let before = ins.params.clone();
     let mut changed = Vec::new();
@@ -431,6 +583,77 @@ fn module_post_fader(e: &mut Engine, p: &Value) -> Result<Value> {
     let ins = find_mut(e, C, t, id)?;
     ins.post_fader = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.post_fader);
     Ok(json!({"post_fader": ins.post_fader}))
+}
+
+fn module_multi_mono(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_multi_mono";
+    let t = first_track(e, C, p)?;
+    let id = module_id(C, p)?;
+    if e.session().track(t).and_then(|tr| tr.mixer.module(id)).is_none() {
+        return Err(bad(C, "only a chain module runs multi-mono"));
+    }
+    let channels = e.session().track(t).map_or(1, |tr| soundcraft_mix::strip_channels(tr, soundcraft_mix::main_channels(e.session())));
+    let ins = find_mut(e, C, t, id)?;
+    let linked = p.get("linked").and_then(Value::as_bool);
+    match p.get("value").and_then(Value::as_bool) {
+        Some(v) => ins.multi_mono = v,
+        // Unlinking turns multi-mono on; otherwise a toggle.
+        None if linked == Some(false) => ins.multi_mono = true,
+        None if linked.is_none() => ins.multi_mono = !ins.multi_mono,
+        None => {}
+    }
+    if let Some(l) = linked {
+        let unlinking = !l && !ins.multi_mono_unlinked;
+        ins.multi_mono_unlinked = !l;
+        if unlinking && let Some(info) = super::clap::plugin_info(&ins.plugin) {
+            // Each channel starts from the module's values; one already set (unlinked before)
+            // keeps its own.
+            for pi in info.params.iter().filter(|x| x.id != soundcraft_model::BYPASS_PARAM) {
+                let v = ins.params.get(pi.id).copied().unwrap_or(pi.default);
+                for c in 1..channels {
+                    ins.params.entry(soundcraft_model::channel_param_id(c, pi.id)).or_insert(v);
+                }
+            }
+        }
+        if l {
+            ins.edit_channel = 0;
+        }
+    }
+    if !ins.multi_mono {
+        ins.edit_channel = 0;
+    }
+    Ok(json!({"multi_mono": ins.multi_mono, "linked": !ins.multi_mono_unlinked}))
+}
+
+fn module_channel(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_channel";
+    let t = first_track(e, C, p)?;
+    let id = module_id(C, p)?;
+    let channels = e.session().track(t).map_or(1, |tr| soundcraft_mix::strip_channels(tr, soundcraft_mix::main_channels(e.session())));
+    let c = p.get("channel").and_then(Value::as_u64).ok_or_else(|| bad(C, "`channel` (0 for the first) required"))?;
+    let ins = find_mut(e, C, t, id)?;
+    if !(ins.multi_mono && ins.multi_mono_unlinked) {
+        return Err(bad(C, "the module is not multi-mono unlinked"));
+    }
+    let c = usize::try_from(c)
+        .ok()
+        .filter(|c| *c < channels)
+        .ok_or_else(|| bad(C, format!("the track has {channels} channels (0 to {})", channels - 1)))?;
+    ins.edit_channel = u16::try_from(c).unwrap_or(0);
+    Ok(json!({"channel": c}))
+}
+
+fn module_mix(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_mix";
+    let t = first_track(e, C, p)?;
+    let id = module_id(C, p)?;
+    let v = p.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(C, "`value` (0 to 1) required"))?;
+    let ins = find_mut(e, C, t, id)?;
+    ins.mix = (v as f32).clamp(0.0, 1.0);
+    let mix = ins.mix;
+    // Written while a pass runs, as any control moved.
+    e.automation_changed(t, AutoParam::wet_mix(id));
+    Ok(json!({"mix": mix}))
 }
 
 fn module_param(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -607,6 +830,82 @@ mod tests {
         e.execute("edit.undo", &json!({})).unwrap();
         assert!(!e.session().tracks[0].mixer.inserts[0].active);
         assert!(e.execute("mix.module_active", &json!({"track": t, "module": 999})).is_err());
+    }
+
+    /// Multi-mono unlinked: unlinking gives the second channel the module's values under `c1:`
+    /// ids (one undo step); with the plugin window on channel 1 a parameter edit writes that
+    /// channel's value only; a `c1:` lane is a lane like any other; linking again keeps them.
+    #[test]
+    fn an_unlinked_multi_mono_module_keeps_a_value_set_per_channel() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"format": "stereo"})).unwrap();
+        let t = e.session().tracks[0].id.0;
+        let m = e.execute("mix.module_add", &json!({"track": t, "plugin": "gain", "params": {"gain": -3.0}})).unwrap()["module"].as_u64().unwrap();
+        let ins = |e: &Engine| e.session().tracks[0].mixer.inserts[0].clone();
+        assert!(e.execute("mix.module_channel", &json!({"track": t, "module": m, "channel": 1})).is_err(), "linked: no channel to pick");
+        let r = e.execute("mix.module_multi_mono", &json!({"track": t, "module": m, "linked": false})).unwrap();
+        assert_eq!((r["multi_mono"].clone(), r["linked"].clone()), (json!(true), json!(false)));
+        assert_eq!(ins(&e).params.get("c1:gain"), Some(&-3.0));
+        e.execute("mix.module_channel", &json!({"track": t, "module": m, "channel": 1})).unwrap();
+        assert!(e.execute("mix.module_channel", &json!({"track": t, "module": m, "channel": 2})).is_err(), "a stereo track has two");
+        e.execute("mix.module_param", &json!({"track": t, "module": m, "param": "gain", "value": -12.0})).unwrap();
+        assert_eq!((ins(&e).params["gain"], ins(&e).params["c1:gain"]), (-3.0, -12.0));
+        e.execute("mix.module_params", &json!({"track": t, "module": m, "params": {"gain": -9.0}})).unwrap();
+        assert_eq!((ins(&e).params["gain"], ins(&e).params["c1:gain"]), (-3.0, -9.0));
+        e.execute("automation.set_point", &json!({"track": t, "param": format!("plugin:m{m}:c1:gain"), "at": 0, "value": -20.0})).unwrap();
+        assert!(
+            e.session().tracks[0]
+                .automation
+                .iter()
+                .any(|l| matches!(&l.param, soundcraft_model::AutoParam::Plugin { param, .. } if param == "c1:gain"))
+        );
+        e.execute("mix.module_multi_mono", &json!({"track": t, "module": m, "linked": true})).unwrap();
+        assert!(ins(&e).multi_mono && !ins(&e).multi_mono_unlinked && ins(&e).edit_channel == 0);
+        assert_eq!(ins(&e).params["c1:gain"], -9.0, "kept for unlinking again");
+        assert!(e.execute("mix.module_param", &json!({"track": t, "module": m, "param": "c1:gain", "value": 0.0})).is_err());
+        // Saved and loaded, unlinked comes back; the edited channel does not.
+        e.execute("mix.module_multi_mono", &json!({"track": t, "module": m, "linked": false})).unwrap();
+        assert_eq!(ins(&e).params["c1:gain"], -9.0, "its own value again, not the module's");
+        let back: soundcraft_model::Session = serde_json::from_str(&serde_json::to_string(e.session()).unwrap()).unwrap();
+        assert!(back.tracks[0].mixer.inserts[0].multi_mono_unlinked);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(!ins(&e).multi_mono_unlinked);
+    }
+
+    /// Multi-mono unlinked: a built-in's derived parameters are each channel's own. Dist's Link
+    /// moves the second channel's Level when its Drive moves, leaving the first's alone, and a
+    /// circuit change on the second keeps its knob memory under its own keys.
+    #[test]
+    fn an_unlinked_channel_derives_its_own_parameters() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"format": "stereo"})).unwrap();
+        let t = e.session().tracks[0].id.0;
+        let m = e.execute("mix.module_add", &json!({"track": t, "plugin": "fs_dist", "params": {"link": 1.0, "drive": 0.2}})).unwrap()["module"]
+            .as_u64()
+            .unwrap();
+        let ins = |e: &Engine| e.session().tracks[0].mixer.inserts[0].clone();
+        e.execute("mix.module_multi_mono", &json!({"track": t, "module": m, "linked": false})).unwrap();
+        let level = ins(&e).params.get("level").copied();
+        let memory = ins(&e).memory.clone();
+        e.execute("mix.module_channel", &json!({"track": t, "module": m, "channel": 1})).unwrap();
+        e.execute("mix.module_param", &json!({"track": t, "module": m, "param": "drive", "value": 0.95})).unwrap();
+        let after = ins(&e);
+        assert_eq!(after.params.get("level").copied(), level, "the first channel's Level stays");
+        let c1 = after.params.get("c1:level").copied().expect("Link wrote the second channel's Level");
+        assert_ne!(Some(c1), level, "Link moved the second channel's Level");
+        let undo = e.undo_history().len();
+        e.execute("mix.module_param", &json!({"track": t, "module": m, "param": "circuit", "value": 2.0})).unwrap();
+        assert_eq!(e.undo_history().len(), undo + 1, "one step");
+        let after = ins(&e);
+        assert!(after.memory.keys().any(|k| k.starts_with("c1:")), "the second channel's knob memory: {:?}", after.memory);
+        let plain: std::collections::BTreeMap<String, f32> =
+            after.memory.iter().filter(|(k, _)| !k.starts_with('c')).map(|(k, v)| (k.clone(), *v)).collect();
+        assert_eq!(plain, memory, "the first channel's memory stays");
+        // The first channel derives as before, into the plain ids.
+        e.execute("mix.module_channel", &json!({"track": t, "module": m, "channel": 0})).unwrap();
+        e.execute("mix.module_param", &json!({"track": t, "module": m, "param": "drive", "value": 0.9})).unwrap();
+        assert_ne!(ins(&e).params.get("level").copied(), level);
+        assert_eq!(ins(&e).params.get("c1:level").copied(), after.params.get("c1:level").copied());
     }
 
     #[test]
@@ -804,6 +1103,25 @@ mod tests {
         assert!(e.session().tracks.iter().all(|tr| tr.automation.iter().all(|l| !matches!(l.param, soundcraft_model::AutoParam::Plugin { .. }))));
         e.execute("automation.set_point", &json!({"track": t, "param": format!("plugin:m{a}:ratio"), "at": 0, "value": 2.0})).unwrap();
         e.execute("track.view", &json!({"track": t, "view": format!("plugin:m{a}:ratio")})).unwrap();
+    }
+
+    /// A module's bypass and wet/dry mix lanes are made by the automation commands (they are no
+    /// plugin parameter, yet the module's own); any other `@` id is refused.
+    #[test]
+    fn bypass_and_mix_lanes_are_made() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({})).unwrap();
+        let t = e.session().tracks[0].id.0;
+        let a = e.execute("mix.module_add", &json!({"track": t, "plugin": "compressor"})).unwrap()["module"].as_u64().unwrap();
+        for p in ["@bypass", "@mix"] {
+            e.execute("automation.set_point", &json!({"track": t, "param": format!("plugin:m{a}:{p}"), "at": 0, "value": 0.5})).unwrap();
+        }
+        let tr = &e.session().tracks[0];
+        let id = soundcraft_model::ModuleId(a as u32);
+        let mix = soundcraft_model::AutoParam::wet_mix(id);
+        assert!(tr.lane(&soundcraft_model::AutoParam::bypass(id)).is_some() && tr.lane(&mix).is_some());
+        assert_eq!(super::super::mix::current_value(tr, &mix), 1.0, "a new insert is fully wet");
+        assert!(e.execute("automation.set_point", &json!({"track": t, "param": format!("plugin:m{a}:@nothing"), "at": 0, "value": 0.5})).is_err());
     }
 
     #[test]

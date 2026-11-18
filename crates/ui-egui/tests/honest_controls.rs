@@ -39,6 +39,8 @@ fn the_network_window_says_what_pairing_allows_and_that_the_local_link_is_plain(
     }
     assert!(h.query_by_label_contains("can do everything you can do here").is_some());
     assert!(h.query_by_label_contains("a link that is not encrypted").is_some());
+    // The first pairing of a PC proves both keys with the code, which is never sent.
+    assert!(h.query_by_label_contains("a PC never sends the code").is_some());
     assert!(h.query_by_label_contains("Offer the encrypted local link").is_some());
     // PCs are taken over the encrypted link only, unless the user turns it off (owner, 2026-11-16).
     assert!(h.query_by_label_contains("Take PCs over the encrypted link only").is_some());

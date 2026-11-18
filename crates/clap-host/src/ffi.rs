@@ -14,10 +14,11 @@ use crate::{ClapError, scan};
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
-    CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
-    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING, clap_event_header, clap_event_midi, clap_event_note,
-    clap_event_note_expression, clap_event_param_value, clap_event_transport, clap_input_events, clap_output_events,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_MIDI_SYSEX, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
+    CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
+    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING, clap_event_header, clap_event_midi,
+    clap_event_midi_sysex, clap_event_note, clap_event_note_expression, clap_event_param_value, clap_event_transport, clap_input_events,
+    clap_output_events,
 };
 use clap_sys::ext::audio_ports::{CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, clap_audio_port_info, clap_plugin_audio_ports};
 use clap_sys::ext::gui::{CLAP_EXT_GUI, clap_host_gui, clap_plugin_gui, clap_window, clap_window_handle};
@@ -66,6 +67,9 @@ pub(crate) const MAX_PORT_CHANNELS: u32 = 64;
 const MAX_FEATURES: usize = 64;
 /// Capacity of the per-block event list (preallocated: `process` never allocates).
 pub(crate) const EVENT_CAP: usize = 1024;
+
+/// Bytes of SysEx one block's events hold, all messages together (made once).
+pub(crate) const SYSEX_ARENA: usize = 8192;
 /// Largest plugin state we accept from `clap_plugin_state.save` (hostile-input cap).
 pub(crate) const MAX_STATE_BYTES: usize = 64 << 20;
 /// Most editor parameter edits buffered between two UI frames.
@@ -343,6 +347,7 @@ impl Bundle {
             state_ext: std::ptr::null(),
             gui: Arc::new(GuiLink::default()),
             raw: Vec::with_capacity(EVENT_CAP),
+            sysex: Vec::with_capacity(SYSEX_ARENA),
             out_params: Vec::with_capacity(EVENT_CAP),
             active: false,
             processing: false,
@@ -883,6 +888,8 @@ pub(crate) enum Event {
     /// `channel` is the MIDI channel, 0–15.
     NoteOn {
         time: u32,
+        /// The host's id for this note (`note_id`), so later expressions reach it alone; -1: none.
+        id: i32,
         channel: u8,
         key: u8,
         velocity: f64,
@@ -890,6 +897,8 @@ pub(crate) enum Event {
     /// `velocity` is the release velocity, 0–1.
     NoteOff {
         time: u32,
+        /// The id its note-on carried; -1: none.
+        id: i32,
         channel: u8,
         key: u8,
         velocity: f64,
@@ -898,6 +907,8 @@ pub(crate) enum Event {
     /// with `key` -1, every key sounding on it.
     Expression {
         time: u32,
+        /// The note it is for, by the id its note-on carried; -1: by channel and key alone.
+        id: i32,
         expression: i32,
         channel: u8,
         key: i16,
@@ -908,6 +919,13 @@ pub(crate) enum Event {
         time: u32,
         data: [u8; 3],
     },
+    /// A System Exclusive message: `len` bytes from `at` in the instance's SysEx arena
+    /// ([`Instance::stage_sysex`]).
+    SysEx {
+        time: u32,
+        at: u32,
+        len: u32,
+    },
 }
 
 impl Event {
@@ -917,7 +935,8 @@ impl Event {
             | Event::NoteOn { time, .. }
             | Event::NoteOff { time, .. }
             | Event::Expression { time, .. }
-            | Event::Midi { time, .. } => time,
+            | Event::Midi { time, .. }
+            | Event::SysEx { time, .. } => time,
         }
     }
     pub fn set_time(&mut self, t: u32) {
@@ -926,7 +945,8 @@ impl Event {
             | Event::NoteOn { time, .. }
             | Event::NoteOff { time, .. }
             | Event::Expression { time, .. }
-            | Event::Midi { time, .. } => *time = t,
+            | Event::Midi { time, .. }
+            | Event::SysEx { time, .. } => *time = t,
         }
     }
 }
@@ -937,6 +957,7 @@ enum RawEvent {
     Param(clap_event_param_value),
     Midi(clap_event_midi),
     Expression(clap_event_note_expression),
+    SysEx(clap_event_midi_sysex),
 }
 
 impl RawEvent {
@@ -948,10 +969,12 @@ impl RawEvent {
             RawEvent::Param(e) => &e.header,
             RawEvent::Midi(e) => &e.header,
             RawEvent::Expression(e) => &e.header,
+            RawEvent::SysEx(e) => &e.header,
         }
     }
 
-    fn from_event(e: &Event, offset: u32) -> RawEvent {
+    /// `e` as CLAP takes it, its time less `offset`; a SysEx points into `arena`.
+    fn from_event(e: &Event, offset: u32, arena: &[u8]) -> RawEvent {
         let header = |size: usize, type_: u16, time: u32| clap_event_header {
             size: u32::try_from(size).unwrap_or(u32::MAX),
             time: time.saturating_sub(offset),
@@ -970,26 +993,26 @@ impl RawEvent {
                 key: -1,
                 value,
             }),
-            Event::NoteOn { time, channel, key, velocity } => RawEvent::Note(clap_event_note {
+            Event::NoteOn { time, id, channel, key, velocity } => RawEvent::Note(clap_event_note {
                 header: header(size_of::<clap_event_note>(), CLAP_EVENT_NOTE_ON, time),
-                note_id: -1,
+                note_id: id,
                 port_index: 0,
                 channel: i16::from(channel & 0x0F),
                 key: i16::from(key),
                 velocity,
             }),
-            Event::NoteOff { time, channel, key, velocity } => RawEvent::Note(clap_event_note {
+            Event::NoteOff { time, id, channel, key, velocity } => RawEvent::Note(clap_event_note {
                 header: header(size_of::<clap_event_note>(), CLAP_EVENT_NOTE_OFF, time),
-                note_id: -1,
+                note_id: id,
                 port_index: 0,
                 channel: i16::from(channel & 0x0F),
                 key: i16::from(key),
                 velocity,
             }),
-            Event::Expression { time, expression, channel, key, value } => RawEvent::Expression(clap_event_note_expression {
+            Event::Expression { time, id, expression, channel, key, value } => RawEvent::Expression(clap_event_note_expression {
                 header: header(size_of::<clap_event_note_expression>(), CLAP_EVENT_NOTE_EXPRESSION, time),
                 expression_id: expression,
-                note_id: -1,
+                note_id: id,
                 port_index: 0,
                 channel: i16::from(channel & 0x0F),
                 key,
@@ -997,6 +1020,15 @@ impl RawEvent {
             }),
             Event::Midi { time, data } => {
                 RawEvent::Midi(clap_event_midi { header: header(size_of::<clap_event_midi>(), CLAP_EVENT_MIDI, time), port_index: 0, data })
+            }
+            Event::SysEx { time, at, len } => {
+                let bytes = arena.get(at as usize..(at as usize).saturating_add(len as usize)).unwrap_or(&[]);
+                RawEvent::SysEx(clap_event_midi_sysex {
+                    header: header(size_of::<clap_event_midi_sysex>(), CLAP_EVENT_MIDI_SYSEX, time),
+                    port_index: 0,
+                    buffer: bytes.as_ptr(),
+                    size: u32::try_from(bytes.len()).unwrap_or(0),
+                })
             }
         }
     }
@@ -1624,6 +1656,8 @@ pub(crate) struct Instance {
     state_ext: *const clap_plugin_state,
     gui: Arc<GuiLink>,
     raw: Vec<RawEvent>,
+    /// The bytes of the SysEx events queued (see [`Instance::stage_sysex`]); never grows.
+    sysex: Vec<u8>,
     /// Parameter values the plugin reported through output events in the current `process`.
     out_params: Vec<(u32, f64)>,
     active: bool,
@@ -1785,6 +1819,24 @@ impl Instance {
         Ok(out)
     }
 
+    /// The names of the plugin's audio output ports (empty for one it does not name), in port
+    /// order.
+    pub fn output_port_names(&self) -> Vec<String> {
+        // SAFETY: see `params`.
+        let Some(p) = (unsafe { self.ports.as_ref() }) else { return Vec::new() };
+        let (Some(count), Some(get)) = (p.count, p.get) else { return Vec::new() };
+        // SAFETY: vtable call with its instance.
+        let n = unsafe { count(self.plugin, false) }.min(MAX_PORTS);
+        (0..n)
+            .map(|i| {
+                // SAFETY: plain data; all-zero (null port_type pointer) is valid.
+                let mut info: clap_audio_port_info = unsafe { std::mem::zeroed() };
+                // SAFETY: index below the count; `info` is writable.
+                if unsafe { get(self.plugin, i, false, &mut info) } { read_name(&info.name) } else { String::new() }
+            })
+            .collect()
+    }
+
     pub fn note_port(&self) -> Option<NotePort> {
         // SAFETY: see `params`.
         let p = unsafe { self.notes.as_ref() }?;
@@ -1868,6 +1920,20 @@ impl Instance {
 
     /// Runs one `clap_process` call over `frames` frames. Events must be sorted by time; their
     /// times are made relative to `offset`. Returns the CLAP process status.
+    /// Keeps `data` for a SysEx event: where it is in the arena, `None` when it does not fit.
+    /// `fresh`: no SysEx event is queued any more, so the arena starts over. Never allocates.
+    pub fn stage_sysex(&mut self, data: &[u8], fresh: bool) -> Option<(u32, u32)> {
+        if fresh {
+            self.sysex.clear();
+        }
+        if self.sysex.len().saturating_add(data.len()) > self.sysex.capacity() {
+            return None;
+        }
+        let at = u32::try_from(self.sysex.len()).ok()?;
+        self.sysex.extend_from_slice(data);
+        Some((at, u32::try_from(data.len()).ok()?))
+    }
+
     pub fn process(
         &mut self,
         frames: usize,
@@ -1898,7 +1964,7 @@ impl Instance {
         let process = self.vt().process.ok_or_else(|| ClapError::Process("plugin has no process".into()))?;
         self.raw.clear();
         for e in events.iter().take(self.raw.capacity()) {
-            self.raw.push(RawEvent::from_event(e, offset));
+            self.raw.push(RawEvent::from_event(e, offset, &self.sysex));
         }
         inputs.refresh();
         outputs.refresh();
@@ -2581,12 +2647,33 @@ mod tests {
     /// reaches CLAP with its id, channel, key (-1: every key) and value.
     #[test]
     fn note_offs_and_expressions_reach_clap_whole() {
-        let off = RawEvent::from_event(&Event::NoteOff { time: 9, channel: 3, key: 60, velocity: 0.5 }, 4);
+        let off = RawEvent::from_event(&Event::NoteOff { time: 9, id: 7, channel: 3, key: 60, velocity: 0.5 }, 4, &[]);
         let RawEvent::Note(n) = off else { panic!("a note event") };
-        assert_eq!((n.header.type_, n.header.time, n.channel, n.key, n.velocity), (CLAP_EVENT_NOTE_OFF, 5, 3, 60, 0.5));
-        let ex = RawEvent::from_event(&Event::Expression { time: 2, expression: 2, channel: 1, key: -1, value: -1.5 }, 0);
+        assert_eq!((n.header.type_, n.header.time, n.channel, n.key, n.velocity, n.note_id), (CLAP_EVENT_NOTE_OFF, 5, 3, 60, 0.5, 7));
+        let on = RawEvent::from_event(&Event::NoteOn { time: 0, id: 7, channel: 3, key: 60, velocity: 1.0 }, 0, &[]);
+        let RawEvent::Note(n) = on else { panic!("a note event") };
+        assert_eq!((n.header.type_, n.note_id), (CLAP_EVENT_NOTE_ON, 7));
+        let ex = RawEvent::from_event(&Event::Expression { time: 2, id: -1, expression: 2, channel: 1, key: -1, value: -1.5 }, 0, &[]);
         let RawEvent::Expression(x) = ex else { panic!("an expression") };
         assert_eq!((x.header.type_, x.header.size as usize), (CLAP_EVENT_NOTE_EXPRESSION, size_of::<clap_event_note_expression>()));
         assert_eq!((x.expression_id, x.channel, x.key, x.note_id, x.value), (2, 1, -1, -1, -1.5));
+        let ex = RawEvent::from_event(&Event::Expression { time: 2, id: 9, expression: 0, channel: 4, key: 62, value: 0.5 }, 0, &[]);
+        let RawEvent::Expression(x) = ex else { panic!("an expression") };
+        assert_eq!((x.note_id, x.channel, x.key), (9, 4, 62), "addressed to one note by its id");
+    }
+
+    /// A SysEx reaches CLAP as `clap_event_midi_sysex`, pointing at its bytes in the arena.
+    #[test]
+    fn a_sysex_reaches_clap_as_its_bytes() {
+        let arena = [0x00, 0xF0, 0x43, 0x10, 0xF7, 0x00];
+        let e = RawEvent::from_event(&Event::SysEx { time: 12, at: 1, len: 4 }, 2, &arena);
+        let RawEvent::SysEx(x) = e else { panic!("a sysex event") };
+        assert_eq!((x.header.type_, x.header.time, x.header.size as usize), (CLAP_EVENT_MIDI_SYSEX, 10, size_of::<clap_event_midi_sysex>()));
+        // SAFETY: the event points into `arena`, alive here.
+        let bytes = unsafe { std::slice::from_raw_parts(x.buffer, x.size as usize) };
+        assert_eq!(bytes, &[0xF0, 0x43, 0x10, 0xF7]);
+        // Outside the arena: an empty message, never a wild pointer.
+        let RawEvent::SysEx(bad) = RawEvent::from_event(&Event::SysEx { time: 0, at: 5, len: 9 }, 0, &arena) else { panic!() };
+        assert_eq!(bad.size, 0);
     }
 }

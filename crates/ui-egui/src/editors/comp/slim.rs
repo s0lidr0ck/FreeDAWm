@@ -67,6 +67,7 @@ pub(super) fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: 
         name,
         listen: None,
         sur_link: None,
+        lookahead: None,
     };
     header_controls(st, app, ui, host, &rects);
     y += btn_h + GAP + 2.0;

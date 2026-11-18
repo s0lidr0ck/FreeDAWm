@@ -201,7 +201,7 @@ pub fn land(e: &mut Engine, env: &TakeEnvelope) -> Result<Landed, String> {
         .map(|ev| {
             let booth = map.as_ref().map_or(ev.t, |m| m.map(ev.t));
             let (at, pass) = env.anchor.place(booth);
-            RecordedEvent { at: to_samples(at), port: remote_port_name(&env.pc, &ev.port), msg: ev.msg, pass }
+            RecordedEvent { at: to_samples(at), port: remote_port_name(&env.pc, &ev.port), msg: ev.msg, pass, sysex: Vec::new() }
         })
         .collect();
     let a = &env.anchor;
@@ -268,6 +268,7 @@ pub fn land_audio(e: &mut Engine, env: &TakeEnvelope, wav: &std::path::Path, fir
         latency: first.saturating_neg(),
         loop_from: None,
         punches: Vec::new(),
+        pre: 0,
     };
     let takes: Vec<(TrackId, std::path::PathBuf)> = tracks.iter().map(|t| (*t, wav.to_path_buf())).collect();
     out.clips = soundcraft_engine::io::place_recording(e, &plan, takes);

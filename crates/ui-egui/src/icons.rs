@@ -104,6 +104,23 @@ pub fn draw(painter: &Painter, r: Rect, name: &str, c: Color32) {
             painter.line_segment([p(r, 0.25, 0.75), p(r, 0.72, 0.28)], Stroke::new(s.width * 2.2, c));
             painter.add(Shape::convex_polygon(vec![p(r, 0.18, 0.82), p(r, 0.22, 0.66), p(r, 0.34, 0.78)], c, Stroke::NONE));
         }
+        "scissors" => {
+            // Two blades crossing, two finger rings below.
+            painter.line_segment([p(r, 0.36, 0.62), p(r, 0.7, 0.14)], s);
+            painter.line_segment([p(r, 0.64, 0.62), p(r, 0.3, 0.14)], s);
+            painter.circle_stroke(p(r, 0.3, 0.74), r.width() * 0.12, s);
+            painter.circle_stroke(p(r, 0.7, 0.74), r.width() * 0.12, s);
+        }
+        "mute_tool" => {
+            // A speaker struck through.
+            painter.add(Shape::convex_polygon(
+                vec![p(r, 0.16, 0.4), p(r, 0.3, 0.4), p(r, 0.48, 0.22), p(r, 0.48, 0.78), p(r, 0.3, 0.6), p(r, 0.16, 0.6)],
+                c,
+                Stroke::NONE,
+            ));
+            painter.line_segment([p(r, 0.6, 0.36), p(r, 0.86, 0.64)], s);
+            painter.line_segment([p(r, 0.86, 0.36), p(r, 0.6, 0.64)], s);
+        }
         "speaker" => {
             painter.add(Shape::convex_polygon(
                 vec![p(r, 0.2, 0.4), p(r, 0.34, 0.4), p(r, 0.52, 0.22), p(r, 0.52, 0.78), p(r, 0.34, 0.6), p(r, 0.2, 0.6)],

@@ -864,9 +864,6 @@ fn ask(file: &DiskFile, block: usize) {
 // ─── The disk thread ──────────────────────────────────────────────────────────────────────────
 
 fn start_thread() -> bool {
-    if cfg!(target_arch = "wasm32") {
-        return false;
-    }
     std::thread::Builder::new().name("freedawm-disk".into()).spawn(run).is_ok()
 }
 

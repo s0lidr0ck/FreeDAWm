@@ -35,6 +35,30 @@ pub const MAX_OUT_PORTS: usize = 16;
 /// Messages one port's ring holds between two passes of its sender (about a millisecond).
 pub const OUT_RING: usize = 4096;
 
+/// SysEx messages waiting to leave, all ports together (each up to `soundcraft_midi::MAX_SYSEX`
+/// bytes); more at once are dropped and counted.
+pub const SYSEX_SLOTS: usize = 32;
+
+/// The ring entry flag of a SysEx: the low byte is its pool slot.
+const SYSEX_FLAG: u64 = 1 << 40;
+
+/// A message as the sender takes it from a ring.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutMsg {
+    /// A channel or system-common message (3 bytes, the unused ones 0).
+    Short([u8; 3]),
+    /// A whole System Exclusive message.
+    SysEx(Vec<u8>),
+}
+
+/// One SysEx waiting to leave: its bytes in atomics (written by the audio thread, read by the
+/// sender), its length, and whether it is free (0), being written (1) or waiting (2).
+struct SysexCell {
+    state: std::sync::atomic::AtomicU8,
+    len: AtomicUsize,
+    bytes: Box<[std::sync::atomic::AtomicU8]>,
+}
+
 /// Bounded multi-producer multi-consumer FIFO of `(stamp, packed message)` pairs (Vyukov's
 /// sequence-numbered cells, with atomics for the payload so no `unsafe` is needed).
 pub struct OutRing {
@@ -153,6 +177,8 @@ pub struct OutHub {
     /// When the frame being rendered now will be heard (µs on [`OutHub::now_us`]'s clock), 0
     /// while no live host renders.
     base: AtomicU64,
+    sysex: Box<[SysexCell]>,
+    sysex_dropped: AtomicU64,
 }
 
 static HUB: OnceLock<OutHub> = OnceLock::new();
@@ -165,6 +191,14 @@ pub fn hub() -> &'static OutHub {
         ids: std::array::from_fn(|_| AtomicU64::new(0)),
         rings: std::array::from_fn(|_| OutRing::new(OUT_RING)),
         base: AtomicU64::new(0),
+        sysex: (0..SYSEX_SLOTS)
+            .map(|_| SysexCell {
+                state: std::sync::atomic::AtomicU8::new(0),
+                len: AtomicUsize::new(0),
+                bytes: (0..soundcraft_midi::MAX_SYSEX).map(|_| std::sync::atomic::AtomicU8::new(0)).collect(),
+            })
+            .collect(),
+        sysex_dropped: AtomicU64::new(0),
     })
 }
 
@@ -228,9 +262,56 @@ impl OutHub {
         }
     }
 
-    /// The sender: the oldest entry queued for slot `slot`.
-    pub fn pop(&self, slot: usize) -> Option<(u64, [u8; 3])> {
-        self.rings.get(slot)?.pop().map(|(s, p)| (s, unpack(p)))
+    /// Queues the SysEx `data` (`F0` … `F7`) for the port `key` to leave at `stamp`; false when
+    /// the port is not open, the message is too long or every pool slot is waiting. Any thread;
+    /// never allocates or blocks.
+    pub fn send_sysex(&self, key: u64, stamp: u64, data: &[u8]) -> bool {
+        let Some(ring) = self.slot_of(key).and_then(|i| self.rings.get(i)) else { return false };
+        if data.len() > soundcraft_midi::MAX_SYSEX || data.is_empty() {
+            self.sysex_dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let free = self.sysex.iter().position(|c| c.state.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_ok());
+        let Some((i, cell)) = free.and_then(|i| self.sysex.get(i).map(|c| (i, c))) else {
+            self.sysex_dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        };
+        for (d, b) in cell.bytes.iter().zip(data) {
+            d.store(*b, Ordering::Relaxed);
+        }
+        cell.len.store(data.len(), Ordering::Relaxed);
+        cell.state.store(2, Ordering::Release);
+        if ring.push(stamp, SYSEX_FLAG | i as u64) {
+            true
+        } else {
+            cell.state.store(0, Ordering::Release);
+            false
+        }
+    }
+
+    /// SysEx messages dropped (too long, or the pool full), since the hub was made.
+    pub fn sysex_dropped(&self) -> u64 {
+        self.sysex_dropped.load(Ordering::Relaxed)
+    }
+
+    /// The sender: the oldest entry queued for slot `slot`. A SysEx comes back whole (its pool
+    /// slot freed); one whose bytes are gone is skipped.
+    pub fn pop(&self, slot: usize) -> Option<(u64, OutMsg)> {
+        let ring = self.rings.get(slot)?;
+        loop {
+            let (stamp, p) = ring.pop()?;
+            if p & SYSEX_FLAG == 0 {
+                return Some((stamp, OutMsg::Short(unpack(p))));
+            }
+            let Some(cell) = self.sysex.get((p & 0xFF) as usize) else { continue };
+            if cell.state.load(Ordering::Acquire) != 2 {
+                continue;
+            }
+            let n = cell.len.load(Ordering::Relaxed).min(cell.bytes.len());
+            let bytes = cell.bytes.iter().take(n).map(|b| b.load(Ordering::Relaxed)).collect();
+            cell.state.store(0, Ordering::Release);
+            return Some((stamp, OutMsg::SysEx(bytes)));
+        }
     }
 
     /// Messages dropped for want of room, all ports together.
@@ -329,9 +410,14 @@ impl ExternalMidi {
                 _ => {}
             }
         }
-        let base = self.hub.block_base();
-        let stamp = if base == 0 { 0 } else { base.saturating_add((offset as f64 * 1e6 / self.rate.max(1.0)) as u64) };
+        let stamp = self.stamp(offset);
         self.hub.send(self.port, stamp, msg);
+    }
+
+    /// When a message `offset` samples into the block leaves (0: at once).
+    fn stamp(&self, offset: usize) -> u64 {
+        let base = self.hub.block_base();
+        if base == 0 { 0 } else { base.saturating_add((offset as f64 * 1e6 / self.rate.max(1.0)) as u64) }
     }
 }
 
@@ -389,6 +475,15 @@ impl Plugin for ExternalMidi {
 
     fn midi_raw(&mut self, offset: usize, msg: [u8; 3]) {
         self.emit(offset, msg);
+    }
+
+    /// Sent whole, at its time among the port's other messages.
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        if self.port == 0 || self.offline {
+            return;
+        }
+        let stamp = self.stamp(offset);
+        self.hub.send_sysex(self.port, stamp, data);
     }
 
     /// Note-offs for every note it left on, then sustain up and All Notes Off on each channel
@@ -480,11 +575,11 @@ mod tests {
         let mut io = vec![vec![1.0f32; 512]; 2];
         p.process(&mut io, 512);
         assert!(io.iter().all(|c| c.iter().all(|x| *x == 0.0)), "it makes no sound");
-        assert_eq!(h.pop(slot), Some((1_010_000, [0x90, 60, 100])), "10 ms into the block");
-        assert_eq!(h.pop(slot), Some((1_000_000, [0x93, 64, 1])), "its own channel kept");
+        assert_eq!(h.pop(slot), Some((1_010_000, OutMsg::Short([0x90, 60, 100]))), "10 ms into the block");
+        assert_eq!(h.pop(slot), Some((1_000_000, OutMsg::Short([0x93, 64, 1]))), "its own channel kept");
         p.all_notes_off();
         let mut sent = Vec::new();
-        while let Some((_, m)) = h.pop(slot) {
+        while let Some((_, OutMsg::Short(m))) = h.pop(slot) {
             sent.push(m);
         }
         assert_eq!(sent[0], [0x80, 60, 0], "the held note let go");
@@ -493,7 +588,21 @@ mod tests {
         assert!(p.set_param("channel", 10.0));
         while h.pop(slot).is_some() {}
         p.note_on(0, 36, 90);
-        assert_eq!(h.pop(slot).map(|x| x.1), Some([0x99, 36, 90]));
+        assert_eq!(h.pop(slot).map(|x| x.1), Some(OutMsg::Short([0x99, 36, 90])));
+        // A SysEx goes whole, in order with the notes beside it (the forced channel leaves it).
+        let gm_on = [0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7];
+        p.sysex(0, &gm_on);
+        p.note_on(0, 38, 90);
+        assert_eq!(h.pop(slot).map(|x| x.1), Some(OutMsg::SysEx(gm_on.to_vec())));
+        assert_eq!(h.pop(slot).map(|x| x.1), Some(OutMsg::Short([0x99, 38, 90])));
+        // The pool frees as the sender takes them; too long is dropped.
+        for _ in 0..SYSEX_SLOTS * 2 {
+            p.sysex(0, &gm_on);
+            assert!(matches!(h.pop(slot), Some((_, OutMsg::SysEx(_)))));
+        }
+        let before = h.sysex_dropped();
+        p.sysex(0, &vec![0x01; soundcraft_midi::MAX_SYSEX + 1]);
+        assert_eq!((h.pop(slot), h.sysex_dropped()), (None, before + 1));
         // Offline (a bounce), nothing goes out.
         p.set_offline(true);
         p.note_on(0, 38, 90);

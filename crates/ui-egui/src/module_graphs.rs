@@ -2498,7 +2498,7 @@ fn vint_curve_with(
     entry.asked = Some(hash);
     let waiting = budget.and_then(|b| b.waiting).filter(|(w, _)| *w != key);
     ctx.data_mut(|d| d.insert_temp(budget_id, VintBudget { last: now, by: key, waiting }));
-    // An inline worker (wasm32) has it already.
+    // An inline worker has it already.
     pick_up(&mut entry);
     store(&entry);
     entry.curve

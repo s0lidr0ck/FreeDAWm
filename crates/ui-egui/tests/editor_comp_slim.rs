@@ -1,4 +1,4 @@
-//! Comp's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its header, its
+//! Comp's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its header, its
 //! slots, its More section and display toggle, the model menu, and the menu item and command.
 
 mod editor_support;
@@ -196,7 +196,7 @@ fn the_slim_flag_is_a_command_and_a_menu_item() {
     use soundcraft_ui_egui::menus;
     let path = "View > Mix Window Views > Slim Plugin Editors";
     let view = menus::tree().into_iter().find(|n| n.label == "View").unwrap();
-    let views = view.children.iter().find(|n| n.label == "Mix Window Views").unwrap();
+    let views = view.children.iter().find(|n| n.label == "Plug-in Editors").unwrap();
     assert!(views.children.iter().any(|n| n.path == path));
     let id = menus::command_for_path(path, &menus::ui_aliases()).unwrap();
     assert_eq!(id, "ui.mix.slim_editors");

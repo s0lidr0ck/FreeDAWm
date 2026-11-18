@@ -9,21 +9,26 @@ use std::collections::HashMap;
 
 /// Top-level rows per menu, headings and separators not counted: the approved mockups' counts,
 /// plus the owner's greyed-out "coming soon" items (Event: Add Key Change…; Setup: Preferences…;
-/// Click/Countoff… has its window now), plus Track › Capture to Pantry… (2026-11-17,
-/// `docs/pantry.md`). The FreeDAWm menu (About, Session Info, Session Audio
-/// Health, Quit) is drawn by hand ahead of these.
-const ROWS: [(&str, usize); 11] = [
+/// Click/Countoff… has its window now). The FreeDAWm menu (About, Session Info, Session Audio
+/// Health, Tour of FreeDAWm, Quit) is drawn by hand ahead of these. The 2026-11 layout
+/// (Transport between AI and Options; the More submenus dissolved into named groups; set-once
+/// Options settings moved to Setup › Preferences…) set the counts below, plus Track › Capture to Pantry… (2026-11-17,
+/// `docs/pantry.md`), Track › Rename Selected Tracks… and Track › Pin, and Window › New Mix Window… (2026-11-18),
+/// and in Event, MIDI editing: Give Notes Their Own Channels and Clear the Note's Expression
+/// (2026-11-18, before only in the MIDI Editor's Lanes menu).
+const ROWS: [(&str, usize); 12] = [
     ("File", 14),
-    ("Edit", 27),
+    ("Edit", 29),
     ("View", 11),
-    ("Track", 32),
-    ("Clip", 28),
-    ("Event", 15),
-    ("Process", 14),
-    ("AI", 14),
-    ("Options", 20),
-    ("Setup", 11),
-    ("Window", 36),
+    ("Track", 38),
+    ("Clip", 29),
+    ("Event", 31),
+    ("Process", 18),
+    ("AI", 12),
+    ("Transport", 28),
+    ("Options", 14),
+    ("Setup", 12),
+    ("Window", 51),
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).
@@ -59,7 +64,7 @@ fn demo_app() -> SoundApp {
 fn the_menus_and_their_top_level_rows_match_the_mockups() {
     let tree = menus::tree();
     let names: Vec<&str> = tree.iter().map(|n| n.label.as_str()).collect();
-    assert_eq!(names, ROWS.map(|(m, _)| m), "menu bar order (AI sits between Process and Options)");
+    assert_eq!(names, ROWS.map(|(m, _)| m), "menu bar order (AI, then Transport, between Process and Options)");
     for (menu, want) in ROWS {
         let n = tree.iter().find(|n| n.label == menu).unwrap();
         assert_eq!(rows(n), want, "{menu}: top-level rows");
@@ -126,8 +131,9 @@ fn each_action_has_one_item_and_dead_ones_are_gone() {
         let Some(id) = menus::command_for_path(&n.path, &extra) else { continue };
         let key = if PARAMETERISED.contains(&id.as_str()) { format!("{id} {}", n.path) } else { id.clone() };
         let shown = format!("{parent} > {}", n.label);
-        // Track › Color… opens the color palette that Window › More lists too.
-        if id != "window.color_palette"
+        // Track › Color… opens the color palette that Window lists too; Hearing Test… and Ear
+        // Profile… sit in Window › Monitoring and, where people look for them, Options › Monitoring.
+        if !matches!(id.as_str(), "window.color_palette" | "window.hearing_test" | "window.ear_profile")
             && let Some(first) = seen.insert(key, shown.clone())
         {
             panic!("{shown} and {first} both run `{id}`");
@@ -145,7 +151,6 @@ fn each_action_has_one_item_and_dead_ones_are_gone() {
         "event.tempo_linear",
         "event.tempo_scale",
         "automation.write_range",
-        "options.trackpunch",
         "options.layered_editing",
         "options.midi_thru",
         "view.edit_object",
@@ -156,12 +161,21 @@ fn each_action_has_one_item_and_dead_ones_are_gone() {
         "window.midi_front",
         "window.workspace_sounds",
         "window.clip_list_view",
-        "setup.disk_allocation",
         "setup.midi_studio",
     ] {
         assert!(!seen.keys().any(|k| k == dead || k.starts_with(&format!("{dead} "))), "`{dead}` is still on the menu bar");
     }
-    for gone in ["View > Mix Window Views > EQ Curve", "View > Mix Window Views > Meters and Faders", "Options > Solo Mode > Latch"] {
+    // EQ Curve, Meters and Faders and Latch did nothing. Prepare DPE Tracks needs Destructive
+    // Punch, which FreeDAWm doesn't have; Renderer and the Object view show a mark only and change
+    // no sound (2026-11 layout). Their commands stay (see command_reachability.rs).
+    for gone in [
+        "View > Mix Window Views > EQ Curve",
+        "View > Mix Window Views > Meters and Faders",
+        "Options > Solo Mode > Latch",
+        "Options > Prepare DPE Tracks",
+        "Window > Renderer",
+        "View > Mix Window Views > Object",
+    ] {
         assert!(!all_leaves().iter().any(|(_, n)| n.path == gone), "{gone} is still shown");
     }
 }
@@ -182,6 +196,26 @@ fn items_ending_in_dots_open_a_dialog_or_window() {
     assert!(at_once.is_empty(), "these act at once: drop their dots: {at_once:#?}");
 }
 
+/// The other half of the rule in menubar.txt's header: an item that opens a dialog or a window
+/// (the Process window, the MIDI Operations window, Strip Silence's dialog…) ends in "..." or "…".
+/// Window toggles (`window.*`, which show or hide a window, the Window menu's way) and Save
+/// Session (which asks for a path only for an unsaved session) are the exceptions.
+#[test]
+fn items_that_open_a_dialog_or_window_end_in_dots() {
+    let extra = menus::ui_aliases();
+    let mut undotted = Vec::new();
+    for (parent, n) in all_leaves() {
+        if n.kind != MenuKind::Item || menus::opens_window(&n.label) {
+            continue;
+        }
+        let id = menus::command_for_path(&n.path, &extra).unwrap_or_default();
+        if menus::opens_dialog(&id, &n.path) && !id.starts_with("window.") && id != "session.save" {
+            undotted.push(format!("{parent} > {} (`{id}`)", n.label));
+        }
+    }
+    assert!(undotted.is_empty(), "these open a dialog or window: give them dots: {undotted:#?}");
+}
+
 #[test]
 fn the_ai_menu_holds_every_ml_tool() {
     let tree = menus::tree();
@@ -193,9 +227,7 @@ fn the_ai_menu_holds_every_ml_tool() {
             "Separate Stems…",
             "Make Karaoke…",
             "Split Drums…",
-            "Clean Vocal…",
             "Clean Vocal",
-            "Tune Vocal…",
             "Tune Vocal",
             "Convert to MIDI…",
             "Detect Chords…",
@@ -209,10 +241,24 @@ fn the_ai_menu_holds_every_ml_tool() {
     let extra = menus::ui_aliases();
     let clean = ai.children.iter().find(|c| c.label == "Clean Vocal").unwrap();
     let ids: Vec<String> = clean.children.iter().filter_map(|c| menus::command_for_path(&c.path, &extra)).collect();
-    assert_eq!(ids, ["clip.clean_toggle", "clip.clean_mix", "clip.clean_commit", "clip.clean_remove"]);
+    assert_eq!(ids, ["ui.ml.clean", "clip.clean_toggle", "clip.clean_mix", "clip.clean_commit", "clip.clean_remove"]);
+    assert_eq!(clean.children.first().map(|c| c.label.as_str()), Some("Open…"), "Clean Vocal › Open… comes first");
     let tune = ai.children.iter().find(|c| c.label == "Tune Vocal").unwrap();
     let ids: Vec<String> = tune.children.iter().filter_map(|c| menus::command_for_path(&c.path, &extra)).collect();
-    assert_eq!(ids, ["vocal.analyse", "vocal.toggle", "vocal.note_mode", "vocal.fit_to_lead", "ui.vocal_harmony", "vocal.commit", "vocal.remove"]);
+    assert_eq!(tune.children.first().map(|c| c.label.as_str()), Some("Open…"), "Tune Vocal › Open… comes first");
+    assert_eq!(
+        ids,
+        [
+            "ui.vocal_editor",
+            "vocal.analyse",
+            "vocal.toggle",
+            "vocal.note_mode",
+            "vocal.fit_to_lead",
+            "ui.vocal_harmony",
+            "vocal.commit",
+            "vocal.remove"
+        ]
+    );
     let track = tree.iter().find(|n| n.label == "Track").unwrap();
     assert!(!track.children.iter().any(|c| c.label.contains("Stems") || c.label.contains("Karaoke")), "the ML tools left Track");
 }
@@ -224,8 +270,8 @@ fn rows_kind(n: &MenuNode) -> bool {
 #[test]
 fn shown_paths_resolve_like_catalog_paths() {
     let extra = menus::ui_aliases();
-    assert_eq!(menus::source_path("Window > More > Search"), "Window > Pro Tools Search");
-    assert_eq!(menus::command_for_path("Window > More > Search", &extra).as_deref(), Some("window.search"));
+    assert_eq!(menus::source_path("Window > Search"), "Window > Pro Tools Search");
+    assert_eq!(menus::command_for_path("Window > Search", &extra).as_deref(), Some("window.search"));
     assert_eq!(menus::command_for_path("Track > Rename...", &extra).as_deref(), Some("track.rename"));
     assert_eq!(menus::command_for_path("File > Export > Stems...", &extra).as_deref(), Some("file.bounce_stems"));
     assert_eq!(menus::menu_location("window.track_list").as_deref(), Some("Window"));
@@ -428,16 +474,6 @@ fn every_menubar_line_has_a_known_shape() {
     }
 }
 
-/// Bug 23 of parity section 6: the web build has no live MIDI, so the windows that play or set it
-/// up are left out of its menus.
-#[test]
-fn live_midi_windows_are_desktop_only() {
-    for shown in ["Setup > MIDI Input Devices...", "Window > Musical Typing"] {
-        let line = menus::layout().iter().find(|l| l.display == shown).unwrap_or_else(|| panic!("{shown} is on the menu bar"));
-        assert!(line.desktop, "{shown} is left out of the web build");
-    }
-}
-
 #[test]
 fn greyed_items_are_refused_by_path() {
     // Click/Countoff… has its window now.
@@ -589,6 +625,69 @@ fn the_first_item_is_the_wordmark_named_freedawm_and_opens_about() {
     assert!(h.state().ui.show_about, "About FreeDAWm opens the About box");
 }
 
+/// The tour sits with About in the hand-built FreeDAWm menu (it left Window › More).
+#[test]
+fn the_freedawm_menu_opens_the_tour() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(demo_app());
+    assert_eq!(h.state().ui.tour_step, None);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "FreeDAWm").click();
+    h.run_steps(3);
+    h.get_by_label("Tour of FreeDAWm").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.tour_step, Some(0), "Tour of FreeDAWm opens the tour");
+    assert!(!all_leaves().iter().any(|(_, n)| n.label.contains("Tour")), "the tour is no longer in the generated menus");
+    assert_eq!(menus::menu_location("window.tour").as_deref(), Some("FreeDAWm"));
+}
+
+/// The Transport menu holds what plays, positions, loops and records: items that were in Edit ›
+/// Selection, Edit, Options and Options › More, each still running its command.
+#[test]
+fn the_transport_menu_holds_the_transport_items() {
+    let extra = menus::ui_aliases();
+    let id_at = |shown: &str| {
+        let (_, n) = all_leaves().into_iter().find(|(p, n)| format!("{p} > {}", n.label) == shown).unwrap_or_else(|| panic!("no item {shown}"));
+        menus::command_for_path(&n.path, &extra).unwrap()
+    };
+    for (shown, id) in [
+        ("Transport > Play Edit Selection", "transport.play_selection"),
+        ("Transport > Pause or Resume", "transport.pause"),
+        ("Transport > Play from End", "transport.play_from_end"),
+        ("Transport > Set Play Start", "transport.set_play_start"),
+        ("Transport > Loop Playback", "options.loop_playback"),
+        ("Transport > Select Loop Range", "loop.select"),
+        ("Transport > Clear Skip Ranges", "transport.skip_clear"),
+        ("Transport > Varispeed...", "transport.varispeed"),
+        ("Transport > Shuttle > Forward", "transport.shuttle_forward"),
+        ("Transport > Dynamic Transport", "options.dynamic_transport"),
+        ("Transport > Pre/Post-Roll...", "options.pre_post_roll"),
+        ("Transport > Insertion Follows Playback", "options.insertion_follows_playback"),
+        ("Transport > QuickPunch", "options.quickpunch"),
+        ("Transport > TrackPunch", "options.trackpunch"),
+        ("Transport > Record Mode > Keep Takes as Lanes", "options.record_mode"),
+    ] {
+        assert_eq!(id_at(shown), id, "{shown}");
+    }
+    // Shortcuts move with their items.
+    assert!(menus::shortcut_for(&id_at("Transport > Loop Playback")).is_some());
+    let tree = menus::tree();
+    let selection = tree.iter().find(|n| n.label == "Edit").and_then(|e| e.children.iter().find(|n| n.label == "Selection")).unwrap();
+    assert!(
+        !selection.children.iter().any(|n| n.label.starts_with("Play")
+            || n.label == "Audition"
+            || n.label.contains("Skip")
+            || n.label.starts_with("Go to")
+            || n.label.contains("Loop")),
+        "Edit › Selection keeps only selection items"
+    );
+    for menu in ["Edit", "Track", "Process", "Options", "Window"] {
+        let m = tree.iter().find(|n| n.label == menu).unwrap();
+        assert!(!m.children.iter().any(|n| n.label == "More"), "{menu} › More is dissolved");
+    }
+    let event = tree.iter().find(|n| n.label == "Event").unwrap();
+    assert!(!event.children.iter().any(|n| n.label == "More MIDI"), "Event › More MIDI is dissolved");
+}
+
 /// The wordmark is 80 % of the menu text's height, centred on the menu bar's text line.
 #[test]
 fn the_wordmark_is_four_fifths_of_the_menu_text_height() {
@@ -605,4 +704,77 @@ fn the_wordmark_is_four_fifths_of_the_menu_text_height() {
     // Centred on the line of the menu titles next to it.
     let file = h.get_by_role_and_label(egui::accesskit::Role::Button, "File").rect();
     assert!((wordmark.center().y - file.center().y).abs() < 1.0, "{wordmark:?} vs {file:?}");
+}
+
+/// Commands nothing in the UI reached have their menu items, each in the group it belongs to.
+#[test]
+fn the_unreachable_commands_have_menu_items() {
+    let extra = menus::ui_aliases();
+    let id_at = |shown: &str| {
+        let (_, n) = all_leaves().into_iter().find(|(p, n)| format!("{p} > {}", n.label) == shown).unwrap_or_else(|| panic!("no item {shown}"));
+        menus::command_for_path(&n.path, &extra).unwrap()
+    };
+    for (shown, id) in [
+        ("Transport > Go to Next Marker", "markers.next"),
+        ("Transport > Go to Previous Marker", "markers.previous"),
+        ("Track > Clear All Mutes", "mix.clear_mutes"),
+        ("Track > Automation > Write Trim Automation...", "track.trim_automation_write"),
+        ("Transport > Discard Take", "transport.discard_take"),
+        ("Transport > Restart Take", "transport.restart_take"),
+    ] {
+        assert_eq!(id_at(shown), id, "{shown}");
+    }
+
+    let mut app = demo_app();
+    // Clear All Mutes unmutes every track.
+    app.run("mix.mute", json!({"track": "Kick"})).unwrap();
+    menus::invoke_menu(&mut app, "mix.clear_mutes", "Track > Clear All Mutes");
+    assert!(app.engine.session().tracks.iter().all(|t| !t.mixer.mute));
+    // Discard Take and Restart Take act on a take under way: greyed out, and say so, otherwise.
+    for id in ["transport.discard_take", "transport.restart_take"] {
+        assert_eq!(menus::availability(&app, id), Err("nothing is recording".into()), "{id}");
+    }
+    // Write Trim Automation… asks for the trim, then writes it over the selection.
+    app.run("edit.select", json!({"tracks": ["Kick"], "start": {"seconds": 2.0}, "end": {"seconds": 4.0}})).unwrap();
+    menus::invoke_menu(&mut app, "track.trim_automation_write", "Track > Automation > Write Trim Automation...");
+    let Some(soundcraft_ui_egui::dialogs::Dialog::Number { key, value, .. }) = &mut app.dialogs.open else {
+        panic!("Write Trim Automation… did not open its dialog");
+    };
+    assert_eq!(key, "db");
+    *value = -6.0;
+    let mut h = harness(app);
+    click_ok(&mut h);
+    let s = h.state().engine.session();
+    let lane = s.track_by_name("Kick").unwrap().lane(&soundcraft_model::AutoParam::Trim).cloned().expect("a trim lane");
+    assert!(lane.points.iter().any(|p| (p.value + 6.0).abs() < 1e-3), "{:?}", lane.points);
+}
+
+/// Clip › Elastic Properties… asks for the stretch ratio (it ran with none, 1.0, and did nothing):
+/// OK stretches the selected clip, in one undo step, and the dialog opens on the ratio it has.
+#[test]
+fn elastic_properties_asks_for_the_stretch_and_ok_applies_it() {
+    const PATH: &str = "Clip > Elastic Properties";
+    let mut app = demo_app();
+    let kick = app.engine.session().track_by_name("Kick").unwrap().clips()[0].clone();
+    app.engine.execute("edit.select", &json!({"clips": [kick.id.0]})).unwrap();
+    let id = menus::command_for_path(PATH, &menus::ui_aliases()).unwrap();
+    assert_eq!(id, "clip.elastic_properties");
+    assert!(menus::item_state(&app, PATH, Some(&id)).0);
+    menus::invoke_menu(&mut app, &id, PATH);
+    let Some(soundcraft_ui_egui::dialogs::Dialog::Number { value, key, .. }) = &mut app.dialogs.open else {
+        panic!("Elastic Properties… did not open its dialog");
+    };
+    assert_eq!((key.as_str(), *value), ("ratio", 1.0), "starts at the clip's ratio");
+    *value = 2.0;
+    let steps = app.engine.undo_history().len();
+    let mut h = harness(app);
+    click_ok(&mut h);
+    let app = h.state_mut();
+    let now = app.engine.session().find_clip(kick.id).unwrap().1.clone();
+    assert_eq!(now.length, kick.length * 2, "twice as long");
+    assert_eq!(app.engine.undo_history().len(), steps + 1, "one undo step");
+    // Opened again, it shows the ratio the clip has now.
+    menus::invoke_menu(app, &id, PATH);
+    let Some(soundcraft_ui_egui::dialogs::Dialog::Number { value, .. }) = &app.dialogs.open else { panic!("no dialog") };
+    assert_eq!(*value, 2.0);
 }

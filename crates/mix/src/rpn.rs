@@ -117,6 +117,49 @@ impl ParamChase {
     }
 }
 
+/// Most messages [`mpe_setup`] writes (the configuration message, then four for each of the
+/// sixteen channels' pitch-bend range, then the null RPN).
+pub(crate) const MPE_SETUP_MAX: usize = 3 + 16 * 4 + 2;
+
+/// The messages that set an instrument up for `zone` (`None`: the zone `was` is turned off, with
+/// a configuration message of no member channels), into `out`; returns how many. The MPE
+/// Configuration Message (RPN 6 on the master channel: its member count), then the pitch-bend
+/// range (RPN 0) of the master and of each member, then the null RPN so later Data Entry does
+/// not land on either. No allocation.
+pub(crate) fn mpe_setup(
+    zone: Option<soundcraft_model::MpeZone>,
+    was: Option<soundcraft_model::MpeZone>,
+    out: &mut [[u8; 3]; MPE_SETUP_MAX],
+) -> usize {
+    let mut n = 0;
+    let mut put = |m: [u8; 3]| {
+        if let Some(x) = out.get_mut(n) {
+            *x = m;
+            n += 1;
+        }
+    };
+    let Some(z) = zone.or(was) else { return 0 };
+    let master = z.master();
+    let members = if zone.is_some() { z.members.clamp(1, 15) } else { 0 };
+    for m in [[0xB0 | master, 101, 0], [0xB0 | master, 100, 6], [0xB0 | master, 6, members]] {
+        put(m);
+    }
+    if let Some(z) = zone {
+        let range = |ch: u8, semis: u8| [[0xB0 | ch, 101, 0], [0xB0 | ch, 100, 0], [0xB0 | ch, 6, semis.min(96)], [0xB0 | ch, 38, 0]];
+        for m in range(master, z.master_bend) {
+            put(m);
+        }
+        for ch in z.member_channels() {
+            for m in range(ch, z.bend) {
+                put(m);
+            }
+        }
+    }
+    put([0xB0 | master, 101, 127]);
+    put([0xB0 | master, 100, 127]);
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +213,26 @@ mod tests {
         let values: Vec<u8> = sent(&p).iter().filter(|m| m[1] == 6).map(|m| m[2]).collect();
         assert_eq!(values.len(), MAX_PARAMS);
         assert!(values.contains(&(MAX_PARAMS as u8 + 3)) && !values.contains(&0));
+    }
+
+    #[test]
+    fn an_mpe_zone_is_configured_and_its_bend_ranges_set() {
+        let z = soundcraft_model::MpeZone { upper: false, members: 2, bend: 48, master_bend: 2 };
+        let mut out = [[0u8; 3]; MPE_SETUP_MAX];
+        let n = mpe_setup(Some(z), None, &mut out);
+        let got = &out[..n];
+        assert_eq!(&got[..3], &[[0xB0, 101, 0], [0xB0, 100, 6], [0xB0, 6, 2]], "MCM: two members on the lower zone");
+        assert_eq!(&got[3..7], &[[0xB0, 101, 0], [0xB0, 100, 0], [0xB0, 6, 2], [0xB0, 38, 0]], "the master's bend range");
+        assert_eq!(got[9], [0xB1, 6, 48]);
+        assert_eq!(got[13], [0xB2, 6, 48]);
+        assert_eq!(&got[n - 2..], &[[0xB0, 101, 127], [0xB0, 100, 127]]);
+        let up = soundcraft_model::MpeZone { upper: true, members: 15, ..z };
+        let n = mpe_setup(Some(up), None, &mut out);
+        assert_eq!(n, MPE_SETUP_MAX, "all sixteen channels");
+        assert_eq!(out[2], [0xBF, 6, 15]);
+        // Turned off: the zone gets no members.
+        let n = mpe_setup(None, Some(up), &mut out);
+        assert_eq!(&out[..n], &[[0xBF, 101, 0], [0xBF, 100, 6], [0xBF, 6, 0], [0xBF, 101, 127], [0xBF, 100, 127]]);
+        assert_eq!(mpe_setup(None, None, &mut out), 0);
     }
 }

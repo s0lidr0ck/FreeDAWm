@@ -163,7 +163,7 @@ const CENTRE_STEP: f32 = 0.40;
 const DRIFT_STEP: f32 = 0.30;
 
 /// Why a note command refuses a stretched clip (it plays untuned).
-const STRETCHED: &str = "tuning can't follow a stretched clip — commit the stretch first";
+const STRETCHED: &str = "tuning can't follow this stretch (still rendering, or with warp markers, a reverse or a loop) — commit the stretch first";
 
 /// Why Tuned/Original, Commit and Remove refuse.
 const UNTUNED: &str = "choose a clip tuned by Tune Vocal";
@@ -192,7 +192,7 @@ fn waiting_text(s: &soundcraft_model::Session, c: &soundcraft_model::Clip) -> St
 /// [`analysed`] for a command that edits notes: a stretched clip is refused too.
 fn editable(e: &Engine, id: &str, clip: ClipId) -> Result<VocalAnalysis> {
     let a = analysed(e, id, clip)?;
-    if e.session().find_clip(clip).is_some_and(|(_, c)| crate::vocal::stretched(c)) {
+    if e.session().find_clip(clip).is_some_and(|(_, c)| crate::vocal::tune_blocked(e.session(), c)) {
         return Err(bad(id, STRETCHED));
     }
     Ok(a)
@@ -1278,11 +1278,15 @@ mod tests {
     }
 
     #[test]
-    fn note_commands_refuse_stretched_clips() {
+    fn note_commands_tune_varispeed_clips_and_refuse_other_stretches() {
         let (mut e, _, id) = tuned_session(false);
         let note = crate::vocal::analysis_for(e.session(), &clip_of(&e, id)).unwrap().notes[0].id;
+        // A plain varispeed clip tunes in file time.
         e.session_mut().find_clip_mut(id).unwrap().stretch = 1.5;
-        let err = e.execute(EDIT, &json!({"notes": [{"clip": id.0, "note": note.0}], "centre": 50})).unwrap_err();
+        e.execute(EDIT, &json!({"notes": [{"clip": id.0, "note": note.0}], "centre": 50})).unwrap();
+        // Stretched and reversed: the notes can't be placed, refused.
+        e.session_mut().find_clip_mut(id).unwrap().reversed = true;
+        let err = e.execute(EDIT, &json!({"notes": [{"clip": id.0, "note": note.0}], "centre": 60})).unwrap_err();
         assert!(err.to_string().contains("commit the stretch first"), "{err}");
     }
 

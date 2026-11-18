@@ -120,16 +120,9 @@ pub fn find(name: &str) -> Option<&'static Preset> {
     builtin().iter().find(|p| key(&p.name) == k)
 }
 
-/// The recorded kits' folder, where downloaded and saved kits live (none on the web).
+/// The recorded kits' folder, where downloaded and saved kits live.
 pub fn default_kits_dir() -> Option<std::path::PathBuf> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Some(soundcraft_ml::kits::kits_dir())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
+    Some(soundcraft_ml::kits::kits_dir())
 }
 
 #[cfg(test)]

@@ -56,7 +56,7 @@ fn a_piano_key_selects_its_notes() {
     use soundcraft_midi::{Note, Sequence};
     use soundcraft_ui_egui::midi_edit_tools::key_selection;
     let n = |pitch, start| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 10 };
-    let seq = Sequence { notes: vec![n(60, -10), n(60, 0), n(62, 5), n(60, 9)], ctrls: Vec::new() };
+    let seq = Sequence { notes: vec![n(60, -10), n(60, 0), n(62, 5), n(60, 9)], ctrls: Vec::new(), sysex: Vec::new() };
     assert_eq!(key_selection(&seq, &[2], 60, false), vec![1, 3], "hidden notes are not picked");
     assert_eq!(key_selection(&seq, &[2], 60, true), vec![1, 2, 3]);
 

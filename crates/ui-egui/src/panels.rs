@@ -267,20 +267,37 @@ fn gutter_scroll<R>(ui: &Ui, gutter: Rect, out: &egui::scroll_area::ScrollAreaOu
 pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
     let t = Tokens::current();
     panel_header(ui, "CLIPS");
-    let items: Vec<(u64, String, bool, [u8; 3], bool)> = {
+    let items: Vec<(u64, String, bool, [u8; 3], bool, bool)> = {
         let s = app.engine.session();
         let mut v = Vec::new();
         // Whole files first (bold), then clips on tracks. A drum kit's pad samples belong to its
         // instrument (a rendered kit brings dozens): they are not listed.
         let pads: std::collections::HashSet<SourceId> =
             s.tracks.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.samples.values().copied()).collect();
+        // A field recording's scene and take (its iXML) beside its name, so a search finds them.
+        let field =
+            |id: SourceId| s.field_info.get(&id.0).map(|f| f.label()).filter(|l| !l.is_empty()).map(|l| format!(" · {l}")).unwrap_or_default();
         for src in s.sources.iter().filter(|src| !pads.contains(&src.id)) {
-            v.push((src.id.0, format!("{} ({}ch)", src.name, src.channels), true, [150, 150, 150], s.edit.selected_sources.contains(&src.id)));
+            // A file the session could not find says so (Relink… in its menu finds it).
+            let missing = if s.pool.get(src.id).is_none() { " — missing" } else { "" };
+            v.push((
+                src.id.0,
+                format!("{} ({}ch){}{missing}", src.name, src.channels, field(src.id)),
+                true,
+                [150, 150, 150],
+                s.edit.selected_sources.contains(&src.id),
+                false,
+            ));
         }
         for tr in &s.tracks {
             for c in tr.clips() {
-                v.push((c.id.0, c.name.clone(), false, c.color.unwrap_or(tr.color), s.edit.selected_clips.contains(&c.id)));
+                let name = format!("{}{}", c.name, c.source().map(field).unwrap_or_default());
+                v.push((c.id.0, name, false, c.color.unwrap_or(tr.color), s.edit.selected_clips.contains(&c.id), false));
             }
+        }
+        // Clips captured into the list (Clip › Capture), on no track.
+        for c in &s.captured {
+            v.push((c.id.0, format!("{} (captured)", c.name), false, c.color.unwrap_or([150, 150, 150]), false, true));
         }
         v
     };
@@ -288,21 +305,53 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
     let mut filter: String = ui.ctx().memory(|m| m.data.get_temp(fkey)).unwrap_or_default();
     ui.add(egui::TextEdit::singleline(&mut filter).hint_text("🔍 Find clips").desired_width(f32::INFINITY));
     ui.ctx().memory_mut(|m| m.data.insert_temp(fkey, filter.clone()));
-    if ui.small_button("Select Unused Files").on_hover_text("Files no clip on any playlist plays (Clear removes them)").clicked() {
-        let unused = unused_sources(app.engine.session());
-        if unused.is_empty() {
-            app.ui.status = "Every file is used".into();
-        } else {
-            let ids: Vec<u64> = unused.iter().map(|s| s.0).collect();
-            let _ = app.run("edit.select", json!({"sources": ids}));
+    ui.horizontal(|ui| {
+        if ui.small_button("Select Unused Files").on_hover_text("Files no clip on any playlist plays (Clear removes them)").clicked() {
+            let unused = unused_sources(app.engine.session());
+            if unused.is_empty() {
+                app.ui.status = "Every file is used".into();
+            } else {
+                let ids: Vec<u64> = unused.iter().map(|s| s.0).collect();
+                let _ = app.run("edit.select", json!({"sources": ids}));
+            }
         }
-    }
+        if ui
+            .small_button("Compact")
+            .on_hover_text("Make each file again with only the parts its clips use (and a second either side); written at the next save, the old files stay on disk. Undo puts them back")
+            .clicked()
+        {
+            app.ui.status = match app.run("file.compact", json!({})) {
+                Ok(v) => {
+                    let mb = |f: &serde_json::Value| f.as_i64().unwrap_or(0) as f64 * 4.0 / 1e6;
+                    format!("Compacted {} file(s): {:.1} MB of audio per channel down to {:.1} MB", v["compacted"], mb(&v["frames_before"]), mb(&v["frames_after"]))
+                }
+                Err(e) => e,
+            };
+        }
+    });
     let needle = filter.to_lowercase();
-    let items: Vec<_> = items.into_iter().filter(|(_, n, _, _, _)| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
+    let items: Vec<_> = items.into_iter().filter(|(_, n, _, _, _, _)| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
     egui::ScrollArea::vertical().id_salt("clips_scroll").auto_shrink([false, false]).show(ui, |ui| {
-        for (id, name, whole, color, selected) in items {
-            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), if whole { Sense::click_and_drag() } else { Sense::click() });
+        for (id, name, whole, color, selected, captured) in items {
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), Sense::click_and_drag());
             resp.context_menu(|ui| {
+                if captured {
+                    let sel_track = app.engine.session().edit.selected_tracks.first().map(|t| t.0);
+                    if let Some(t) = sel_track
+                        && ui.button("Place on Selected Track").clicked()
+                    {
+                        let at = app.engine.session().edit.selection.start;
+                        if let Err(e) = app.run("clip.place_captured", json!({"clip": id, "track": t, "at": at})) {
+                            app.ui.status = e;
+                        }
+                        ui.close();
+                    }
+                    if ui.button("Remove from List").clicked() {
+                        let _ = app.run("clip.uncapture", json!({"clip": id}));
+                        ui.close();
+                    }
+                    return;
+                }
                 if whole {
                     if ui.button("Place on New Track").clicked() {
                         let _ = app.run("clip.place_source", json!({"source": id}));
@@ -313,6 +362,16 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                         && ui.button("Place on Selected Track").clicked()
                     {
                         let _ = app.run("clip.place_source", json!({"source": id, "track": t}));
+                        ui.close();
+                    }
+                    if app.services.pick_open.is_some() && ui.button("Relink…").on_hover_text("Play this file's clips from another file").clicked()
+                    {
+                        let picked = app.services.pick_open.as_ref().and_then(|pick| pick("file.relink_audio", &[]));
+                        if let Some(path) = picked
+                            && let Err(e) = app.run("file.relink_audio", json!({"source": id, "path": path}))
+                        {
+                            app.ui.status = e;
+                        }
                         ui.close();
                     }
                     ui.separator();
@@ -334,12 +393,16 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                     ui.close();
                 }
             });
+            // Whole files and clips drag onto tracks (a clip lands as a copy).
             if whole {
-                // Whole files drag onto tracks.
                 resp.dnd_set_drag_payload(crate::DragSource(id));
-                if resp.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                }
+            } else if captured {
+                resp.dnd_set_drag_payload(crate::DragCaptured(id));
+            } else {
+                resp.dnd_set_drag_payload(crate::DragClip(id));
+            }
+            if resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             }
             if selected {
                 ui.painter().rect_filled(r, 0.0, t.row_selected);
@@ -352,7 +415,9 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                 if whole { bold(11.0) } else { regular(11.0) },
                 t.text,
             );
-            if resp.clicked() && !whole && ui.input(|i| i.modifiers.alt) {
+            if captured {
+                // Placed by dragging or from its menu; nothing to select on a track.
+            } else if resp.clicked() && !whole && ui.input(|i| i.modifiers.alt) {
                 // Alt-click auditions a clip, as in Pro Tools.
                 crate::audition::clip(app, ClipId(id));
             } else if resp.clicked() {
@@ -370,7 +435,8 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
 pub fn unused_sources(s: &soundcraft_model::Session) -> Vec<SourceId> {
     let mut used: std::collections::HashSet<SourceId> =
         s.tracks.iter().filter_map(|t| t.instrument.as_ref()).flat_map(|i| i.samples.values().copied()).collect();
-    for c in s.all_clips() {
+    // A clip's process history keeps the clips it was made from: their files count as used.
+    for c in s.all_clips().flat_map(|c| std::iter::once(c).chain(c.processes.iter().map(|p| &*p.before))) {
         if let soundcraft_model::ClipContent::Audio { source, .. } = &c.content {
             used.insert(*source);
         }
@@ -432,10 +498,6 @@ fn transport_window(app: &mut SoundApp, ctx: &egui::Context) {
                     (cmd == "transport.play" && app.is_playing()) || (cmd == "transport.record" && app.engine.transport.recording),
                     cmd,
                 );
-                let resp = match crate::record_unavailable(cfg!(target_arch = "wasm32")) {
-                    Some(why) if cmd == "transport.record" => resp.on_hover_text(why),
-                    _ => resp,
-                };
                 if cmd == "transport.record"
                     && let Some(why) = app.record_hint()
                 {
@@ -539,6 +601,9 @@ pub(crate) fn memory_locations(app: &mut SoundApp, ui: &mut Ui) {
         if ui.button("+ Selection").clicked() {
             let _ = app.run("markers.add", json!({"kind": "selection"}));
         }
+        if ui.button("+ View").on_hover_text("A location that recalls this zoom, scroll, the track heights and which tracks are shown").clicked() {
+            let _ = app.run("markers.add", json!({"kind": "none", "view": true}));
+        }
     });
     let rows: Vec<(u32, String, String, String, String)> = {
         let s = app.engine.session();
@@ -549,10 +614,12 @@ pub(crate) fn memory_locations(app: &mut SoundApp, ui: &mut Ui) {
                 let kind = match m.kind {
                     soundcraft_model::MarkerKind::Marker => "marker",
                     soundcraft_model::MarkerKind::Selection => "selection",
-                    soundcraft_model::MarkerKind::None => "none",
+                    soundcraft_model::MarkerKind::None => "view",
                 };
+                // A location that also recalls the view says so.
+                let kind = if m.view.is_some() && m.kind != soundcraft_model::MarkerKind::None { format!("{kind} + view") } else { kind.to_string() };
                 let len = if m.kind == soundcraft_model::MarkerKind::Selection { f(m.end - m.start) } else { String::new() };
-                (m.number, m.name.clone(), f(m.start), len, kind.to_string())
+                (m.number, m.name.clone(), f(m.start), len, kind)
             })
             .collect()
     };
@@ -590,23 +657,37 @@ pub(crate) fn memory_locations(app: &mut SoundApp, ui: &mut Ui) {
 
 pub(crate) fn undo_history(app: &mut SoundApp, ui: &mut Ui) {
     let hist = app.engine.undo_history();
+    let redo = app.engine.redo_history();
     let n = hist.len();
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (i, h) in hist.iter().enumerate() {
             if ui.selectable_label(i + 1 == n, format!("{}  {h}", i + 1)).clicked() {
-                for _ in 0..(n - i - 1) {
-                    let _ = app.run("edit.undo", json!({}));
-                }
+                history_go(app, n - i - 1, 0);
             }
         }
-        if let Some(r) = app.engine.redo_label() {
-            ui.label(egui::RichText::new(format!("(redo) {r}")).italics().color(Tokens::current().text_dim));
+        // The undone steps, dimmed: a click redoes up to and including that one.
+        for (i, r) in redo.iter().enumerate() {
+            let text = egui::RichText::new(format!("{}  {r}", n + i + 1)).italics().color(Tokens::current().text_dim);
+            if ui.selectable_label(false, text).on_hover_text("Redo to here").clicked() {
+                history_go(app, 0, i + 1);
+            }
         }
     });
 }
 
+/// Undoes `undo` steps, then redoes `redo`: a click in the Undo History moves to that step.
+pub(crate) fn history_go(app: &mut SoundApp, undo: usize, redo: usize) {
+    for _ in 0..undo {
+        let _ = app.run("edit.undo", json!({}));
+    }
+    for _ in 0..redo {
+        let _ = app.run("edit.redo", json!({}));
+    }
+}
+
 /// The plugin windows drawn in `ctx`'s viewport: each over the window that opened it.
 pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
+    follow_selection(app);
     let wins = app.ui.plugin_windows.clone();
     let mut keep = Vec::new();
     for (tid, key) in wins {
@@ -634,6 +715,7 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         }) else {
             continue;
         };
+        let ins = edited_channel_view(ins);
         let hosted = soundcraft_mix::is_third_party(&ins.plugin);
         // A hosted plugin not described (yet) still gets its window, for its editor and picture.
         let info = crate::mix_window::plugin_info(&ins.plugin);
@@ -656,6 +738,86 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         }
     }
     app.ui.plugin_windows = keep;
+}
+
+/// What a plugin window shows of a module: for one running multi-mono unlinked with its window
+/// on another channel ([`soundcraft_model::Insert::edit_channel`]), that channel's own values in
+/// place of the first's, so every editor shows the channel it edits (its edits go there too:
+/// `mix.module_param` writes the edited channel).
+pub(crate) fn edited_channel_view(mut ins: soundcraft_model::Insert) -> soundcraft_model::Insert {
+    let ch = usize::from(ins.edit_channel);
+    if ins.multi_mono && ins.multi_mono_unlinked && ch > 0 {
+        let own: Vec<(String, f32)> = ins
+            .params
+            .iter()
+            .filter_map(|(k, v)| soundcraft_model::split_channel_param(k).filter(|(n, _)| *n == ch).map(|(_, p)| (p.to_string(), *v)))
+            .collect();
+        ins.params.extend(own);
+    }
+    ins
+}
+
+/// The channel picker of a multi-mono unlinked module's window: which channel it shows and
+/// edits, and Link to give every channel the module's settings again.
+fn channel_picker(app: &mut SoundApp, ui: &mut Ui, tid: soundcraft_model::TrackId, ins: &soundcraft_model::Insert) {
+    let s = app.engine.session();
+    let Some(t) = s.track(tid) else { return };
+    let channels = soundcraft_mix::strip_channels(t, soundcraft_mix::main_channels(s));
+    if !(ins.multi_mono && ins.multi_mono_unlinked) || channels < 2 {
+        return;
+    }
+    let format = t.format;
+    let name = |c: usize| format!("Channel {} ({})", c + 1, format.channel_label(c));
+    let mut pick = usize::from(ins.edit_channel);
+    egui::ComboBox::from_id_salt(("mm-channel", tid.0, ins.id.0)).selected_text(name(pick)).show_ui(ui, |ui| {
+        for c in 0..channels {
+            ui.selectable_value(&mut pick, c, name(c));
+        }
+    });
+    if pick != usize::from(ins.edit_channel) {
+        let _ = app.run("mix.module_channel", json!({"track": tid.0, "module": ins.id.0, "channel": pick}));
+    }
+    if ui.button("Link").on_hover_text("Multi-mono linked: every channel takes these settings").clicked() {
+        let _ = app.run("mix.module_multi_mono", json!({"track": tid.0, "module": ins.id.0, "linked": true}));
+    }
+}
+
+/// Moves every following plugin window ([`crate::UiState::following_plugins`]) to the track
+/// selected last, when that track has the same plug-in: its instrument, or its first module of
+/// that plug-in. A window whose plug-in the track lacks stays where it is; one already open there
+/// is not opened twice. Pin, detach and follow go with the window.
+pub(crate) fn follow_selection(app: &mut SoundApp) {
+    let s = app.engine.session();
+    let Some(&sel) = s.edit.selected_tracks.last() else { return };
+    let Some(to) = s.track(sel) else { return };
+    let mut moves = Vec::new();
+    for &(tid, key) in &app.ui.following_plugins {
+        if tid == sel {
+            continue;
+        }
+        let plugin = s.track(tid).and_then(|t| match key {
+            soundcraft_mix::SlotKey::Instrument => t.instrument.as_ref().map(|i| i.plugin.clone()),
+            soundcraft_mix::SlotKey::Module(m) => t.module(m).map(|i| i.plugin.clone()),
+        });
+        let Some(plugin) = plugin else { continue };
+        let target = match key {
+            soundcraft_mix::SlotKey::Instrument => to.instrument.as_ref().filter(|i| i.plugin == plugin).map(|_| soundcraft_mix::SlotKey::Instrument),
+            soundcraft_mix::SlotKey::Module(_) => to.mixer.inserts.iter().find(|i| i.plugin == plugin).map(|i| soundcraft_mix::SlotKey::Module(i.id)),
+        };
+        if let Some(target) = target {
+            moves.push(((tid, key), (sel, target)));
+        }
+    }
+    for (from, to) in moves {
+        if app.ui.plugin_windows.contains(&to) {
+            continue;
+        }
+        for list in [&mut app.ui.plugin_windows, &mut app.ui.pinned_plugins, &mut app.ui.detached_plugins, &mut app.ui.following_plugins] {
+            for k in list.iter_mut().filter(|k| **k == from) {
+                *k = to;
+            }
+        }
+    }
 }
 
 /// What a plugin window shows: a slot's plugin, with what it is.
@@ -768,6 +930,15 @@ fn detach_bar(app: &mut SoundApp, ui: &mut Ui, v: &PluginView, detached: bool) {
                 app.ui.pinned_plugins.push(key);
             }
         }
+        let following = app.ui.following_plugins.contains(&key);
+        let r = ui.selectable_label(following, "Follow").on_hover_text("Show this plug-in on whichever track is selected");
+        if r.clicked() {
+            if following {
+                app.ui.following_plugins.retain(|k| *k != key);
+            } else {
+                app.ui.following_plugins.push(key);
+            }
+        }
         ui.label(egui::RichText::new(format!("{} · {}", v.tname, v.name)).color(Tokens::current().text_dim).small());
     });
 }
@@ -850,6 +1021,16 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
             }
             ui.menu_button("Presets ▾", |ui| preset_menu(app, ui, tid, module, info, ins));
         }
+        if !instrument {
+            channel_picker(app, ui, tid, ins);
+        }
+        // A built-in instrument's factory presets (the Subtractive Synth's).
+        if instrument
+            && let Some(info) = info
+            && !crate::fs_presets::factory_groups(info).is_empty()
+        {
+            ui.menu_button("Presets ▾", |ui| crate::fs_presets::instrument_factory_menu(app, ui, tid, info));
+        }
         if hosted {
             let open = app.player.as_ref().is_some_and(|p| p.editor_open(tid, key));
             let available = app.player.as_ref().is_some_and(|p| p.has_editor(tid, key));
@@ -872,6 +1053,21 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
                 .on_disabled_hover_text("Open the plugin's editor first");
             if resp.clicked() {
                 crate::browser::thumbs::capture_now(app, (tid, key));
+            }
+            // A/B of the plug-in's whole state, beside its editor (an inserted one's preset menu
+            // has it too).
+            if !instrument {
+                let b = crate::preset_house::on_b(ui.ctx(), tid, module);
+                let resp = ui.button(if b { "B" } else { "A" }).on_hover_text(if b {
+                    "Comparing: B. Click to go back to A"
+                } else {
+                    "Compare: click to switch to B (a copy of these settings the first time)"
+                });
+                if resp.clicked()
+                    && let Err(e) = crate::preset_house::ab_toggle_hosted(app, ui.ctx(), tid, ins)
+                {
+                    app.ui.status = e;
+                }
             }
         }
     });
@@ -910,6 +1106,42 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
     }
     if info.id == "eq_7band" || info.id == "eq_1band" {
         eq_curve(ui, info.id, ins);
+    }
+    if instrument && info.id == crate::synth_panel::SYNTH {
+        // The synth's panel: its filter and envelopes drawn, over the controls.
+        let r = ui.scope(|ui| {
+            if frozen {
+                ui.disable();
+            }
+            crate::synth_panel::draw(app, ui, tid, ins);
+        });
+        if frozen {
+            r.response.on_disabled_hover_text(read_only.as_str());
+        }
+    }
+    if instrument && info.id == crate::fm_panel::FM {
+        // The FM synth's panel: its algorithm and the operators' envelopes, over the controls.
+        let r = ui.scope(|ui| {
+            if frozen {
+                ui.disable();
+            }
+            crate::fm_panel::draw(app, ui, tid, ins);
+        });
+        if frozen {
+            r.response.on_disabled_hover_text(read_only.as_str());
+        }
+    }
+    if instrument && info.id == crate::wavetable_panel::WAVETABLE {
+        // The wavetable synth's panel: the current wave and its envelopes, over the controls.
+        let r = ui.scope(|ui| {
+            if frozen {
+                ui.disable();
+            }
+            crate::wavetable_panel::draw(app, ui, tid, ins);
+        });
+        if frozen {
+            r.response.on_disabled_hover_text(read_only.as_str());
+        }
     }
     // What the drawer offers, by the drawer's names (a FireStation engine's own
     // bypass and a model's unused switches are not here).
@@ -1209,7 +1441,25 @@ fn preset_housekeeping(
     // A/B compare.
     let b = ph::on_b(ui.ctx(), tid, ins.id);
     if ui.button(if b { "Compare: Back to A" } else { "Compare: Switch to B" }).on_hover_text("Two settings to flip between").clicked() {
-        ph::ab_toggle(app, ui.ctx(), tid, ins, info);
+        if soundcraft_mix::is_third_party(&ins.plugin) {
+            if let Err(e) = ph::ab_toggle_hosted(app, ui.ctx(), tid, ins) {
+                app.ui.status = e;
+            }
+        } else {
+            ph::ab_toggle(app, ui.ctx(), tid, ins, info);
+        }
+        ui.close();
+    }
+    // Copy and paste settings between instances of the plug-in, on any track.
+    if ui.button("Copy Settings").on_hover_text("For Paste Settings on another instance").clicked() {
+        ph::copy_settings(ui.ctx(), ins, info);
+        app.ui.status = format!("Copied the {} settings", info.name);
+        ui.close();
+    }
+    if ui.add_enabled(ph::can_paste(ui.ctx(), info.id), egui::Button::new("Paste Settings")).clicked() {
+        if let Err(e) = ph::paste_settings(app, ui.ctx(), tid, ins.id) {
+            app.ui.status = e;
+        }
         ui.close();
     }
 }
@@ -1271,7 +1521,9 @@ pub(crate) fn full_editors(app: &mut SoundApp, ctx: &egui::Context) {
                 // The full layout here, whatever the drawers use.
                 let slim = std::mem::replace(&mut app.ui.slim_editors, false);
                 let top = ui.cursor().min.y;
-                crate::editors::drawer(app, ui, track, module, meters.as_ref().and_then(|m| m.tracks.get(&tid)));
+                // Its controls follow their automation, as in the drawer.
+                let shown = crate::mix_window::shown_params(app, track);
+                crate::editors::drawer(app, ui, &shown, module, meters.as_ref().and_then(|m| m.tracks.get(&tid)));
                 app.ui.slim_editors = slim;
                 if let Some(face) = crate::editor_kit::frame_rect(ui.ctx(), tid, module) {
                     let want = vec2(face.width(), (face.max.y - top).max(64.0) + 2.0);
@@ -1284,4 +1536,70 @@ pub(crate) fn full_editors(app: &mut SoundApp, ctx: &egui::Context) {
         }
     }
     app.ui.full_editors = keep;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soundcraft_engine::Engine;
+    use soundcraft_mix::SlotKey;
+    use soundcraft_model::ModuleId;
+
+    /// Multi-mono unlinked: the plugin window shows the channel it edits, and a parameter set
+    /// from it (as every editor sets one) lands on that channel; the lane picker lists the
+    /// other channel's lanes.
+    #[test]
+    fn a_multi_mono_unlinked_window_shows_and_edits_its_channel() {
+        let mut engine = Engine::new(soundcraft_model::Session::default());
+        engine.execute("track.new", &json!({"name": "A", "format": "stereo"})).unwrap();
+        let mut app = SoundApp::new(engine, None, crate::Services::default());
+        let t = app.engine.session().tracks[0].id;
+        let m = app.run("mix.module_add", json!({"track": t.0, "plugin": "gain", "params": {"gain": -3.0}})).unwrap()["module"].as_u64().unwrap();
+        app.run("mix.module_multi_mono", json!({"track": t.0, "module": m, "linked": false})).unwrap();
+        app.run("mix.module_channel", json!({"track": t.0, "module": m, "channel": 1})).unwrap();
+        app.run("mix.module_param", json!({"track": t.0, "module": m, "param": "gain", "value": -10.0})).unwrap();
+        let ins = app.engine.session().tracks[0].mixer.inserts[0].clone();
+        assert_eq!(ins.params["gain"], -3.0, "the first channel keeps its value");
+        assert_eq!(edited_channel_view(ins.clone()).params["gain"], -10.0, "the window shows channel 2's");
+        let first = soundcraft_model::Insert { edit_channel: 0, ..ins };
+        assert_eq!(edited_channel_view(first).params["gain"], -3.0);
+        let s = app.engine.session();
+        let lanes = crate::auto_lanes::choices(s, &s.tracks[0]);
+        assert!(lanes.iter().any(|c| matches!(&c.param, soundcraft_model::AutoParam::Plugin { param, .. } if param == "c1:gain")));
+    }
+
+    /// The parity list's "follow the selected track": a plug-in window with Follow on moves to
+    /// the same plug-in on the track selected next, keeping its pin; a track without it leaves
+    /// the window where it is.
+    #[test]
+    fn a_following_plugin_window_moves_with_the_selection() {
+        let mut engine = Engine::new(soundcraft_model::Session::default());
+        for name in ["A", "B", "C"] {
+            engine.execute("track.new", &json!({"name": name})).unwrap();
+        }
+        let mut app = SoundApp::new(engine, None, crate::Services::default());
+        let ids: Vec<TrackId> = app.engine.session().tracks.iter().map(|t| t.id).collect();
+        let add = |app: &mut SoundApp, t: TrackId, p: &str| -> ModuleId {
+            let r = app.run("mix.module_add", json!({"track": t.0, "plugin": p})).unwrap();
+            ModuleId(u32::try_from(r["module"].as_u64().unwrap()).unwrap())
+        };
+        let ma = add(&mut app, ids[0], "heft");
+        add(&mut app, ids[1], "keel");
+        let mb = add(&mut app, ids[1], "heft");
+        add(&mut app, ids[2], "keel");
+        let win = (ids[0], SlotKey::Module(ma));
+        app.ui.plugin_windows.push(win);
+        app.ui.pinned_plugins.push(win);
+        app.ui.following_plugins.push(win);
+        app.run("edit.select", json!({"tracks": [ids[1].0]})).unwrap();
+        follow_selection(&mut app);
+        let moved = (ids[1], SlotKey::Module(mb));
+        assert_eq!(app.ui.plugin_windows, [moved]);
+        assert_eq!(app.ui.pinned_plugins, [moved]);
+        assert_eq!(app.ui.following_plugins, [moved]);
+        // C has no Heft: the window stays on B
+        app.run("edit.select", json!({"tracks": [ids[2].0]})).unwrap();
+        follow_selection(&mut app);
+        assert_eq!(app.ui.plugin_windows, [moved]);
+    }
 }

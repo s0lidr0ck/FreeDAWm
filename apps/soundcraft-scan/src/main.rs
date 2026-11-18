@@ -23,7 +23,6 @@ fn main() -> ExitCode {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn scan(args: &soundcraft_plugin_scan::HelperArgs) -> std::io::Result<()> {
     // No crash dialog may wait for a click: the app stops a helper that goes quiet.
     soundcraft_vst3_host::quiet_crash_dialogs();
@@ -36,9 +35,4 @@ fn scan(args: &soundcraft_plugin_scan::HelperArgs) -> std::io::Result<()> {
         }
     }
     out.done()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn scan(args: &soundcraft_plugin_scan::HelperArgs) -> std::io::Result<()> {
-    ResultWriter::create(&args.out)?.done()
 }

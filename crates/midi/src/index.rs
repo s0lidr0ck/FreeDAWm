@@ -6,8 +6,13 @@
 //! with MIDI Cleanup's previews) and kept beside them. It is only used for the very notes it was
 //! made from: [`NoteIndex::window`] checks their address and count, and any other notes (a copy, a
 //! cleanup's output, notes edited since) are searched whole, as before.
+//!
+//! Made from a whole sequence ([`NoteIndex::of_sequence`]) it indexes the controllers too: whether
+//! they are in tick order and the longest ramp (from a ramp point to the next point of its lane),
+//! so the scheduler looks only at the controllers that can send something in the block
+//! ([`NoteIndex::ctrl_window`]).
 
-use crate::Note;
+use crate::{CtrlEvent, CtrlKind, Note, Sequence};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
@@ -23,6 +28,64 @@ pub struct NoteIndex {
     sorted: bool,
     /// The longest note, in ticks.
     longest: i64,
+    /// The controllers', when made from a whole sequence.
+    ctrls: Option<CtrlPart>,
+}
+
+/// What a [`NoteIndex`] knows of the controllers it was made from.
+#[derive(Debug, Clone)]
+struct CtrlPart {
+    ptr: usize,
+    len: usize,
+    /// A hash of their ticks, lanes and shapes.
+    print: u64,
+    /// Ticks never decrease (as `Sequence::sort` leaves them).
+    sorted: bool,
+    /// The longest span from a ramp point to the next point of its lane, in ticks.
+    longest_ramp: i64,
+}
+
+fn lane_key(c: &CtrlEvent) -> (u8, u8, u8) {
+    let (k, n) = match c.kind {
+        CtrlKind::Cc(n) => (0, n),
+        CtrlKind::PitchBend => (1, 0),
+        CtrlKind::ChannelPressure => (2, 0),
+        CtrlKind::PolyPressure(n) => (3, n),
+        CtrlKind::Program => (4, 0),
+    };
+    (c.channel, k, n)
+}
+
+fn ctrl_print(ctrls: &[CtrlEvent]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for c in ctrls {
+        (c.tick, lane_key(c), c.shape.is_step()).hash(&mut h);
+    }
+    h.finish()
+}
+
+impl CtrlPart {
+    fn of(ctrls: &[CtrlEvent]) -> CtrlPart {
+        // The tick of each lane's last point, when it is a ramp.
+        let mut open: std::collections::HashMap<(u8, u8, u8), i64> = std::collections::HashMap::new();
+        let mut longest_ramp = 0i64;
+        for c in ctrls {
+            let key = lane_key(c);
+            if let Some(from) = open.remove(&key) {
+                longest_ramp = longest_ramp.max(c.tick.saturating_sub(from));
+            }
+            if !c.shape.is_step() {
+                open.insert(key, c.tick);
+            }
+        }
+        CtrlPart {
+            ptr: ctrls.as_ptr() as usize,
+            len: ctrls.len(),
+            print: ctrl_print(ctrls),
+            sorted: ctrls.windows(2).all(|w| w.first().map(|a| a.tick) <= w.get(1).map(|b| b.tick)),
+            longest_ramp: longest_ramp.max(0),
+        }
+    }
 }
 
 /// Where a clip keeps its notes' index: derived data, never saved, and left out of comparisons
@@ -53,6 +116,37 @@ impl NoteIndex {
             print: print(notes),
             sorted: notes.windows(2).all(|w| w.first().map(|a| a.start) <= w.get(1).map(|b| b.start)),
             longest: notes.iter().map(|n| n.length).max().unwrap_or(0).max(0),
+            ctrls: None,
+        }
+    }
+
+    /// The index of a sequence's notes and controllers. Reads every event once.
+    pub fn of_sequence(seq: &Sequence) -> NoteIndex {
+        NoteIndex { ctrls: Some(CtrlPart::of(&seq.ctrls)), ..NoteIndex::of(&seq.notes) }
+    }
+
+    /// Whether this index was made by [`NoteIndex::of_sequence`] from `seq` as it is now.
+    pub fn is_of_sequence(&self, seq: &Sequence) -> bool {
+        self.is_of(&seq.notes)
+            && self
+                .ctrls
+                .as_ref()
+                .is_some_and(|c| c.ptr == seq.ctrls.as_ptr() as usize && c.len == seq.ctrls.len() && c.print == ctrl_print(&seq.ctrls))
+    }
+
+    /// The controllers of `ctrls` that can send something while ticks `from..=to` play: those
+    /// whose tick lies there, and ramp points before it whose ramp can reach into it. Only when
+    /// this index was made from them (with [`NoteIndex::of_sequence`]) and they are in tick order;
+    /// every controller otherwise. No allocation.
+    pub fn ctrl_window(index: Option<&NoteIndex>, ctrls: &[CtrlEvent], from: i64, to: i64) -> Range<usize> {
+        match index.and_then(|ix| ix.ctrls.as_ref()) {
+            Some(c) if c.sorted && c.ptr == ctrls.as_ptr() as usize && c.len == ctrls.len() => {
+                let from = from.saturating_sub(c.longest_ramp);
+                let a = ctrls.partition_point(|e| e.tick < from);
+                let b = ctrls.partition_point(|e| e.tick <= to).max(a);
+                a..b
+            }
+            _ => 0..ctrls.len(),
         }
     }
 
@@ -111,5 +205,39 @@ mod tests {
             x.length = 900;
         }
         assert!(!ix.is_of(&edited), "an edit in place is seen");
+    }
+
+    #[test]
+    fn the_controller_window_reaches_back_by_the_longest_ramp() {
+        let c = |tick: i64, kind: CtrlKind, shape: crate::CtrlShape| CtrlEvent { tick, channel: 0, kind, value: 0, shape };
+        let ramp = crate::CtrlShape::Ramp(0.0);
+        let step = crate::CtrlShape::Step;
+        let seq = Sequence {
+            ctrls: vec![
+                c(0, CtrlKind::Cc(1), ramp),
+                c(100, CtrlKind::Cc(7), step),
+                c(300, CtrlKind::Cc(1), step),
+                c(400, CtrlKind::Cc(7), ramp),
+                c(450, CtrlKind::Cc(7), step),
+                c(1000, CtrlKind::PitchBend, ramp),
+            ],
+            ..Default::default()
+        };
+        let ix = NoteIndex::of_sequence(&seq);
+        assert!(ix.is_of_sequence(&seq));
+        // The longest ramp is 300 ticks (CC 1, 0 to 300); the bend's has no next point.
+        assert_eq!(NoteIndex::ctrl_window(Some(&ix), &seq.ctrls, 310, 420), 1..4);
+        assert_eq!(NoteIndex::ctrl_window(Some(&ix), &seq.ctrls, 900, 950), 5..5);
+        assert_eq!(NoteIndex::ctrl_window(Some(&ix), &seq.ctrls, 600, 700), 2..5);
+        let notes_only = NoteIndex::of(&seq.notes);
+        assert_eq!(NoteIndex::ctrl_window(Some(&notes_only), &seq.ctrls, 600, 700), 0..6, "not indexed: all");
+        assert!(!notes_only.is_of_sequence(&seq));
+        let copy = seq.clone();
+        assert_eq!(NoteIndex::ctrl_window(Some(&ix), &copy.ctrls, 600, 700), 0..6);
+        let mut edited = seq;
+        if let Some(x) = edited.ctrls.get_mut(2) {
+            x.shape = ramp;
+        }
+        assert!(!ix.is_of_sequence(&edited), "a shape changed in place is seen");
     }
 }

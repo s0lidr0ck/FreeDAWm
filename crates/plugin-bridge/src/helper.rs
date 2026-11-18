@@ -4,7 +4,7 @@
 use crate::exchange::{Event, Helper, words_for};
 use crate::proto::{Info, Param, Prepare, Reply, Request, hex, unhex};
 use crate::shm::Shm;
-use soundcraft_dsp::{Plugin, Taper, Unit};
+use soundcraft_dsp::{Plugin, PluginStateReader, Taper, Unit};
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{TryRecvError, channel};
 use std::time::Duration;
@@ -15,6 +15,8 @@ struct Served {
     /// Parameter ids by the index the host sends.
     ids: Vec<&'static str>,
     exchange: Option<(Shm, Helper)>,
+    /// Its state on this (main) thread: where its own presets are loaded.
+    reader: Option<Box<dyn PluginStateReader>>,
 }
 
 /// Serves requests from stdin until it ends (the host went away) or says `quit`, and the
@@ -80,21 +82,19 @@ fn failed(e: impl Into<String>) -> Reply {
 
 fn handle(served: &mut Option<Served>, req: Request) -> Reply {
     match req {
+        Request::Describe { id, dir } => match open(&id, dir) {
+            Ok(p) => Reply { ok: true, info: Some(info_of(&*p)), ..Reply::default() },
+            Err(e) => failed(e),
+        },
         Request::Open { id, dir, prepare } => {
-            if let Some(d) = dir.filter(|_| soundcraft_clap_host::parse_id(&id).is_some()) {
-                soundcraft_clap_host::add_search_dir(std::path::Path::new(&d));
-            }
-            let plugin = match soundcraft_clap_host::parse_id(&id) {
-                Some(_) => soundcraft_clap_host::instantiate(&id).map_err(|e| e.to_string()),
-                // Built-in plug-ins: the tests' stand-ins.
-                None => soundcraft_dsp::create(&id).ok_or_else(|| format!("no plug-in `{id}`")),
-            };
-            let plugin = match plugin {
+            let plugin = match open(&id, dir) {
                 Ok(p) => p,
                 Err(e) => return failed(e),
             };
+            let mut plugin = plugin;
             let ids = plugin.info().params.iter().map(|p| p.id).collect();
-            let s = served.insert(Served { plugin, ids, exchange: None });
+            let reader = plugin.state_reader();
+            let s = served.insert(Served { plugin, ids, exchange: None, reader });
             let mut reply = prepare_with(s, &prepare);
             if reply.ok {
                 reply.info = Some(info_of(&*s.plugin));
@@ -110,14 +110,69 @@ fn handle(served: &mut Option<Served>, req: Request) -> Reply {
             _ => failed("the plug-in did not save its state"),
         },
         Request::LoadState { state } => {
-            let took = match (served.as_mut(), unhex(&state)) {
-                (Some(s), Some(b)) => s.plugin.load_state(&b),
-                _ => false,
-            };
-            if took { Reply { ok: true, ..Reply::default() } } else { failed("the plug-in did not take the state") }
+            match (served.as_mut(), unhex(&state)) {
+                // Its parameters as the state set them, for the host's copy.
+                (Some(s), Some(b)) => {
+                    if s.plugin.load_state(&b) {
+                        Reply { ok: true, values: values_of(s), ..Reply::default() }
+                    } else {
+                        failed("the plug-in did not take the state")
+                    }
+                }
+                _ => failed("the plug-in did not take the state"),
+            }
+        }
+        Request::LoadPreset { kind, location, load_key } => match served.as_mut() {
+            Some(s) => {
+                let took = s.reader.as_mut().is_some_and(|r| r.load_preset(kind, location.as_deref(), load_key.as_deref()));
+                if took { Reply { ok: true, values: values_of(s), ..Reply::default() } } else { failed("the plug-in did not load the preset") }
+            }
+            None => failed("no plug-in is open"),
+        },
+        Request::Presets { id, path } => {
+            let found = soundcraft_clap_host::load_bundle(std::path::Path::new(&path)).map_err(|e| e.to_string());
+            match found.map(|all| all.into_iter().find(|d| d.id == id)) {
+                Ok(Some(d)) => Reply { ok: true, presets: soundcraft_clap_host::presets(&d), ..Reply::default() },
+                Ok(None) => failed(format!("{path} has no plug-in `{id}`")),
+                Err(e) => failed(e),
+            }
+        }
+        Request::PresetState { id, dir, preset } => {
+            if let Some(d) = dir {
+                soundcraft_clap_host::add_search_dir(std::path::Path::new(&d));
+            }
+            match soundcraft_clap_host::preset_state(&id, &preset) {
+                Ok(state) => Reply { ok: true, state: Some(hex(&state)), ..Reply::default() },
+                Err(e) => failed(e),
+            }
         }
         Request::Quit => Reply { ok: true, ..Reply::default() },
     }
+}
+
+/// The plug-in's parameter values, by the index the host sends (`None` for one it does not say).
+fn values_of(s: &Served) -> Vec<Option<f32>> {
+    s.ids.iter().map(|id| s.plugin.param(id).filter(|v| v.is_finite())).collect()
+}
+
+/// Makes plug-in `id`: a `clap:` or `vst3:` one (the bundles in `dir` made known first), or for
+/// tests a built-in one.
+fn open(id: &str, dir: Option<String>) -> Result<Box<dyn Plugin>, String> {
+    let dir = dir.as_deref().map(std::path::Path::new);
+    if soundcraft_clap_host::parse_id(id).is_some() {
+        if let Some(d) = dir {
+            soundcraft_clap_host::add_search_dir(d);
+        }
+        return soundcraft_clap_host::instantiate(id).map_err(|e| e.to_string());
+    }
+    if soundcraft_vst3_host::parse_id(id).is_some() {
+        if let Some(d) = dir {
+            soundcraft_vst3_host::add_search_dir(d);
+        }
+        return soundcraft_vst3_host::instantiate(id).map_err(|e| e.to_string());
+    }
+    // Built-in plug-ins: the tests' stand-ins.
+    soundcraft_dsp::create(id).ok_or_else(|| format!("no plug-in `{id}`"))
 }
 
 fn prepare_with(s: &mut Served, p: &Prepare) -> Reply {
@@ -150,7 +205,7 @@ fn info_of(p: &dyn Plugin) -> Info {
             group: q.group.into(),
         })
         .collect();
-    Info { name: i.name.into(), short_name: i.short_name.into(), instrument: i.is_instrument, params }
+    Info { name: i.name.into(), short_name: i.short_name.into(), instrument: i.is_instrument, params, category: Some(i.category) }
 }
 
 /// The unit a [`Param`] names (`None` for one it does not know).

@@ -15,6 +15,9 @@ macro_rules! option {
     };
 }
 
+/// The flag of Options › Recording › Pre-Record.
+pub const PRE_RECORD: &str = "options.pre_record";
+
 const MIDI_FILTER_KINDS: [&str; 8] = ["notes", "pitch_bend", "mono_aftertouch", "poly_aftertouch", "program", "cc", "sysex", "realtime"];
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -28,11 +31,48 @@ pub fn specs() -> Vec<CommandSpec> {
             "options.marker_target_follows_first_selected_track"
         ),
         option!("options.midi_thru", "MIDI Thru", "options.midi_thru"),
+        cmd!(
+            noundo "options.midi_auto_arm",
+            "Auto-Arm Selected MIDI Track",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — selecting one instrument or MIDI track that listens to MIDI input arms it (heard and ready to record), disarming the one it armed before",
+            always,
+            |e, p| toggle_flag(e, p, crate::auto_arm::FLAG)
+        ),
+        cmd!(
+            noundo "options.wait_for_note",
+            "Wait for Note",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — Record with the transport stopped waits, and the take starts at the first note played on an armed MIDI or instrument track's input",
+            always,
+            |e, p| toggle_flag(e, p, "options.wait_for_note")
+        ),
         option!("options.auto_spot_clips", "Auto-Spot Clips", "options.auto_spot_clips"),
         option!("options.keyboard_lock", "Edit/Tool Mode Keyboard Lock", "options.edit_tool_mode_keyboard_lock"),
         option!("options.calibration_mode", "Calibration Mode", "options.calibration_mode"),
         option!("options.midi_live_mode", "MIDI Live Mode", "options.midi_live_mode"),
         option!("options.low_latency_monitoring", "Low Latency Monitoring", "options.low_latency_monitoring"),
+        // Momentary solo: an S key clicked with the mouse solos only while it is held.
+        option!("options.momentary_solo", "Momentary Solo", "options.momentary_solo"),
+        // Selecting tracks arms them and disarms the others (`mix::arm_follows_selection`).
+        option!("options.arm_follows_selection", "Arm Follows Selection", "options.arm_follows_selection"),
+        // Every armed track on Auto hears its input in playback too (`soundcraft_mix::INPUT_ONLY_MONITORING`).
+        option!("options.input_only_monitoring", "Input Only Monitoring", "options.input_only_monitoring"),
+        // On unless turned off: the flag is the opposite (`soundcraft_mix::NO_FEEDBACK_PROTECTION`).
+        cmd!(noundo "options.feedback_protection", "Feedback Protection", ["Options"], None, "{value?: bool} (toggles when omitted) — a monitored input clipping (-0.1 dBFS or above) for a second is taken for feedback and silenced", always, |e, p| {
+            let s = e.session_mut();
+            let on = p.get("value").and_then(Value::as_bool).unwrap_or(s.edit.flag(soundcraft_mix::NO_FEEDBACK_PROTECTION));
+            s.edit.set_flag(soundcraft_mix::NO_FEEDBACK_PROTECTION, !on);
+            Ok(json!({"value": on}))
+        }),
+        // Pre-record: the input of the last seconds before Record leads each take, as the clip's
+        // handle (`soundcraft_playback::record::Recorder::set_pre_record`).
+        cmd!(noundo "options.pre_record", "Pre-Record", ["Options"], None, "{value?: bool} (toggles when omitted) — while the input is open, the last 10 seconds before Record are kept and put in front of each take, as a handle the clip can be trimmed out over", always, |e, p| toggle_flag(e, p, PRE_RECORD)),
+        // Inserts whose input and output stay silent are not run (`soundcraft_mix::SUSPEND_ON_SILENCE`).
+        option!("options.suspend_on_silence", "Suspend Plug-ins on Silence", "options.suspend_on_silence"),
+        option!("options.loops_follow", "Imported Loops Follow Tempo and Key", "import.loops_follow"),
         cmd!(
             "options.prepare_dpe_tracks",
             "Prepare DPE Tracks",
@@ -49,14 +89,14 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             engine_settings(e, p)
         }),
-        cmd!(noundo "setup.disk_allocation", "Disk Allocation...", ["Setup"], None, "{path?, track?} — the record folder for the session, or for one track", always, disk_allocation),
+        cmd!(noundo "setup.disk_allocation", "Disk Allocation...", ["Setup"], None, "{path?, track?} — the folder takes record into, for the session or for one track (relative: inside the session folder; empty: back to Audio Files, or for a track to the session's)", always, disk_allocation),
         cmd!(noundo "setup.peripherals", "Peripherals...", ["Setup"], None, "{settings?: {name: number|bool|string}} — control surface / sync device settings", always, peripherals),
         cmd!(
             "setup.io",
             "I/O...",
             ["Setup"],
             None,
-            "{action?: list|create_bus|rename_bus|delete_bus|create_output|rename_output|delete_output|set_output_channel|set_output_format|create_input|rename_input|delete_input|set_input_channel|set_input_format|auto_inputs, name?, new_name?, format?: busses and outputs any format, default stereo (set_output_format: any format, not the main's: use setup.main_format); inputs mono|stereo, default mono, first_channel?: 0..1023, channels?: 1..64 (auto_inputs)}",
+            "{action?: list|create_bus|rename_bus|delete_bus|create_output|rename_output|delete_output|set_output_channel|set_output_format|create_input|rename_input|delete_input|set_input_channel|set_input_format|auto_inputs, name?, new_name?, format?: busses and outputs any format, default stereo (set_output_format: any format, not the main's: use setup.main_format); inputs any format up to 16 channels, default mono, first_channel?: 0..1023, channels?: 1..64 (auto_inputs)}",
             always,
             io_setup
         ),
@@ -72,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "setup.current_feet_frames", "Current Feet+Frames Position...", ["Setup"], None, "{feet_frames: 'F+FF'} — the feet+frames reading at the insertion point", always, current_feet_frames),
         cmd!(noundo "setup.external_timecode_offset", "External Timecode Offset...", ["Setup"], None, "{frames?: ±, samples?: ±} — offset applied to incoming timecode", always, |e, p| offset_setting(e, p, "sync.external_offset")),
         cmd!(noundo "setup.video_sync_offset", "Video Sync Offset...", ["Setup"], None, "{frames?: ±, samples?: ±} — offset between audio and video playback", always, |e, p| offset_setting(e, p, "video.sync_offset")),
-        cmd!(noundo "setup.click_countoff", "Click/Countoff...", ["Setup"], None, "{volume_db?: -60..12, accent_note?: 0..127, normal_note?: 0..127, accent_velocity?, normal_velocity?, countoff?: bool, countoff_bars?: 1..16, only_during_record?: bool, keep_pickup?: bool (notes played during the count-off are kept in a MIDI take)}", always, click_countoff),
+        cmd!(noundo "setup.click_countoff", "Click/Countoff...", ["Setup"], None, "{volume_db?: -60..12, accent_note?: 0..127, normal_note?: 0..127, accent_velocity?, normal_velocity?, countoff?: bool, countoff_bars?: 1..16, only_during_record?: bool, keep_pickup?: bool (notes played during the count-off are kept in a MIDI take), output?: a hardware output's name for the click alone (empty or \"main\": the main mix)}", always, click_countoff),
         cmd!(query "setup.keyboard_shortcuts", "Keyboard Shortcuts...", ["Setup"], None, "{filter?} — every command shortcut", always, |_, p| {
             let f = str_param(p, "filter").map(str::to_ascii_lowercase);
             let rows: Vec<Value> = command_specs()
@@ -92,7 +132,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let devices: Vec<String> = text(&s.edit, "midi.studio.devices").map(|t| t.split('|').map(str::to_string).collect()).unwrap_or_default();
             Ok(json!({"devices": devices}))
         }),
-        cmd!(noundo "setup.midi_beat_clock", "MIDI Beat Clock...", ["Setup", "MIDI"], None, "{enabled?: bool (MIDI clock out), mtc?: bool (MIDI timecode out), offset?: samples (later; negative earlier), destination?: output port name} — sync out to that port (`soundcraft_mix::midi_sync`)", always, |e, p| {
+        cmd!(noundo "setup.midi_beat_clock", "MIDI Beat Clock...", ["Setup", "MIDI"], None, "{enabled?: bool (MIDI clock out), mtc?: bool (MIDI timecode out), mmc?: bool (MIDI Machine Control out), offset?: samples (later; negative earlier), destination?: output port name, sync_in?: off|clock|mtc (follow MIDI clock or timecode coming in), source?: input port name ('' for any)} — sync out to that port (`soundcraft_mix::midi_sync`) and in from that one", always, |e, p| {
             let s = e.session_mut();
             if let Some(v) = p.get("enabled").and_then(Value::as_bool) {
                 s.edit.set_flag("midi.beat_clock", v);
@@ -100,13 +140,25 @@ pub fn specs() -> Vec<CommandSpec> {
             if let Some(v) = p.get("mtc").and_then(Value::as_bool) {
                 s.edit.set_flag("midi.beat_clock.mtc", v);
             }
+            if let Some(v) = p.get("mmc").and_then(Value::as_bool) {
+                s.edit.set_flag("midi.mmc_out", v);
+            }
+            if let Some(m) = str_param(p, "sync_in") {
+                if !matches!(m, "off" | "clock" | "mtc") {
+                    return Err(bad("setup.midi_beat_clock", format!("unknown sync_in `{m}`: off, clock or mtc")));
+                }
+                set_text(&mut s.edit, "midi.sync_in", Some(m));
+            }
+            if let Some(src) = p.get("source").and_then(Value::as_str) {
+                set_text(&mut s.edit, "midi.sync_in.source", Some(src));
+            }
             store_value(&mut s.edit, p, "offset", "midi.beat_clock.offset", -1e7, 1e7);
             if let Some(d) = str_param(p, "destination") {
                 set_text(&mut s.edit, "midi.beat_clock.destination", Some(d));
             }
-            Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "mtc": s.edit.flag("midi.beat_clock.mtc"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination")}))
+            Ok(json!({"enabled": s.edit.flag("midi.beat_clock"), "mtc": s.edit.flag("midi.beat_clock.mtc"), "mmc": s.edit.flag("midi.mmc_out"), "offset": s.edit.value("midi.beat_clock.offset", 0.0), "destination": text(&s.edit, "midi.beat_clock.destination"), "sync_in": text(&s.edit, "midi.sync_in").unwrap_or_else(|| "off".into()), "source": text(&s.edit, "midi.sync_in.source")}))
         }),
-        cmd!(noundo "setup.midi_input_filter", "MIDI Input Filter...", ["Setup", "MIDI"], None, "{filter?: [notes|pitch_bend|mono_aftertouch|poly_aftertouch|program|cc|sysex|realtime], allow?: [...]} — filtered kinds are not recorded", always, midi_filter),
+        cmd!(noundo "setup.midi_input_filter", "MIDI Input Filter...", ["Setup", "MIDI"], None, "{filter?: [notes|pitch_bend|mono_aftertouch|poly_aftertouch|program|cc|sysex|realtime], allow?: [...], thin?: bool} — filtered kinds are not recorded; `thin` keeps only the controller points that shape a move (the rest become ramps)", always, midi_filter),
         cmd!(noundo "setup.midi_input_devices", "MIDI Input Devices...", ["Setup", "MIDI"], None, "{enable?: [names], disable?: [names]}", always, midi_inputs),
         cmd!(noundo "setup.transcription_settings", "Transcription Settings...", ["Setup"], None, "{enabled?: bool, language?: 'en'}", always, |e, p| {
             let s = e.session_mut();
@@ -123,7 +175,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Session Data...",
             ["File", "Import"],
             Some("Alt+Shift+I"),
-            "{path, tracks?: [names]} — imports tracks (clips, playlists, mixer, automation, audio) from another session",
+            "{path, tracks?: [names], onto?: bool, sections?: [faders, pan, mutes, sends, inserts, delay, automation]} — imports tracks (clips, playlists, mixer, automation, audio) from another session; with `onto` each lands on this session's track of the same name instead, bringing only `sections` (default inserts, sends, faders and pan) → {tracks, unmatched, missing}",
             always,
             import_session_data
         ),
@@ -249,8 +301,8 @@ fn first_channel(p: &Value) -> u16 {
 /// An input's format: mono or stereo.
 fn input_format(id: &str, f: Option<&str>) -> Result<ChannelFormat> {
     match f.and_then(ChannelFormat::from_id) {
-        Some(f @ (ChannelFormat::Mono | ChannelFormat::Stereo)) => Ok(f),
-        _ => Err(bad(id, "inputs are mono or stereo")),
+        Some(f) if f.mixable() => Ok(f),
+        _ => Err(bad(id, "inputs are mono, stereo or a multichannel format of up to 16 channels")),
     }
 }
 
@@ -487,6 +539,16 @@ fn click_countoff(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(v) = p.get("keep_pickup").and_then(Value::as_bool) {
         s.edit.set_flag("midi.keep_pickup", v);
     }
+    if let Some(o) = str_param(p, "output") {
+        let o = o.trim();
+        if o.is_empty() || o.eq_ignore_ascii_case("main") {
+            set_text(&mut s.edit, "click.output", None);
+        } else {
+            let i = s.output_index(o).filter(|i| *i > 0).ok_or_else(|| bad("setup.click_countoff", format!("no hardware output named `{o}`")))?;
+            let name = s.outputs.get(i).map(|x| x.name.clone()).unwrap_or_default();
+            set_text(&mut s.edit, "click.output", Some(&name));
+        }
+    }
     Ok(json!({
         "volume_db": s.edit.value("click.volume_db", -6.0),
         "accent_note": s.edit.value("click.accent_note", 84.0),
@@ -497,6 +559,7 @@ fn click_countoff(e: &mut Engine, p: &Value) -> Result<Value> {
         "countoff_bars": s.edit.countoff_bars,
         "only_during_record": s.edit.flag("click.only_during_record"),
         "keep_pickup": s.edit.flag("midi.keep_pickup"),
+        "output": text(&s.edit, "click.output"),
     }))
 }
 
@@ -515,8 +578,11 @@ fn midi_filter(e: &mut Engine, p: &Value) -> Result<Value> {
     for k in kinds(p, "allow") {
         s.edit.set_flag(&format!("midi.filter.{k}"), false);
     }
+    if let Some(on) = p.get("thin").and_then(Value::as_bool) {
+        s.edit.set_flag(crate::midi_record::THIN_FLAG, on);
+    }
     let filtered: Vec<&str> = MIDI_FILTER_KINDS.iter().copied().filter(|k| s.edit.flag(&format!("midi.filter.{k}"))).collect();
-    Ok(json!({"filtered": filtered}))
+    Ok(json!({"filtered": filtered, "thin": s.edit.flag(crate::midi_record::THIN_FLAG)}))
 }
 
 fn device_key(name: &str) -> String {
@@ -557,6 +623,9 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
     };
     if picked.is_empty() {
         return Err(bad(id, "nothing to import"));
+    }
+    if p.get("onto").and_then(Value::as_bool).unwrap_or(false) {
+        return import_onto_tracks(e, p, &path, &other, picked);
     }
     let mut needed: Vec<SourceId> = picked
         .iter()
@@ -649,6 +718,88 @@ fn import_session_data(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"tracks": out, "sources": map.len(), "missing": missing}))
 }
 
+/// What Import Session Data can bring onto an existing track: the mix snapshot's sections but
+/// routing (it would point into the other session), and its automation.
+const ONTO_SECTIONS: [&str; 7] = ["faders", "pan", "mutes", "sends", "inserts", "delay", "automation"];
+
+/// `file.import_session_data` with `onto`: each picked track of the other session lands on the
+/// track of this one with the same name (case ignored), bringing only `sections` (default
+/// inserts, sends, faders and pan); a track with no namesake here is reported, not added. Clips
+/// and audio never come this way. One undo step.
+fn import_onto_tracks(e: &mut Engine, p: &Value, path: &str, other: &Session, picked: Vec<soundcraft_model::Track>) -> Result<Value> {
+    const C: &str = "file.import_session_data";
+    let sections: Vec<&str> = match p.get("sections") {
+        None | Some(Value::Null) => vec!["inserts", "sends", "faders", "pan"],
+        Some(Value::Array(a)) => {
+            let mut out = Vec::new();
+            for v in a {
+                let s = v.as_str().and_then(|x| ONTO_SECTIONS.iter().find(|k| k.eq_ignore_ascii_case(x))).copied();
+                out.push(s.ok_or_else(|| bad(C, format!("cannot bring {v} ({})", ONTO_SECTIONS.join(", "))))?);
+            }
+            out
+        }
+        Some(_) => return Err(bad(C, "`sections` is a list")),
+    };
+    if sections.is_empty() {
+        return Err(bad(C, "choose something to bring (`sections`)"));
+    }
+    let inserts = sections.contains(&"inserts");
+    let automation = sections.contains(&"automation");
+    let mixer_sections: Vec<&str> = sections.iter().copied().filter(|s| *s != "automation").collect();
+    let s = e.session_mut();
+    let mut onto = Vec::new();
+    let mut unmatched = Vec::new();
+    for donor in picked {
+        let Some(target) = s.tracks.iter().find(|t| t.kind != TrackKind::Master && t.name.eq_ignore_ascii_case(&donor.name)).map(|t| t.id) else {
+            unmatched.push(donor.name.clone());
+            continue;
+        };
+        // Sends to the other session's busses go to this one's of the same name (made when missing).
+        let mut mixer = donor.mixer.clone();
+        for slot in mixer.sends.iter_mut().flatten() {
+            if let Route::Bus(b) = slot.target {
+                slot.target = other.bus(b).map_or(Route::None, |ob| Route::Bus(s.add_bus(&ob.name, ob.format)));
+            }
+        }
+        let snap = soundcraft_model::MixSnapshot { name: String::new(), strips: vec![soundcraft_model::SnapshotStrip { track: target, mixer }] };
+        let Some(tr) = s.track_mut(target) else { continue };
+        snap.recall_onto(tr, &mixer_sections);
+        // Which module a lane drives: none (the strip's own lanes), the instrument, or an insert.
+        let module = |l: &soundcraft_model::AutomationLane| match l.param {
+            soundcraft_model::AutoParam::Plugin { module, .. } => Some(module == soundcraft_model::INSTRUMENT_MODULE),
+            _ => None,
+        };
+        if automation {
+            // The donor's lanes replace these; an insert's lane only with the donor's inserts (its
+            // module ids are the donor's). The instrument is not imported: its lanes stay.
+            tr.automation.retain(|l| match module(l) {
+                None => false,
+                Some(instrument) => instrument || !inserts,
+            });
+            tr.automation.extend(donor.automation.iter().filter(|l| module(l).is_none() || (inserts && module(l) == Some(false))).cloned());
+        }
+        if inserts {
+            // Lanes of modules no longer on the strip go.
+            let ids: Vec<soundcraft_model::ModuleId> = tr.mixer.inserts.iter().map(|i| i.id).collect();
+            tr.automation.retain(|l| match &l.param {
+                soundcraft_model::AutoParam::Plugin { module, .. } => *module == soundcraft_model::INSTRUMENT_MODULE || ids.contains(module),
+                _ => true,
+            });
+        }
+        onto.push(target);
+    }
+    if onto.is_empty() {
+        return Err(bad(C, format!("no track here has the name of {}", unmatched.join(", "))));
+    }
+    let missing = if inserts { crate::cmd::module_asset::import_track_assets(s, &onto, Path::new(path)) } else { Vec::new() };
+    s.sanitize();
+    s.edit.selected_tracks = onto.clone();
+    for t in &onto {
+        e.automation_changed(*t, soundcraft_model::AutoParam::Volume);
+    }
+    Ok(json!({"tracks": onto, "unmatched": unmatched, "missing": missing}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,8 +865,12 @@ mod tests {
         assert_eq!(r["inputs"][0]["first_channel"], 4);
         assert!(r.get("busses").is_some() && r.get("outputs").is_some());
         assert!(io(&mut e, json!({"action": "create_input", "name": "vox mic"})).is_err(), "names are unique");
-        let err = io(&mut e, json!({"action": "create_input", "name": "Room", "format": "5.1"})).unwrap_err().to_string();
-        assert!(err.contains("inputs are mono or stereo"), "{err}");
+        // A multichannel input: a 5.1 microphone on six device inputs.
+        io(&mut e, json!({"action": "create_input", "name": "Room", "format": "5.1", "first_channel": 8})).unwrap();
+        assert_eq!(e.session().input_channels("Room"), Some((8, 6)));
+        io(&mut e, json!({"action": "delete_input", "name": "Room"})).unwrap();
+        let err = io(&mut e, json!({"action": "create_input", "name": "Huge", "format": "nonsense"})).unwrap_err().to_string();
+        assert!(err.contains("inputs are mono, stereo or a multichannel"), "{err}");
         e.execute("track.input", &json!({"tracks": [vox], "input": "Vox Mic"})).unwrap();
 
         io(&mut e, json!({"action": "rename_input", "name": "Vox Mic", "new_name": "Lead"})).unwrap();
@@ -855,7 +1010,7 @@ mod tests {
         io(&mut e, json!({"action": "create_output", "name": "Mon", "first_channel": 4})).unwrap();
         io(&mut e, json!({"action": "set_input_format", "name": "keys", "format": "stereo"})).unwrap();
         assert_eq!(e.session().inputs[0].format, ChannelFormat::Stereo);
-        assert!(io(&mut e, json!({"action": "set_input_format", "name": "Keys", "format": "5.1"})).is_err());
+        assert!(io(&mut e, json!({"action": "set_input_format", "name": "Keys", "format": "5.1"})).is_ok(), "multichannel inputs");
         assert!(io(&mut e, json!({"action": "set_input_format", "name": "Keys"})).is_err());
         assert!(io(&mut e, json!({"action": "set_input_format", "name": "Nope", "format": "mono"})).is_err());
         io(&mut e, json!({"action": "set_output_format", "name": "Mon", "format": "mono"})).unwrap();
@@ -864,6 +1019,8 @@ mod tests {
         assert!(io(&mut e, json!({"action": "set_output_format", "name": "Mon"})).is_err());
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(e.session().outputs[1].format, ChannelFormat::Stereo);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(e.session().inputs[0].format, ChannelFormat::Stereo);
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(e.session().inputs[0].format, ChannelFormat::Mono);
     }
@@ -968,6 +1125,50 @@ mod tests {
         assert!(e.session().pool.get(src).is_some());
         assert_eq!(e.session().track_by_name("Keys").unwrap().clips().len(), 1);
         assert!(e.execute("file.import_session_data", &json!({"path": path, "tracks": ["Nope"]})).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Import Session Data onto existing tracks: matched by name, only the chosen parts come
+    /// (inserts and the fader here, not the pan, not the clips), one undo step; a donor track
+    /// with no namesake is reported; automation brings the donor's lanes.
+    #[test]
+    fn import_session_data_onto_tracks_of_the_same_name() {
+        let dir = std::env::temp_dir().join(format!("sc-import-onto-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("donor.scraft").to_string_lossy().into_owned();
+        let mut donor = Engine::default();
+        donor.execute("track.new", &json!({"name": "Vox", "format": "stereo"})).unwrap();
+        donor.execute("track.new", &json!({"name": "Only There"})).unwrap();
+        let vox = donor.session().tracks[0].id;
+        donor.execute("mix.module_add", &json!({"track": vox.0, "plugin": "gain", "params": {"gain": -7.0}})).unwrap();
+        donor.session_mut().track_mut(vox).unwrap().mixer.volume_db = -4.0;
+        donor.session_mut().track_mut(vox).unwrap().mixer.pan = vec![0.5];
+        donor.execute("automation.set_point", &json!({"track": vox.0, "param": "volume", "at": 0, "value": -9.0})).unwrap();
+        crate::io::save_session(&mut donor, &path).unwrap();
+
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"name": "VOX", "format": "stereo"})).unwrap();
+        let mine = e.session().tracks[0].id;
+        let undo = e.undo_history().len();
+        let r = e.execute("file.import_session_data", &json!({"path": path, "onto": true, "sections": ["inserts", "faders"]})).unwrap();
+        assert_eq!(r["tracks"], json!([mine.0]));
+        assert_eq!(r["unmatched"], json!(["Only There"]));
+        assert_eq!(e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).count(), 1, "no track added");
+        let t = e.session().track(mine).unwrap();
+        assert_eq!(t.mixer.inserts.len(), 1);
+        assert_eq!(t.mixer.inserts[0].params["gain"], -7.0);
+        assert_eq!(t.mixer.volume_db, -4.0);
+        assert_ne!(t.mixer.pan, vec![0.5], "pan was not chosen");
+        assert!(t.automation.iter().all(|l| l.points.is_empty()), "automation was not chosen");
+        assert_eq!(e.undo_history().len(), undo + 1);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(e.session().track(mine).unwrap().mixer.inserts.is_empty());
+        e.execute("file.import_session_data", &json!({"path": path, "onto": true, "tracks": ["Vox"], "sections": ["automation"]})).unwrap();
+        let t = e.session().track(mine).unwrap();
+        assert!(t.mixer.inserts.is_empty(), "inserts were not chosen");
+        assert_eq!(t.lane(&soundcraft_model::AutoParam::Volume).map(|l| l.points.len()), Some(1));
+        assert!(e.execute("file.import_session_data", &json!({"path": path, "onto": true, "tracks": ["Only There"]})).is_err());
+        assert!(e.execute("file.import_session_data", &json!({"path": path, "onto": true, "sections": ["routing"]})).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

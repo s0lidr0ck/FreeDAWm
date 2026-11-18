@@ -161,7 +161,7 @@ impl FsPreset {
 }
 
 /// The bundled factory presets of a plugin as `(name, json)` pairs: a FireStation engine's, or
-/// Rez's, Lull's, Sprawl's or Keel's own (built-ins with presets in the same form). Empty for any other id.
+/// Rez's, Lull's, Sprawl's, Keel's, Heft's, the Subtractive, Wavetable or FM Synth's own (built-ins with presets in the same form). Empty for any other id.
 pub fn factory_presets(plugin_id: &str) -> &'static [(&'static str, &'static str)] {
     match engine(plugin_id) {
         Some(e) => e.presets,
@@ -170,6 +170,9 @@ pub fn factory_presets(plugin_id: &str) -> &'static [(&'static str, &'static str
         None if plugin_id == super::sprawl::SPRAWL_INFO.id => super::sprawl::presets::factory_presets(),
         None if plugin_id == super::keel::KEEL_INFO.id => super::keel::presets::factory_presets(),
         None if plugin_id == super::heft::HEFT_INFO.id => super::heft::presets::factory_presets(),
+        None if plugin_id == super::synth::SYNTH_INFO.id => super::synth::presets::factory_presets(),
+        None if plugin_id == super::wavetable::WAVETABLE_INFO.id => super::wavetable::presets::factory_presets(),
+        None if plugin_id == super::fm::FM_INFO.id => super::fm::presets::factory_presets(),
         None => &[],
     }
 }

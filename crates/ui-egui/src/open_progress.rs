@@ -143,17 +143,11 @@ pub fn start(app: &mut SoundApp, id: &str, params: &Value) -> Result<Value, Stri
             let _ = tx.send(r);
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let threaded = std::thread::Builder::new().name("open".into()).spawn(work(req.clone(), Arc::clone(&shared), tx.clone())).is_ok();
-        if !threaded {
-            log::warn!("the open's worker thread could not start; loading inline");
-            work(req, Arc::clone(&shared), tx)();
-        }
+    let threaded = std::thread::Builder::new().name("open".into()).spawn(work(req.clone(), Arc::clone(&shared), tx.clone())).is_ok();
+    if !threaded {
+        log::warn!("the open's worker thread could not start; loading inline");
+        work(req, Arc::clone(&shared), tx)();
     }
-    // The browser has no threads: the load runs now, and the window shows the plugin phase.
-    #[cfg(target_arch = "wasm32")]
-    work(req, Arc::clone(&shared), tx)();
     app.open = Some(OpenJob {
         id: id.to_string(),
         name,
@@ -275,6 +269,10 @@ fn finish(app: &mut SoundApp, job: &OpenJob, loaded: LoadedSession) {
             (0, _) => format!("Opened {} ({problems} plugins not loaded)", job.name),
             _ => format!("Opened {} ({missing} missing media, {} plugins not loaded)", job.name, job.failed.len()),
         };
+        // A bundle opens from the folder it was unpacked into: say where that is.
+        if let Some(folder) = v.get("unpacked").and_then(serde_json::Value::as_str) {
+            app.ui.status.push_str(&format!(" — unpacked into {folder}"));
+        }
     } else {
         app.ui.status.clear();
     }

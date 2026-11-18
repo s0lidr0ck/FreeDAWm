@@ -776,10 +776,21 @@ mod tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track, path: take, channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track,
+                path: take,
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+                punches: Vec::new(),
+            }],
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         let clips = |e: &Engine| e.session().track(track).unwrap().clips().iter().map(|c| (c.start, c.length)).collect::<Vec<_>>();
         let w = Autosaver::new(root.clone());
@@ -818,8 +829,10 @@ mod tests {
             latency: 0,
             loop_from: Some(0),
             punches: Vec::new(),
+            pre: 0,
         };
-        let ev = |at: i64, pitch: u8, pass: u16| RecordedEvent { at: at + 480, port: "Keys".into(), msg: [0x90, pitch, 100], pass };
+        let ev =
+            |at: i64, pitch: u8, pass: u16| RecordedEvent { at: at + 480, port: "Keys".into(), msg: [0x90, pitch, 100], pass, sysex: Vec::new() };
         let w = Autosaver::new(root.clone());
         // An earlier take's MIDI is not this one's.
         w.midi_take(0);
@@ -883,11 +896,22 @@ mod tests {
             rate: 48_000,
             takes: paths
                 .iter()
-                .map(|p| Take { track, path: p.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None })
+                .map(|p| Take {
+                    track,
+                    path: p.clone(),
+                    channels: 1,
+                    internal: false,
+                    from_device: false,
+                    tap_latency: 0,
+                    file: None,
+                    late: None,
+                    punches: Vec::new(),
+                })
                 .collect(),
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         let w = Autosaver::new(root.clone());
         w.write(e.session_arc(), None, Some(plan));

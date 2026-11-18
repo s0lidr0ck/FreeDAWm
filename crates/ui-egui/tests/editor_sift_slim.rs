@@ -1,4 +1,4 @@
-//! Sift's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its two Amount
+//! Sift's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its two Amount
 //! dials, Listen and the More section, with the full editor's own gestures.
 
 mod editor_support;

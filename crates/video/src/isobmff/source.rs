@@ -70,7 +70,6 @@ impl<T: ByteSource + ?Sized> ByteSource for Box<T> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl ByteSource for std::fs::File {
     fn len(&self) -> u64 {
         self.metadata().map(|m| m.len()).unwrap_or(0)

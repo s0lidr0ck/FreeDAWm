@@ -120,7 +120,7 @@ const STALE_SECONDS: f64 = 2.0;
 
 impl SoundApp {
     /// The Library folder in use: the one the preferences name, else the settings folder. `None`
-    /// without either (the web build, tests).
+    /// without either (a bare app, tests).
     pub fn library_root(&self) -> Option<PathBuf> {
         let chosen = self.ui.library_dir.trim();
         if chosen.is_empty() { self.library_default.clone() } else { Some(PathBuf::from(chosen)) }
@@ -132,10 +132,7 @@ impl SoundApp {
         let Some(root) = self.library_root() else { return };
         self.dialogs.dirs = UserDirs::under(&root);
         self.preset_dir = self.dialogs.dirs.presets.clone();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.juke_kits.presets = self.dialogs.dirs.juke_presets.clone();
-        }
+        self.juke_kits.presets = self.dialogs.dirs.juke_presets.clone();
         self.browser_library = None;
         self.browser_presets = None;
     }
@@ -148,17 +145,9 @@ impl SoundApp {
     }
 }
 
-/// The Juke presets in the Library (none on the web).
+/// The Juke presets in the Library (none without a Library folder).
 fn juke_presets(app: &SoundApp) -> Vec<(String, PathBuf)> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        app.juke_kits.user_presets()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = app;
-        Vec::new()
-    }
+    app.juke_kits.user_presets()
 }
 
 /// One line of the list: a group's heading, or an item (its index in the cache).
@@ -443,10 +432,7 @@ pub(crate) fn use_item(app: &mut SoundApp, catalog: &Catalog, it: &LibraryItem, 
                 app.ui.status = "Select a Juke track first (Track › New Beat makes one)".into();
                 return;
             };
-            #[cfg(not(target_arch = "wasm32"))]
             let kits = app.juke_kits.dir().to_string_lossy().into_owned();
-            #[cfg(target_arch = "wasm32")]
-            let kits = String::new();
             app.ui.status = match app.run("mix.kit_preset", json!({"track": t.0, "path": path, "kits_dir": kits})) {
                 Ok(_) => format!("Loaded Juke preset {}", it.name),
                 Err(e) => e,
@@ -508,7 +494,7 @@ mod tests {
     fn the_library_folder_moves_every_place_presets_are_kept() {
         let (a, b) = (scratch("root-a"), scratch("root-b"));
         let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
-        // No folder at all (the web, a test): what was set by hand stays.
+        // No folder at all (a bare app): what was set by hand stays.
         app.preset_dir = Some(a.join("mine"));
         app.apply_library_dir();
         assert_eq!(app.preset_dir, Some(a.join("mine")));

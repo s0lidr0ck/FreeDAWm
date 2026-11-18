@@ -397,7 +397,7 @@ pub fn effective_energy(e: i32, add: i32) -> i32 {
 // ---- FeelPresets.h: the user's own song-feel presets ("Save as preset...") ------------------------------------
 // Kept in the Library folder's FeelPresets.json: { "presets": [ { "name": "...", "time": "half", "density": "sparse",
 // ... }, ... ] }. Never inside a song. An unreadable file reads as none. Only the text half is here: the caller owns
-// the file (there is no user folder on wasm).
+// the file.
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UserFeelPreset {

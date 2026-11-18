@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Groove from Clip",
             [],
             None,
-            "{clip?, name?, grid?: '1/16', bars?: 1} — the clip's timing as a groove (each grid step where its notes fall, over `bars` bars), kept in the session -> {name, period, points}",
+            "{clip?, name?, grid?: '1/16', bars?: 1, sensitivity?: 0..1 (audio: 0.5)} — the clip's timing as a groove (each grid step where its notes fall, or for an audio clip its hits, over `bars` bars), kept in the session -> {name, period, points}",
             has_selection,
             from_clip
         ),
@@ -64,14 +64,51 @@ fn midi_clips(e: &Engine, p: &Value) -> Vec<ClipId> {
 /// Most grooves a session keeps.
 const MAX_GROOVES: usize = 64;
 
+/// An audio clip's hits as notes (ticks from its start, all of one velocity), for a groove: the
+/// transients Beat Detective finds in it.
+fn hits_as_notes(s: &Session, track: soundcraft_model::TrackId, clip: &soundcraft_model::Clip, sens: f32) -> Vec<soundcraft_midi::Note> {
+    let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
+    let r = soundcraft_time::Range::new(clip.start, clip.end().min(clip.start.saturating_add(s.sample_rate.samples(120.0))));
+    crate::io::transients_in(s, track, r, sens)
+        .into_iter()
+        .map(|at| soundcraft_midi::Note {
+            probability: 100,
+            pitch: 36,
+            velocity: 100,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: s.tempo.samples_to_ticks(at, s.sample_rate).saturating_sub(base),
+            length: 1,
+        })
+        .collect()
+}
+
 fn from_clip(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "event.groove_from_clip";
-    let id = *midi_clips(e, p).first().ok_or_else(|| bad(C, "select a MIDI clip"))?;
+    let s = e.session();
+    // A MIDI clip's notes, else an audio clip's hits.
+    let id = match midi_clips(e, p).first() {
+        Some(id) => *id,
+        None => *clip_ids_param(e, p)
+            .iter()
+            .find(|id| {
+                s.find_clip(**id)
+                    .is_some_and(|(t, c)| matches!(c.content, ClipContent::Audio { .. }) && s.track(t).is_some_and(|x| !x.kind.is_midi()))
+            })
+            .ok_or_else(|| bad(C, "select a MIDI or audio clip"))?,
+    };
     let slot = crate::cmd::event::grid_ticks(C, p)?;
     let bars = i64_or(p, "bars", 1).clamp(1, 4);
-    let s = e.session();
-    let Some((_, clip)) = s.find_clip(id) else { return Err(bad(C, "no such clip")) };
-    let ClipContent::Midi { sequence } = &clip.content else { return Err(bad(C, "not a MIDI clip")) };
+    let Some((track, clip)) = s.find_clip(id) else { return Err(bad(C, "no such clip")) };
+    let hits;
+    let notes = match &clip.content {
+        ClipContent::Midi { sequence } => &sequence.notes,
+        _ => {
+            hits = hits_as_notes(s, track, clip, f32_or(p, "sensitivity", 0.5).clamp(0.0, 1.0));
+            &hits
+        }
+    };
     let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
     let tpb = s.tempo.meter_at_tick(base).ticks_per_bar().max(1);
     let name = match str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
@@ -80,8 +117,8 @@ fn from_clip(e: &mut Engine, p: &Value) -> Result<Value> {
     };
     let tempo = &s.tempo;
     let bar_start = |x: i64| tempo.bar_start_tick(tempo.bar_beat_at_tick(base.saturating_add(x)).bar).saturating_sub(base);
-    let g = groove_from_notes(&name, &sequence.notes, tpb.saturating_mul(bars), slot, bar_start)
-        .ok_or_else(|| bad(C, "the clip has no notes near the grid to take a groove from"))?;
+    let g = groove_from_notes(&name, notes, tpb.saturating_mul(bars), slot, bar_start)
+        .ok_or_else(|| bad(C, "the clip has no notes or hits near the grid to take a groove from"))?;
     let out = json!({"name": g.name, "period": g.period, "points": g.points, "accents": g.accents});
     let s = e.session_mut();
     s.grooves.retain(|x| !x.name.eq_ignore_ascii_case(&g.name));
@@ -149,6 +186,22 @@ fn apply(e: &mut Engine, ids: &[ClipId]) -> Result<Value> {
         }
     }
     Ok(json!({"notes": notes}))
+}
+
+#[cfg(test)]
+mod audio_groove_tests {
+    use super::*;
+
+    /// Parity section 7: a groove taken from an audio clip's hits (the demo's kick), timing only.
+    #[test]
+    fn a_groove_comes_from_an_audio_clips_hits() {
+        let mut e = crate::demo::demo_engine();
+        let kick = e.session().track_by_name("Kick").unwrap().clips()[0].id;
+        let r = e.execute("event.groove_from_clip", &json!({"clips": [kick.0], "name": "Kick feel", "grid": "1/8"})).unwrap();
+        assert!(!r["points"].as_array().unwrap().is_empty(), "{r}");
+        assert!(r["accents"].as_array().unwrap().iter().all(|a| a.as_i64().unwrap_or(0) == 0), "one velocity: no accents");
+        assert!(e.session().grooves.iter().any(|g| g.name == "Kick feel"));
+    }
 }
 
 #[cfg(test)]

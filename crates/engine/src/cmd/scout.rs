@@ -336,21 +336,13 @@ fn list(e: &mut Engine, _: &Value) -> Result<Value> {
     Ok(v)
 }
 
-/// Now as RFC 3339 UTC (seconds). Empty on the web build, where the system clock is unavailable.
+/// Now as RFC 3339 UTC (seconds).
 pub(crate) fn now_rfc3339() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        rfc3339(i64::try_from(secs).unwrap_or(0))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        String::new()
-    }
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    rfc3339(i64::try_from(secs).unwrap_or(0))
 }
 
 /// Unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (days to civil date: Howard Hinnant's algorithm).
-#[cfg(not(target_arch = "wasm32"))]
 fn rfc3339(secs: i64) -> String {
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let z = days + 719_468;

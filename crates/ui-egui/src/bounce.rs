@@ -19,12 +19,93 @@ pub fn start(app: &mut SoundApp, params: &Value) {
     // Third-party plugins keep state the session can't see: store it first.
     app.capture_plugin_states();
     match soundcraft_engine::cmd::bounce_job(&app.engine, params) {
+        Ok(job) if params.get("realtime").and_then(Value::as_bool) == Some(true) && app.player.is_some() => start_print(app, job),
         Ok(job) => {
             app.bounce = Some(job);
             crate::render::lend(app);
             app.ui.status = crate::render::RENDERING.into();
         }
         Err(e) => app.ui.status = e.to_string(),
+    }
+}
+
+/// A real-time bounce's pass: the live player prints the range as it plays it; the print waits
+/// here until the range has played, then `bounce` writes it ([`step_print`]).
+pub struct PrintPass {
+    tap: std::sync::Arc<soundcraft_playback::print::PrintTap>,
+    audio: Vec<Vec<f32>>,
+    /// The transport was seen rolling (a stop after that ends the pass).
+    rolled: bool,
+}
+
+impl PrintPass {
+    /// How far the pass is, from 0 to 1.
+    pub fn progress(&self) -> f32 {
+        self.tap.progress()
+    }
+}
+
+/// Plays `job`'s range through the live player and prints it (Bounce Mix › In real time). Loop
+/// playback is off for the pass; the progress window locks editing; Cancel stops it.
+fn start_print(app: &mut SoundApp, job: soundcraft_engine::io::Bounce) {
+    let Some(p) = &app.player else { return };
+    let channels = soundcraft_mix::source_channels(app.engine.session(), job.tap());
+    let range = job.range();
+    let tap = p.print(range, job.tap(), channels);
+    app.start_play(range.start, None, None);
+    app.bounce = Some(job);
+    app.print = Some(PrintPass { tap, audio: Vec::new(), rolled: false });
+    app.ui.status = "Bouncing in real time".into();
+}
+
+/// Takes what the player printed since the last frame; once the range has played, stops the
+/// transport and hands the print to the bounce. A pass the transport stopped short of, or that
+/// lost frames, is cancelled. True while the pass goes on.
+fn step_print(app: &mut SoundApp, ctx: &egui::Context) -> bool {
+    let Some(pass) = &mut app.print else { return false };
+    pass.tap.drain(&mut pass.audio);
+    let playing = app.player.as_ref().is_some_and(soundcraft_playback::Player::is_playing);
+    pass.rolled |= playing;
+    let failed = if pass.tap.lost() > 0 {
+        Some(format!("Real-time bounce cancelled: {} frames were not printed (the app fell behind the audio)", pass.tap.lost()))
+    } else if pass.rolled && !playing && !pass.tap.is_done() {
+        Some("Real-time bounce cancelled: the transport stopped".to_string())
+    } else {
+        None
+    };
+    if !pass.tap.is_done() && failed.is_none() {
+        ctx.request_repaint();
+        return true;
+    }
+    pass.tap.drain(&mut pass.audio);
+    let audio = std::mem::take(&mut pass.audio);
+    app.print = None;
+    if let Some(p) = &app.player {
+        p.end_print();
+    }
+    // (the bounce is still running, so `stop_play` must not see it as a render: it only stops)
+    let job = app.bounce.take();
+    app.stop_play();
+    match (failed, job) {
+        (Some(why), _) => app.ui.status = why,
+        (None, Some(job)) => {
+            app.bounce = Some(job.printed(audio));
+            ctx.request_repaint();
+        }
+        (None, None) => {}
+    }
+    false
+}
+
+/// Cancels a real-time pass under way: the transport stops and the print ends.
+fn cancel_print(app: &mut SoundApp) {
+    if app.print.take().is_some() {
+        if let Some(p) = &app.player {
+            p.end_print();
+        }
+        let job = app.bounce.take();
+        app.stop_play();
+        drop(job);
     }
 }
 
@@ -71,7 +152,6 @@ fn step_stems(app: &mut SoundApp, ctx: &egui::Context) {
 
 /// Starts the movie `file.bounce_movie` writes for `params`; [`step`] writes it a few frames at a
 /// time, the status line showing how far it is.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn start_movie(app: &mut SoundApp, params: &Value) {
     if app.rendering() {
         app.ui.status = "A render is already running".into();
@@ -92,7 +172,6 @@ pub fn start_movie(app: &mut SoundApp, params: &Value) {
 }
 
 /// Writes the running movie bounce for a moment (see [`start_movie`]).
-#[cfg(not(target_arch = "wasm32"))]
 fn step_movie(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(job) = &mut app.movie else { return };
     app.ui.status = match job.step(slice()) {
@@ -118,12 +197,12 @@ fn step_movie(app: &mut SoundApp, ctx: &egui::Context) {
 /// the window is hidden as long as a repaint is requested, so a bounce doesn't pause then.
 pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
     step_stems(app, ctx);
-    #[cfg(not(target_arch = "wasm32"))]
     step_movie(app, ctx);
-    if app.bounce.is_none() || !crate::render::instances_ready(app, ctx) {
+    if step_print(app, ctx) || app.bounce.is_none() || !crate::render::instances_ready(app, ctx) {
         return;
     }
     let Some(job) = &mut app.bounce else { return };
+    let mut import = None;
     app.ui.status = match job.step(slice()) {
         Ok(None) => {
             ctx.request_repaint();
@@ -131,11 +210,23 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
         }
         Ok(Some(done)) => {
             let name = job.path().file_name().unwrap_or_default().to_string_lossy().into_owned();
+            if job.imports() {
+                import = Some((done.files.iter().map(|f| f.to_string_lossy().into_owned()).collect::<Vec<_>>(), job.range().start));
+            }
             done_line(&name, &done)
         }
         Err(e) => e.to_string(),
     };
     app.bounce = None;
+    // Add to Session: the files go onto new tracks at the range's start, as one undo step.
+    if let Some((files, at)) = import {
+        let main_ext = files.first().and_then(|f| std::path::Path::new(f).extension().map(|x| x.to_os_string()));
+        let paths: Vec<&String> =
+            files.iter().filter(|f| std::path::Path::new(f.as_str()).extension().map(|x| x.to_os_string()) == main_ext).collect();
+        if let Err(e) = app.run("file.import_audio", serde_json::json!({"paths": paths, "at": at, "new_tracks": true})) {
+            app.ui.status = e;
+        }
+    }
 }
 
 /// The status line for a finished bounce: its levels, and for a loudness target held back by the
@@ -164,20 +255,9 @@ pub fn refuses_session_switch(app: &mut SoundApp) -> bool {
 }
 
 /// Whether to render another block in this call: for 30 ms.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn slice() -> impl FnMut() -> bool {
     let until = std::time::Instant::now() + std::time::Duration::from_millis(30);
     move || std::time::Instant::now() < until
-}
-
-/// The browser has no `Instant` (it panics there), so a call renders 32 blocks.
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn slice() -> impl FnMut() -> bool {
-    let mut blocks = 32;
-    move || {
-        blocks -= 1;
-        blocks > 0
-    }
 }
 
 /// Shows how far the running stems export got, with Cancel (or Esc).
@@ -212,14 +292,20 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         ui.set_width(320.0);
         let name = job.path().file_name().unwrap_or_default().to_string_lossy();
         ui.label(egui::RichText::new(format!("Bouncing {name}")).font(bold(13.0)));
-        ui.add(egui::ProgressBar::new(job.progress()));
+        let (progress, through) = match &app.print {
+            Some(pass) => (pass.progress(), " in real time: playing"),
+            None if job.is_printed() => (job.progress(), " in real time: writing"),
+            None if job.is_live() => (job.progress(), " through the live plugins"),
+            None => (job.progress(), ""),
+        };
+        ui.add(egui::ProgressBar::new(progress));
         ui.horizontal(|ui| {
             cancel |= ui.button("Cancel").clicked();
-            let through = if job.is_live() { " through the live plugins" } else { "" };
-            ui.label(egui::RichText::new(format!("{:.0}%{through}", job.progress() * 100.0)).color(Tokens::current().text_dim));
+            ui.label(egui::RichText::new(format!("{:.0}%{through}", progress * 100.0)).color(Tokens::current().text_dim));
         });
     });
     if cancel {
+        cancel_print(app);
         // (dropping the bounce hands the lent instances back)
         app.bounce = None;
         app.lending = None;

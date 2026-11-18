@@ -116,9 +116,11 @@ pub fn key_from_hex(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// The first line a bridged encrypted-link stream carries to the hub: the caller's key.
-pub fn peer_line(key: &[u8; 32]) -> String {
-    format!("{{\"method\":\"link.peer\",\"params\":{{\"key\":\"{}\"}}}}\n", key_hex(key))
+/// The first line a bridged encrypted-link stream carries to the hub: the caller's key, and this
+/// PC's own (`me`), as the TLS session of that connection proved them (a first pairing proves
+/// both, see [`crate::pairing::exchange`]).
+pub fn peer_line(key: &[u8; 32], me: &[u8; 32]) -> String {
+    format!("{{\"method\":\"link.peer\",\"params\":{{\"key\":\"{}\",\"me\":\"{}\"}}}}\n", key_hex(key), key_hex(me))
 }
 
 /// A booth on the local network as an encrypted-link address: its key (hex) at `addr` (its IP
@@ -204,13 +206,14 @@ impl Internet {
         use tokio::io::AsyncWriteExt;
         let ep = self.ep.clone();
         let conns = Arc::clone(&self.conns);
+        let me = *self.ep.id().as_bytes();
         self.rt.spawn(async move {
             while let Some(incoming) = ep.accept().await {
                 let conns = Arc::clone(&conns);
                 tokio::spawn(async move {
                     let Ok(conn) = incoming.await else { return };
                     lock(&conns).push(conn.clone());
-                    let line = peer_line(conn.remote_id().as_bytes());
+                    let line = peer_line(conn.remote_id().as_bytes(), &me);
                     while let Ok(bi) = conn.accept_bi().await {
                         let line = line.clone();
                         tokio::spawn(async move {

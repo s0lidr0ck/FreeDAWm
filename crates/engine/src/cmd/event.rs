@@ -39,9 +39,12 @@ pub fn specs() -> Vec<CommandSpec> {
             "Transpose...",
             ["Event", "MIDI Operations"],
             Some("Alt+T"),
-            "{semitones, clips?, indices?}",
+            "{semitones? | steps? (scale steps in the key on the Key ruler at each clip's start, else the band's key; a note out of the key keeps its distance from the key's tone below it), clips?, indices?}",
             has_selection,
             |e, p| {
+                if p.get("steps").is_some() {
+                    return transpose_in_key(e, p);
+                }
                 let st = i64_or(p, "semitones", 0).clamp(-127, 127) as i32;
                 midi_op(e, p, move |n, _| {
                     soundcraft_midi::ops::transpose_within(n, st);
@@ -53,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Change Velocity...",
             ["Event", "MIDI Operations"],
             None,
-            "{set?|add?|scale?|from?,to? (a ramp over each clip's notes)|min?,max?, clips?, indices?}",
+            "{set?|add?|scale?|from?,to? (a ramp over each clip's notes)|min?,max? (a limit)|random? (± that much; seed?)|compress? (percent of each velocity's distance from center?, by default the notes' average), clips?, indices?}",
             has_selection,
             velocity
         ),
@@ -101,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Memory Location",
             [],
             Some("Enter"),
-            "{name?, at?, start?, end?, kind?: marker|selection|none, ruler?: 1..5}",
+            "{name?, at?, start?, end?, kind?: marker|selection|none, ruler?: 1..5, view?: bool (keeps the zoom, scroll, track heights and shown tracks to recall; default on for kind none), track?: id|name (a marker on that track's lane in the Edit window)}",
             always,
             add_marker
         ),
@@ -114,7 +117,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             delete_marker
         ),
-        cmd!("markers.edit", "Edit Memory Location", [], None, "{number | id, name?, comments?, at?, color?: [r,g,b] | null}", always, edit_marker),
+        cmd!(
+            "markers.edit",
+            "Edit Memory Location",
+            [],
+            None,
+            "{number | id, name?, comments?, at?, color?: [r,g,b] | null, track?: id|name | null (null: back to the rulers)}",
+            always,
+            edit_marker
+        ),
         cmd!(noundo "markers.recall", "Recall Memory Location", [], Some("Period + n + Period"), "{number}", always, recall_marker),
         cmd!(noundo "markers.next", "Go to Next Marker", [], None, "{}", always, |e, _| step_marker(e, 1)),
         cmd!(noundo "markers.previous", "Go to Previous Marker", [], None, "{}", always, |e, _| step_marker(e, -1)),
@@ -251,7 +262,7 @@ fn meter(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"meter": format!("{num}/{den}")}))
 }
 
-fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
     let r = range_param(e, "event.insert_time", p)?;
     if r.is_empty() {
         return Err(bad("event.insert_time", "give `start` and `length` or `end`"));
@@ -282,6 +293,11 @@ fn insert_time(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     for (k, _) in &mut s.key_signatures {
+        if *k >= r.start && *k > 0 {
+            *k = k.saturating_add(r.len());
+        }
+    }
+    for (k, _) in &mut s.transpose_track {
         if *k >= r.start && *k > 0 {
             *k = k.saturating_add(r.len());
         }
@@ -321,7 +337,7 @@ fn on_every_playlist(s: &mut soundcraft_model::Session, t: soundcraft_model::Tra
     }
 }
 
-fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
     let r = range_param(e, "event.cut_time", p)?;
     if r.is_empty() {
         return Err(bad("event.cut_time", "selection is empty"));
@@ -365,6 +381,20 @@ fn cut_time(e: &mut Engine, p: &Value) -> Result<Value> {
     {
         s.key_signatures.push((r.start, key));
         s.key_signatures.sort_by_key(|(k, _)| *k);
+    }
+    // The transpose track the same way.
+    let carried = s.transpose_track.iter().filter(|(k, _)| r.contains(*k)).max_by_key(|(k, _)| *k).map(|(_, st)| *st);
+    s.transpose_track.retain(|(k, _)| !r.contains(*k));
+    for (k, _) in &mut s.transpose_track {
+        if *k >= r.end {
+            *k = k.saturating_sub(r.len());
+        }
+    }
+    if let Some(st) = carried
+        && !s.transpose_track.iter().any(|(k, _)| *k == r.start)
+    {
+        s.transpose_track.push((r.start, st));
+        s.transpose_track.sort_by_key(|(k, _)| *k);
     }
     s.tempo.remove_ticks(from, to);
     // The Band's chords and sections lose what was inside the cut and close up after it.
@@ -423,6 +453,55 @@ impl ClipTime<'_> {
 /// Runs `f` on the notes of the clips picked, or with `indices` on those notes of the one clip
 /// named (the MIDI Editor's selection) -> {notes, indices?: where the picked notes are after the
 /// re-sort}.
+/// `pitch` moved `steps` tones of the scale `set` up (or down): a note out of the scale keeps its
+/// distance from the scale's tone below it. `None` past the keyboard.
+pub(crate) fn scale_step(set: soundcraft_vocal::PitchClassSet, pitch: u8, steps: i32) -> Option<u8> {
+    let in_set = |q: i32| set.contains(q.rem_euclid(12) as u8);
+    let p = i32::from(pitch);
+    // The scale's tone at or below the note (a scale with no tones moves nothing).
+    let base = (0..12).map(|d| p - d).find(|q| in_set(*q))?;
+    let mut q = base;
+    for _ in 0..steps.unsigned_abs() {
+        q += steps.signum();
+        while !in_set(q) {
+            q += steps.signum();
+        }
+    }
+    u8::try_from(q + (p - base)).ok().filter(|x| *x <= 127)
+}
+
+/// `event.transpose` by `steps` of the key at each clip's start: the largest move toward `steps`
+/// every picked note can make, so a chord keeps its shape at the keyboard's ends.
+fn transpose_in_key(e: &mut Engine, p: &Value) -> Result<Value> {
+    let steps = i64_or(p, "steps", 0).clamp(-75, 75) as i32;
+    let ids = clip_ids_param(e, p);
+    let mut out = json!({"notes": 0});
+    let mut notes = 0;
+    for id in ids {
+        let Some(start) = e.session().find_clip(id).map(|(_, c)| c.start) else { continue };
+        let (k, sc) = crate::vocal::key_pc_at(e.session(), start);
+        let set = crate::vocal::key_set(k, sc);
+        let mut q = p.clone();
+        q["clips"] = json!([id.0]);
+        out = midi_op(e, &q, move |n, _| {
+            let mut s = steps;
+            while s != 0 && n.iter().any(|x| scale_step(set, x.pitch, s).is_none()) {
+                s -= s.signum();
+            }
+            for x in n.iter_mut() {
+                if let Some(to) = scale_step(set, x.pitch, s) {
+                    x.pitch = to;
+                }
+            }
+        })?;
+        notes += out.get("notes").and_then(Value::as_u64).unwrap_or(0);
+    }
+    if let Some(o) = out.as_object_mut() {
+        o.insert("notes".into(), json!(notes));
+    }
+    Ok(out)
+}
+
 pub(super) fn midi_op(e: &mut Engine, p: &Value, f: impl Fn(&mut [soundcraft_midi::Note], &ClipTime)) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let only: Option<Vec<usize>> = match p.get("indices") {
@@ -550,22 +629,39 @@ fn quantize(e: &mut Engine, p: &Value) -> Result<Value> {
     })
 }
 
-fn velocity(e: &mut Engine, p: &Value) -> Result<Value> {
-    let op = if let Some(v) = p.get("set").and_then(Value::as_u64) {
-        VelocityOp::Set(v.min(127) as u8)
-    } else if let Some(v) = p.get("add").and_then(Value::as_i64) {
-        VelocityOp::Add(v.clamp(-127, 127) as i32)
-    } else if let Some(v) = p.get("scale").and_then(Value::as_f64) {
+/// The velocity change `p` asks for (`event.change_velocity`, `midi.notes_velocity`): `set`,
+/// `add`, `scale` (a factor), `from` and `to` (a ramp), `min` and/or `max` (a limit), `random` (±
+/// that much, seeded by `seed`), or `compress` (percent of each velocity's distance from `center`,
+/// by default the notes' average: under 100 compresses, over 100 expands); and the seed.
+pub(crate) fn velocity_op(p: &Value) -> Option<(VelocityOp, u64)> {
+    let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+    let vel = |v: f64| v.round().clamp(1.0, 127.0) as u8;
+    let op = if let Some(v) = num("set") {
+        VelocityOp::Set(vel(v))
+    } else if let Some(v) = num("add") {
+        VelocityOp::Add(v.round().clamp(-127.0, 127.0) as i32)
+    } else if let Some(v) = num("scale") {
         VelocityOp::Scale((v as f32).clamp(0.0, 10.0))
-    } else if let (Some(a), Some(b)) = (p.get("from").and_then(Value::as_i64), p.get("to").and_then(Value::as_i64)) {
-        VelocityOp::Ramp { from: a.clamp(1, 127) as u8, to: b.clamp(1, 127) as u8 }
-    } else if p.get("min").is_some() || p.get("max").is_some() {
-        VelocityOp::Limit { min: i64_or(p, "min", 1).clamp(1, 127) as u8, max: i64_or(p, "max", 127).clamp(1, 127) as u8 }
+    } else if let (Some(a), Some(b)) = (num("from"), num("to")) {
+        VelocityOp::Ramp { from: vel(a), to: vel(b) }
+    } else if num("min").is_some() || num("max").is_some() {
+        VelocityOp::Limit { min: vel(num("min").unwrap_or(1.0)), max: vel(num("max").unwrap_or(127.0)) }
+    } else if let Some(v) = num("random") {
+        VelocityOp::Humanize(v.round().clamp(0.0, 127.0) as u8)
     } else {
-        // Nothing to do is said, not done silently.
-        return Err(bad("event.change_velocity", "give set, add, scale, from and to, or min and max"));
+        let v = num("compress")?;
+        VelocityOp::Compress { center: num("center").map(vel), factor: (v / 100.0).clamp(0.0, 10.0) as f32 }
     };
-    midi_op(e, p, move |n, _| soundcraft_midi::ops::change_velocity(n, op))
+    let seed = p.get("seed").and_then(Value::as_u64).unwrap_or(soundcraft_midi::ops::DEFAULT_SEED);
+    Some((op, seed))
+}
+
+fn velocity(e: &mut Engine, p: &Value) -> Result<Value> {
+    // Nothing to do is said, not done silently.
+    let Some((op, seed)) = velocity_op(p) else {
+        return Err(bad("event.change_velocity", "give set, add, scale, from and to, min or max, random, or compress"));
+    };
+    midi_op(e, p, move |n, _| soundcraft_midi::ops::change_velocity_with_seed(n, op, seed))
 }
 
 fn duration(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -638,12 +734,26 @@ fn add_marker(e: &mut Engine, p: &Value) -> Result<Value> {
         n += 1;
     }
     let name = str_param(p, "name").map_or_else(|| format!("Marker {n}"), str::to_string);
+    let track = track_param(e, "markers.add", p, "track")?;
+    let s = e.session_mut();
+    let view = bool_or(p, "view", kind == MarkerKind::None).then(|| location_view(s));
     let id = s.add_marker(&name, kind, a.max(0), b.max(a).max(0));
     if let Some(m) = s.markers.iter_mut().find(|m| m.id == id) {
         m.ruler = i64_or(p, "ruler", 1).clamp(1, 5) as u8;
+        m.view = view;
+        m.track = track;
     }
     let number = s.marker(id).map_or(0, |m| m.number);
     Ok(json!({"id": id, "number": number}))
+}
+
+/// The Edit window's view as it is now, for a memory location to recall.
+fn location_view(s: &soundcraft_model::Session) -> soundcraft_model::LocationView {
+    soundcraft_model::LocationView {
+        samples_per_px: s.edit.zoom.samples_per_px,
+        scroll: s.edit.zoom.scroll,
+        tracks: s.tracks.iter().map(|t| (t.id, t.height, t.hidden)).collect(),
+    }
 }
 
 fn marker_index(e: &Engine, p: &Value, cmd: &str) -> Result<usize> {
@@ -705,6 +815,11 @@ fn delete_marker(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn edit_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     let i = marker_index(e, p, "markers.edit")?;
+    let track = match p.get("track") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(_) => Some(track_param(e, "markers.edit", p, "track")?),
+    };
     let at = position_param(e, "markers.edit", p, "at")?;
     let color = match p.get("color") {
         None => None,
@@ -722,6 +837,9 @@ fn edit_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     let Some(m) = s.markers.get_mut(i) else { return Err(bad("markers.edit", "gone")) };
     if let Some(c) = color {
         m.color = c;
+    }
+    if let Some(t) = track {
+        m.track = t;
     }
     // `name` is the documented new name; when it was the selector it already matches, so this is a no-op.
     if let Some(n) = str_param(p, "rename").or_else(|| str_param(p, "name")) {
@@ -744,6 +862,17 @@ fn recall_marker(e: &mut Engine, p: &Value) -> Result<Value> {
     let s = e.session();
     let Some(m) = s.markers.get(i).cloned() else { return Err(bad("markers.recall", "gone")) };
     let s = e.session_mut();
+    // A location that keeps a view puts the zoom, scroll, heights and shown tracks back (tracks
+    // made since stay as they are).
+    if let Some(v) = &m.view {
+        s.edit.zoom.samples_per_px = v.samples_per_px.clamp(0.25, 1_000_000.0);
+        s.edit.zoom.scroll = v.scroll.max(0);
+        for t in &mut s.tracks {
+            if let Some((_, h, hidden)) = v.tracks.iter().find(|(id, _, _)| *id == t.id) {
+                (t.height, t.hidden) = (*h, *hidden);
+            }
+        }
+    }
     match m.kind {
         MarkerKind::Marker => s.edit.selection = soundcraft_time::Range::point(m.start),
         MarkerKind::Selection => s.edit.selection = soundcraft_time::Range::new(m.start, m.end),
@@ -777,6 +906,33 @@ mod tests {
     use serde_json::json;
 
     /// Change Velocity…'s ramp: the earliest note gets `from`, the latest `to`, in each clip.
+    #[test]
+    fn transpose_in_key_moves_by_scale_steps() {
+        use soundcraft_model::{ChannelFormat, TrackKind};
+        let mut e = crate::Engine::default();
+        e.session_mut().key_signatures.push((0, "G major".into()));
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0})).unwrap()["clip"].as_u64().unwrap();
+        for (i, pitch) in [60, 64, 65, 66].into_iter().enumerate() {
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": pitch, "start_ticks": i * 480})).unwrap();
+        }
+        let pitches = |e: &mut crate::Engine| -> Vec<u64> {
+            let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+            n["notes"].as_array().unwrap().iter().map(|x| x["pitch"].as_u64().unwrap()).collect()
+        };
+        // Up a step of G major: C-D, E-F#, F (out of the key, a semitone over E) a semitone over F#, F#-G.
+        e.execute("event.transpose", &json!({"clips": [clip], "steps": 1})).unwrap();
+        assert_eq!(pitches(&mut e), vec![62, 66, 67, 67]);
+        // Down two, on the first note only.
+        e.execute("event.transpose", &json!({"clips": [clip], "steps": -2, "indices": [0]})).unwrap();
+        assert_eq!(pitches(&mut e)[0], 59);
+        // Never past the keyboard: the whole chord stops where its top note must.
+        let set = crate::vocal::key_set(7, 0);
+        assert_eq!(super::scale_step(set, 127, 1), None);
+        assert_eq!(super::scale_step(set, 60, 7), Some(72));
+        assert_eq!(super::scale_step(set, 60, -7), Some(48));
+    }
+
     #[test]
     fn change_velocity_ramps_from_to() {
         use soundcraft_model::{ChannelFormat, TrackKind};

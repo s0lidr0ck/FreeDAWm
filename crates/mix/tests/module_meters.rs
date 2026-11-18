@@ -50,6 +50,20 @@ fn module_meters_follow_the_chain() {
     assert!(!m[0].failed && !m[1].failed);
 }
 
+/// The parity list's "processor load shown per effect": a module that runs reports the share of
+/// the block's duration it took; a bypassed one, which does not run, reports none.
+#[test]
+fn a_running_module_reports_its_processor_load() {
+    let mut off = Insert::new("fs_reverb");
+    off.bypass = true;
+    let (s, t, _) = session(vec![Insert::new("fs_reverb"), off]);
+    let mut eng = MixEngine::new(48_000.0, BLOCK);
+    render(&mut eng, &s, 0..8);
+    let m = &eng.meters[&t].modules;
+    assert!(m[0].load > 0.0 && m[0].load.is_finite(), "load {}", m[0].load);
+    assert_eq!(m[1].load, 0.0, "a bypassed module does not run");
+}
+
 #[test]
 fn a_missing_plugin_passes_the_signal_through_its_meter() {
     let mut gain = Insert::new("gain");

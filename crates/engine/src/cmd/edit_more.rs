@@ -38,7 +38,7 @@ fn has_clip_gain_clipboard(e: &Engine) -> std::result::Result<(), String> {
 }
 
 fn has_clip_effects_clipboard(e: &Engine) -> std::result::Result<(), String> {
-    if e.clipboard.clip_effects.is_empty() { Err("no clip effects have been copied".into()) } else { Ok(()) }
+    if e.clipboard.clip_effects.is_empty() && e.clipboard.clip_modules.is_empty() { Err("no clip effects have been copied".into()) } else { Ok(()) }
 }
 
 fn has_automation_clipboard(e: &Engine) -> std::result::Result<(), String> {
@@ -358,7 +358,7 @@ pub(super) fn copy_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"points": n, "length": r.len()}))
 }
 
-fn paste_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn paste_clip_gain(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "edit.paste_clip_gain";
     let tracks = tracks_required(e, id, p)?;
     let at = position_param(e, id, p, "at")?.unwrap_or(e.session().edit.selection.start);
@@ -402,33 +402,39 @@ fn clip_effects(e: &mut Engine, p: &Value, copy: bool, remove: bool, id: &str) -
     let first = *ids.first().ok_or_else(|| bad(id, "select a clip"))?;
     if copy {
         let fx: Vec<(String, f64)> = e.session().find_clip(first).map(|(_, c)| c.effects.clone()).unwrap_or_default();
-        if fx.is_empty() {
+        let mods = e.session().find_clip(first).map(|(_, c)| c.modules.clone()).unwrap_or_default();
+        if fx.is_empty() && mods.is_empty() {
             return Err(bad(id, "the clip has no clip effects"));
         }
-        e.clipboard = Clipboard { clip_effects: fx, ..Clipboard::default() };
+        e.clipboard = Clipboard { clip_effects: fx, clip_modules: mods, ..Clipboard::default() };
     }
     let mut removed = 0;
     if remove {
         let s = e.session_mut();
         for id in &ids {
             let Some(c) = s.find_clip_mut(*id) else { continue };
-            removed += c.effects.len();
+            removed += c.effects.len() + c.modules.len();
             c.effects.clear();
+            c.modules.clear();
             c.effects_bypass = false;
         }
     }
     Ok(json!({"clips": ids.len(), "copied": e.clipboard.clip_effects.len(), "removed": removed}))
 }
 
-fn paste_clip_effects(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn paste_clip_effects(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     if ids.is_empty() {
         return Err(bad("edit.paste_clip_effects", "select a clip"));
     }
     let fx = e.clipboard.clip_effects.clone();
+    let mods = e.clipboard.clip_modules.clone();
     let s = e.session_mut();
     for id in &ids {
         let Some(c) = s.find_clip_mut(*id) else { continue };
+        if c.is_audio() {
+            c.modules.clone_from(&mods);
+        }
         c.effects.clear();
         for (k, v) in &fx {
             c.set_effect(k, *v);
@@ -1047,6 +1053,21 @@ mod tests {
         assert!((clip_db(&c, 500) + 6.0).abs() < 1e-3, "{c:?}");
     }
 
+    /// Edit › Paste after Copy Special › Clip Gain pastes the gain (it used to be refused: "the
+    /// clipboard is empty"), as one undo step.
+    #[test]
+    fn plain_paste_takes_copied_clip_gain() {
+        let (mut e, t, ids) = session_with_clips(&[(0, 1000), (2000, 1000)]);
+        e.execute("clip.gain", &json!({"clip": ids[0].0, "db": -6.0})).unwrap();
+        e.execute("edit.copy_clip_gain", &json!({"tracks": [t.0], "start": 0, "end": 1000})).unwrap();
+        assert!((crate::find_command("edit.paste").unwrap().enabled)(&e).is_ok());
+        let steps = e.undo_history().len();
+        e.execute("edit.paste", &json!({"tracks": [t.0], "at": 2000})).unwrap();
+        let c = e.session().track(t).unwrap().clips()[1].clone();
+        assert!((clip_db(&c, 500) + 6.0).abs() < 1e-3, "{c:?}");
+        assert_eq!(e.undo_history().len(), steps + 1);
+    }
+
     #[test]
     fn cut_clip_gain_can_be_pasted() {
         let (mut e, t, ids) = session_with_clips(&[(0, 1000), (2000, 1000), (4000, 1000)]);
@@ -1151,10 +1172,15 @@ mod tests {
             length: 240,
         };
         let id = s.new_clip_id();
-        ops::place_clip(&mut s, t, Clip::midi(id, "plain", 0, 96_000, soundcraft_midi::Sequence { notes: vec![n(36, 9)], ctrls: vec![] }));
+        ops::place_clip(
+            &mut s,
+            t,
+            Clip::midi(id, "plain", 0, 96_000, soundcraft_midi::Sequence { notes: vec![n(36, 9)], ctrls: vec![], sysex: Vec::new() }),
+        );
         let mut e = Engine::new(s);
         let pid = ClipId(9_999);
-        let mut printed = Clip::midi(pid, "band", 0, 24_000, soundcraft_midi::Sequence { notes: vec![n(48, 2), n(60, 0)], ctrls: vec![] });
+        let mut printed =
+            Clip::midi(pid, "band", 0, 24_000, soundcraft_midi::Sequence { notes: vec![n(48, 2), n(60, 0)], ctrls: vec![], sysex: Vec::new() });
         printed.midi_channels = true;
         e.clipboard.tracks = vec![vec![printed]];
         e.execute("edit.paste_merge_midi", &json!({"tracks": [t.0], "at": 0})).unwrap();
@@ -1202,6 +1228,31 @@ mod tests {
         e.execute("edit.select", &json!({"tracks": [member.0]})).unwrap();
         e.execute("edit.extend_up_to_members", &json!({})).unwrap();
         assert_eq!(e.session().edit.selected_tracks.len(), 3);
+    }
+
+    #[test]
+    fn a_closed_folder_edits_its_members_as_one() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 2, "kind": "midi"})).unwrap();
+        let members: Vec<soundcraft_model::TrackId> = e.session().tracks.iter().map(|t| t.id).collect();
+        for (i, t) in members.iter().enumerate() {
+            e.execute("midi.new_clip", &json!({"track": t.0, "start": i * 1_000, "end": i * 1_000 + 48_000})).unwrap();
+        }
+        e.execute("track.move_to_new_folder", &json!({})).unwrap();
+        let folder = e.session().tracks.iter().find(|t| t.is_folder()).unwrap().id;
+        // Open: the folder alone.
+        e.execute("edit.select", &json!({"tracks": [folder.0], "start": 0, "end": 10_000})).unwrap();
+        assert_eq!(e.session().edit.selected_tracks, vec![folder]);
+        e.execute("track.folder_toggle", &json!({"track": folder.0, "open": false})).unwrap();
+        e.execute("edit.select", &json!({"tracks": [folder.0], "start": 0, "end": 10_000})).unwrap();
+        assert_eq!(e.session().edit.selected_tracks.len(), 3, "closed: its members come with it");
+        e.execute("edit.clear", &json!({})).unwrap();
+        let starts: Vec<i64> = members.iter().map(|t| e.session().track(*t).unwrap().clips()[0].start).collect();
+        assert_eq!(starts, vec![10_000, 10_000], "the cut reached every member");
+        assert!(e.undo());
+        assert_eq!(e.session().track(members[1]).unwrap().clips()[0].start, 1_000, "one undo step");
+        e.execute("edit.select", &json!({"tracks": [folder.0], "exact": true})).unwrap();
+        assert_eq!(e.session().edit.selected_tracks, vec![folder], "unless exact");
     }
 
     #[test]

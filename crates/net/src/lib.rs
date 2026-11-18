@@ -22,19 +22,12 @@ pub mod proto;
 pub mod sync;
 pub mod take;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod discovery;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod follower;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod glue;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod hub;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod internet;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod stream;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod sys;
 
 /// The DNS-SD service type FreeDAWm PCs announce.

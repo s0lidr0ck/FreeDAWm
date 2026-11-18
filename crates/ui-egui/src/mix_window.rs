@@ -15,7 +15,7 @@ use soundcraft_playback::MeterSnapshot;
 pub(crate) const OBJECT_HOVER: &str = "Marks the track as an immersive object or as bed. A mark only: objects are not rendered yet, so the track plays through its panner into the bed either way.";
 
 /// A strip's width: Wide 150, Slim 80; `Auto` follows the Mix window's global toggle
-/// (`global_wide`, wide unless View › Narrow Mix / Slim Strips is on).
+/// (`global_wide`, wide unless View › Channel Width › Narrow Mix / Slim Strips is on).
 pub fn strip_width(size: StripSize, global_wide: bool) -> f32 {
     if strip_is_wide(size, global_wide) { 150.0 } else { 80.0 }
 }
@@ -91,9 +91,18 @@ pub fn separate_closed(app: &mut SoundApp) {
 
 pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
     let sync = app.ui.sync;
+    // Find and spill narrow the strips (a spilled folder's members show even when it is closed).
+    let find = crate::mix_find::get(ui.ctx());
     let ids: Vec<TrackId> = {
         let s = app.engine.session();
-        s.tracks.iter().filter(|x| crate::window_sync::mix_shows(s, x, sync)).map(|x| x.id).collect()
+        let spilled = |x: &Track| find.spill.is_some_and(|sp| x.id == sp || crate::mix_find::spill_members(s, sp).contains(&x.id));
+        s.tracks
+            .iter()
+            .filter(|x| {
+                (crate::window_sync::mix_shows(s, x, sync) || (spilled(x) && x.kind != TrackKind::Video)) && crate::mix_find::keeps(s, &find, x)
+            })
+            .map(|x| x.id)
+            .collect()
     };
     // Per-channel peaks for multichannel meters (read once per frame).
     let snap = app.preview_meters.clone().or_else(|| app.player.as_ref().filter(|_| app.meters_live()).map(|p| p.meters()));
@@ -112,35 +121,32 @@ pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
     // The strips and drawers scroll: there the wheel scrolls, and knobs ignore it.
     crate::widgets::begin_wheel_scrolls(ui.ctx());
     crate::channel_width::bar(app, ui);
+    crate::mix_find::bar(app, ui);
+    // Track › Pin: pinned strips stay at the left in session order while the others scroll; at
+    // most half the width is pinned (the rest of the pinned ones scroll).
+    let (pinned, ids) = pinned_split(app, &ids, ui.available_width() * 0.5);
+    let r = ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 1.0;
+        for &id in &pinned {
+            strip_and_drawers(app, ui, id, snap.as_ref(), chain_h, pitch_row);
+        }
+    });
+    if !pinned.is_empty() {
+        // The pinned strips' edge: the others scroll under it.
+        let x = r.response.rect.max.x + 1.0;
+        let y = r.response.rect.y_range();
+        ui.painter().vline(x, y, Stroke::new(2.0, Tokens::current().accent.gamma_multiply(0.6)));
+    }
+    let pinned_w = if pinned.is_empty() { 0.0 } else { r.response.rect.width() + 4.0 };
+    let area = Rect::from_min_max(pos2(ui.max_rect().min.x + pinned_w, r.response.rect.min.y), ui.max_rect().max);
+    ui.advance_cursor_after_rect(area);
+    let mut rest_ui = ui.new_child(egui::UiBuilder::new().max_rect(area));
+    let ui = &mut rest_ui;
     egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
             for &id in &ids {
-                let r = strip(app, ui, id, snap.as_ref(), chain_h, pitch_row);
-                // A track selected in the Edit window scrolls into view here.
-                if app.window_sync.reveal_mix == Some(id) {
-                    ui.scroll_to_rect(r, None);
-                    app.window_sync.reveal_mix = None;
-                }
-                // A musician strip's band drawer sits right of it, before any module drawer.
-                if app.ui.band_drawers.contains(&id) {
-                    let session = app.engine.session_arc();
-                    if let Some(track) = session.track(id)
-                        && let Some(k) = crate::band::musician_of(track)
-                    {
-                        crate::band::drawer(app, ui, track, k);
-                    }
-                }
-                // An open drawer sits right of its strip; the strips after it shift right.
-                if let Some(module) = app.ui.drawers.get(&id).copied() {
-                    let session = app.engine.session_arc();
-                    if let Some(track) = session.track(id) {
-                        let meters = snap.as_ref().and_then(|s| s.tracks.get(&id));
-                        // A frozen module's drawer is read-only and greyed (the drawer does it, so
-                        // its header menu can still move the freeze point or unfreeze).
-                        crate::module_drawer::drawer(app, ui, track, module, meters);
-                    }
-                }
+                strip_and_drawers(app, ui, id, snap.as_ref(), chain_h, pitch_row);
             }
             // A track with no strip here (hidden, in a closed folder) is not waited for.
             if app.window_sync.reveal_mix.is_some_and(|r| !ids.contains(&r)) {
@@ -154,6 +160,56 @@ pub(crate) fn content(app: &mut SoundApp, ui: &mut Ui) {
         });
     });
     crate::widgets::end_wheel_scrolls(ui.ctx());
+}
+
+/// The strips of `ids` split into those pinned at the left (Track › Pin, in session order, while
+/// they fit in `room` points) and the others, which scroll.
+pub(crate) fn pinned_split(app: &SoundApp, ids: &[TrackId], room: f32) -> (Vec<TrackId>, Vec<TrackId>) {
+    let s = app.engine.session();
+    let mut used = 0.0;
+    let (mut pinned, mut rest) = (Vec::new(), Vec::new());
+    for &id in ids {
+        let Some(t) = s.track(id) else { continue };
+        let w = strip_width(t.mixer.strip_size, !app.ui.narrow_mix) + 1.0;
+        if t.pinned && used + w <= room {
+            used += w;
+            pinned.push(id);
+        } else {
+            rest.push(id);
+        }
+    }
+    (pinned, rest)
+}
+
+/// One strip with the drawers open beside it (a musician's band drawer, a module drawer).
+fn strip_and_drawers(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapshot>, chain_h: f32, pitch_row: f32) {
+    let r = strip(app, ui, id, snap, chain_h, pitch_row);
+    // A track selected in the Edit window scrolls into view here.
+    if app.window_sync.reveal_mix == Some(id) {
+        ui.scroll_to_rect(r, None);
+        app.window_sync.reveal_mix = None;
+    }
+    // A musician strip's band drawer sits right of it, before any module drawer.
+    if app.ui.band_drawers.contains(&id) {
+        let session = app.engine.session_arc();
+        if let Some(track) = session.track(id)
+            && let Some(k) = crate::band::musician_of(track)
+        {
+            crate::band::drawer(app, ui, track, k);
+        }
+    }
+    // An open drawer sits right of its strip; the strips after it shift right.
+    if let Some(module) = app.ui.drawers.get(&id).copied() {
+        let session = app.engine.session_arc();
+        if let Some(track) = session.track(id) {
+            let meters = snap.and_then(|s| s.tracks.get(&id));
+            // A frozen module's drawer is read-only and greyed (the drawer does it, so
+            // its header menu can still move the freeze point or unfreeze). Its
+            // controls follow their automation as the fader does.
+            let shown = shown_params(app, track);
+            crate::module_drawer::drawer(app, ui, &shown, module, meters);
+        }
+    }
 }
 
 /// The strip's snowflake key: a click freezes the whole chain, or unfreezes a frozen track (whole
@@ -343,6 +399,71 @@ pub(crate) fn route_popup(app: &mut SoundApp, resp: &egui::Response, id: TrackId
     egui::Popup::menu(resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| route_menu(app, ui, id, input));
 }
 
+/// The surround panner's other controls, in the strip name's menu: how much of the centre
+/// speaker the pan uses (the rest goes to the left and right) and the level sent to the LFE.
+fn surround_menu(app: &mut SoundApp, ui: &mut Ui, track: &Track, lfe: bool) {
+    let id = track.id;
+    let sp = track
+        .mixer
+        .surround
+        .unwrap_or_else(|| SurroundPan::from_stereo(if track.mixer.pan.len() == 1 { track.mixer.pan.first().copied().unwrap_or(0.0) } else { 0.0 }));
+    ui.menu_button("Surround", |ui| {
+        let mut c = sp.center;
+        let r = ui.add(egui::Slider::new(&mut c, 0.0..=100.0).text("Centre %").max_decimals(0)).on_hover_text(
+            "How much of the centre speaker the pan uses: 0 sends the centre's share to the left and right instead (a phantom centre)",
+        );
+        if r.changed() {
+            let _ = app.engine.execute_merged("mix.surround_pan", &json!({"track": id.0, "center": c}), &format!("span_c:{}", id.0));
+        }
+        if r.drag_stopped() || r.lost_focus() {
+            app.engine.end_merge();
+        }
+        if lfe {
+            let mut db = sp.lfe_db.max(-60.0);
+            let r = ui
+                .add(egui::Slider::new(&mut db, -60.0..=12.0).text("LFE dB").max_decimals(1))
+                .on_hover_text("The level sent to the LFE channel (-60: none)");
+            if r.changed() {
+                let v = if db <= -59.9 { -144.0 } else { db };
+                let _ = app.engine.execute_merged("mix.surround_pan", &json!({"track": id.0, "lfe_db": v}), &format!("span_l:{}", id.0));
+            }
+            if r.drag_stopped() || r.lost_focus() {
+                app.engine.end_merge();
+            }
+        }
+    });
+}
+
+/// The strip's polarity (Ø) button: lit when any channel is inverted; a click inverts every
+/// channel (or puts them all back), a right-click on a wider track picks single channels.
+fn polarity_button(app: &mut SoundApp, ui: &mut Ui, track: &soundcraft_model::Track, r: Rect, frozen: bool) {
+    let id = track.id;
+    let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r));
+    if frozen {
+        c.disable();
+    }
+    let any = track.mixer.inverts_any();
+    let resp = c
+        .add_sized(r.size(), egui::Button::new(egui::RichText::new("Ø").font(bold(10.0))).selected(any))
+        .on_hover_text("Polarity: invert every channel (mix.phase_invert); right-click to invert single channels");
+    if resp.clicked() {
+        let _ = app.run("mix.phase_invert", json!({"tracks": [id.0], "value": !any}));
+    }
+    let n = track.channels().min(16);
+    if n > 1 {
+        let fmt = track.format;
+        let inverted: Vec<bool> = (0..n).map(|ch| track.mixer.inverts(ch)).collect();
+        resp.context_menu(|ui| {
+            for (ch, on) in inverted.iter().enumerate() {
+                let mut v = *on;
+                if ui.checkbox(&mut v, format!("Invert {}", fmt.channel_label(ch))).changed() {
+                    let _ = app.run("mix.phase_invert", json!({"tracks": [id.0], "channel": ch, "value": v}));
+                }
+            }
+        });
+    }
+}
+
 /// Draws track `id`'s strip and returns its rect.
 fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapshot>, chain_h: f32, pitch_row: f32) -> Rect {
     let t = Tokens::current();
@@ -376,7 +497,10 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         inset(ui.painter(), sec, t.strip_section);
         section_label(ui, sec, "PREAMP", narrow);
         if has_input {
-            let kr = Rect::from_min_size(pos2(x0 + 6.0, sec.min.y + 15.0), vec2(inner_w - 12.0, 16.0));
+            // The polarity button beside the trim: every channel; a right-click picks channels.
+            let pr = Rect::from_min_size(pos2(x0 + inner_w - 24.0, sec.min.y + 15.0), vec2(18.0, 16.0));
+            polarity_button(app, ui, track, pr, frozen);
+            let kr = Rect::from_min_size(pos2(x0 + 6.0, sec.min.y + 15.0), vec2(inner_w - 34.0, 16.0));
             let mut db = track.mixer.trim_db;
             let mut c = ui.new_child(egui::UiBuilder::new().max_rect(kr));
             if frozen {
@@ -657,8 +781,14 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             crate::scope::input_monitor(app, crate::MainWindow::Mix, id, m);
         }
         // A frozen track is not recorded on: its R key is greyed until it is unfrozen.
-        let rec = row.add_enabled_ui(!frozen, |ui| rec_toggle(ui, vec2(kw, 18.0), track.mixer.record_arm, "Record enable")).inner;
-        if rec.on_disabled_hover_text("Unfreeze the track to record on it").clicked() {
+        let tip = if track.mixer.record_safe { "Record safe: cannot be armed (right-click to change)" } else { "Record enable" };
+        let rec = row.add_enabled_ui(!frozen, |ui| rec_toggle(ui, vec2(kw, 18.0), track.mixer.record_arm, tip)).inner;
+        if track.mixer.record_safe {
+            crate::widgets::paint_record_safe(row.painter(), rec.rect);
+        }
+        let rec = rec.on_disabled_hover_text("Unfreeze the track to record on it");
+        rec.context_menu(|ui| crate::scope::rec_menu(app, ui, id));
+        if rec.clicked() {
             let m = row.input(|i| i.modifiers);
             crate::scope::toggle(app, crate::MainWindow::Mix, id, "mix.record_arm", m);
         }
@@ -685,8 +815,9 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
             crate::widgets::paint_solo_safe(row.painter(), sresp.rect);
         }
         let sresp = sresp.on_hover_text(crate::scope::solo_hint(mac));
-        if sresp.clicked() {
-            let m = row.input(|i| i.modifiers);
+        let m = row.input(|i| i.modifiers);
+        let held = crate::scope::momentary_solo(app, &row, crate::MainWindow::Mix, id, &sresp, m);
+        if sresp.clicked() && !held {
             crate::scope::solo(app, crate::MainWindow::Mix, id, m, mac);
         }
         sresp.context_menu(|ui| crate::scope::solo_menu(app, ui, id));
@@ -733,7 +864,6 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         }
     }
     let md = app.meters.get(&id).copied().unwrap_or_default();
-    #[cfg(not(target_arch = "wasm32"))]
     let md = crate::net_ui::with_remote_level(app, track, md);
     let slot = fader_slot(fr);
     let mr = Rect::from_min_max(pos2(fr.max.x + 4.0, slot.min.y - 5.0), pos2(x0 + inner_w - 2.0, slot.max.y + if wide_meter { 17.0 } else { 1.0 }));
@@ -840,7 +970,23 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     if nresp.double_clicked() {
         app.dialogs.open_rename_track(id, &track.name);
     }
+    let spills = crate::mix_find::spills(track);
+    let out_fmt = output_format(app, track);
+    let surround_out =
+        out_fmt.channels() > 2 && !out_fmt.is_ambisonic() && !matches!(track.kind, TrackKind::Master | TrackKind::Vca) && track.channels() <= 2;
     nresp.context_menu(|ui| {
+        if surround_out {
+            surround_menu(app, ui, track, out_fmt.has_lfe());
+            ui.separator();
+        }
+        if spills && ui.button("Spill").on_hover_text("Show only this strip and what it controls or sums").clicked() {
+            crate::mix_find::spill(ui.ctx(), id);
+            ui.close();
+        }
+        // Mix Engine FX: the character of this strip's bus sum.
+        if matches!(track.mixer.input, soundcraft_model::Route::Bus(_)) {
+            summing_menu(app, ui, track);
+        }
         crate::edit_window::track_context_menu(app, ui, id, crate::MainWindow::Mix);
         ui.separator();
         crate::channel_width::menu(app, ui, id);
@@ -852,6 +998,30 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     // Scout's PRE/POST lights either side of the track-type label, above the name plate.
     crate::scout::strip_lights(app, ui, id, Rect::from_center_size(pos2(r.center().x, vr.max.y + 9.0), vec2(inner_w - 4.0, 11.0)));
     r
+}
+
+/// The Summing submenu of a strip that sums a bus (Mix Engine FX): off, or a console model every
+/// source passes through on its way into the bus, and how hard it is driven.
+fn summing_menu(app: &mut SoundApp, ui: &mut Ui, track: &Track) {
+    let now = track.mixer.summing;
+    ui.menu_button("Summing", |ui| {
+        if ui.add(egui::Button::new("Off (clean)").selected(now.is_none())).clicked() {
+            let _ = app.run("mix.summing", json!({"track": track.id.0, "model": "off"}));
+        }
+        for m in soundcraft_model::SummingModel::ALL {
+            if ui.add(egui::Button::new(m.label()).selected(now.is_some_and(|s| s.model == m))).clicked() {
+                let _ = app.run("mix.summing", json!({"track": track.id.0, "model": m.id()}));
+            }
+        }
+        if let Some(sm) = now {
+            let mut pct = (sm.drive * 100.0).round();
+            let r = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix(" %").text("Drive"));
+            if r.changed() {
+                let key = format!("summing:{}", track.id.0);
+                let _ = app.engine.execute_merged("mix.summing", &json!({"track": track.id.0, "model": sm.model.id(), "drive": pct / 100.0}), &key);
+            }
+        }
+    });
 }
 
 /// The strip's group box menu: tick a group to join or leave it, or make a new one with this
@@ -1058,6 +1228,11 @@ fn level_icon(r: Rect) -> Rect {
 /// `edit_list`: a row of the Edit window's inserts list, named "<module> insert" (long names
 /// ellipsized), with "Open in Window" for built-ins; else the Mix window's INSTRUMENT row, named
 /// "Insert A…", which never opens a built-in's generic window.
+/// A Hardware Insert whose round trip has not been measured (Ping): it compensates nothing.
+pub(crate) fn hw_unmeasured(ins: &soundcraft_model::Insert) -> bool {
+    ins.plugin == soundcraft_mix::hw_insert::ID && ins.params.get("latency").copied().unwrap_or(0.0) <= 0.0
+}
+
 pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect, edit_list: bool) {
     let t = Tokens::current();
     let id = track.id;
@@ -1080,8 +1255,15 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         None => empty_slot(ui.painter(), r, resp.hovered(), Mark::Dot),
         Some(i) => {
             let faces = if i.bypass { t.slot_bypassed } else { t.slot_face };
-            let color = if info.is_some() { t.text } else { t.text_dim };
-            let shown = if edit_list { ellipsize(ui.painter(), &name, slot_text_width(r)) } else { name.clone() };
+            let color = if info.is_some() && !hw_unmeasured(i) { t.text } else { t.text_dim };
+            let shown = if hw_unmeasured(i) {
+                // Not pinged: it compensates nothing, and says so on its slot.
+                ellipsize(ui.painter(), &format!("{name} · not measured"), slot_text_width(r))
+            } else if edit_list {
+                ellipsize(ui.painter(), &name, slot_text_width(r))
+            } else {
+                name.clone()
+            };
             used_slot(ui.painter(), r, faces, Mark::Dot, &shown, color, None);
         }
     }
@@ -1108,7 +1290,11 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         }
     }
     let cmd = if ui.ctx().os().is_mac() { "⌘" } else { "Ctrl+" };
-    let resp = resp.on_hover_text(format!("{name}: click to open · {cmd}click to bypass · right-click for more"));
+    // What the module costs, read only while the pointer is on it.
+    let load = if resp.hovered() { crate::chain_view::module_load(app, id, ins.id) } else { String::new() };
+    let unmeasured =
+        if hw_unmeasured(&ins) { "\nRound trip not measured: no delay compensation until it is pinged (Ping in its drawer)" } else { "" };
+    let resp = resp.on_hover_text(format!("{name}: click to open · {cmd}click to bypass · right-click for more{load}{unmeasured}"));
     resp.context_menu(|ui| {
         ui.set_min_width(170.0);
         if ui.add(egui::Button::selectable(ins.bypass, "Bypass")).clicked() {
@@ -1121,6 +1307,43 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         // Post-Fader: the module runs after the fader and mute (Cubase's slots 7-8).
         if ui.add(egui::Button::selectable(ins.post_fader, "Post-Fader")).on_hover_text("Run after the fader and mute").clicked() {
             run_pick(app, ui, "mix.module_post_fader", json!({"track": id.0, "module": ins.id.0}));
+        }
+        // Multi-Mono: one mono instance per channel, linked (Pro Tools' multi-mono plug-ins).
+        if ui
+            .add(egui::Button::selectable(ins.multi_mono, "Multi-Mono"))
+            .on_hover_text("One mono instance per channel, all with these settings")
+            .clicked()
+        {
+            run_pick(app, ui, "mix.module_multi_mono", json!({"track": id.0, "module": ins.id.0}));
+        }
+        // Unlinked: each channel its own settings and lanes (the plugin window picks the channel).
+        if ui
+            .add(egui::Button::selectable(ins.multi_mono && ins.multi_mono_unlinked, "Multi-Mono Unlinked"))
+            .on_hover_text("One mono instance per channel, each with settings and automation of its own")
+            .clicked()
+        {
+            let linked = ins.multi_mono && ins.multi_mono_unlinked;
+            run_pick(app, ui, "mix.module_multi_mono", json!({"track": id.0, "module": ins.id.0, "linked": linked}));
+        }
+        // Wet/dry: the module's output blended with its input (any effect in parallel).
+        let mut pct = (ins.mix * 100.0).round();
+        let r =
+            ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix(" % wet").text("Mix")).on_hover_text("Blend the module's output with its input");
+        if r.changed() {
+            let key = format!("insert-mix:{}:{}", id.0, ins.id.0);
+            if let Err(e) = app.engine.execute_merged("mix.module_mix", &json!({"track": id.0, "module": ins.id.0, "value": pct / 100.0}), &key) {
+                app.ui.status = e.to_string();
+            }
+        }
+        if r.drag_stopped() || r.lost_focus() {
+            app.engine.end_merge();
+        }
+        // LFOs and envelope followers that move this track's plug-in parameters.
+        let mods = track.modulators.len();
+        let label = if mods == 0 { "Modulators…".to_string() } else { format!("Modulators ({mods})…") };
+        if ui.button(label).on_hover_text("LFOs and envelope followers that move plug-in parameters").clicked() {
+            crate::modulators_ui::open(app, id);
+            ui.close();
         }
         if edit_list && crate::module_drawer::has_drawer(&ins.plugin) && ui.button("Open in Window").clicked() {
             // The generic window: every parameter as a slider, outside the Mix window.
@@ -1159,8 +1382,10 @@ pub(crate) enum Pick {
 /// ([`soundcraft_dsp::PluginInfo::listed`]): the stock effects are hidden.
 pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_dsp::PluginInfo>)> {
     use soundcraft_dsp::Category;
-    // Dither is a utility here, not a group of its own (the owner's call).
-    let group_of = |p: &soundcraft_dsp::PluginInfo| if p.category == Category::Dither { Category::Other } else { p.category };
+    // Dither is a utility here, not a group of its own (the owner's call), and so is Lo-Fi.
+    let group_of = |p: &soundcraft_dsp::PluginInfo| {
+        if p.category == Category::Dither || soundcraft_dsp::LISTED_UTILITIES.contains(&p.id) { Category::Other } else { p.category }
+    };
     let listed = || soundcraft_dsp::listed_plugins().filter(|p| p.is_instrument == instruments);
     let mut out = Vec::new();
     let mut fs: Vec<_> = listed().filter(|p| p.with_engines()).collect();
@@ -1180,7 +1405,12 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
             Category::Instrument => "Built-in".to_string(),
             c => format!("{c:?}"),
         };
-        out.push((name, listed().filter(|p| !p.with_engines() && group_of(p) == c).collect()));
+        let mut list: Vec<&'static soundcraft_dsp::PluginInfo> = listed().filter(|p| !p.with_engines() && group_of(p) == c).collect();
+        // Outboard gear in the chain: a utility of the mixer's own.
+        if c == Category::Other && !instruments {
+            list.push(&soundcraft_mix::hw_insert::INFO);
+        }
+        out.push((name, list));
     }
     out
 }
@@ -1613,7 +1843,7 @@ fn hosted_groups(instruments: bool) -> (Vec<(String, Vec<MenuPlugin>)>, bool) {
 /// plugin stays reachable however many are installed. Until CLAP and VST3 have both scanned, or
 /// when nothing was found, a row at the bottom says so with a button that starts the scan in the
 /// background. Returns the id picked.
-fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
+pub(crate) fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
     let (groups, scanned) = hosted_groups(instruments);
     let max_h = (ui.ctx().content_rect().height() - 80.0).max(160.0);
     let mut picked = None;
@@ -1647,9 +1877,9 @@ fn hosted_menus(ui: &mut Ui, instruments: bool) -> Option<String> {
 pub fn plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
     soundcraft_mix::external_midi::plugin_info(id)
         .or_else(|| soundcraft_mix::track_midi::plugin_info(id))
+        .or_else(|| soundcraft_mix::hw_insert::plugin_info(id))
         .or_else(|| soundcraft_dsp::plugin_info(id))
-        .or_else(|| soundcraft_clap_host::plugin_info(id))
-        .or_else(|| soundcraft_vst3_host::plugin_info(id))
+        .or_else(|| soundcraft_mix::hosted_plugin_info(id))
         .or_else(|| soundcraft_au_host::plugin_info(id))
 }
 
@@ -1671,10 +1901,49 @@ fn sends_section_height(s: &soundcraft_model::Session, off: usize) -> f32 {
 /// View > Expanded Sends: under a send's slot, a mini fader with its dB (drag; Shift for fine,
 /// Alt-click for 0 dB, double-click for the Send window), then its pan (drag; double-click
 /// centres), PRE and M. Blank when the slot has no send, so every strip's rows line up.
+/// `track` as its module controls show it: each chain module's laned parameters at what their
+/// lanes play now (while the track reads and the control is not touched), so a knob moves with
+/// its automation as the fader does. A copy only when some value differs.
+pub(crate) fn shown_params<'a>(app: &SoundApp, track: &'a Track) -> std::borrow::Cow<'a, Track> {
+    let mut out = std::borrow::Cow::Borrowed(track);
+    if !track.mixer.automation_mode.reads() {
+        return out;
+    }
+    for lane in track.automation.iter().filter(|l| !l.points.is_empty()) {
+        let soundcraft_model::AutoParam::Plugin { module, param } = &lane.param else { continue };
+        let Some(v) = app.engine.automation_shown(track.id, &lane.param) else { continue };
+        let now = track.mixer.module(*module).and_then(|i| i.params.get(param).copied());
+        if now.is_some_and(|n| (n - v).abs() > f32::EPSILON)
+            && let Some(ins) = out.to_mut().mixer.module_mut(*module)
+            && let Some(x) = ins.params.get_mut(param)
+        {
+            *x = v;
+        }
+    }
+    out
+}
+
+/// A send as its controls show it: its level, pan and mute follow their automation as the
+/// fader does (while the track reads and the control is not touched).
+fn shown_send(app: &SoundApp, id: TrackId, slot: usize, mut send: soundcraft_model::SendSlot) -> soundcraft_model::SendSlot {
+    let Ok(i) = u8::try_from(slot) else { return send };
+    if let Some(v) = app.engine.automation_shown(id, &soundcraft_model::AutoParam::SendLevel(i)) {
+        send.level_db = v;
+    }
+    if let Some(v) = app.engine.automation_shown(id, &soundcraft_model::AutoParam::SendPan(i)) {
+        send.pan = v;
+    }
+    if let Some(v) = app.engine.automation_shown(id, &soundcraft_model::AutoParam::SendMute(i)) {
+        send.mute = v >= 0.5;
+    }
+    send
+}
+
 fn expanded_send(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect, wide: bool) {
     let t = Tokens::current();
     let id = track.id;
     let Some(send) = track.mixer.sends.get(slot).cloned().flatten() else { return };
+    let send = shown_send(app, id, slot, send);
     let which = (b'A' + slot as u8) as char;
     let label = |what: &str| format!("{} Send {which} {what}", track.name);
     // Row 1: the fader bar, its level as a fill along the fader taper, the dB over it.
@@ -1764,7 +2033,7 @@ fn expanded_send(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r:
 pub(crate) fn send_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect) {
     let t = Tokens::current();
     let id = track.id;
-    let snd = track.mixer.sends.get(slot).cloned().flatten();
+    let snd = track.mixer.sends.get(slot).cloned().flatten().map(|s| shown_send(app, id, slot, s));
     let compact = r.width() < COMPACT_SLOT;
     // As in Pro Tools, only the fader icon opens a send's level; the rest of the slot picks its
     // destination. A short track's square has no icon, so all of it is the level.
@@ -2170,7 +2439,7 @@ pub fn input_choices(s: &soundcraft_model::Session, device_inputs: Option<usize>
         let n = device_inputs.filter(|n| *n > 0).unwrap_or(8).min(64);
         return (1..=n).map(|k| (format!("In {k}"), true)).collect();
     }
-    s.inputs.iter().map(|i| (i.name.clone(), path_fits(usize::from(i.first_channel), i.format.channels().clamp(1, 2), device_inputs))).collect()
+    s.inputs.iter().map(|i| (i.name.clone(), path_fits(usize::from(i.first_channel), i.width(), device_inputs))).collect()
 }
 
 /// The hardware outputs an output menu offers: the main, then the session's other outputs, each
@@ -2191,6 +2460,43 @@ pub fn input_monitor_tip(m: soundcraft_model::InputMonitor) -> &'static str {
         soundcraft_model::InputMonitor::On => "Input monitoring: On (always hears its input)",
         soundcraft_model::InputMonitor::Off => "Input monitoring: Off (direct monitoring)",
     }
+}
+
+/// Additional outputs (Pro Tools'): post-fader copies of the main output, each in a send slot
+/// (`mix.send` `as_output`); listed with a Remove, and offered to any hardware output or bus.
+fn extra_outputs_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, hw: &[(String, bool)]) {
+    let session = app.engine.session_arc();
+    let Some(track) = session.track(id) else { return };
+    if matches!(track.kind, TrackKind::Master | TrackKind::Vca) {
+        return;
+    }
+    ui.separator();
+    for (slot, snd) in track.mixer.sends.iter().enumerate() {
+        let Some(snd) = snd.as_ref().filter(|x| x.output) else { continue };
+        let name = route_name(app, &snd.target);
+        if ui.button(format!("Remove output {name}")).on_hover_text("This additional output (a send slot)").clicked() {
+            let _ = app.run("mix.send_remove", json!({"track": id.0, "slot": slot}));
+            ui.close();
+        }
+    }
+    ui.menu_button("Add Output", |ui| {
+        // (The first choice is the main output itself.)
+        for (name, _) in hw.iter().skip(1) {
+            if ui.button(name).clicked() {
+                let _ = app.run("mix.send", json!({"track": id.0, "output": name, "as_output": true}));
+                ui.close();
+            }
+        }
+        ui.separator();
+        for b in &session.busses {
+            if ui.button(&b.name).clicked() {
+                let _ = app.run("mix.send", json!({"track": id.0, "bus": b.name, "as_output": true}));
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("Another output beside the main one: a post-fader copy at the fader's level and pan (it takes a send slot)");
 }
 
 fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
@@ -2220,13 +2526,13 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
         }
     }
     if input {
-        #[cfg(not(target_arch = "wasm32"))]
         crate::net_ui::input_menu(app, ui, id, &current);
         crate::midi_devices::input_menu(app, ui, id);
         crate::band::input_menu(app, ui, id);
         crate::band::module_input_menu(app, ui, id);
     } else {
         crate::midi_devices::output_menu(app, ui, id);
+        extra_outputs_menu(app, ui, id, &choices);
     }
     if input && session.track(id).is_some_and(|t| t.kind == TrackKind::Audio) {
         ui.separator();
@@ -2263,6 +2569,30 @@ fn route_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, input: bool) {
 #[cfg(test)]
 mod tests {
     use super::{dragged_send_db, editable_readout, parse_db, parse_pan};
+
+    /// A module's knobs and a send's controls show what their lanes play while the track reads.
+    #[test]
+    fn module_knobs_and_sends_follow_their_automation() {
+        use serde_json::json;
+        use soundcraft_model::AutoParam;
+        let mut e = soundcraft_engine::Engine::default();
+        e.execute("track.new", &json!({"count": 1, "name": "A", "format": "mono"})).unwrap();
+        e.execute("mix.module_add", &json!({"track": "A", "plugin": "fs_cleanq"})).unwrap();
+        e.execute("mix.send", &json!({"track": "A", "slot": 0, "bus": "Verb", "level_db": -10.0})).unwrap();
+        let tr = e.session().tracks[0].clone();
+        let m = tr.mixer.inserts[0].id;
+        for (p, v) in [(AutoParam::Plugin { module: m, param: "outGain".into() }, 0.8), (AutoParam::SendLevel(0), -3.0)] {
+            for at in [0, 10_000] {
+                e.execute("automation.set_point", &json!({"track": tr.id.0, "param": p.id(), "at": at, "value": v})).unwrap();
+            }
+        }
+        let app = crate::SoundApp::new(e, None, crate::Services::default());
+        let tr = app.engine.session().tracks[0].clone();
+        let shown = super::shown_params(&app, &tr);
+        assert_eq!(shown.mixer.module(m).unwrap().params.get("outGain").copied(), Some(0.8));
+        let send = super::shown_send(&app, tr.id, 0, tr.mixer.sends[0].clone().unwrap());
+        assert_eq!(send.level_db, -3.0);
+    }
 
     #[test]
     fn wide_strips_send_slots_read_their_db_and_narrow_ones_do_not() {
@@ -2315,18 +2645,22 @@ mod tests {
         for id in ["gain", "trim", "invert", "dc_offset_removal", "time_shift", "signal_generator", "channel_tool"] {
             assert!(ids.contains(&id), "{id}");
         }
-        // The meters and Dither are utilities (the owner's call), not in the first group.
-        for id in ["spectrum", "loudness", "phase_meter", "tuner", "dither"] {
+        // The meters and Dither are utilities (the owner's call), not in the first group, and so
+        // is Lo-Fi (bit and sample-rate reduction), the one stock effect the lists offer.
+        for id in ["spectrum", "loudness", "phase_meter", "tuner", "dither", "lofi"] {
             assert!(ids.contains(&id), "{id} under Utilities");
             assert!(groups[0].1.iter().all(|p| p.id != id), "{id} not with the engines");
         }
         for (_, l) in &groups {
             assert!(l.iter().all(|p| p.listed() && !p.is_instrument));
-            assert!(l.iter().all(|p| !soundcraft_dsp::HIDDEN_STOCK.contains(&p.category) || soundcraft_dsp::LISTED_STOCK.contains(&p.id)));
+            assert!(l.iter().all(|p| !soundcraft_dsp::HIDDEN_STOCK.contains(&p.category)
+                || soundcraft_dsp::LISTED_STOCK.contains(&p.id)
+                || soundcraft_dsp::LISTED_UTILITIES.contains(&p.id)));
         }
         let listed: usize = groups.iter().map(|(_, l)| l.len()).sum();
-        assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count());
-        assert!(groups[1].1.iter().all(|p| p.category == Category::Other || p.category == Category::Dither));
+        // (and the mixer's own Hardware Insert)
+        assert_eq!(listed, soundcraft_dsp::listed_plugins().filter(|p| !p.is_instrument).count() + 1);
+        assert!(groups[1].1.iter().all(|p| p.category == Category::Other || p.category == Category::Dither || p.id == "lofi"));
         // The instruments: the built-in ones, but Drum Synth (hidden: Juke took over from it).
         let inst = super::picker_groups(true);
         assert_eq!(inst.iter().map(|(g, _)| g.as_str()).collect::<Vec<_>>(), ["Built-in"]);

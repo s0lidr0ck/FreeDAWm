@@ -241,6 +241,7 @@ pub(crate) fn deliver(slot: &SlotBuf, inst: &mut PluginSlot) {
         if !lower && b[0] < 0xF0 {
             b[0] &= 0xF0;
         }
+        inst.hear(b);
         inst.plugin.midi_raw(offset as usize, b);
     }
 }

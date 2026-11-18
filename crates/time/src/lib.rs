@@ -11,7 +11,7 @@ mod grid;
 mod tempo;
 mod timecode;
 
-pub use format::{TimeFormat, format_length, format_position, parse_position};
+pub use format::{TimeFormat, format_length, format_position, parse_length, parse_position};
 pub use grid::{GridCtx, GridValue, NoteValue};
 pub use tempo::{BarBeat, MeterEvent, TICKS_PER_QUARTER, TempoEvent, TempoMap};
 pub use timecode::{FrameRate, Timecode};

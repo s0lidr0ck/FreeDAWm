@@ -49,9 +49,9 @@ echo "==> FreeDAWm $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
   if [ -n "${CROSS_TARGET:-}" ]; then
-    (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan --target "$CROSS_TARGET")
+    (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan -p soundcraft-plugin-bridge --target "$CROSS_TARGET")
   else
-    (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan)
+    (cd "$ROOT" && cargo build --release --locked -p soundcraft -p soundcraft-cli -p soundcraft-scan -p soundcraft-plugin-bridge)
   fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -64,7 +64,9 @@ install -Dm755 "$BIN/freedawm" "$STAGE/usr/bin/freedawm"
 install -Dm755 "$BIN/freedawm-cli" "$STAGE/usr/bin/freedawm-cli"
 # freedawm-scan: the plugin scanner helper; the app finds it next to itself and scans only through it.
 install -Dm755 "$BIN/freedawm-scan" "$STAGE/usr/bin/freedawm-scan"
-"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/freedawm" "$STAGE/usr/bin/freedawm-cli" "$STAGE/usr/bin/freedawm-scan" 2>/dev/null || true
+# freedawm-plugin-host: runs a hosted plug-in in its own process (Preferences › Mixing); found next to the app.
+install -Dm755 "$BIN/freedawm-plugin-host" "$STAGE/usr/bin/freedawm-plugin-host"
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/freedawm" "$STAGE/usr/bin/freedawm-cli" "$STAGE/usr/bin/freedawm-scan" "$STAGE/usr/bin/freedawm-plugin-host" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"

@@ -408,9 +408,6 @@ impl<'p, R: Read + Seek> Importer<'p, '_, R> {
                 return Err(format!("{path}: not in the archive"));
             }
         }
-        if cfg!(target_arch = "wasm32") {
-            return Err(format!("{path}: an external file (not in the archive)"));
-        }
         let p = Path::new(path);
         let full = if p.is_absolute() { p.to_path_buf() } else { self.dir.clone().unwrap_or_default().join(p) };
         crate::io::read_file_max(&full, max).map_err(|e| e.to_string())

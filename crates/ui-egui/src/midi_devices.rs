@@ -33,12 +33,10 @@ pub fn tick(app: &mut SoundApp) {
     if app.midi_outputs.is_none() && app.use_system_midi {
         app.midi_outputs = soundcraft_playback::midi_out::MidiOutputs::system(app.ui.midi_outputs.clone());
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(m) = &mut app.midi_inputs {
         m.set_offsets(app.ui.midi_offsets.clone());
         m.tick(std::time::Instant::now());
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(m) = &mut app.midi_outputs {
         // The ports the session's tracks send to open even if never enabled in the window.
         m.set_wanted(wanted_outputs(app.engine.session()));
@@ -103,7 +101,7 @@ pub(crate) fn collect_capture(app: &mut SoundApp) {
     }
 }
 
-/// Event › More MIDI › Capture MIDI: what was played on the MIDI inputs without recording becomes
+/// Event › Capture MIDI: what was played on the MIDI inputs without recording becomes
 /// a take on the record-armed MIDI and instrument tracks (or, with none armed, the selected ones),
 /// placed as a recorded take is (latency, input filter, record mode, input quantize). What was
 /// played last counts: during the playback under way (or the last one), over the loop when it
@@ -209,7 +207,16 @@ pub(crate) fn recorded_events(
 ) -> Vec<soundcraft_engine::midi_record::RecordedEvent> {
     let names = slot_names(app);
     let name = |slot: u8| names.iter().find(|(s, _)| *s == usize::from(slot)).map(|(_, n)| n.clone()).unwrap_or_default();
-    heard.iter().map(|r| soundcraft_engine::midi_record::RecordedEvent { at: r.at, port: name(r.port), msg: r.msg, pass: r.pass }).collect()
+    heard
+        .iter()
+        .map(|r| soundcraft_engine::midi_record::RecordedEvent {
+            at: r.at,
+            port: name(r.port),
+            msg: r.msg,
+            pass: r.pass,
+            sysex: r.sysex.as_deref().map(<[u8]>::to_vec).unwrap_or_default(),
+        })
+        .collect()
 }
 
 /// Loop recording (each frame while recording, after [`collect`]): once the loop has wrapped
@@ -249,7 +256,7 @@ pub(crate) fn loop_undo_applies(app: &SoundApp) -> bool {
     app.engine.transport.recording && app.midi_loop_preview.as_ref().is_some_and(|p| p.shown() > 0)
 }
 
-/// Event › More MIDI › Undo Last Pass (and Undo while loop recording): the last finished loop
+/// Event › Undo Last Pass (and Undo while loop recording): the last finished loop
 /// pass still in is left out of what plays and of the take; the loop runs on.
 pub(crate) fn undo_last_pass(app: &mut SoundApp) -> Result<serde_json::Value, String> {
     if !app.engine.transport.recording {
@@ -264,6 +271,39 @@ pub(crate) fn undo_last_pass(app: &mut SoundApp) -> Result<serde_json::Value, St
     show_passes(app, upto);
     app.ui.status = format!("Loop pass {} undone", u32::from(pass) + 1);
     Ok(serde_json::json!({"pass": pass}))
+}
+
+/// Event › Erase Held Notes (while loop recording MIDI): the keys held now are taken
+/// out of the take so far, every note of theirs in the finished passes and the one under way
+/// (the held keys too: they are not recorded), and what plays follows. Keys are told apart by
+/// channel and pitch. The take spilled for crash recovery still has them.
+pub(crate) fn erase_held_notes(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    if !app.engine.transport.recording || app.midi_loop_preview.is_none() {
+        return Err("Erase Held Notes works while loop recording MIDI: hold the keys whose notes should go.".into());
+    }
+    collect(app);
+    let is_on = |m: [u8; 3]| m[0] & 0xF0 == 0x90 && m[2] > 0;
+    let is_note = |m: [u8; 3]| matches!(m[0] & 0xF0, 0x80 | 0x90);
+    let key = |m: [u8; 3]| (m[0] & 0x0F, m[1] & 0x7F);
+    let mut held: Vec<(u8, u8)> = Vec::new();
+    for e in &app.midi_rec {
+        if is_on(e.msg) {
+            if !held.contains(&key(e.msg)) {
+                held.push(key(e.msg));
+            }
+        } else if is_note(e.msg) {
+            held.retain(|k| *k != key(e.msg));
+        }
+    }
+    if held.is_empty() {
+        return Err("No key is held: hold the keys whose notes should go, then Erase Held Notes.".into());
+    }
+    app.midi_rec.retain(|e| !(is_note(e.msg) && held.contains(&key(e.msg))));
+    let upto = app.midi_loop_preview.as_ref().map_or(0, soundcraft_engine::midi_record::LoopPreview::shown);
+    show_passes(app, upto);
+    let names: Vec<String> = held.iter().map(|(_, p)| soundcraft_midi::note_name(*p)).collect();
+    app.ui.status = format!("Erased {} from the take", names.join(", "));
+    Ok(serde_json::json!({"erased": held.iter().map(|(c, p)| serde_json::json!({"channel": c + 1, "pitch": p})).collect::<Vec<_>>()}))
 }
 
 /// The take as recorded so far (to `end`), with the plan's start, loop and punch.
@@ -387,11 +427,172 @@ fn to_track_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
                 }
             }
         });
+        let mut on_target = app.engine.session().track(id).is_some_and(|t| t.midi_record_on_target);
+        if ui
+            .checkbox(&mut on_target, "Record on the Target")
+            .on_hover_text("A take on this track goes onto the tracks it plays, as each heard them (after this track's MIDI effects, each layer's range, the channel); off, it stays here as played")
+            .changed()
+            && let Err(e) = app.run("track.midi_record_on_target", json!({"tracks": [id.0], "value": on_target}))
+        {
+            app.ui.status = e;
+        }
         if ui.button("Not on Another Track").clicked() {
             if let Err(e) = app.run("mix.midi_to_track", json!({"track": id.0, "target": null})) {
                 app.ui.status = e;
             }
             ui.close();
+        }
+    });
+    layers_menu(app, ui, id);
+}
+
+/// The output menu's "Layers & Splits" part: the track plays up to four instruments at once, each
+/// over a key range and a velocity range (`mix.midi_layers`). Each layer's ranges are drag
+/// values (a drag is one undo step); a layer is added from the other instrument tracks.
+fn layers_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    use soundcraft_mix::track_midi::{MAX_ZONES, Zone};
+    let s = app.engine.session();
+    let Some(track) = s.track(id) else { return };
+    let zones: Vec<Zone> = track.instrument.as_ref().map(soundcraft_engine::cmd::midi_out::layers).unwrap_or_default();
+    let targets: Vec<(TrackId, String)> =
+        s.tracks.iter().filter(|t| t.id != id && t.kind.is_midi() && t.instrument.is_some()).map(|t| (t.id, t.name.clone())).collect();
+    let name = |t: TrackId| s.track(t).map_or_else(|| "(gone)".to_string(), |t| t.name.clone());
+    let names: Vec<String> = zones.iter().map(|z| name(z.track)).collect();
+    let title = if zones.len() > 1 { format!("Layers & Splits: {}", zones.len()) } else { "Layers & Splits".to_string() };
+    let as_json = |zs: &[Zone]| -> Vec<serde_json::Value> {
+        zs.iter().map(|z| json!({"target": z.track.0, "keys": [z.keys.0, z.keys.1], "velocities": [z.vel.0, z.vel.1]})).collect()
+    };
+    ui.menu_button(title, |ui| {
+        let mut next = zones.clone();
+        let mut merge: Option<String> = None;
+        let mut remove = None;
+        for (i, (z, n)) in next.iter_mut().zip(&names).enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(n).strong());
+                let mut drag = |ui: &mut egui::Ui, v: &mut u8, lo: u8, hi: u8, what: &str, note: bool| {
+                    let r = ui.add(egui::DragValue::new(v).range(lo..=hi).custom_formatter(move |x, _| {
+                        if note { soundcraft_midi::note_name(x.round().clamp(0.0, 127.0) as u8) } else { format!("{x:.0}") }
+                    }));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, format!("{n} {what}")));
+                    if r.changed() {
+                        merge = Some(format!("midi_layers:{}:{i}:{what}", id.0));
+                    }
+                };
+                ui.label("Keys");
+                drag(ui, &mut z.keys.0, 0, 127, "lowest key", true);
+                drag(ui, &mut z.keys.1, 0, 127, "highest key", true);
+                ui.label("Vel");
+                drag(ui, &mut z.vel.0, 1, 127, "lowest velocity", false);
+                drag(ui, &mut z.vel.1, 1, 127, "highest velocity", false);
+                if ui.small_button("✕").on_hover_text("Take this layer off").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(key) = merge
+            && let Err(e) = app.engine.execute_merged("mix.midi_layers", &json!({"track": id.0, "layers": as_json(&next)}), &key)
+        {
+            app.ui.status = e.to_string();
+        }
+        if let Some(i) = remove {
+            next.remove(i);
+            if let Err(e) = app.run("mix.midi_layers", json!({"track": id.0, "layers": as_json(&next)})) {
+                app.ui.status = e;
+            }
+        }
+        if !zones.is_empty() {
+            ui.separator();
+        }
+        ui.add_enabled_ui(zones.len() < MAX_ZONES, |ui| {
+            ui.menu_button("Add Layer", |ui| {
+                if targets.is_empty() {
+                    ui.label(egui::RichText::new("No other instrument tracks").small().color(Tokens::current().text_dim));
+                }
+                for (t, n) in &targets {
+                    if ui.button(n).clicked() {
+                        let mut more = zones.clone();
+                        more.push(Zone::all(*t));
+                        if let Err(e) = app.run("mix.midi_layers", json!({"track": id.0, "layers": as_json(&more)})) {
+                            app.ui.status = e;
+                        }
+                        ui.close();
+                    }
+                }
+            });
+        })
+        .response
+        .on_disabled_hover_text(format!("A track plays at most {MAX_ZONES} layers"));
+    });
+}
+
+/// The window's Studio Setup: what is connected to each output port (a device's name and the
+/// channel it listens on), kept on this computer. The track output menus list the devices under
+/// their port, so a track picks "JV-1080 (ch 3)" rather than a port and a channel.
+fn studio_setup(app: &mut SoundApp, ui: &mut egui::Ui, ports: &[String]) {
+    let t = Tokens::current();
+    let mut all: Vec<String> = ports.to_vec();
+    all.extend(app.ui.midi_studio.keys().filter(|k| !ports.contains(k)).cloned());
+    if all.is_empty() {
+        return;
+    }
+    egui::CollapsingHeader::new("Studio Setup").id_salt("midi-studio").show(ui, |ui| {
+        ui.label(
+            egui::RichText::new("What is connected to each output (on this computer): the track output menus list these devices")
+                .small()
+                .color(t.text_dim),
+        );
+        for port in &all {
+            let gone = !ports.contains(port);
+            ui.horizontal(|ui| {
+                ui.strong(port);
+                if gone {
+                    ui.label(egui::RichText::new("(not connected)").small().color(t.text_dim));
+                }
+            });
+            let mut list = app.ui.midi_studio.get(port).cloned().unwrap_or_default();
+            let before = list.clone();
+            let mut remove = None;
+            for (i, d) in list.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.name).hint_text("Device").desired_width(140.0));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("{port} device {}", i + 1)));
+                    ui.label("Channel");
+                    ui.add(
+                        egui::DragValue::new(&mut d.channel)
+                            .range(0..=16)
+                            .custom_formatter(|v, _| if v < 0.5 { "all".into() } else { format!("{v:.0}") }),
+                    );
+                    if ui.small_button("✕").on_hover_text("Take this device off").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                list.remove(i);
+            }
+            if list.len() < MAX_STUDIO_DEVICES
+                && ui
+                    .horizontal(|ui| {
+                        ui.add_space(12.0);
+                        ui.small_button("Add Device").on_hover_text(format!("A device connected to {port}"))
+                    })
+                    .inner
+                    .clicked()
+            {
+                list.push(StudioDevice { name: String::new(), channel: 0 });
+            }
+            if list != before {
+                for d in &mut list {
+                    d.name = d.name.chars().filter(|c| !c.is_control()).take(64).collect();
+                    d.channel = d.channel.min(16);
+                }
+                if list.is_empty() {
+                    app.ui.midi_studio.remove(port);
+                } else {
+                    app.ui.midi_studio.insert(port.clone(), list);
+                }
+            }
         }
     });
 }
@@ -405,14 +606,18 @@ fn sync_destination(s: &soundcraft_model::Session) -> Option<String> {
 /// the port they go to (`setup.midi_beat_clock`).
 fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::midi_out::OutPortInfo]) {
     let s = app.engine.session();
-    let (mut clock, mut mtc) = (s.edit.flag("midi.beat_clock"), s.edit.flag("midi.beat_clock.mtc"));
+    let (mut clock, mut mtc, mut mmc) = (s.edit.flag("midi.beat_clock"), s.edit.flag("midi.beat_clock.mtc"), s.edit.flag("midi.mmc_out"));
     let dest = sync_destination(s).unwrap_or_default();
+    let (mode, source) = crate::midi_sync_in::sync_in_mode(s);
+    let (mode, source) = (mode.to_string(), source.unwrap_or_default().to_string());
     ui.horizontal_wrapped(|ui| {
         ui.label("Sync out:");
         let mut changed = false;
         changed |=
             ui.checkbox(&mut clock, "MIDI clock").on_hover_text("24 clocks a quarter note with Start, Stop, Continue and Song Position").changed();
         changed |= ui.checkbox(&mut mtc, "MIDI timecode").on_hover_text("MTC quarter frames at the session's frame rate").changed();
+        changed |=
+            ui.checkbox(&mut mmc, "MMC").on_hover_text("MIDI Machine Control: Play, Stop, Record and Locate as the transport does them").changed();
         let mut to = dest.clone();
         egui::ComboBox::from_id_salt("midi-sync-dest").selected_text(if to.is_empty() { "Choose a port".to_string() } else { to.clone() }).show_ui(
             ui,
@@ -423,7 +628,7 @@ fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::
             },
         );
         if changed || to != dest {
-            let mut p = json!({"enabled": clock, "mtc": mtc});
+            let mut p = json!({"enabled": clock, "mtc": mtc, "mmc": mmc});
             if !to.is_empty() {
                 p["destination"] = json!(to);
             }
@@ -431,11 +636,215 @@ fn sync_row(app: &mut SoundApp, ui: &mut egui::Ui, outs: &[soundcraft_playback::
                 app.ui.status = e;
             }
             // Chosen for sync: the port is enabled, as one chosen for a track is.
-            if (clock || mtc) && !to.is_empty() && app.ui.midi_outputs.get(&to) == Some(&false) {
+            if (clock || mtc || mmc) && !to.is_empty() && app.ui.midi_outputs.get(&to) == Some(&false) {
                 set_output_enabled(app, &to, true);
             }
         }
     });
+    // Following another device's clock or timecode.
+    let inputs: Vec<String> = app.midi_inputs.as_ref().map(|m| m.ports().into_iter().map(|p| p.name).collect()).unwrap_or_default();
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Sync in:");
+        let (mut m, mut src) = (mode.clone(), source.clone());
+        egui::ComboBox::from_id_salt("midi-sync-in")
+            .selected_text(match m.as_str() {
+                "clock" => "MIDI clock",
+                "mtc" => "MIDI timecode",
+                _ => "Off",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut m, "off".to_string(), "Off");
+                ui.selectable_value(&mut m, "clock".to_string(), "MIDI clock")
+                    .on_hover_text("Start, Stop, Continue and Song Position run the transport");
+                ui.selectable_value(&mut m, "mtc".to_string(), "MIDI timecode").on_hover_text("The transport chases the timecode coming in");
+            });
+        egui::ComboBox::from_id_salt("midi-sync-in-port").selected_text(if src.is_empty() { "Any input".to_string() } else { src.clone() }).show_ui(
+            ui,
+            |ui| {
+                ui.selectable_value(&mut src, String::new(), "Any input");
+                for n in &inputs {
+                    ui.selectable_value(&mut src, n.clone(), n);
+                }
+            },
+        );
+        if let Some(bpm) = app.sync.follower.tempo().filter(|_| m == "clock") {
+            ui.label(format!("{bpm:.1} bpm"));
+        }
+        if (m != mode || src != source)
+            && let Err(e) = app.run("setup.midi_beat_clock", json!({"sync_in": m, "source": src}))
+        {
+            app.ui.status = e;
+        }
+    });
+}
+
+/// The input menu's MPE Zone: off, the lower or upper zone, its member channels and bend ranges
+/// (`track.mpe`), sent to the instrument as MPE's configuration message.
+fn mpe_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let now = app.engine.session().track(id).and_then(|t| t.mpe);
+    let title = match now {
+        None => "MPE Zone: Off".to_string(),
+        Some(z) => format!("MPE Zone: {} ({} channels)", if z.upper { "Upper" } else { "Lower" }, z.members),
+    };
+    let mut ask: Option<serde_json::Value> = None;
+    ui.menu_button(title, |ui| {
+        for (label, zone) in [("Off", "off"), ("Lower (master channel 1)", "lower"), ("Upper (master channel 16)", "upper")] {
+            let on = match now {
+                None => zone == "off",
+                Some(z) => zone == if z.upper { "upper" } else { "lower" },
+            };
+            if ui.add(egui::Button::selectable(on, label)).clicked() {
+                ask = Some(json!({"tracks": [id.0], "zone": zone}));
+            }
+        }
+        if let Some(z) = now {
+            ui.separator();
+            let (mut members, mut bend, mut master) = (z.members, z.bend, z.master_bend);
+            let a = ui.add(egui::Slider::new(&mut members, 1..=15).text("member channels")).changed();
+            let b = ui.add(egui::Slider::new(&mut bend, 0..=96).text("member bend (semitones)")).changed();
+            let c = ui.add(egui::Slider::new(&mut master, 0..=96).text("master bend (semitones)")).changed();
+            if a || b || c {
+                ask = Some(json!({"tracks": [id.0], "members": members, "bend": bend, "master_bend": master}));
+            }
+        }
+        ui.label(
+            egui::RichText::new("Sent to the instrument as MPE's configuration message and pitch-bend ranges")
+                .small()
+                .color(Tokens::current().text_dim),
+        );
+    });
+    if let Some(p) = ask {
+        let r = if p.get("zone").is_some() {
+            app.run("track.mpe", p).map(|_| ())
+        } else {
+            app.engine.execute_merged("track.mpe", &p, &format!("mpe-{}", id.0)).map(|_| ()).map_err(|e| e.to_string())
+        };
+        if let Err(e) = r {
+            app.ui.status = e;
+        }
+    }
+}
+
+/// The input menu's Articulations (sound variations, an expression map): the track's
+/// articulations with their keyswitches (`track.articulations`), and one set in the selected
+/// MIDI clip at the insertion point (a point on the articulation lane, `midi.ctrl_add`).
+fn articulations_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let now = app.engine.session().track(id).and_then(|t| t.articulations.clone()).unwrap_or_default();
+    let mut asks: Vec<(&str, serde_json::Value)> = Vec::new();
+    let title = if now.items.is_empty() { "Articulations".to_string() } else { format!("Articulations ({})", now.items.len()) };
+    ui.menu_button(title, |ui| {
+        for (i, a) in now.items.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(&a.name);
+                let mut k = a.keyswitch;
+                if ui
+                    .add(egui::DragValue::new(&mut k).range(0..=127).custom_formatter(|v, _| soundcraft_midi::note_name(v as u8)))
+                    .on_hover_text("Its keyswitch")
+                    .changed()
+                {
+                    asks.push(("track.articulations", json!({"tracks": [id.0], "index": i, "keyswitch": k})));
+                }
+                if ui.small_button("Set Here").on_hover_text("From the insertion point on, the selected clip plays this way").clicked() {
+                    asks.push(("articulation.here", json!(i)));
+                    ui.close();
+                }
+                if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                    asks.push(("track.articulations", json!({"tracks": [id.0], "index": i, "remove": true})));
+                }
+            });
+        }
+        let key = egui::Id::new(("articulation-new", id.0));
+        let mut name: String = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text("New articulation").desired_width(110.0));
+            let next = now.items.last().map_or(24, |a| a.keyswitch.saturating_add(1).min(127));
+            if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Add")).clicked() {
+                asks.push(("track.articulations", json!({"tracks": [id.0], "add": {"name": name.trim(), "keyswitch": next}})));
+                name.clear();
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(key, name));
+        ui.label(
+            egui::RichText::new(format!(
+                "Chosen in clips by controller {} (value = the articulation's number, from 0); its keyswitch is sent in its place",
+                now.cc
+            ))
+            .small()
+            .color(Tokens::current().text_dim),
+        );
+    });
+    for (cmd, p) in asks {
+        let r =
+            if cmd == "articulation.here" { set_articulation_here(app, id, now.cc, p.as_u64().unwrap_or(0)) } else { app.run(cmd, p).map(|_| ()) };
+        if let Err(e) = r {
+            app.ui.status = e;
+        }
+    }
+}
+
+/// The selected MIDI clip on `track` (or the one under the insertion point) gets articulation
+/// `index` from the insertion point on.
+fn set_articulation_here(app: &mut SoundApp, track: TrackId, cc: u8, index: u64) -> Result<(), String> {
+    let s = app.engine.session();
+    let at = s.edit.selection.start;
+    let tr = s.track(track).ok_or("no such track")?;
+    let clip = tr
+        .clips()
+        .iter()
+        .filter(|c| c.midi_playing().is_some())
+        .find(|c| s.edit.selected_clips.contains(&c.id) && c.range().contains(at))
+        .or_else(|| tr.clips().iter().filter(|c| c.midi_playing().is_some()).find(|c| c.start <= at && at < c.end()))
+        .ok_or("Put the insertion point in one of the track's MIDI clips first")?;
+    let tick = s.tempo.samples_to_ticks(at, s.sample_rate) - s.tempo.samples_to_ticks(clip.start, s.sample_rate);
+    let cid = clip.id.0;
+    app.run("midi.ctrl_add", json!({"clip": cid, "lane": format!("cc{cc}"), "tick": tick.max(0), "value": index})).map(|_| ())
+}
+
+/// The output menu's Instrument Outputs part (an instrument with outputs besides its main one,
+/// Juke's Out 2-8): each output on a track of its own (`mix.new_output_track`), or back on the
+/// main output (`mix.instrument_output`).
+fn instrument_outputs_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
+    let s = app.engine.session();
+    let Some(track) = s.track(id) else { return };
+    let names = track.instrument.as_ref().map(soundcraft_engine::cmd::instrument::output_names).unwrap_or_default();
+    if names.is_empty() {
+        return;
+    }
+    let taken: Vec<(u8, String)> = track
+        .instrument_outs
+        .iter()
+        .map(|o| (o.output, s.busses.iter().find(|b| b.id == o.bus).map(|b| b.name.clone()).unwrap_or_default()))
+        .collect();
+    let mut ask: Option<(&'static str, serde_json::Value)> = None;
+    ui.menu_button("Instrument Outputs", |ui| {
+        for (i, name) in names.iter().enumerate() {
+            let Ok(k) = u8::try_from(i) else { continue };
+            match taken.iter().find(|t| t.0 == k) {
+                Some((_, bus)) => {
+                    ui.menu_button(format!("{name} › {bus}"), |ui| {
+                        if ui.button("Back on the Main Output").clicked() {
+                            ask = Some(("mix.instrument_output", json!({"track": id.0, "output": i, "bus": null})));
+                            ui.close();
+                        }
+                    });
+                }
+                None => {
+                    if ui.button(format!("New Track for {name}")).on_hover_text("A bus and an aux track that plays this output").clicked() {
+                        ask = Some(("mix.new_output_track", json!({"track": id.0, "output": i})));
+                        ui.close();
+                    }
+                }
+            }
+        }
+        ui.label(
+            egui::RichText::new("A pad or part set to an output nobody takes plays on the main output").small().color(Tokens::current().text_dim),
+        );
+    });
+    if let Some((cmd, p)) = ask
+        && let Err(e) = app.run(cmd, p)
+    {
+        app.ui.status = e;
+    }
 }
 
 /// The output menu's MIDI section (instrument and MIDI tracks): send what the track plays to a
@@ -460,19 +869,38 @@ pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         } else {
             egui::RichText::new(format!("MIDI: {name} (not connected)")).color(dim)
         };
-        if ui.add(egui::Button::selectable(current.as_deref() == Some(name.as_str()), label)).clicked() {
+        let devices: Vec<StudioDevice> = studio_devices(app, &name).into_iter().cloned().collect();
+        let here = current.as_deref() == Some(name.as_str());
+        let mut pick: Option<Option<u8>> = None;
+        if ui.add(egui::Button::selectable(here && (devices.is_empty() || studio_device_for(app, &name, channel).is_none()), label)).clicked() {
+            pick = Some(None);
+        }
+        // The studio setup's devices on this port: each sets the port and its channel.
+        for d in &devices {
+            let on = here && studio_device_for(app, &name, channel) == Some(d);
+            let text = egui::RichText::new(format!("    {}", studio_label(d)));
+            if ui.add(egui::Button::selectable(on, if available { text } else { text.color(dim) })).on_hover_text(format!("On {name}")).clicked() {
+                pick = Some(Some(d.channel));
+            }
+        }
+        if let Some(ch) = pick {
             // Chosen for a track: a port disabled in the window is enabled (the choice is
             // explicit); one never chosen opens because the track sends to it.
             if available && app.ui.midi_outputs.get(&name) == Some(&false) {
                 set_output_enabled(app, &name, true);
             }
-            if let Err(e) = app.run("mix.midi_output", json!({"track": id.0, "port": name})) {
+            let p = match ch {
+                Some(c) => json!({"track": id.0, "port": name, "channel": c}),
+                None => json!({"track": id.0, "port": name}),
+            };
+            if let Err(e) = app.run("mix.midi_output", p) {
                 app.ui.status = e;
             }
             ui.close();
         }
     }
     to_track_menu(app, ui, id);
+    instrument_outputs_menu(app, ui, id);
     let Some(port) = current else { return };
     ui.menu_button(if channel == 0 { "MIDI Channel: as played".to_string() } else { format!("MIDI Channel: {channel}") }, |ui| {
         for ch in 0..=16u8 {
@@ -491,6 +919,36 @@ pub(crate) fn output_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         }
         ui.close();
     }
+}
+
+/// One device of the studio setup: a hardware synth, drum machine or module connected to an
+/// output port, and the channel it listens on (0: every channel).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StudioDevice {
+    pub name: String,
+    #[serde(default)]
+    pub channel: u8,
+}
+
+/// Most devices the studio setup keeps on one port.
+pub const MAX_STUDIO_DEVICES: usize = 16;
+
+/// The devices named on output port `port`, in order, with a name.
+pub fn studio_devices<'a>(app: &'a SoundApp, port: &str) -> Vec<&'a StudioDevice> {
+    app.ui.midi_studio.get(port).map(|v| v.iter().filter(|d| !d.name.trim().is_empty()).collect()).unwrap_or_default()
+}
+
+/// A studio device as the output menu names it: "JV-1080 (ch 1)", or just its name when it
+/// takes every channel.
+pub fn studio_label(d: &StudioDevice) -> String {
+    if d.channel == 0 { d.name.clone() } else { format!("{} (ch {})", d.name, d.channel) }
+}
+
+/// The studio device a track sending to `port` on `channel` plays, when one is set up there: one
+/// on that channel, else one taking every channel.
+pub fn studio_device_for<'a>(app: &'a SoundApp, port: &str, channel: u8) -> Option<&'a StudioDevice> {
+    let devs = studio_devices(app, port);
+    devs.iter().find(|d| d.channel != 0 && d.channel == channel).or_else(|| devs.iter().find(|d| d.channel == 0)).copied()
 }
 
 /// What the input port `name` is called here: its alias, else its name.
@@ -513,10 +971,7 @@ pub fn input_choices(app: &SoundApp, current: Option<&MidiIn>) -> Vec<(String, O
         out.push((format!("MIDI: {typing}"), Some(typing.clone()), true));
     }
     // The remote recorders' ports (Setup › Network): `Remote: <PC> › <port>`.
-    #[cfg(not(target_arch = "wasm32"))]
     let remote = app.net.as_ref().map(|n| n.hub.remote_ports()).unwrap_or_default();
-    #[cfg(target_arch = "wasm32")]
-    let remote: Vec<String> = Vec::new();
     for p in &remote {
         out.push((format!("MIDI: {p}"), Some(p.clone()), true));
     }
@@ -557,6 +1012,8 @@ pub(crate) fn input_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
         }
     }
     crate::midi_fx_menu::menu(app, ui, id);
+    mpe_menu(app, ui, id);
+    articulations_menu(app, ui, id);
     let Some(m) = current else { return };
     transform_menu(app, ui, id, &m.transform);
     ui.menu_button(if m.channel == 0 { "Channel: Omni".to_string() } else { format!("Channel: {}", m.channel) }, |ui| {
@@ -751,6 +1208,8 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         for (name, on) in out_toggles {
             set_output_enabled(app, &name, on);
         }
+        let names: Vec<String> = outs.iter().map(|p| p.name.clone()).collect();
+        studio_setup(app, ui, &names);
         sync_row(app, ui, &outs);
         ui.separator();
         // Setup › MIDI Input Filter: the session's, for every port.
@@ -775,6 +1234,24 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
         });
+        let mut thin = app.engine.session().edit.flag(soundcraft_engine::midi_record::THIN_FLAG);
+        if ui
+            .checkbox(&mut thin, "Thin controllers")
+            .on_hover_text("Takes keep only the controller, pitch bend and pressure points that shape a move; the ones between become ramps")
+            .changed()
+            && let Err(e) = app.run("setup.midi_input_filter", json!({"thin": thin}))
+        {
+            app.ui.status = e;
+        }
+        let mut auto = app.engine.session().edit.flag(soundcraft_engine::auto_arm::FLAG);
+        if ui
+            .checkbox(&mut auto, "Auto-arm the selected MIDI track")
+            .on_hover_text("Selecting an instrument or MIDI track arms it, so it is heard and ready to record; the one it armed before is disarmed")
+            .changed()
+            && let Err(e) = app.run("options.midi_auto_arm", json!({"value": auto}))
+        {
+            app.ui.status = e;
+        }
         ui.checkbox(&mut app.ui.midi_thru, "MIDI Thru")
             .on_hover_text("Record-enabled instrument and MIDI tracks play what comes in (input-monitored tracks always do)");
         ui.horizontal(|ui| {
@@ -845,6 +1322,27 @@ pub(crate) mod tests {
         assert!(fake.is_open("USB MIDI Device #2"));
     }
 
+    /// The studio setup names devices on an output port: a track on that port and channel plays
+    /// the one set up there (else the one taking every channel); kept per computer by port name;
+    /// a device without a name is not offered.
+    #[test]
+    fn the_studio_setup_names_the_devices_on_an_output_port() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let dev = |name: &str, channel| StudioDevice { name: name.into(), channel };
+        app.ui.midi_studio.insert("MIDI Out 1".into(), vec![dev("JV-1080", 0), dev("Drum Box", 10), dev(" ", 3)]);
+        let names: Vec<String> = studio_devices(&app, "MIDI Out 1").into_iter().map(studio_label).collect();
+        assert_eq!(names, vec!["JV-1080".to_string(), "Drum Box (ch 10)".to_string()]);
+        assert_eq!(studio_device_for(&app, "MIDI Out 1", 10).map(|d| d.name.as_str()), Some("Drum Box"));
+        assert_eq!(studio_device_for(&app, "MIDI Out 1", 2).map(|d| d.name.as_str()), Some("JV-1080"));
+        assert!(studio_devices(&app, "MIDI Out 2").is_empty());
+        let json = serde_json::to_value(&app.ui).unwrap();
+        assert_eq!(json["midi.studio"]["MIDI Out 1"][1]["name"], "Drum Box");
+        assert_eq!(json["midi.studio"]["MIDI Out 1"][1]["channel"], 10);
+        // Settings saved before it existed have none.
+        let back: crate::UiState = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(back.midi_studio.is_empty());
+    }
+
     #[test]
     fn the_input_menu_offers_all_inputs_and_each_open_port() {
         let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
@@ -871,13 +1369,13 @@ pub(crate) mod tests {
         app.run("track.input", json!({"track": typed, "input": "midi:Musical Typing"})).unwrap();
         app.run("mix.record_arm", json!({"tracks": [keys, typed], "value": true})).unwrap();
         // Stale events from before the take are dropped when it starts.
-        app.midi_rec.push(RecordedMidi { at: 1, port: 0, msg: [0x90, 1, 1], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at: 1, port: 0, msg: [0x90, 1, 1], pass: 0, sysex: None });
         start_take(&mut app);
         assert!(app.midi_rec.is_empty());
         app.midi_rec = vec![
-            RecordedMidi { at: 1_000, port: 0, msg: [0x90, 60, 100], pass: 0 },
-            RecordedMidi { at: 9_000, port: 0, msg: [0x80, 60, 0], pass: 0 },
-            RecordedMidi { at: 2_000, port: TYPING_SLOT as u8, msg: [0x90, 72, 100], pass: 0 },
+            RecordedMidi { at: 1_000, port: 0, msg: [0x90, 60, 100], pass: 0, sysex: None },
+            RecordedMidi { at: 9_000, port: 0, msg: [0x80, 60, 0], pass: 0, sysex: None },
+            RecordedMidi { at: 2_000, port: TYPING_SLOT as u8, msg: [0x90, 72, 100], pass: 0, sysex: None },
         ];
         let plan = soundcraft_engine::io::Recording {
             start: 0,
@@ -888,6 +1386,7 @@ pub(crate) mod tests {
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         let ids = finish_take(&mut app, &plan, 48_000);
         assert_eq!(ids.len(), 2);
@@ -907,7 +1406,7 @@ pub(crate) mod tests {
         app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
         assert!(app.run("ui.capture_midi", json!({})).is_err(), "nothing played yet");
         // Played (not recorded) a little into bar 2 at 120 bpm: a bar is 96,000 samples.
-        let note = |at: i64, msg: [u8; 3]| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass: 0 };
+        let note = |at: i64, msg: [u8; 3]| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass: 0, sysex: None };
         app.midi_capture = vec![note(100_000, [0x90, 60, 100]), note(130_000, [0x80, 60, 0])];
         app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
         let r = app.run("ui.capture_midi", json!({})).unwrap();
@@ -927,7 +1426,7 @@ pub(crate) mod tests {
         let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
         app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
         app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
-        let note = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass };
+        let note = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass, sysex: None };
         // Played along with the transport earlier, then noodled with it stopped: the noodle is
         // what was played last. On the listening clock: a sustain pedal, then a note a quarter long.
         app.midi_capture = vec![
@@ -955,7 +1454,7 @@ pub(crate) mod tests {
         app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
         app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
         start_take(&mut app);
-        let note = |at: i64, pitch: u8| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass: 0 };
+        let note = |at: i64, pitch: u8| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass: 0, sysex: None };
         // Punched out at 20,000, in again at 30,000, stopped at 48,000.
         app.midi_rec = vec![note(1_000, 60), note(25_000, 62), note(31_000, 64)];
         let plan = soundcraft_engine::io::Recording {
@@ -967,6 +1466,7 @@ pub(crate) mod tests {
             latency: 0,
             loop_from: None,
             punches: vec![soundcraft_time::Range::new(0, 20_000), soundcraft_time::Range::new(30_000, soundcraft_time::Samples::MAX)],
+            pre: 0,
         };
         let ids = finish_take(&mut app, &plan, 48_000);
         assert_eq!(ids.len(), 2, "a clip per punch");
@@ -999,9 +1499,10 @@ pub(crate) mod tests {
             latency: 0,
             loop_from: Some(0),
             punches: Vec::new(),
+            pre: 0,
         };
         app.take_plan = Some(plan.clone());
-        let note = |at: i64, pitch: u8, pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass };
+        let note = |at: i64, pitch: u8, pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg: [0x90, pitch, 100], pass, sysex: None };
         app.midi_rec = vec![note(1_000, 36, 0), note(30_000, 38, 1)];
         let pitches = |app: &SoundApp| -> Vec<u8> {
             let tr = app.engine.session().track(TrackId(t)).unwrap();
@@ -1025,6 +1526,76 @@ pub(crate) mod tests {
         assert!(app.run("ui.midi_undo_pass", json!({})).is_err(), "not while stopped");
         app.run("edit.undo", json!({})).unwrap();
         assert!(pitches(&app).is_empty());
+    }
+
+    #[test]
+    fn an_articulation_is_set_in_the_clip_at_the_insertion_point() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        let c = app.run("midi.new_clip", json!({"track": t, "start": 48_000, "end": 144_000})).unwrap()["clip"].as_u64().unwrap();
+        app.run("track.articulations", json!({"tracks": [t], "add": {"name": "Legato", "keyswitch": 24}})).unwrap();
+        app.run("track.articulations", json!({"tracks": [t], "add": {"name": "Staccato", "keyswitch": 25}})).unwrap();
+        assert!(set_articulation_here(&mut app, TrackId(t), 3, 1).is_err(), "the insertion point is outside the clip");
+        app.engine.session_mut().edit.selection = soundcraft_time::Range::point(72_000);
+        set_articulation_here(&mut app, TrackId(t), 3, 1).unwrap();
+        let (_, clip) = app.engine.session().find_clip(soundcraft_model::ClipId(c)).unwrap();
+        let ev = &clip.midi_playing().unwrap().ctrls;
+        assert_eq!(
+            ev.iter().map(|e| (e.tick, e.kind, e.value)).collect::<Vec<_>>(),
+            vec![(960, soundcraft_midi::CtrlKind::Cc(3), 1)],
+            "a beat into the clip"
+        );
+    }
+
+    #[test]
+    fn held_keys_are_erased_from_every_pass_while_loop_recording() {
+        use soundcraft_playback::midi_in::{RecordedMidi, TYPING_SLOT};
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let t = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        app.run("track.input", json!({"track": t, "input": "midi:Musical Typing"})).unwrap();
+        app.run("mix.record_arm", json!({"tracks": [t], "value": true})).unwrap();
+        assert!(app.run("ui.midi_erase_held", json!({})).is_err(), "not while stopped");
+        start_take(&mut app);
+        app.engine.transport.recording = true;
+        let plan = soundcraft_engine::io::Recording {
+            start: 0,
+            pass: Some(96_000),
+            punch: None,
+            rate: 0,
+            takes: Vec::new(),
+            latency: 0,
+            loop_from: Some(0),
+            punches: Vec::new(),
+            pre: 0,
+        };
+        app.take_plan = Some(plan.clone());
+        let ev = |at: i64, msg: [u8; 3], pass: u16| RecordedMidi { at, port: TYPING_SLOT as u8, msg, pass, sysex: None };
+        // Kick and hat in pass 1, the hat again in pass 2, then the hat key held down in pass 3.
+        app.midi_rec = vec![
+            ev(1_000, [0x90, 36, 100], 0),
+            ev(2_000, [0x80, 36, 0], 0),
+            ev(10_000, [0x90, 42, 100], 0),
+            ev(11_000, [0x80, 42, 0], 0),
+            ev(20_000, [0x90, 42, 90], 1),
+            ev(21_000, [0x80, 42, 0], 1),
+            ev(50_000, [0x90, 42, 80], 2),
+        ];
+        show_passes(&mut app, 2);
+        let pitches = |app: &SoundApp| -> Vec<u8> {
+            let tr = app.engine.session().track(TrackId(t)).unwrap();
+            tr.clips().iter().flat_map(|c| c.midi_playing().unwrap().notes.iter().map(|n| n.pitch)).collect()
+        };
+        assert_eq!(pitches(&app), vec![36, 42, 42]);
+        let r = app.run("ui.midi_erase_held", json!({})).unwrap();
+        assert_eq!(r["erased"][0]["pitch"], 42);
+        assert_eq!(pitches(&app), vec![36], "the held key's notes are gone from what plays");
+        // Let go: its note-off has no note; nothing comes back at Stop.
+        app.midi_rec.push(ev(60_000, [0x80, 42, 0], 2));
+        assert!(app.run("ui.midi_erase_held", json!({})).is_err(), "nothing held now");
+        lift_preview(&mut app);
+        app.engine.transport.recording = false;
+        finish_take(&mut app, &plan, 250_000);
+        assert_eq!(pitches(&app), vec![36]);
     }
 
     #[test]

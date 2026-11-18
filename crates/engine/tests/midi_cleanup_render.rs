@@ -52,7 +52,11 @@ fn rms(b: &[Vec<f32>]) -> f32 {
 #[test]
 fn cleaned_clip_plays_cleaned_notes() {
     // A held C triad over beat 0..1 and a short quiet C#5 alone at beat 2 (tick 1920, 1.0 s).
-    let seq = Sequence { notes: vec![note(60, 90, 0, 900), note(64, 90, 0, 900), note(67, 90, 0, 900), note(73, 20, 1920, 60)], ctrls: Vec::new() };
+    let seq = Sequence {
+        notes: vec![note(60, 90, 0, 900), note(64, 90, 0, 900), note(67, 90, 0, 900), note(73, 20, 1920, 60)],
+        ctrls: Vec::new(),
+        sysex: Vec::new(),
+    };
     let (mut e, t, id) = setup(seq, &[(0, 3840, 0)]);
     e.execute("midi.cleanup", &json!({"clip": id.0, "wrong": 100, "protect_melody": false})).unwrap();
     // 1.0 s to 1.5 s: only the C# is (or was) sounding.
@@ -71,6 +75,7 @@ fn pedal_edits_reach_the_instrument() {
             CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(64), value: 127, shape: Default::default() },
             CtrlEvent { tick: 5000, channel: 0, kind: CtrlKind::Cc(64), value: 0, shape: Default::default() },
         ],
+        sysex: Vec::new(),
     };
     let (mut e, t, id) = setup(seq, &[(0, 3840, 0), (3840, 3840, 3)]);
     e.execute("midi.cleanup", &json!({"clip": id.0, "wrong": 0, "held": 100, "protect_melody": false})).unwrap();
@@ -83,7 +88,7 @@ fn pedal_edits_reach_the_instrument() {
 
 #[test]
 fn no_cleanup_renders_identically() {
-    let seq = Sequence { notes: vec![note(60, 90, 0, 900), note(73, 20, 1920, 60)], ctrls: Vec::new() };
+    let seq = Sequence { notes: vec![note(60, 90, 0, 900), note(73, 20, 1920, 60)], ctrls: Vec::new(), sysex: Vec::new() };
     let (mut e, t, id) = setup(seq, &[(0, 3840, 0)]);
     let plain = render(&e, t, 0.0, 2.0);
     e.execute("midi.cleanup", &json!({"clip": id.0, "wrong": 0, "held": 0, "legato": 0, "extend": 0})).unwrap();

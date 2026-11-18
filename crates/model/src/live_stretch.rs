@@ -64,10 +64,12 @@ pub struct PitchRender {
     /// The file position the render's first sample stands for.
     pub start: Samples,
     pub audio: std::sync::Arc<crate::SourceAudio>,
+    /// The Clean Vocal mix rendered with it (the cleaned audio blended in at that amount), if any.
+    pub clean: Option<crate::CleanAlt>,
 }
 
 impl PitchRender {
-    /// Whether this render plays `clip` as it is: the same file, channel and transpose, no Clean
+    /// Whether this render plays `clip` as it is: the same file, channel, transpose and Clean
     /// Vocal mix, and the clip's file window inside what was rendered.
     pub fn serves(&self, clip: &Clip) -> bool {
         let span = if clip.loop_len > 0 { clip.loop_len } else { clip.length };
@@ -77,7 +79,7 @@ impl PitchRender {
         clip.source() == Some(self.source)
             && clip.transpose_cents == self.cents
             && clip.source_channel == self.channel
-            && clip.clean_alt().is_none()
+            && clip.clean_alt().copied() == self.clean
             && lo >= self.start
             && hi <= end
     }

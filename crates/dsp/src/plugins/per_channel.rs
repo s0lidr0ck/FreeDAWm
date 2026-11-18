@@ -45,6 +45,126 @@ pub(crate) struct PerChannel {
     link_key: Vec<Vec<f32>>,
     /// The LFE channels ([`Plugin::set_lfe_channels`]): kept out of the link.
     lfe: u64,
+    /// The channels the first instance takes: two, or one for multi-mono ([`PerChannel::mono`]).
+    first_width: usize,
+    /// Multi-mono unlinked ([`PerChannel::unlinked`]): a plain id sets the first instance only,
+    /// `c<n>:<id>` sets channel n's.
+    unlinked: bool,
+    /// Unlinked: each channel's stored state from the last [`pack_states`] blob given to
+    /// `load_state` (index 0 the first channel's), for the instances made after it.
+    states: Vec<Option<Vec<u8>>>,
+}
+
+/// The head of a multi-mono unlinked module's stored state: every channel's own state, packed by
+/// [`pack_states`]. Long and unlike a plug-in's own state, so a plain state is never taken for one.
+const PACK_MAGIC: &[u8] = b"FreeDAWm multi-mono states v1\0";
+
+/// The most channels a packed state carries (more than any track has).
+const PACK_MAX: usize = 64;
+
+/// Every channel's state in one blob (`None`: that channel's instance gave none).
+pub fn pack_states(states: &[Option<Vec<u8>>]) -> Vec<u8> {
+    let states = states.get(..states.len().min(PACK_MAX)).unwrap_or(&[]);
+    let mut out = Vec::with_capacity(PACK_MAGIC.len() + 2 + states.iter().map(|s| 4 + s.as_ref().map_or(0, Vec::len)).sum::<usize>());
+    out.extend_from_slice(PACK_MAGIC);
+    out.extend_from_slice(&(states.len() as u16).to_le_bytes());
+    for st in states {
+        match st {
+            Some(b) if u32::try_from(b.len()).is_ok_and(|n| n < u32::MAX) => {
+                out.extend_from_slice(&(b.len() as u32).to_le_bytes());
+                out.extend_from_slice(b);
+            }
+            _ => out.extend_from_slice(&u32::MAX.to_le_bytes()),
+        }
+    }
+    out
+}
+
+/// The channels' states of a [`pack_states`] blob; `None` for any other data (a plug-in's own
+/// state) or a damaged blob. Hostile input: every length is checked.
+pub fn unpack_states(data: &[u8]) -> Option<Vec<Option<Vec<u8>>>> {
+    let rest = data.strip_prefix(PACK_MAGIC)?;
+    let (n, mut rest) = rest.split_first_chunk::<2>()?;
+    let n = usize::from(u16::from_le_bytes(*n));
+    if n == 0 || n > PACK_MAX {
+        return None;
+    }
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (len, tail) = rest.split_first_chunk::<4>()?;
+        let len = u32::from_le_bytes(*len);
+        if len == u32::MAX {
+            out.push(None);
+            rest = tail;
+            continue;
+        }
+        let len = usize::try_from(len).ok()?;
+        let (b, tail) = (tail.get(..len)?, tail.get(len..)?);
+        out.push(Some(b.to_vec()));
+        rest = tail;
+    }
+    rest.is_empty().then_some(out)
+}
+
+/// The state a single instance takes from stored `data`: the first channel's of a packed blob
+/// (a module that was multi-mono unlinked), else `data` itself.
+pub fn first_state(data: &[u8]) -> Option<Vec<u8>> {
+    match unpack_states(data) {
+        Some(mut v) => v.first_mut().and_then(Option::take),
+        None => Some(data.to_vec()),
+    }
+}
+
+/// Reads every channel's state of a multi-mono unlinked module, packed ([`pack_states`]).
+struct PackedReader {
+    first: Box<dyn PluginStateReader>,
+    rest: Vec<Option<Box<dyn PluginStateReader>>>,
+}
+
+impl PluginStateReader for PackedReader {
+    fn save_state(&mut self) -> Option<Vec<u8>> {
+        let first = self.first.save_state();
+        let rest: Vec<Option<Vec<u8>>> = self.rest.iter_mut().map(|r| r.as_mut().and_then(|r| r.save_state())).collect();
+        if first.is_none() && rest.iter().all(Option::is_none) {
+            return None;
+        }
+        Some(pack_states(&std::iter::once(first).chain(rest).collect::<Vec<_>>()))
+    }
+
+    /// A packed blob gives each channel its own; a plain state (a preset of the plug-in's own)
+    /// goes to the first channel, as a plain parameter id does.
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        let Some(parts) = unpack_states(data) else { return self.first.load_state(data) };
+        let mut ok = match parts.first() {
+            Some(Some(b)) => self.first.load_state(b),
+            _ => true,
+        };
+        for (r, part) in self.rest.iter_mut().zip(parts.iter().skip(1)) {
+            if let (Some(r), Some(b)) = (r.as_mut(), part) {
+                ok &= r.load_state(b);
+            }
+        }
+        ok
+    }
+
+    fn load_preset(&mut self, kind: u32, location: Option<&str>, load_key: Option<&str>) -> bool {
+        self.first.load_preset(kind, location, load_key)
+    }
+
+    fn crashed(&self) -> bool {
+        self.first.crashed() || self.rest.iter().flatten().any(|r| r.crashed())
+    }
+}
+
+/// A per-channel parameter id (`c1:gain`) split into its channel (1 or more) and the plugin's
+/// own id, as the model writes them (`soundcraft_model::channel_param_id`).
+fn split_channel(id: &str) -> Option<(usize, &str)> {
+    let (n, param) = id.strip_prefix('c')?.split_once(':')?;
+    if n.is_empty() || n.len() > 3 || !n.bytes().all(|b| b.is_ascii_digit()) || param.is_empty() {
+        return None;
+    }
+    let n: usize = n.parse().ok()?;
+    (n >= 1).then_some((n, param))
 }
 
 /// The parameter that links detection across every channel.
@@ -52,7 +172,38 @@ const SUR_LINK: &str = "surLink";
 
 impl PerChannel {
     pub(crate) fn new(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
-        PerChannel { make, first, rest: Vec::new(), state: None, offline: false, link_key: Vec::new(), lfe: 0 }
+        PerChannel {
+            make,
+            first,
+            rest: Vec::new(),
+            state: None,
+            offline: false,
+            link_key: Vec::new(),
+            lfe: 0,
+            first_width: 2,
+            unlinked: false,
+            states: Vec::new(),
+        }
+    }
+
+    /// Multi-mono: one mono instance per channel, the first included, every one taking the
+    /// first's parameters (linked).
+    pub(crate) fn mono(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
+        PerChannel { first_width: 1, ..PerChannel::new(first, make) }
+    }
+
+    /// Multi-mono unlinked: one mono instance per channel, each with its own parameters (the
+    /// first channel's under the plain ids, channel n's under `c<n>:<id>`).
+    pub(crate) fn unlinked(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
+        PerChannel { unlinked: true, ..PerChannel::mono(first, make) }
+    }
+
+    /// The instance a per-channel id is for (`None`: not one, or no such channel), with the
+    /// plugin's own id.
+    fn channel_of<'a>(&mut self, id: &'a str) -> Option<(&mut Box<dyn Plugin>, &'a str)> {
+        let (n, param) = split_channel(id)?;
+        let i = n.checked_sub(self.first_width)?;
+        self.rest.get_mut(i).map(|p| (p, param))
     }
 
     fn all(&mut self) -> impl Iterator<Item = &mut Box<dyn Plugin>> {
@@ -66,14 +217,16 @@ impl Plugin for PerChannel {
     }
 
     fn prepare(&mut self, sample_rate: f32, max_block: usize, channels: usize) {
-        self.first.prepare(sample_rate, max_block, channels.min(2));
-        let want = channels.saturating_sub(2);
+        self.first.prepare(sample_rate, max_block, channels.min(self.first_width));
+        let want = channels.saturating_sub(self.first_width);
         self.rest.truncate(want);
         let info = self.first.info();
         while self.rest.len() < want {
             let Some(mut p) = (self.make)(info.id) else { break };
             p.set_offline(self.offline);
-            if let Some(st) = &self.state {
+            // Unlinked: the channel's own stored state, else the first's.
+            let own = self.states.get(self.rest.len() + self.first_width).and_then(Option::as_ref);
+            if let Some(st) = own.or(self.state.as_ref()) {
                 p.load_state(st);
             }
             // The parameters before the first prepare, as the host sets them on a new instance:
@@ -97,6 +250,13 @@ impl Plugin for PerChannel {
     }
 
     fn set_param(&mut self, id: &str, value: f32) -> bool {
+        if split_channel(id).is_some() {
+            // Another channel's value: its instance only, and only while unlinked.
+            return self.unlinked && self.channel_of(id).is_some_and(|(p, param)| p.set_param(param, value));
+        }
+        if self.unlinked {
+            return self.first.set_param(id, value);
+        }
         let known = self.first.set_param(id, value);
         for p in &mut self.rest {
             p.set_param(id, value);
@@ -105,7 +265,11 @@ impl Plugin for PerChannel {
     }
 
     fn param(&self, id: &str) -> Option<f32> {
-        self.first.param(id)
+        match split_channel(id) {
+            Some((n, param)) if self.unlinked => self.rest.get(n.checked_sub(self.first_width)?)?.param(param),
+            Some(_) => None,
+            None => self.first.param(id),
+        }
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -137,12 +301,13 @@ impl Plugin for PerChannel {
             }
         }
         let key = if linked { Some(self.link_key.as_slice()) } else { key };
-        let n = io.len().min(2);
+        let fw = self.first_width;
+        let n = io.len().min(fw);
         let (head, tail) = io.split_at_mut(n);
         self.first.process_with_sidechain(head, frames, key);
         for (i, (p, c)) in self.rest.iter_mut().zip(tail.iter_mut()).enumerate() {
             // the LFE is not turned down by the others' link: it keys from itself
-            let k = if linked && is_lfe(i + 2) { None } else { key };
+            let k = if linked && is_lfe(i + fw) { None } else { key };
             p.process_with_sidechain(std::slice::from_mut(c), frames, k);
         }
     }
@@ -178,11 +343,21 @@ impl Plugin for PerChannel {
 
     fn set_lfe_channels(&mut self, mask: u64) {
         self.lfe = mask;
-        self.first.set_lfe_channels(mask & 0b11);
+        self.first.set_lfe_channels(mask & if self.first_width == 1 { 0b1 } else { 0b11 });
     }
 
     fn set_param_automated(&mut self, id: &str, automated: bool) {
-        self.all().for_each(|p| p.set_param_automated(id, automated));
+        if split_channel(id).is_some() {
+            if self.unlinked
+                && let Some((p, param)) = self.channel_of(id)
+            {
+                p.set_param_automated(param, automated);
+            }
+        } else if self.unlinked {
+            self.first.set_param_automated(id, automated);
+        } else {
+            self.all().for_each(|p| p.set_param_automated(id, automated));
+        }
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
@@ -199,6 +374,10 @@ impl Plugin for PerChannel {
 
     fn midi_raw(&mut self, offset: usize, msg: [u8; 3]) {
         self.first.midi_raw(offset, msg);
+    }
+
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        self.first.sysex(offset, data);
     }
 
     fn all_notes_off(&mut self) {
@@ -236,7 +415,11 @@ impl Plugin for PerChannel {
     }
 
     fn save_state(&mut self) -> Option<Vec<u8>> {
-        self.first.save_state()
+        if !self.unlinked || self.rest.is_empty() {
+            return self.first.save_state();
+        }
+        let all: Vec<Option<Vec<u8>>> = self.all().map(|p| p.save_state()).collect();
+        if all.iter().all(Option::is_none) { None } else { Some(pack_states(&all)) }
     }
 
     fn set_prepared_state(&mut self, data: &[f64]) -> bool {
@@ -247,12 +430,32 @@ impl Plugin for PerChannel {
     }
 
     fn load_state(&mut self, data: &[u8]) -> bool {
+        // A packed blob (saved while unlinked): unlinked, each channel takes its own; linked,
+        // every channel takes the first's.
+        if let Some(parts) = unpack_states(data) {
+            let first = parts.first().cloned().flatten();
+            let ok = first.as_ref().is_none_or(|b| self.first.load_state(b));
+            if !ok {
+                return false;
+            }
+            let fw = self.first_width;
+            for (i, p) in self.rest.iter_mut().enumerate() {
+                let own = if self.unlinked { parts.get(i + fw).and_then(Option::as_ref) } else { None };
+                if let Some(b) = own.or(first.as_ref()) {
+                    p.load_state(b);
+                }
+            }
+            self.state = first;
+            self.states = if self.unlinked { parts } else { Vec::new() };
+            return true;
+        }
         let ok = self.first.load_state(data);
         if ok {
             for p in &mut self.rest {
                 p.load_state(data);
             }
             self.state = Some(data.to_vec());
+            self.states.clear();
         }
         ok
     }
@@ -269,8 +472,14 @@ impl Plugin for PerChannel {
         self.first.editor()
     }
 
+    /// Unlinked with more than one instance: every channel's state, packed ([`pack_states`]).
     fn state_reader(&mut self) -> Option<Box<dyn PluginStateReader>> {
-        self.first.state_reader()
+        let first = self.first.state_reader()?;
+        if !self.unlinked || self.rest.is_empty() {
+            return Some(first);
+        }
+        let rest = self.rest.iter_mut().map(|p| p.state_reader()).collect();
+        Some(Box::new(PackedReader { first, rest }))
     }
 }
 
@@ -379,6 +588,122 @@ mod tests {
         let (l, lfe, _) = run(4, LFE_5_1);
         assert!(l < 0.005, "the others still link: {l}");
         assert!((lfe - 0.01).abs() < 0.002, "the LFE is not turned down by the others: {lfe}");
+    }
+
+    /// Multi-mono unlinked: the plain ids set the first channel, `c1:` ids the second, so two
+    /// identical channels come out different; linked, a `c1:` id changes nothing.
+    #[test]
+    fn unlinked_multi_mono_gives_each_channel_its_own_values() {
+        let frames = 512;
+        let run = |unlinked: bool| {
+            let first = instantiate("fs_sat").unwrap();
+            let mut p = if unlinked { super::super::multi_mono_unlinked(first, instantiate) } else { super::super::multi_mono(first, instantiate) };
+            assert!(p.set_param("drive", 0.5));
+            assert!(p.set_param("output", 1.0));
+            p.prepare(48_000.0, frames, 2);
+            assert_eq!(p.set_param("c1:output", 0.0), unlinked, "a c1 id is taken only unlinked");
+            assert_eq!(p.param("c1:output"), unlinked.then_some(0.0));
+            let mut io = vec![sine(frames, 0.0); 2];
+            for _ in 0..8 {
+                io = vec![sine(frames, 0.0); 2];
+                p.process(&mut io, frames);
+            }
+            (peak(&io[0]), peak(&io[1]))
+        };
+        let (a, b) = run(false);
+        assert_eq!(a, b, "linked: the same on both");
+        let (a2, b2) = run(true);
+        assert_eq!(a2, a, "the first channel as linked");
+        assert!(b2 < 0.5 * a2, "the second channel turned down on its own: {b2} vs {a2}");
+    }
+
+    /// A plug-in whose whole state is one byte, read through its state reader.
+    struct Mem(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+    impl crate::Plugin for Mem {
+        fn info(&self) -> &'static crate::PluginInfo {
+            crate::plugin_info("gain").unwrap()
+        }
+        fn prepare(&mut self, _: f32, _: usize, _: usize) {}
+        fn reset(&mut self) {}
+        fn set_param(&mut self, _: &str, _: f32) -> bool {
+            false
+        }
+        fn param(&self, _: &str) -> Option<f32> {
+            None
+        }
+        fn process(&mut self, _: &mut [Vec<f32>], _: usize) {}
+        fn save_state(&mut self) -> Option<Vec<u8>> {
+            Some(vec![self.0.load(std::sync::atomic::Ordering::Relaxed)])
+        }
+        fn load_state(&mut self, data: &[u8]) -> bool {
+            let [b] = data else { return false };
+            self.0.store(*b, std::sync::atomic::Ordering::Relaxed);
+            true
+        }
+        fn state_reader(&mut self) -> Option<Box<dyn crate::PluginStateReader>> {
+            Some(Box::new(Mem(std::sync::Arc::clone(&self.0))))
+        }
+    }
+
+    impl crate::PluginStateReader for Mem {
+        fn save_state(&mut self) -> Option<Vec<u8>> {
+            Some(vec![self.0.load(std::sync::atomic::Ordering::Relaxed)])
+        }
+        fn load_state(&mut self, data: &[u8]) -> bool {
+            let [b] = data else { return false };
+            self.0.store(*b, std::sync::atomic::Ordering::Relaxed);
+            true
+        }
+    }
+
+    fn mem(_: &str) -> Option<Box<dyn crate::Plugin>> {
+        Some(Box::new(Mem(Default::default())))
+    }
+
+    /// Multi-mono unlinked: each channel's hosted state is saved and comes back on its own
+    /// channel; linked (or a single instance), the first channel's is taken.
+    #[test]
+    fn unlinked_multi_mono_saves_and_restores_each_channels_state() {
+        use super::{first_state, pack_states, unpack_states};
+        let made = |unlinked: bool, state: Option<&[u8]>| {
+            let first = mem("").unwrap();
+            let mut p = if unlinked { super::super::multi_mono_unlinked(first, mem) } else { super::super::multi_mono(first, mem) };
+            if let Some(st) = state {
+                assert!(p.load_state(st));
+            }
+            p.prepare(48_000.0, 64, 3);
+            p
+        };
+        let packed = pack_states(&[Some(vec![1]), Some(vec![2]), Some(vec![3])]);
+        let mut p = made(true, Some(&packed));
+        let mut reader = p.state_reader().unwrap();
+        assert_eq!(reader.save_state(), Some(packed.clone()), "each channel's own state, saved");
+        assert_eq!(p.save_state(), Some(packed.clone()));
+        // Into the running instance (a preset in place): packed goes channel by channel, a plain
+        // state to the first channel only.
+        assert!(reader.load_state(&pack_states(&[Some(vec![7]), None, Some(vec![9])])));
+        assert_eq!(unpack_states(&reader.save_state().unwrap()).unwrap(), [Some(vec![7]), Some(vec![2]), Some(vec![9])]);
+        assert!(reader.load_state(&[5]));
+        assert_eq!(unpack_states(&reader.save_state().unwrap()).unwrap(), [Some(vec![5]), Some(vec![2]), Some(vec![9])]);
+        // Linked, every channel takes the first's; its reader is the first's.
+        let mut linked = made(false, Some(&packed));
+        assert_eq!(linked.state_reader().unwrap().save_state(), Some(vec![1]));
+        // A plain state, unlinked: every channel starts from it, as before.
+        let mut plain = made(true, Some(&[4]));
+        let saved = plain.state_reader().unwrap().save_state().unwrap();
+        assert_eq!(unpack_states(&saved).unwrap(), [Some(vec![4]), Some(vec![4]), Some(vec![4])]);
+        // A single instance takes the first channel's; anything else passes through.
+        assert_eq!(first_state(&packed), Some(vec![1]));
+        assert_eq!(first_state(b"plain"), Some(b"plain".to_vec()));
+        assert_eq!(first_state(&pack_states(&[None, Some(vec![2])])), None);
+        let mut cut = packed.clone();
+        cut.pop();
+        assert!(unpack_states(&cut).is_none(), "truncated");
+        let mut long = packed.clone();
+        long.push(0);
+        assert!(unpack_states(&long).is_none(), "trailing bytes");
+        assert!(unpack_states(b"plain").is_none());
     }
 
     #[test]

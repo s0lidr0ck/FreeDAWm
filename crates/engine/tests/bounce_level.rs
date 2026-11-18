@@ -179,3 +179,36 @@ fn the_demo_keys_bounce_at_their_playback_level() {
     assert_same_level(&played, &bounced, "demo Keys");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The Wavetable and FM synths (parity section 7): saved with the session (plugin, parameters,
+/// preset name), and a bounce of a track playing one comes out at playback's level.
+#[test]
+fn the_wavetable_and_fm_synths_save_and_bounce_at_their_playback_level() {
+    for (id, preset) in [("wavetable_synth", 3usize), ("fm_synth", 0)] {
+        let mut s = piano_session();
+        let t = s.tracks[0].id;
+        let info = soundcraft_dsp::plugin_info(id).unwrap();
+        let mut ins = Insert::new(id);
+        for pi in info.params {
+            ins.params.insert(pi.id.to_string(), pi.default);
+        }
+        // One of its factory presets, as the Presets menu recalls it.
+        let (name, json) = soundcraft_dsp::plugins::fs::factory_presets(id)[preset];
+        let p = soundcraft_dsp::plugins::fs::FsPreset::parse(json, info).unwrap();
+        ins.params.extend(p.values.clone());
+        ins.preset = name.to_string();
+        s.track_mut(t).unwrap().instrument = Some(ins);
+        let back: Session = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        let (a, b) = (back.track(t).unwrap().instrument.as_ref().unwrap(), s.track(t).unwrap().instrument.as_ref().unwrap());
+        assert_eq!((&a.plugin, &a.params, &a.preset), (&b.plugin, &b.params, &b.preset), "{id}: kept with the session");
+        let range = Range::new(0, s.sample_rate.samples(5.0));
+        let e = Engine::new(back);
+        let dir = scratch(&format!("bounce-{id}"));
+        let bounced = bounce(&e, &dir, "synth.wav", range);
+        for block in [128usize, 1024] {
+            let played = live(e.session(), range, block);
+            assert_same_level(&played, &bounced, &format!("{id}, live block {block}"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

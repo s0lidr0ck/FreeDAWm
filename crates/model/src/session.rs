@@ -95,10 +95,15 @@ pub enum Tool {
     Scrubber,
     Pencil,
     Smart,
+    /// A click separates the clip under the pointer there (Studio Pro's Split, Logic's Scissors).
+    Scissors,
+    /// A click mutes or unmutes the clip under the pointer.
+    Mute,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 7] = [Tool::Zoom, Tool::Trim, Tool::Selector, Tool::Grabber, Tool::Scrubber, Tool::Pencil, Tool::Smart];
+    pub const ALL: [Tool; 9] =
+        [Tool::Zoom, Tool::Trim, Tool::Selector, Tool::Grabber, Tool::Scrubber, Tool::Pencil, Tool::Smart, Tool::Scissors, Tool::Mute];
     pub fn id(self) -> &'static str {
         match self {
             Tool::Zoom => "zoom",
@@ -108,6 +113,8 @@ impl Tool {
             Tool::Scrubber => "scrubber",
             Tool::Pencil => "pencil",
             Tool::Smart => "smart",
+            Tool::Scissors => "scissors",
+            Tool::Mute => "mute",
         }
     }
     pub fn label(self) -> &'static str {
@@ -119,6 +126,8 @@ impl Tool {
             Tool::Scrubber => "Scrubber",
             Tool::Pencil => "Pencil",
             Tool::Smart => "Smart Tool",
+            Tool::Scissors => "Scissors",
+            Tool::Mute => "Mute Tool",
         }
     }
     pub fn from_id(s: &str) -> Option<Tool> {
@@ -133,7 +142,7 @@ impl Tool {
             Tool::Grabber => Some("F8"),
             Tool::Scrubber => Some("F9"),
             Tool::Pencil => Some("F10"),
-            Tool::Smart => None,
+            Tool::Smart | Tool::Scissors | Tool::Mute => None,
         }
     }
 }
@@ -188,6 +197,10 @@ pub struct EditState {
     /// range is selected or `loop.set` runs; old sessions load with none.
     #[serde(default, rename = "loop")]
     pub loop_range: Option<Range>,
+    /// Ranges playback jumps over (Logic's skip cycle, Cubase's skip): sorted by start, not
+    /// overlapping. Recording plays through them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skips: Vec<Range>,
     /// Clips explicitly selected (Grabber selection).
     #[serde(default)]
     pub selected_clips: Vec<ClipId>,
@@ -274,6 +287,7 @@ impl Default for EditState {
             selection: Range::default(),
             selected_tracks: Vec::new(),
             loop_range: None,
+            skips: Vec::new(),
             selected_clips: Vec::new(),
             selected_sources: Vec::new(),
             playhead: 0,
@@ -346,6 +360,11 @@ pub struct Session {
     pub tempo: TempoMap,
     #[serde(default)]
     pub key_signatures: Vec<(Samples, String)>,
+    /// The global transpose track: (position, semitones -24..24) changes, sorted, that MIDI and
+    /// instrument tracks follow at playback ([`Session::global_transpose`]). Absent in sessions
+    /// saved before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transpose_track: Vec<(Samples, i8)>,
     pub tracks: Vec<Track>,
     pub sources: Vec<Source>,
     /// Movies referenced by Video track clips.
@@ -358,6 +377,24 @@ pub struct Session {
     #[serde(default, deserialize_with = "lenient_inputs")]
     pub inputs: Vec<InputPath>,
     pub markers: Vec<MemoryLocation>,
+    /// Clips kept in the Clip List rather than on a track (Clip › Capture…), timed from 0; a
+    /// copy is placed by dragging one onto a track (`clip.place_captured`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captured: Vec<crate::Clip>,
+    /// Alternative arrangements (scratch pads): each names the playlist every track plays in it
+    /// and keeps its own markers. Empty until the first is made (Edit › Arrangements).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arrangements: Vec<Arrangement>,
+    /// The arrangement the session plays now (by name), once there are any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrangement: Option<String>,
+    /// What a field recorder wrote into an imported file (its iXML: scene, take, tape, the
+    /// channels' names), by source id.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub field_info: std::collections::BTreeMap<u64, soundcraft_audio_io::ixml::IxmlInfo>,
+    /// The show's set list: songs (memory locations holding a range) played in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_list: Vec<crate::SetListEntry>,
     pub groups: Vec<Group>,
     pub edit: EditState,
     pub next_id: u64,
@@ -419,6 +456,17 @@ pub struct Session {
     pub pitch_renders: crate::PitchRenders,
 }
 
+/// An alternative arrangement of the session ([`Session::arrangements`]): the playlist each track
+/// plays in it, by name, and its markers.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Arrangement {
+    pub name: String,
+    #[serde(default)]
+    pub playlists: Vec<(TrackId, String)>,
+    #[serde(default)]
+    pub markers: Vec<MemoryLocation>,
+}
+
 impl Default for Session {
     fn default() -> Self {
         Session::new("Untitled", SampleRate::HZ_48000)
@@ -439,6 +487,7 @@ impl Session {
             timecode_start: 0,
             tempo: TempoMap::default(),
             key_signatures: Vec::new(),
+            transpose_track: Vec::new(),
             tracks: Vec::new(),
             sources: Vec::new(),
             videos: Vec::new(),
@@ -446,6 +495,11 @@ impl Session {
             outputs: vec![OutputPath { name: "Out 1-2".into(), first_channel: 0, format: ChannelFormat::Stereo }],
             inputs: Vec::new(),
             markers: Vec::new(),
+            captured: Vec::new(),
+            arrangements: Vec::new(),
+            arrangement: None,
+            field_info: std::collections::BTreeMap::new(),
+            set_list: Vec::new(),
             groups: Vec::new(),
             edit: EditState::default(),
             next_id: 1,
@@ -469,6 +523,9 @@ impl Session {
         };
         s.edit.pre_roll = sample_rate.samples(2.0);
         s.edit.post_roll = sample_rate.samples(2.0);
+        // Imported loops follow the session's tempo and key (the engine's `io::LOOPS_FOLLOW`):
+        // on in new sessions; sessions saved without it keep importing loops as they are.
+        s.edit.set_flag("import.loops_follow", true);
         s
     }
 
@@ -569,8 +626,9 @@ impl Session {
     }
 
     /// Clips on every playlist, alternates included.
+    /// Every clip: on every track's playlists, then those captured in the Clip List.
     pub fn all_clips(&self) -> impl Iterator<Item = &Clip> {
-        self.tracks.iter().flat_map(|t| t.playlists.iter().flat_map(|p| &p.clips))
+        self.tracks.iter().flat_map(|t| t.playlists.iter().flat_map(|p| &p.clips)).chain(&self.captured)
     }
 
     /// Whether `clip` was cleaned by Clean Vocal but its cleaned audio isn't loaded (its file was
@@ -686,6 +744,7 @@ impl Session {
             color: None,
             ruler: 1,
             track: None,
+            view: None,
         });
         self.markers.sort_by_key(|m| m.start);
         id
@@ -703,7 +762,7 @@ impl Session {
     /// audio thread calls it).
     pub fn input_channels(&self, name: &str) -> Option<(usize, usize)> {
         if let Some(i) = self.inputs.iter().find(|i| same_name(&i.name, name)) {
-            return Some((usize::from(i.first_channel), i.format.channels().clamp(1, 2)));
+            return Some((usize::from(i.first_channel), i.width()));
         }
         let rest = name.get(..3).filter(|p| p.eq_ignore_ascii_case("in ")).and_then(|_| name.get(3..))?;
         let digits = |t: &str| -> Option<usize> { if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) { t.parse().ok() } else { None } };
@@ -850,11 +909,24 @@ impl Session {
             bound(&mut m.end);
             truncate_chars(&mut m.name, MAX_NAME_CHARS);
             truncate_chars(&mut m.comments, MAX_COMMENT_CHARS);
+            if let Some(v) = &mut m.view {
+                v.samples_per_px = if v.samples_per_px.is_finite() { v.samples_per_px.clamp(0.25, 1_000_000.0) } else { 1024.0 };
+                bound(&mut v.scroll);
+                v.scroll = v.scroll.max(0);
+                v.tracks.truncate(10_000);
+            }
         }
         for (at, key) in &mut self.key_signatures {
             bound(at);
             truncate_chars(key, MAX_NAME_CHARS);
         }
+        for (at, st) in &mut self.transpose_track {
+            bound(at);
+            *st = (*st).clamp(-24, 24);
+        }
+        self.transpose_track.sort_by_key(|c| c.0);
+        self.transpose_track.dedup_by_key(|c| c.0);
+        self.transpose_track.truncate(10_000);
         self.midi_originals.values_mut().for_each(bound_sequence);
         // The Chord Symbols ruler (`chords`) is gone. It showed marker lane 2, so a session that
         // showed it shows Markers 2 in its place (or just drops it when Markers 2 is shown too).
@@ -953,6 +1025,19 @@ pub const MAX_COMMENT_CHARS: usize = 4096;
 pub fn truncate_chars(s: &mut String, max: usize) {
     if let Some((end, _)) = s.char_indices().nth(max) {
         s.truncate(end);
+    }
+}
+
+impl Session {
+    /// The global transpose `track` plays with at `at`: the transpose track's change in force
+    /// there (0 before the first), or 0 for a track that does not follow it (set to Independent,
+    /// or a drum instrument: Juke and the drum synth). Binary search; no allocation.
+    pub fn global_transpose(&self, track: &crate::Track, at: Samples) -> i64 {
+        if self.transpose_track.is_empty() || !track.follows_global_transpose() {
+            return 0;
+        }
+        let i = self.transpose_track.partition_point(|(t, _)| *t <= at);
+        i.checked_sub(1).and_then(|k| self.transpose_track.get(k)).map_or(0, |(_, st)| i64::from(*st))
     }
 }
 

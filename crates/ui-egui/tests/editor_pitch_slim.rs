@@ -1,4 +1,4 @@
-//! PitchEngine's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its
+//! PitchEngine's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its
 //! header, the Style and Interval menus, the 5th Mode switch, the knobs and its More section.
 
 mod editor_support;

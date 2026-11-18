@@ -15,12 +15,12 @@
 //! - **A crash** (the helper exits, or falls behind for [`HANG_SECONDS`] straight) silences that
 //!   plug-in, an effect passing its input through, and is reported once
 //!   ([`take_crash_reports`], and the log); the session and the app carry on.
-//! - **Opt-in:** [`enabled`] (`FREEDAWM_PLUGIN_PROCESS=1`) is off by default; [`create`] answers
-//!   only then, and only for `clap:` ids.
+//! - **Opt-in:** [`enabled`] (the app's setting, [`set_enabled`]; `FREEDAWM_PLUGIN_PROCESS=1` or
+//!   `0` overrides it) is off by default; [`create`] answers only then, and only for `clap:` ids.
 //!
 //! Not in this step: the editor window, presets of the plug-in's own, latency or parameter
 //! changes the plug-in makes itself, the transport (tempo, position) for the plug-in, a restart,
-//! VST3 and AU, and a setting in the app.
+//! VST3 and AU.
 //!
 //! This is an isolated `unsafe` helper crate (craftrules never-crash): `unsafe` is denied
 //! crate-wide and allowed only in the private `shm` module (mapping the shared file and viewing it
@@ -29,20 +29,16 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod exchange;
-#[cfg(not(target_arch = "wasm32"))]
 mod helper;
-#[cfg(not(target_arch = "wasm32"))]
 mod host;
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(unsafe_code)]
 mod shm;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use helper::serve;
-#[cfg(not(target_arch = "wasm32"))]
-pub use host::BridgedPlugin;
+pub use host::{BridgedPlugin, DescribeError, describe_with, preset_state_with, presets_with};
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The helper's program name (without the platform's extension).
 pub const HELPER_NAME: &str = "freedawm-plugin-host";
@@ -50,30 +46,109 @@ pub const HELPER_NAME: &str = "freedawm-plugin-host";
 /// A helper behind for this long without a break counts as hung: its plug-in is given up.
 pub const HANG_SECONDS: u64 = 5;
 
-/// Whether hosted CLAP plug-ins run in their own process: `FREEDAWM_PLUGIN_PROCESS=1` (off by
-/// default; nothing changes for existing sessions otherwise).
-pub fn enabled() -> bool {
-    std::env::var_os("FREEDAWM_PLUGIN_PROCESS").is_some_and(|v| v == "1")
+/// The app's setting (Setup › Preferences › Mixing › Run CLAP and VST3 plug-ins in their own process).
+static SETTING: AtomicBool = AtomicBool::new(false);
+
+/// Sets this computer's choice (the app's Preferences); [`enabled`] follows it unless
+/// `FREEDAWM_PLUGIN_PROCESS` overrides it. Plug-ins already loaded stay where they are.
+pub fn set_enabled(on: bool) {
+    SETTING.store(on, Ordering::Relaxed);
 }
 
-/// A `clap:` plug-in in its own process, when that is [`enabled`] and the helper starts; `None`
-/// otherwise (the caller then creates it as before).
-pub fn create(id: &str) -> Option<Box<dyn soundcraft_dsp::Plugin>> {
+/// What `FREEDAWM_PLUGIN_PROCESS` forces, if it is set: `1` on, `0` off (anything else is
+/// ignored, and the setting decides).
+pub fn env_override() -> Option<bool> {
+    override_of(std::env::var("FREEDAWM_PLUGIN_PROCESS").ok().as_deref())
+}
+
+fn override_of(v: Option<&str>) -> Option<bool> {
+    match v.map(str::trim) {
+        Some("1") => Some(true),
+        Some("0") => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether hosted CLAP plug-ins loaded from now on run in their own process: the app's setting
+/// ([`set_enabled`], off by default, so nothing changes for existing sessions), unless
+/// `FREEDAWM_PLUGIN_PROCESS` overrides it ([`env_override`]).
+pub fn enabled() -> bool {
+    env_override().unwrap_or_else(|| SETTING.load(Ordering::Relaxed))
+}
+
+/// The helper program the app would start, or why there is none.
+pub fn helper_path() -> Result<std::path::PathBuf, String> {
+    host::helper_exe()
+}
+
+/// Whether `id` is a plug-in the bridge can run: a CLAP (`clap:`) or VST3 (`vst3:`) one.
+pub fn bridgeable(id: &str) -> bool {
+    soundcraft_clap_host::parse_id(id).is_some() || soundcraft_vst3_host::parse_id(id).is_some()
+}
+
+/// A CLAP or VST3 plug-in in its own process, when that is [`enabled`]. `None` when it is not for
+/// the bridge (turned off, not such an id, or no helper next to the app): the caller then creates it
+/// as before. `Some(None)` when the helper could not make it (it crashed, hung or the plug-in
+/// refused, said once): the caller must not then load it in its own process, where the same crash
+/// would take the app down.
+pub fn create(id: &str) -> Option<Option<Box<dyn soundcraft_dsp::Plugin>>> {
+    if !enabled() || !bridgeable(id) {
+        return None;
+    }
+    let exe = match host::helper_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            log::warn!("{id}: not run in its own process: {e}");
+            return None;
+        }
+    };
+    match BridgedPlugin::spawn_from(&exe, id) {
+        Ok(p) => Some(Some(Box::new(p))),
+        Err(e) => {
+            report(format!("{} could not be loaded in its own process: {e}", host::scanned_name(id).unwrap_or_else(|| id.to_string())));
+            Some(None)
+        }
+    }
+}
+
+/// The description of a CLAP or VST3 plug-in, read in a helper of its own when plug-ins run in
+/// their own process ([`enabled`]), so a plug-in that crashes or hangs while being described cannot
+/// take the app down. `None` when it is not for the bridge (turned off, not such an id, or no
+/// helper): the caller reads the description as before. `Some(None)` when the helper could not
+/// describe it (it crashed, hung or the plug-in refused; a crash or hang is said once, see
+/// [`take_crash_reports`]); that answer is kept for the rest of the run. Blocks for as long as the
+/// helper takes, at most [`HANG_SECONDS`]; later calls answer from memory.
+pub fn plugin_info(id: &str) -> Option<Option<&'static soundcraft_dsp::PluginInfo>> {
+    if !enabled() || !bridgeable(id) {
+        return None;
+    }
+    host::describe(id)
+}
+
+/// The presets a `clap:` plug-in's own binary reports, listed in a helper of its own while
+/// plug-ins run in their own process (the binary is never loaded in the app for it). `None`
+/// when it is not for the bridge (turned off, not a `clap:` id, no helper, or the scan does not
+/// know the plug-in's bundle): the caller lists them as before. Empty when the helper could not.
+pub fn presets(id: &str) -> Option<Vec<soundcraft_clap_host::ClapPreset>> {
     if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
         return None;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    match BridgedPlugin::spawn(id) {
-        Ok(p) => return Some(Box::new(p)),
-        Err(e) => log::warn!("{id}: not run in its own process: {e}"),
+    host::presets(id)
+}
+
+/// The state of a fresh instance of `clap:` plug-in `id` with `preset` loaded, made in a helper
+/// while plug-ins run in their own process. `None` when it is not for the bridge (the caller
+/// makes it as before).
+pub fn preset_state(id: &str, preset: &soundcraft_clap_host::ClapPreset) -> Option<Result<Vec<u8>, String>> {
+    if !enabled() || soundcraft_clap_host::parse_id(id).is_none() {
+        return None;
     }
-    None
+    host::preset_state(id, preset)
 }
 
 static REPORTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Says (once) that a bridged plug-in crashed or hung and was silenced.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn report(what: String) {
     log::error!("{what}");
     REPORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(what);
@@ -106,6 +181,32 @@ pub mod proto {
         LoadState {
             state: String,
         },
+        /// Load plug-in `id` only to describe it (the reply's `info`), then let it go: a
+        /// plug-in that crashes while being described costs the helper, not the app.
+        Describe {
+            id: String,
+            dir: Option<String>,
+        },
+        /// Load one of the open plug-in's own presets into it (CLAP `preset-load`: location kind
+        /// 0 a file, 1 the plug-in; the file and the key within it). The reply has its values.
+        LoadPreset {
+            kind: u32,
+            location: Option<String>,
+            load_key: Option<String>,
+        },
+        /// The presets the plug-in `id` in the bundle at `path` reports (its binary's preset
+        /// discovery), in the reply's `presets`; the helper loads the binary for it.
+        Presets {
+            id: String,
+            path: String,
+        },
+        /// The state of a fresh instance of `id` (its bundle's folder `dir`) with `preset` loaded:
+        /// what a module stores to start with that preset.
+        PresetState {
+            id: String,
+            dir: Option<String>,
+            preset: soundcraft_clap_host::ClapPreset,
+        },
         Quit,
     }
 
@@ -133,6 +234,12 @@ pub mod proto {
         pub tail: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub state: Option<String>,
+        /// The plug-in's parameter values by index, after a state is loaded (`None`: not said).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub values: Vec<Option<f32>>,
+        /// The plug-in's own presets (`presets`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub presets: Vec<soundcraft_clap_host::ClapPreset>,
     }
 
     /// The plug-in as the helper loaded it.
@@ -142,6 +249,9 @@ pub mod proto {
         pub short_name: String,
         pub instrument: bool,
         pub params: Vec<Param>,
+        /// Its group in the insert menu (absent: Instrument or Other).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub category: Option<soundcraft_dsp::Category>,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -181,6 +291,30 @@ mod tests {
         assert!(!enabled());
         assert!(create("clap:org.soundcraft.test.gain").is_none());
         assert!(create("eq_7band").is_none());
+    }
+
+    #[test]
+    fn clap_and_vst3_ids_are_bridgeable() {
+        assert!(bridgeable("clap:org.soundcraft.test.gain"));
+        assert!(bridgeable("vst3:5C0A1D00111122223333444455556666"));
+        assert!(!bridgeable("au:aufx:bpas:appl"), "Audio Units are not yet");
+        assert!(!bridgeable("eq_7band"));
+        assert!(!bridgeable("vst3:nonsense"));
+    }
+
+    #[test]
+    fn the_variable_overrides_the_setting_with_1_or_0_only() {
+        assert_eq!(override_of(None), None);
+        assert_eq!(override_of(Some("1")), Some(true));
+        assert_eq!(override_of(Some(" 0 ")), Some(false));
+        assert_eq!(override_of(Some("yes")), None, "only 1 and 0 override");
+        assert_eq!(override_of(Some("")), None);
+    }
+
+    #[test]
+    fn descriptions_are_read_in_process_while_the_bridge_is_off() {
+        assert_eq!(plugin_info("clap:org.soundcraft.test.gain"), None);
+        assert_eq!(plugin_info("eq_7band"), None);
     }
 
     #[test]

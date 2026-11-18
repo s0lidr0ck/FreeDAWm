@@ -1,7 +1,6 @@
 //! The whole rig in one process: a booth (engine + hub) and a piano PC (engine + follower)
 //! talking over loopback TCP, the service remote as a fake web client, simulated audio clocks
 //! (the piano PC's runs fast) and a cable that can be pulled (a proxy between them).
-#![cfg(not(target_arch = "wasm32"))]
 
 use serde_json::{Value, json};
 use soundcraft_engine::Engine;
@@ -138,7 +137,7 @@ impl SimHost {
     fn play(&mut self, msg: [u8; 3]) {
         self.tick();
         if self.view.recording {
-            self.live.push(RecordedEvent { at: self.view.position, port: "Keys".into(), msg, pass: 0 });
+            self.live.push(RecordedEvent { at: self.view.position, port: "Keys".into(), msg, pass: 0, sysex: Vec::new() });
         }
     }
 }

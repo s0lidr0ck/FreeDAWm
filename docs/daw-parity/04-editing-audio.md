@@ -1,6 +1,6 @@
 # Four-DAW parity, section 4: editing audio on the timeline
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and tier-2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (bug fixes and tier-2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -34,19 +34,19 @@ FreeDAWm: **Works** · **Partial** · **Flag only** · **Missing**.
 
 | Area | FreeDAWm today | Distance from the four |
 |---|---|---|
-| A. Tools | Selector, Grabber, Trimmer, Smart Tool, Zoomer; fade handles on clips | Medium: no stretch-by-dragging, no waveform pencil, scrub tool is silent |
-| B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid | Medium: snaps to the grid only, never to clips, markers or zero crossings |
-| C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups | Small: no typed selection numbers |
-| D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients; overwrite, layer or crossfade on overlap | Small: no trim to close gaps |
-| E. Clip properties | Clip gain, mute, locks, rating, sync point, per-clip EQ and compressor, real-time transpose, reverse and loop | Small: clip notes |
+| A. Tools | Selector, Grabber (with separation grab), Trimmer, Smart Tool (with crossfades at joins), Zoomer, Scrubber, Scissors, Mute; fade handles on clips | **Level** |
+| B. Edit modes, grid, nudge | Shuffle, Slip, Spot and Grid all enforced; relative grid for moves and trims; an adaptive grid; snap to clip edges, markers, the playhead and zero crossings | Small |
+| C. Selection and navigation | Tab to Transient, linked selections, zoom presets, markers, rubber-band clip selection, edit groups, typed selection numbers | Small |
+| D. Cut, trim, overlaps | Full cut/copy/paste/repeat set, separate on grid and at transients, trim to close gaps; overwrite, layer or crossfade on overlap | Small |
+| E. Clip properties | Clip gain, mute, locks, rating, sync point, notes, per-clip EQ and compressor, real-time transpose, reverse and loop | Small |
 | F. Fades | Five shapes with adjustable curve, real-time, auto edge fades, drag handles | Small to medium: thin fade dialog, no batch fades on separate clips |
-| G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Medium: processing discards handles, no process history, bounce in place is whole-track only |
+| G. Consolidate and offline processing | Consolidate, ten offline processes, strip silence | Small: bounce in place is whole-track only |
 | H. Takes and comping | Take layers, swipe comping, automatic crossfades | Small |
-| I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag, stretches heard at once | Small: not heard while a marker is still being dragged |
-| J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral view, mono sources only |
-| K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | **Large**: no arranger track, tempo edits do not move audio, no organising folders |
-| L. Clip list and sample editing | Clip list with a filter, peak files, sample-level zoom | Medium: no relink of missing audio, no audition, no sample editor |
-| M. Undo and keys | 200 levels, history window, single-key editing, a key editor | Small: redo by clicking in the history |
+| I. Timing | Tempo detection, phase-coherent straightening, warp markers you drag and hear while dragging, stretches heard at once | Small |
+| J. Pitch and spectral | A real note-level vocal editor with formants; stem separation and de-noise | Medium: no ARA 2, no spectral editing, mono sources only |
+| K. Arrangement and tracks | Insert and cut time, duplicate, freeze, tempo curves | Medium: tempo edits do not move audio, a closed folder's blocks can't be dragged |
+| L. Clip list and sample editing | Clip list with a filter, audition and relink, peak files, sample-level zoom | Small: the sample editor has no cut, copy or paste inside the file |
+| M. Undo and keys | 200 levels, history window with undo and redo by clicking, single-key editing, a key editor | Small |
 
 Three things every one of the four does and FreeDAWm does not: **stretch audio by dragging**
 (a clip edge or a warp marker), with a real choice of algorithm; **edits that respect groups and
@@ -59,37 +59,37 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Range selector | ● | ● | ● | ● | **Works** |
 | Object grabber, drag between tracks, modifier to copy | ● | ● | ● | ● | **Works** |
-| Grabber variants (separation grab: drag a selection out of a clip) | ● | ◐ | ◐ | ◐ | **Missing** |
+| Grabber variants (separation grab: drag a selection out of a clip) | ● | ◐ | ◐ | ◐ | **Works**: a Grabber drag that starts inside a range selection over a clip the range cuts into separates the clips at the range's edges on every selected track and drags the pieces inside it (Ctrl copies, Alt keeps the time), one undo step |
 | Trim tool | ● | ● | ● | ● | **Works**; stops at file ends and neighbours |
 | Stretch by dragging a clip edge | ● | ● | ● | ● | **Works**: Alt held as a trim starts (Trim tool or the Smart Tool's edge) stretches the material to the new edge, by the track's Elastic algorithm (pitch-preserving on a plain track, speed on Varispeed) |
 | Loop by dragging a clip edge | ● | ◐ | ● | ◐ | **Works**: Shift held as an end trim starts makes it a loop trim, the clip's material repeating to the new end in real time (no copies) |
 | Smart / combined tool | ● | ● | ● | ● | **Works**: trim, select, grab, fades, fade curve, clip gain by zone |
-| Crossfade from the Smart Tool at a clip boundary | ● | ● | ● | ● | **Missing** |
-| Scissors / split tool | ◐ | ● | ● | ● | **Missing** as a tool; Separate is a key (B, Cmd+E) |
-| Mute tool | ◐ | ● | ● | ● | **Missing** as a tool; Mute Clips is a key |
-| Pencil redraws the waveform at sample level | ● | ○ | ◐ | ● | **Missing**: on audio the pencil draws nothing |
+| Crossfade from the Smart Tool at a clip boundary | ● | ● | ● | ● | **Works**: the Smart Tool's lower corners where two clips meet (within 8 points of the join) draw a crossfade centred on the join, as wide as the drag either way, through `edit.fades_create` (its short-audio warning included) |
+| Scissors / split tool | ◐ | ● | ● | ● | **Works**: the Scissors tool (toolbar) separates the clip under a click there (snapped as edit points are), on the tracks an active edit group spreads the point to; Separate is still a key (B, Cmd+E) |
+| Mute tool | ◐ | ● | ● | ● | **Works**: the Mute tool (toolbar) mutes or unmutes the clip under a click, with its clip group and the clips an edit group brings along; Mute Clips is still a key |
+| Pencil redraws the waveform at sample level | ● | ○ | ◐ | ● | **Works**: zoomed in to a sample or less per point, a Pencil drag on an audio clip redraws its samples on the channel where the stroke starts (`clip.draw_samples`; the clip gain and waveform zoom are taken off what is drawn, the stroke blends in and out over 8 samples). The change goes to a copy of the file the clip then plays, so other clips of the file are untouched; one undo step per stroke. Stretched, looped or reversed clips are left alone (consolidate first). The same pencil is in the Sample Editor |
 | Zoom tool (click, drag a box) | ● | ● | ● | ● | **Works** |
 | Scrub tool with audio | ● | ◐ | ● | ● | **Works**: plays what it passes, both ways, at the drag's speed, through the track's built-in inserts and fader; on a ruler it scrubs every audible track (section 1) |
-| Tool chord shown in the tooltip (F6+F7) | ● | — | — | — | **Missing**: the tooltip promises it |
+| Tool chord shown in the tooltip (F6+F7) | ● | — | — | — | **Works**: F6+F7 or F7+F8 held together, in either order, choose the Smart Tool |
 
 ## B. Edit modes, grid and nudge
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Slip (free) editing | ● | ● | ● | ● | **Works** |
-| Shuffle / ripple editing | ● | ● | ● | ● | **Partial**: drag, trim, cut, paste, duplicate honour it; nudge, the A/S trims and Trim to Selection do not |
+| Shuffle / ripple editing | ● | ● | ● | ● | **Works**: drag, trim, cut, paste, duplicate, Trim to Selection and the A/S trims (Start / End to Insertion) honour it, the clip keeping its start and what follows closing up. A nudge moves the clips alone, without rippling: as designed (the owner's decision) |
 | Shuffle lock | ● | — | — | — | **Works** |
 | Spot: place by typed time, with the original timestamp | ● | ◐ | ◐ | ◐ | **Works** |
-| Grid, absolute and relative | ● | ● | ● | ● | **Partial**: trims snap absolute even in relative grid |
-| Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; "1/4 dotted" typed as a command fails to parse |
+| Grid, absolute and relative | ● | ● | ● | ● | **Works**: in relative Grid a trim moves the clip's edge by whole grid steps from where it was, keeping its offset from the grid, as a move does; absolute Grid puts it on a line |
+| Grid in bars and beats with triplets and dotted | ● | ● | ● | ● | **Works**; typed values read "1/4.", "1/4 dotted", "1/8t" and "1/8 triplet" alike |
 | Grid in time, frames and samples | ● | ● | ● | ● | **Works**: lines do not drift and count from the session's timecode start (bug 18, fixed) |
-| Grid that adapts to zoom | ◐ | ● | ● | ● | **Missing** |
-| Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Works** for clip edges and markers (Options › Snap, within 8 pixels; a nearer grid line wins; the suspend modifier lets go); not the cursor |
+| Grid that adapts to zoom | ◐ | ● | ● | ● | **Works**: Options › Snap › Adaptive Grid: a musical grid's note value follows the zoom, the one whose lines are nearest 16 points apart (bar down to 1/64; no dotted or triplet); a time, frame or sample grid stays as chosen |
+| Snap to clip edges, markers and the cursor | ◐ | ● | ● | ● | **Works**: Options › Snap › Clip Edges, Markers and Playhead, within 8 pixels; a nearer grid line wins; the suspend modifier lets go |
 | Snap to zero crossings | ○ | ◐ | ● | ● | **Works**: Options › Snap › Zero Crossings moves the insertion and selection edges to the nearest crossing within 5 ms of the audio on the track |
-| Modifier to suspend snap while dragging | ● | ● | ● | ● | **Partial**: works for moves and trims, not for selecting |
+| Modifier to suspend snap while dragging | ● | ● | ● | ● | **Works** for moves, trims and selecting: held through a Selector drag, the selection's end goes free of the grid, clip edges and markers |
 | Nudge by a chosen value | ● | ● | ● | ● | **Works**: a range nudges the clips wholly inside it; a clip it only touches stays (bug 16, fixed) |
-| Nudge the audio inside a clip (slip contents) | ● | ● | ● | ● | **Missing** |
-| Nudge only the selection's start or end | ● | ◐ | ◐ | ◐ | **Missing** |
+| Nudge the audio inside a clip (slip contents) | ● | ● | ● | ● | **Works**: Clip › Real-Time › Nudge Contents Earlier / Later moves the audio inside the selected clips by the nudge value while they stay put (a loop turns, a reversed clip moves the way it sounds), stopping at the file's ends; a warped clip is left alone |
+| Nudge only the selection's start or end | ● | ◐ | ◐ | ◐ | **Works**: Edit › Selection › Nudge Edit Start / End Earlier / Later, by the nudge value; the edges never cross |
 
 ## C. Selection and navigation
 
@@ -98,34 +98,34 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Range across several tracks | ● | ● | ● | ● | **Works** |
 | Select several clips as objects and act on only those | ● | ● | ● | ● | **Works**: Delete, Cut and Copy act on the selected clips only (bug 1, fixed) |
 | Rubber-band selection of clips | ◐ | ● | ● | ● | **Works**: a Grabber drag from empty space selects the clips the box touches across tracks (Shift adds) |
-| Select all on a track; select all following; select by colour, name or mute | ◐ | ● | ● | ● | **Missing** except Select All |
-| Extend selection to session start or end | ● | ● | ● | ● | **Missing** |
-| Type the selection's start, end and length | ● | ● | ● | ● | **Missing**: the numbers are display only |
+| Select all on a track; select all following; select by colour, name or mute | ◐ | ● | ● | ● | **Works**: Edit › Selection › Select All Clips on Track, Select All Following (from the insertion, the selected tracks or every track), Select Clips with Same Name, with Same Color, Select Muted Clips |
+| Extend selection to session start or end | ● | ● | ● | ● | **Works**: Edit › Selection › Extend Edit to Session Start / End (the end of the last clip) |
+| Type the selection's start, end and length | ● | ● | ● | ● | **Works**: a click on Start, End or Length in the counters opens a field that takes the value in the main counter's format (a length counts from the start: bars, beats and ticks in its meter) |
 | Tab to clip boundaries, Tab to Transient | ● | ● | ● | ● | **Works** |
 | Link timeline and edit selection | ● | — | — | — | **Works** |
-| Link track and edit selection | ● | ◐ | ● | ● | **Flag only** |
+| Link track and edit selection | ● | ◐ | ● | ● | **Works**, as designed: FreeDAWm keeps one selection list, so the selected tracks and the edit selection are always linked (the toolbar button stores a value nothing needs) |
 | Edit groups: an edit on one grouped track applies to all | ● | ● | ● | ● | **Works**: in an active group with Edit on (Track › Group…; not while groups are suspended) a clip grabbed, moved, nudged, trimmed or faded on one track brings the clips the other members hold at that time, as a clip group does (`alone` for one); a range selected on one track spreads to the group, so separate, cut, copy, paste and fades over it apply to all. One undo step |
 | Zoom: horizontal, vertical, waveform height, presets, toggle, to selection | ● | ● | ● | ● | **Works**; zoom-to-selection and fit size to the timeline on screen (bug 23, fixed) |
 | Scroll modes (page, continuous, none) | ● | ● | ● | ● | **Works** |
 | Markers on several rulers, a marker list | ● | ● | ● | ● | **Works** |
-| A location that recalls zoom, track heights and shown tracks | ● | ○ | ◐ | ◐ | **Missing** |
-| Markers attached to a track | ● | ○ | ○ | ◐ | **Flag only**: the field exists, nothing sets it |
+| A location that recalls zoom, track heights and shown tracks | ● | ○ | ◐ | ◐ | **Works**: Memory Locations' + View keeps the zoom, scroll, track heights and which tracks are shown, and recalling it puts them back without moving the playhead; any marker made with `view` recalls them too |
+| Markers attached to a track | ● | ○ | ○ | ◐ | **Works**: Add Track Marker Here in a track lane's menu puts a marker on that track, drawn down its lane with its name; `markers.add`/`markers.edit` take `track` (null moves it back to the rulers) |
 | Session overview strip | ● | ● | ◐ | ● | **Works** |
 
 ## D. Cut, copy, trim and overlaps
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Cut, copy, paste, clear, duplicate, repeat N times | ● | ● | ● | ● | **Works**, crossfaded pairs included (bug 2, fixed); Repeat leaves automation behind, Duplicate takes it |
-| Paste repeated to fill the selection | ● | ◐ | ◐ | ● | **Works**; ignores Shuffle |
+| Cut, copy, paste, clear, duplicate, repeat N times | ● | ● | ● | ● | **Works**, crossfaded pairs included (bug 2, fixed); Repeat leaves automation behind, Duplicate takes it. Audio clips pasted into another session bring their audio along as new sources of that session (written to its Audio Files on save; reused by later pastes); refused, naming the file, when that audio was never loaded or is at another sample rate |
+| Paste repeated to fill the selection | ● | ◐ | ◐ | ● | **Works**; the fill is exactly the selection's length, so in Shuffle too nothing after it moves |
 | Insert silence; insert and cut time on all tracks | ● | ● | ● | ● | **Works**: every playlist and take layer, automation, markers, key changes and the tempo and meter map move (bug 7, fixed); refused inside a tempo ramp |
 | Separate at the cursor or selection, on the grid, at transients | ● | ● | ● | ● | **Works**; transient cuts are found per track, so multi-mic cuts do not line up |
 | Heal a separation | ● | ◐ | ● | ● | **Works**: pieces that sound alike are joined, their clip-gain lines too; pieces that differ stay apart (bug 6, fixed) |
 | Trim to selection, start or end to the cursor | ● | ● | ● | ● | **Works** |
-| Trim clips to close gaps | ◐ | ● | ● | ● | **Missing** |
+| Trim clips to close gaps | ◐ | ● | ● | ● | **Works**: Edit › Trim › To Close Gaps runs each selected clip's end on to the next clip's start, as far as its file (or loop) has audio |
 | Overlap modes: overwrite, keep both, crossfade on overlap | ◐ | ● | ● | ● | **Works**: Options › Overlap › Overwrite (the default), Layer (audio clips stay whole underneath; the newest is on top and heard, the lower one plays again where uncovered, crossing over through the top clip's fades or a 1 ms ramp) or Crossfade (overwrite with a 10 ms crossfade at each join, out of the handles). Moves, pastes, duplicates and recorded takes follow it; MIDI and video clips always overwrite; kept by undo like the Edit mode (`edit.overlap_mode`) |
 | Clip order (front/back) where clips overlap | ● | ● | ● | ● | **Works**: each audio clip has a layer; Send to Back and Bring to Front put it below or above the clips it overlaps, which changes what is heard there; the Edit window draws the top one last and a click picks it |
-| Drag a file from the clip list or the desktop to a track | ● | ● | ● | ● | **Works**; whole files only, not a clip from the list |
+| Drag a file from the clip list or the desktop to a track | ● | ● | ● | ● | **Works**: whole files, and clips from the Clip List (a copy lands where dropped, snapped, by `clip.copy_to`, onto a track of its kind) |
 
 ## E. Clip properties
 
@@ -137,13 +137,13 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Clip lock (position, or all edits) | ● | ● | ● | ● | **Works**: a command that would change an edit-locked clip is refused and undone (bug 4, fixed) |
 | Clip name, colour, rating | ● | ● | ● | ● | **Works** |
 | Clip groups that select and move as one | ● | ● | ● | ● | **Works**: selecting a grouped clip selects its group; a drag from an unselected member takes the group; a trim moves the same edge of every member as far, and a fade drawn on one goes on all (`alone` for one) |
-| Loop a clip without making copies | ● | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Loop in Place… (N times, or by the loop trim) repeats the material as the clip plays; a start trim keeps each repeat where it was; `off` ends it. Clip › Loop… still makes copies |
-| Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose… (semitones, fractions as cents, ±24) plays the clip transposed in real time at its length, by a two-grain shifter reading the file (no state, so locates and loops are exact), heard at once; in the app a background render by Pitch Shift's algorithm then replaces it at the same length (derived, not saved, kept across undo; not an undo step) |
+| Loop a clip without making copies | ● | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Loop in Place… (N times, or by the loop trim) repeats the material as the clip plays, and its waveform is drawn repeat by repeat; a start trim keeps each repeat where it was; `off` ends it. Clip › Loop… still makes copies |
+| Clip transpose and fine tune, non-destructive | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose… (semitones, fractions as cents, ±24) plays the clip transposed in real time at its length, by a two-grain shifter reading the file (no state, so locates and loops are exact), heard at once; in the app a background render by Pitch Shift's algorithm then replaces it at the same length (derived, not saved, kept across undo; not an undo step), a clip playing a Clean Vocal mix included (the render is of the mix, made again when the mix changes) |
 | Clip stretch ratio | ● | ● | ● | ● | **Works**: trims, splits, Trim to File and fade handles count file samples at the clip's ratio (bug 3, fixed) |
-| Reverse a clip without a new file | ○ | ● | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place plays the clip's window backwards in real time; trims take audio off the matching end; the waveform is drawn reversed too (a looped reversed clip's is still drawn forwards) |
+| Reverse a clip without a new file | ○ | ● | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place plays the clip's window backwards in real time; trims take audio off the matching end; the waveform is drawn reversed too, looped or not |
 | Per-clip effects in real time | ● | ● | ◐ | ◐ | **Works** (EQ, compressor, gain), kept by a split's pieces and every copy (bug 5, fixed); made off the audio thread when the session changes, not when a clip first plays (bug 13, fixed) |
 | Sync point | ● | ● | ● | ● | **Works** |
-| Clip notes | ○ | ● | ● | ● | **Missing** |
+| Clip notes | ○ | ● | ● | ● | **Works**: Notes… in the clip's menu; a clip with notes shows a mark in its name bar, and the notes beside the pointer on it; kept by splits and copies |
 
 ## F. Fades
 
@@ -151,12 +151,12 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 |---|:-:|:-:|:-:|:-:|---|
 | Fade in, fade out, crossfade, calculated in real time | ● | ● | ● | ● | **Works** |
 | Shapes: linear, equal power, S-curve, adjustable slope | ● | ● | ● | ● | **Works**, plus exponential and logarithmic |
-| Drag fade handles on the clip | ● | ● | ● | ● | **Works** for one clip; no crossfade by dragging |
+| Drag fade handles on the clip | ● | ● | ● | ● | **Works** for one clip, and a crossfade by dragging from where two clips meet (Smart Tool, row A) |
 | Fade dialog with preview, length and separate in and out shapes | ● | ◐ | ◐ | ● | **Works**: a shape and bend for each side (a crossfade's two sides too), a drawn preview, presets (built-in and saved); the length is the selection's |
 | Batch fades over many clips | ● | ● | ● | ● | **Works**: the fade dialog's batch option fades both ends of every clip inside the selection, at a length in ms |
-| Crossfade placement (before, across, after the cut) | ● | ◐ | ● | ● | **Partial**: follows where the selection sits |
-| Warning when the audio beyond the cut is too short | ● | ◐ | ◐ | ● | **Missing**: the fade lengths silently differ |
-| Automatic short fades at clip edges | ● | ● | ◐ | ● | **Works** in playback (1 ms default); not applied when consolidating or exporting |
+| Crossfade placement (before, across, after the cut) | ● | ◐ | ● | ● | **Works**: the fade dialog's Crossfade choice puts the crossfade as the selection lies over the cut (the default, as before), or the selection's length wholly before the cut, centred on it, or wholly after it (`edit.fades_create` `placement`); the short-audio warning follows the placement |
+| Warning when the audio beyond the cut is too short | ● | ◐ | ◐ | ● | **Works**: a crossfade made shorter on one side than the selection, for want of audio beyond the cut, says so in the status line (`edit.fades_create` returns `short` and a `warning`) |
+| Automatic short fades at clip edges | ● | ● | ◐ | ● | **Works** in playback, bounces and exports (1 ms default), and Consolidate renders them too, as heard |
 | Delete fades in a selection | ● | ● | ● | ● | **Works**: only the fades and crossfades in the selection go (bug 9, fixed) |
 
 ## G. Consolidate and offline processing
@@ -169,51 +169,51 @@ locks** (grouped clips and grouped tracks edit together, locked clips cannot be 
 | Normalize, gain, reverse, invert, DC removal, pitch, stretch | ● | ● | ● | ● | **Works**; each writes a new file; fades, sync point and warp markers follow (bug 20, partly fixed) |
 | Run a plug-in on a clip offline | ● | ● | ● | ● | **Works** |
 | Processed clip keeps audio beyond its edges (handles) | ● | ● | ● | ● | **Works** for processes that keep the length: up to 1 s (`handle_ms`) of the file each side is processed too, the clip's own window rendered as it played (a Clean alternate's edges are not faded by the longer render); stretch, pitch and varispeed render the clip only |
-| Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Missing** |
+| Process history that can be changed or removed later | ○ | ◐ | ○ | ● | **Works**: every Process (`process.run`) is kept in the clip's process history with the clip as it was before it; Process › Process History lists the selected clip's steps, oldest first, and bypasses, moves or removes one (`process.bypass_step`, `process.move_step`, `process.remove_step`, one undo step each): the clip is made again from the audio before that step, at its edges now, the later steps applied again in order. A step after it that changed the length (time stretch, pitch shift, varispeed) or ran on stretched audio is refused with a message (remove the later steps first); a length-changing last step alone goes back to the clip as it was before it. The files the history keeps count as used (not offered as unused, not compacted away) |
 | Strip silence with threshold, minimum length and padding | ● | ● | ● | ● | **Works**; muted clips are left whole (bug 11, fixed) |
-| Strip silence preview before committing | ● | ● | ● | ● | **Missing** |
+| Strip silence preview before committing | ● | ● | ● | ● | **Works**: while the Strip Silence dialog is open, the Edit window shades what it would remove from the selection, worked out again as the settings change (`edit.strip_silence_preview`) |
 
 ## H. Takes and comping
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Alternate playlists or versions per track | ● | ● | ● | ● | **Works**: new, duplicate, switch |
-| Delete one playlist | ● | ● | ● | ● | **Partial**: only "delete all unused" |
+| Delete one playlist | ● | ● | ● | ● | **Works**: any playlist but the one playing is a take layer, and Delete Take in its menu deletes it (one the comp uses: Remove and Delete); Delete Unused Playlists deletes them all |
 | Take lanes under the track | ● | ● | ● | ● | **Works** |
 | Swipe comping | ◐ | ● | ● | ● | **Works** |
 | Copy a selection up to the main playlist | ● | ● | ● | ● | **Works**; this route adds no crossfades |
 | Automatic crossfades at comp joins | ◐ | ● | ● | ● | **Works** (10 ms equal power) |
 | Name and rate takes | ● | ● | ● | ● | **Works** |
-| Flatten a comp | ● | ● | ● | ● | **Partial**: by consolidating; Delete Unused Playlists keeps the layers the comp came from (bug 19, fixed) |
-| Show only takes that match the selection | ● | ○ | ○ | ○ | **Missing** |
-| Comp grouped tracks together (drums) | ● | ● | ● | ● | **Missing** |
+| Flatten a comp | ● | ● | ● | ● | **Works**: Flatten Comp in a take layer's menu keeps the comp as plain clips, crossfades and all, and deletes the take layers (one undo step); Delete Unused Playlists keeps the layers the comp came from (bug 19, fixed) |
+| Show only takes that match the selection | ● | ○ | ○ | ○ | **Works**: Track › Show Only Takes Matching Selection (also on a take layer's right-click menu): with a selection made, the selected tracks' open take layers are only those with audio inside it; the others are hidden, not changed, and come back when the selection goes or the option is off. Cycling takes (Up/Down, `comp.cycle`) offers the same ones |
+| Comp grouped tracks together (drums) | ● | ● | ● | ● | **Works**: a swipe (or click) on one track of an active edit group comps the same take layer over the same range on the group's other tracks where that layer has audio, in one undo step (`comp.swipe` `alone` for one track; not while groups are suspended). Takes are matched by layer number, as tracks recorded together number them |
 
 ## I. Timing
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Warp markers you drag to move a hit | ● | ● | ● | ● | **Works**: on a track showing Warp, a click on a clip adds a marker, a drag moves it and the material on each side stretches to fit (by the track's Elastic algorithm, one pass with no joins), Alt-click deletes it; Straighten's markers show and edit the same way (`clip.warp_marker`). On release the new warp is heard at once through the real-time stretcher while its render is made in the background (not while dragging) |
+| Warp markers you drag to move a hit | ● | ● | ● | ● | **Works**: on a track showing Warp, a click on a clip adds a marker, a drag moves it and the material on each side stretches to fit (by the track's Elastic algorithm, one pass with no joins), Alt-click deletes it; Straighten's markers show and edit the same way (`clip.warp_marker`). The marker moves as it is dragged (several times a second), so the new warp is heard through the real-time stretcher while dragging, its render made in the background; the whole drag is one undo step |
 | Choice of stretch algorithm (polyphonic, rhythmic, monophonic, tape) | ● | ● | ● | ● | **Works** offline: the track's algorithm sets how the stretch splices (Rhythmic short and tight, Monophonic searching wide, Polyphonic general, X-Form long and smooth); varispeed plays in real time through the band-limited resampler (section 1). Not real-time |
-| Transient detection with a sensitivity control | ● | ● | ● | ● | **Works**; sensitivity is reachable by command only |
-| Quantize audio to the grid with strength and swing | ● | ● | ● | ● | **Works** for whole clips: Clip › Quantize Audio… moves each by its sync point with a strength and a swing; no slicing at hits (Beat Detective) |
+| Transient detection with a sensitivity control | ● | ● | ● | ● | **Works**: the Beat Detective window has a Sensitivity slider (its Separate uses it too); `edit.separate_at_transients` takes `sensitivity` |
+| Quantize audio to the grid with strength and swing | ● | ● | ● | ● | **Works** for whole clips: Clip › Quantize Audio… moves each by its sync point with a strength and a swing; slicing at hits and moving the pieces is Beat Detective's (below) |
 | Quantize multitrack drums keeping phase | ● | ● | ● | ● | **Works** as Straighten, to a steady tempo only |
-| Slice, conform and smooth (Beat Detective style) | ● | ◐ | ◐ | ● | **Partial**: detect and separate; no conform, no gap filling |
-| Extract a groove and apply it | ● | ● | ● | ● | **Missing** |
+| Slice, conform and smooth (Beat Detective style) | ● | ◐ | ◐ | ● | **Works**: the Beat Detective window (`event.beat_detective`) finds the hits, Separate cuts at them, Conform moves each piece that starts at a hit the Strength share of the way to the nearest grid line (or to a groove's point), a later piece winning where two then overlap, and Smooth runs each piece on to the next as far as its file goes and puts a 5 ms equal-power crossfade at every join; one undo step. Pieces are moved whole, not stretched (the warp-marker way of conforming without cuts is not built) |
+| Extract a groove and apply it | ● | ● | ● | ● | **Works**: Groove from Selected Clip takes an audio clip's hits as a groove (ddff138; also a button in Beat Detective, which then picks it), and Beat Detective's Conform with that groove moves another track's hits to it; MIDI Quantize follows a groove too. Timing only: the hits' loudness is not applied as accents to audio |
 | Detect tempo from audio and build a tempo map | ◐ | ● | ● | ● | **Works**: constant, follow and smooth modes |
 | Audio on a musical-time track follows tempo edits | ● | ● | ● | ● | **Works**: on a tick track a clip moves to its bar; on an Elastic one it also takes the new length (Varispeed by its stretch, the others by a pitch-preserving render from the original) |
 | Conform a clip to the session tempo | ● | ● | ● | ● | **Works**: varispeed on a Varispeed or plain track, a pitch-preserving render on an Elastic one (bug 12, fixed) |
-| Re-stretch after trimming | ● | ● | ● | ● | **Partial**: a second stretch rebuilds from the first-stretch length and discards later trims |
+| Re-stretch after trimming | ● | ● | ● | ● | **Works**: a second stretch renders from the window of the original the trimmed clip still plays (its render offset and length mapped back through the first ratio), so trims are kept |
 
 ## J. Pitch and spectral editing
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Built-in note-level pitch editor | ◐ | ◐ | ● | ● | **Works**: pitch, drift, vibrato, formant, per-note gain; monophonic sources |
-| Pitch editor on a stretched clip | ● | ● | ● | ● | **Missing**: a stretched clip plays untuned |
-| Automatic pitch correction in real time | ○ | ○ | ● | ● | **Partial**: offline per clip (centre and snap to key) |
-| ARA 2 for third-party editors | ● | ● | ● | ● | **Missing** |
+| Pitch editor on a stretched clip | ● | ● | ● | ● | **Works** for a varispeed clip: it is analysed and tuned in file time, the editor and the note commands place notes through the stretch, and playback reads the file with the tuned render in place, so a tuned clip at another speed plays exactly the tuned file stretched (a test compares them sample for sample at 1.5× and 0.8×); a clip whose Elastic render is done is a file of its own and tunes as any clip. Still refused, with "commit the stretch first": an Elastic stretch still playing live, and a stretch together with warp markers, a reverse or a loop. Not checked by ear. Key changes under a stretched clip are read at the unstretched times for Snap to key |
+| Automatic pitch correction in real time | ○ | ○ | ● | ● | **Not planned here**: real-time pitch correction was dropped by the owner; offline per clip (centre and snap to key) works |
+| ARA 2 for third-party editors | ● | ● | ● | ● | **Missing**, approved by the owner (2026-11-18) and next after this round: Rust bindings to the ARA C header (no C++ library), VST3 first, in process, with a test ARA plug-in in the repo; then playback, bounce and saving; then the editor window, selection and undo; CLAP and AU later |
 | Audio to MIDI | ● | ● | ● | ● | **Works**, including polyphonic and drum models |
-| Spectral view or spectral editing on the timeline | ○ | ◐ | ○ | ● | **Missing** |
+| Spectral view or spectral editing on the timeline | ○ | ◐ | ○ | ● | **Works** for the view: an audio track's view menu offers spectral, which draws each clip as a spectrogram (time across, 30 Hz to the top on a log scale, colour by level over 90 dB) in place of its waveform, following stretch and reverse; the columns are analysed as they come into view and kept in memory, so a long clip fills in over a few frames. Spectral editing (a rectangle that attenuates a band of frequencies and writes a new file, as Cubase does) is not built |
 | Stem separation | ◐ | ● | ● | ● | **Works** (desktop, downloaded model) |
 | De-noise as clip processing | ○ | ○ | ○ | ◐ | **Works** (desktop, downloaded model) |
 
@@ -227,12 +227,12 @@ why they score ◐ for "built-in".
 | Duplicate a track with a choice of what comes along | ● | ● | ● | ● | **Works**; the copy's clips keep the original's group and loop ids |
 | Freeze, commit | ● | ● | ● | ● | **Works** (see G for the commit bug) |
 | Make inactive, hide, colour, reorder, height presets | ● | ● | ● | ● | **Works**; a dragged folder takes its members (bug 15, fixed) |
-| Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Missing**: every folder is a routing folder; no folder editing |
-| Lock a whole track | ◐ | ● | ● | ● | **Missing** |
-| Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Missing** |
-| Scratch pads or alternative arrangements | ○ | ● | ● | ◐ | **Missing** |
+| Folders that only organise, and edit a closed folder as one clip | ● | ● | ● | ● | **Works**: folders that only organise are built (Move to New Basic Folder, [section 3](03-mixing.md)); a closed folder's lane draws its members' clips (nested folders too) as blocks, overlapping clips joined, and a selection made on it takes the members with it (`edit.select` unless `exact`), so Cut, Copy, Paste, Clear, Duplicate and the other range edits act on every member in one undo step. With the Grabber (or the Smart Tool's lower half) a click on a block selects its clips, so Nudge moves them, and a drag moves them (`edit.move_block`); from a block's edge (or with the Trim tool) a drag trims it (`edit.trim_block`): the clips on that edge follow it out, those it passes are trimmed in, and none is trimmed to nothing. One undo step each |
+| Lock a whole track | ◐ | ● | ● | ● | **Works**: Lock Track in the track's menu; a command that would add, change or remove a clip on any of its playlists, or record-arm it, is refused and undone (Insert and Cut Time still move it) |
+| Arranger track: named sections you move, copy and repeat | ○ | ● | ● | ● | **Works**: the Sections ruler (the Song lane's blocks, each a named section) is the arranger: a block's right-click menu copies it with the song, repeats it once or several times (`arrange.repeat`, up to 16), moves it before another section or to the end, or removes it, and every track's clips (the playlist shown) and automation, the chords and the block go with it, later material making room or closing up; one undo step each (c8cfbb1, repeat added in the follow-up). A section that changes tempo or meter inside is refused, and a copy goes only where the same tempo and meter are in force. Markers, key changes and take layers other than the one shown are not copied |
+| Scratch pads or alternative arrangements | ○ | ● | ● | ◐ | **Works**: Track › Arrangements. New Arrangement keeps the arrangement as it is (the first time as "Main") and starts another: every track gets a copy of the playlist it plays and plays it, the markers carry over; a click switches arrangement (every track plays the playlist it had there and the markers are that arrangement's), Delete forgets one that is not playing (its playlists stay on the tracks). One undo step each (`arrangement.new`, `arrangement.switch`, `arrangement.delete`, `arrangement.list`; at most 64). Built on playlists, so an arrangement's playlists also show among a comping track's take layers, as a duplicated playlist does; tempo, mixer and automation are shared by every arrangement |
 | Tempo changes, ramps and curves; meter changes | ● | ● | ● | ● | **Works** |
-| Tap tempo | ● | ● | ● | ● | **Missing** |
+| Tap tempo | ● | ● | ● | ● | **Works**: the Tempo Operations window's Tap button; from the second tap the tempo in effect at the insertion point takes the average of the last eight taps (a pause of 2 s starts over), one undo step per run of taps |
 | Identify a beat to set the tempo from a selection | ● | ◐ | ● | ● | **Works**: the tempo after the selection resumes where it ends (bug 8, fixed) |
 | Video stays in sync through edits; snap to frames | ● | ● | ● | ● | **Works** |
 
@@ -243,11 +243,11 @@ why they score ◐ for "built-in".
 | List of clips and files with a search | ● | ● | ● | ● | **Works**; shows the active playlists only |
 | Audition, rename and locate from the list | ● | ● | ● | ● | **Works**: a click selects the clip and scrolls to it when off screen; Alt-click or Audition plays it; Rename… from its menu |
 | Select and remove unused clips | ● | ● | ● | ● | **Works**: Select Unused Files picks the files no clip plays; Clear removes them |
-| Relink missing audio files | ● | ● | ● | ● | **Missing** (video can be relinked) |
-| Compact files to what is used | ● | ● | ● | ● | **Missing** |
-| "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Missing**: the command only renames the clip "Captured" |
-| Audio file / sample editor window | ○ | ● | ● | ● | **Missing** |
-| Waveform from peak files, down to single samples, rectified and outline views | ● | ● | ● | ● | **Works**; a stretched clip's waveform is drawn unstretched |
+| Relink missing audio files | ● | ● | ● | ● | **Works**: the Clip List marks a file the session could not find as missing, and Relink… in a file's menu reads it from another file (`file.relink_audio`), its clips playing again from where they were; a file of another length or width is taken with a warning. One file at a time; no search of a folder |
+| Compact files to what is used | ● | ● | ● | ● | **Works**: Compact in the Clip List (`file.compact`, `sources?`, `handle_ms?` 1000): each audio file is made again holding only the parts its clips use (every playlist, the Clip List's captured clips and the clips process histories keep) and a second either side, the clips point at the new file and the old one leaves the session (it stays on disk; written at the next save). One undo step brings the old file back. Files of stretched, looped, reversed, tuned, cleaned or lyric clips, frozen tracks, inserts and instruments are left whole, and a file that would shrink by less than 10% is left. Runs on the UI thread (a long file pauses the window briefly) |
+| "Capture" a selection as a new clip in the list | ● | ◐ | ◐ | ● | **Works**: Clip › Capture… (Cmd+R) keeps the selection's clips on each selected track in the Clip List as new clips, the track untouched; a captured clip drags onto a track (or Place on Selected Track from its menu) as a copy, and Remove from List takes it out. Saved with the session; its file counts as used |
+| Audio file / sample editor window | ○ | ● | ● | ● | **Works**: Process › Sample Editor shows the selected audio clip's samples with its own zoom (wheel scrolls, Ctrl/Cmd+wheel zooms), its window or, with Whole File, the whole file (the clip's window outlined): drag to select samples and Cut, Copy, Paste, Silence, Reverse, Invert or Gain them (`clip.sample_edit`, `clip.sample_copy`; a click places the paste point), Loop plays the selection looped where the clip sits on the timeline (`clip.sample_loop`), or turn on Pencil and draw them when zoomed in. Each edit writes a copy of the file the clip plays, one undo step; a cut or paste keeps the clip on the audio it showed and makes it shorter or longer by what changed inside it (a paste never runs over the next clip). The clip must not be stretched, looped or reversed |
+| Waveform from peak files, down to single samples, rectified and outline views | ● | ● | ● | ● | **Works**; a stretched clip's waveform is drawn stretched, as it plays |
 
 ## M. Undo and keyboard
 
@@ -255,9 +255,9 @@ why they score ◐ for "built-in".
 |---|:-:|:-:|:-:|:-:|---|
 | Multi-level undo and redo, every edit covered | ● | ● | ● | ● | **Works** (200 levels) |
 | Undo leaves zoom, scroll and the current tool alone | ● | ● | ● | ● | **Works**: undo and redo keep the zoom, scroll, waveform height and tool, as they keep the Edit mode |
-| Undo history list | ● | ● | ● | ● | **Works**; redo by clicking is not offered |
+| Undo history list | ● | ● | ● | ● | **Works**: the undone steps are listed after the current one, dimmed; a click on any step undoes or redoes to it |
 | Single-key editing commands | ● | ● | ● | ● | **Works** |
-| Editable key bindings | ● | ● | ● | ● | **Works**; a few fixed keys cannot be changed |
+| Editable key bindings | ● | ● | ● | ● | **Works**. Fixed, by design: the context keys that act by where the pointer or focus is or name a family of keys the binding strings cannot hold (Space, Shift/Cmd+Space, F12, Enter, F1–F10, Alt+1–4, `, Tab, = / keypad + −, Shift/Alt+Shift with = −, Cmd+=, Delete, R / T, and single-key editing), and five commands those keys run (track height up/down, clip gain nudge up/down, search). The key editor lists them as "(fixed)" and refuses to give them away |
 
 ## Bugs found on the way
 
@@ -335,11 +335,108 @@ Not done: slip contents, typed selection numbers, adaptive
 grid; relink, compact, capture; strip-silence preview; a short-handle warning and crossfade by
 dragging; every tier-3 item; ARA 2 hosting.
 
+**Status after round three (2026-11-17).** Built: typed selection numbers, selection commands
+(extend to the session ends, select by track, following, name, colour or mute, nudge one edge),
+slip contents, trim to close gaps, Shuffle for the menu trims, view-recalling locations, track
+markers, clip notes, track lock, tap tempo, Flatten Comp, Strip Silence preview, relink, a
+short-crossfade warning, the Smart Tool chord, redo from the history, the looped clip's waveform,
+warp markers heard while dragged, and Clean Vocal clips' transpose render. Not done: every item
+in the designs below.
+
+**Status after the round-three follow-up (2026-11-17).** Built: Scissors and Mute tools, the
+Smart Tool's crossfade at a join (by dragging), separation grab, snap to the playhead, an adaptive
+grid, relative-grid trims, dragging a clip from the Clip List, comping grouped tracks together,
+soloing a take in place of the comp, and audio clips pasted into another session bringing their
+audio along. Decided: nudge in Shuffle does not ripple, and the track and edit selections are
+always linked (both as designed). Not done: the designs below that are not marked built.
+
 **Where FreeDAWm is already level or ahead:** Spot mode with the original timestamp (only Pro
 Tools matches it), fade shapes with a continuous curve, swipe comping with automatic crossfades,
 phase-coherent multitrack straightening in one command, a built-in vocal editor with formant
 control (Pro Tools and Studio Pro need Melodyne), stem separation and de-noise as clip processes,
 and audio to MIDI for polyphonic and drum material.
+
+## Designs (round three)
+
+Short designs for the open rows too large to build in one step. Each names the first tested step.
+Built since, in the round-three follow-ups: the arranger (copy, move, remove, repeat), scratch
+pads, the sample editor's first step with the waveform pencil, the spectral view (not spectral
+editing), process history, groove from audio, Beat Detective conform and smoothing, compact,
+and a closed folder's blocks with its selection spreading. The rows say what is left.
+
+- **Arranger track** (K). A session-level `arranger: Vec<Section { id, name, start, end, color }>`
+  (non-overlapping, sorted), drawn as a ruler. Commands `arranger.add/rename/delete` and
+  `arranger.move {section, to}` / `arranger.copy` / `arranger.repeat {count}`, each built on the
+  Insert/Cut Time machinery of bug 7 (every playlist, take layers, automation, markers, key changes
+  and the tempo and meter map move together): a move is "copy the section's time to the target,
+  then cut the source". First step: the model, the ruler and add/rename/delete; then copy (insert
+  time + paste of everything in the span); then move and repeat.
+- **Folders that only organise; edit a closed folder as one clip** (K). `Track::folder_kind:
+  Routing | Organise`; an organise folder has no bus, its members route as before, and Convert
+  toggles it. Editing a closed folder: its lane draws the members' clips summed as blocks; a
+  selection on it spreads to the members, as an edit group's does (the edit-group spreading of
+  round two is the mechanism). First step: the kind, routing that ignores an organise folder, and the
+  convert command.
+- **Scratch pads / alternative arrangements** (K). A whole-session alternative: `Session::scratch:
+  Vec<Arrangement { name, playlists: per-track active-playlist index, markers }>` switched by a
+  command, built on playlists (each track gets a playlist per arrangement). First step: save and
+  switch, one undo step each.
+- **Audio file / sample editor with a waveform pencil** (L, A). A window on one source: the waveform
+  at sample level (the waveform module already draws sample lines), a selection, and destructive
+  edits that write a new source and point the clips at it (as Process does, handles kept): gain,
+  silence, reverse, cut/copy/paste inside the file, and the pencil redrawing samples between two
+  points (linear in the drawn samples, a short crossfade at both ends). First step: the window,
+  selection and the pencil on a copy of the file, one undo step.
+- **Spectral view** (J). A per-track view `spectral`: an STFT image cached per source in the peak
+  cache's folder (log frequency, colour by dB), drawn in place of the waveform. Spectral editing
+  (Cubase) is a later step: a rectangle selection that attenuates bins and writes a new source.
+- **Process history** (G). `Clip::processes: Vec<ProcessStep { id, params, from_source }>` kept by
+  Process; "Remove" re-renders from `from_source` of the step removed with the later steps
+  re-applied in order (or simply plays the earlier source when it was the last). First step: record
+  the chain and offer removing the last step.
+- **Groove from audio and apply** (I). Transients (the detector Tab to Transient uses) quantized to
+  the grid make a `Groove` like `event.groove_from_clip`'s; applying moves audio by the warp-marker
+  path (markers at hits, moved to the groove). Needs the Beat Detective conform below.
+- **Beat Detective conform and smoothing** (I). Detect hits (exists), add warp markers at them and
+  move each to the grid by a strength (the warp-marker render already stretches between markers):
+  conform without cutting. "Separate and smooth" (cut at hits, move pieces, fill gaps by trimming
+  the previous piece and crossfading) is the classic alternative, built on separate, nudge and
+  trim to close gaps.
+- **Pitch editor on a stretched clip** (J; refined in the follow-up). Only a clip with a real-time
+  stretch (`Clip::stretch` not 1: varispeed, or an Elastic stretch still playing live) is refused;
+  an Elastic render is a file of its own and tunes as any clip. Two ways on: (a) tune in file time
+  and play the tuned render through the same stretch (the analysis and `TunedSpans` stay in file
+  positions; the mixer's stretched path, which reads sample by sample through
+  `Clip::material_at`, takes the tuned sample where a span covers that file position; the editor
+  draws note times through `timeline_span`); or (b) offer "Render Stretch and Tune" (commit the
+  stretch, then open the editor). (a) is the parity answer; its first step is the mixer change with
+  a test that a tuned varispeed clip plays its tuned render, then lifting the refusal. Earlier text:
+  The vocal editor analyses `clip_heard_window`; for a
+  stretched clip it should analyse the stretched render (the elastic render is a source of its
+  own) and map note times through the stretch ratio. First step: refuse with a clear message rather
+  than play untuned; then analyse the render.
+- **Re-stretch after trimming** (I). Keep the clip's original source and its window in the
+  original's samples (`edit.values` already remembers the original for Remove Warp); a second
+  stretch renders from that window rather than from the first-stretch length.
+- **Real-time stretch algorithms** (I). The live stretcher is one algorithm; the track's Elastic
+  choice picks only the offline render. Make the live grain size and search width follow the
+  track's algorithm (short and tight for rhythmic, wide search for monophonic). Shared with
+  section 1.
+- **Capture into the Clip List and dragging a clip from it** (L, D). `Session::captured: Vec<Clip>`
+  (clips kept in the list, not on a track); `clip.capture` stores the selection's clips there;
+  the Clip List lists them and a drag places a copy, as whole files are placed today.
+- **Compact** (L). For each source, the union of the windows its clips (all playlists and undo
+  history) use plus handles; write a new file of those spans and point the clips at it with new
+  offsets. Needs a confirmation (it is the one destructive file operation) and runs off the UI
+  thread like Commit.
+- **Smaller UI items** (A, B; all built in the follow-up): a Scissors and a Mute tool (two `Tool` variants: click separates or
+  mutes the clip under the pointer, edit-group aware); separation grab (a Grabber drag inside a range
+  selection separates at its edges, then drags the middle); a crossfade made by the Smart Tool at a
+  clip boundary (bottom corner zone over two touching clips → `edit.fades_create` over the drag);
+  an adaptive grid (a grid value `adaptive` choosing the note value whose line spacing is nearest
+  16 px at the zoom); relative-grid trims (the trim tool moving the edge by whole grid steps from
+  where it was); the snap-suspend modifier applied to selecting; nudge in Shuffle rippling what
+  follows; a stretched clip's waveform mapped through its ratio.
 
 ## Sources
 
@@ -389,3 +486,41 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-16 | minor | Stretches and warp-marker moves are heard at once through the real-time stretcher while the render is made |
 | 2026-11-16 | minor | A reversed clip's waveform is drawn reversed |
 | 2026-11-16 | minor | Clip transpose gets a high-quality background render |
+| 2026-11-17 | minor | Round three reconciliation: transient sensitivity and edge fades in exports were already built; ARA 2 and real-time pitch correction not planned here |
+| 2026-11-17 | minor | Typed grid values such as "1/4 dotted" and "1/8 triplet" parse |
+| 2026-11-17 | minor | F6+F7 and F7+F8 choose the Smart Tool |
+| 2026-11-17 | minor | The Undo History lists undone steps and redoes to one by clicking |
+| 2026-11-17 | minor | Selection commands: extend to the session start or end, select clips on a track, following, by name, colour or mute; nudge one edge of the selection |
+| 2026-11-17 | minor | Nudge the audio inside a clip |
+| 2026-11-17 | minor | Tap tempo |
+| 2026-11-17 | minor | Lock a whole track |
+| 2026-11-17 | minor | Clip notes |
+| 2026-11-17 | minor | Trim clips to close gaps |
+| 2026-11-17 | minor | Consolidate keeps the automatic edge fades, as playback does |
+| 2026-11-17 | minor | Memory locations that recall the view |
+| 2026-11-17 | minor | The selection's start, end and length can be typed |
+| 2026-11-17 | minor | Markers on a track |
+| 2026-11-17 | minor | Trim to Selection and the A/S trims follow Shuffle |
+| 2026-11-17 | minor | A looped clip's waveform is drawn repeat by repeat, reversed when the clip is |
+| 2026-11-17 | minor | A crossfade short of audio beyond the cut warns |
+| 2026-11-17 | minor | Flatten Comp; deleting one playlist and Repeat to Fill in Shuffle were already covered |
+| 2026-11-17 | minor | Transposed clips with Clean Vocal get the background render too |
+| 2026-11-17 | minor | A warp marker is heard while it is dragged |
+| 2026-11-17 | minor | Strip Silence previews what it would remove |
+| 2026-11-17 | minor | Relink a missing audio file from the Clip List |
+| 2026-11-17 | minor | Round three: status, and designs for the rows too large for one step |
+| 2026-11-17 | minor | The snap-suspend modifier works while selecting |
+| 2026-11-17 | minor | Follow-up: Scissors and Mute tools; Smart Tool crossfades at joins; separation grab; snap to the playhead; adaptive grid; relative-grid trims; clips dragged from the Clip List; grouped tracks comp together; Solo Take; pasting audio into another session brings it along; Shuffle nudge and linked selections as designed; fixed keys listed |
+| 2026-11-17 | minor | round three follow-up: Show Only Takes Matching Selection |
+| 2026-11-17 | minor | round three follow-up: process history (bypass, move, remove a step); Compact |
+| 2026-11-17 | minor | round three follow-up: Beat Detective conform and smoothing; groove from audio applied through it |
+| 2026-11-17 | minor | round three follow-up: waveform pencil at sample zoom; a basic Sample Editor |
+| 2026-11-17 | minor | round three follow-up: the arranger repeats a section; arranger row brought up to date |
+| 2026-11-17 | minor | round three follow-up: alternative arrangements (scratch pads) |
+| 2026-11-17 | minor | round three follow-up: a spectral track view |
+| 2026-11-17 | minor | round three follow-up: a closed folder edits its members as one |
+| 2026-11-17 | minor | round three follow-up: pitch editor on a stretched clip left Partial, design refined |
+| 2026-11-18 | minor | Round four: the Sample Editor cuts, copies, pastes, loops and edits the whole file |
+| 2026-11-18 | minor | Round four: a closed folder's blocks are dragged, nudged and trimmed |
+| 2026-11-18 | minor | Round four: crossfade placement before, across or after the cut in the fade dialog |
+| 2026-11-18 | minor | Round four: a varispeed clip tunes in file time and plays the tuned file stretched |

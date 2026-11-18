@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fit to Lead",
             [],
             None,
-            "{track?, against?: track, notes?: [{clip, note}], fit_pitch?: true, align_timing?: false, strength?: 0..100 (%, default 100), max_shift_ms?: 1..500 (default 100)} — `fit_pitch`: moves each clashing note of `track` (default: the first selected track; `notes`: only those, else all) by whole semitones to the nearest tone within a fourth that clashes with no note of `against` sounding with it (default: the session's lead) nor with the chord, and is in the key: chord tones first, then the smaller move. Notes that fit already, or have nowhere to go, stay. Sets the notes' offset (as dragging them does). `align_timing`: each note is paired with the lead note it overlaps most and its start and end move `strength` of the way to the lead's, at most `max_shift_ms`; each clip with notes to move is rendered again with a pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), and its tuning is carried onto the new audio and re-analysed before the command returns. Refused while either track is being analysed or a clip is edit-locked. Undoable, one step. Returns {track, against, moved: [{clip, note, semitones}], aligned?: [{clip, note, start_ms, end_ms}]}",
+            "{track?, against?: track, notes?: [{clip, note}], fit_pitch?: true, align_timing?: false, strength?: 0..100 (%, default 100), max_shift_ms?: 1..500 (default 100)} — `fit_pitch`: moves each clashing note of `track` (default: the first selected track; `notes`: only those, else all) by whole semitones to the nearest tone within a fourth that clashes with no note of `against` sounding with it (default: the session's lead) nor with the chord, and is in the key: chord tones first, then the smaller move. Notes that fit already, or have nowhere to go, stay. Sets the notes' offset (as dragging them does). `align_timing`: each note is paired with the lead note it overlaps most and its start and end move `strength` of the way to the lead's, at most `max_shift_ms`; each clip with notes to move is rendered again with a pitch-keeping stretch between those points (its edges stay; Remove Warp restores the original), and its tuning is carried onto the new audio and re-analysed before the command returns. Refused while either track is being analysed or a clip is edit-locked. Undoable, one step. Returns {track, against, moved: [{clip, note, semitones}], aligned?: [{clip, note, start_ms, end_ms}], warning?: why nothing moved (no tuned notes, or every note fits)}",
             has_selection,
             fit_to_lead
         ),
@@ -238,6 +238,19 @@ fn fit_to_lead(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     let moved: Vec<Value> = plan.iter().map(|(r, d)| json!({"clip": r.clip, "note": r.note, "semitones": d})).collect();
     let mut out = json!({"track": track, "against": against, "moved": moved});
+    // Nothing moved: say why (from the menu this is the status line), not a silent success.
+    if moved.is_empty() && !align {
+        let s = e.session();
+        let name = |t: TrackId| s.track(t).map_or_else(String::new, |tr| tr.name.clone());
+        out["warning"] = json!(if crate::vocal_studio::studio_notes(s, track).is_empty() {
+            format!("Fit to Lead: {} has no tuned notes yet (AI › Tune Vocal › Analyse Now)", name(track))
+        } else {
+            match against {
+                Some(lead) => format!("Fit to Lead: every note of {} fits {} already; nothing moved", name(track), name(lead)),
+                None => format!("Fit to Lead: every note of {} fits the chords and key already; nothing moved", name(track)),
+            }
+        });
+    }
     if let (true, Some(lead)) = (align, against) {
         let max_shift = (max_ms / 1000.0 * e.session().sample_rate.as_f64()).round() as Samples;
         out["aligned"] = json!(align_timing(e, track, lead, only.as_deref(), strength, max_shift));

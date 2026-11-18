@@ -433,11 +433,18 @@ fn thin(e: &mut Engine, p: &Value) -> Result<Value> {
     let idx = indices(p);
     let tol = i64_or(p, "tolerance", 2).clamp(0, 8192) as f64;
     let seq = seq_mut(e, id, C)?;
+    let before = seq.ctrls.len();
+    thin_points(seq, &idx, |_| tol);
+    Ok(json!({"removed": before - seq.ctrls.len()}))
+}
+
+/// Drops the points `idx` names (indices into `seq.ctrls`) that a straight line between their
+/// kept neighbours (same lane and channel) passes within `tol(kind)` of, or that repeat the kept
+/// value before them. Per lane and channel, in time order.
+pub(crate) fn thin_points(seq: &mut soundcraft_midi::Sequence, idx: &[usize], tol: impl Fn(CtrlKind) -> f64) {
     let mut drop: Vec<usize> = Vec::new();
-    // Per lane and channel, in time order: a picked point goes when the line between the last
-    // kept point and the next point passes within the tolerance of it (or it repeats a value).
     let mut lanes: Vec<(CtrlKind, u8)> = Vec::new();
-    for i in &idx {
+    for i in idx {
         if let Some(c) = seq.ctrls.get(*i)
             && !lanes.iter().any(|(k, ch)| same(*k, c.kind) && *ch == c.channel)
         {
@@ -445,6 +452,7 @@ fn thin(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     for (kind, ch) in lanes {
+        let tol = tol(kind);
         let lane: Vec<usize> = (0..seq.ctrls.len()).filter(|i| seq.ctrls.get(*i).is_some_and(|c| same(c.kind, kind) && c.channel == ch)).collect();
         let mut kept: Option<CtrlEvent> = None;
         for (k, i) in lane.iter().enumerate() {
@@ -466,14 +474,70 @@ fn thin(e: &mut Engine, p: &Value) -> Result<Value> {
             }
         }
     }
-    let before = seq.ctrls.len();
+    drop.sort_unstable();
     let mut i = 0;
     seq.ctrls.retain(|_| {
-        let keep = !drop.contains(&i);
+        let keep = drop.binary_search(&i).is_err();
         i += 1;
         keep
     });
-    Ok(json!({"removed": before - seq.ctrls.len()}))
+}
+
+/// Controller data thinned on the way in (Setup › MIDI Input Devices › Thin controllers): per
+/// lane and channel, a controller, pitch bend or pressure point that the straight line from the
+/// last kept point to the next passes within one step of (a 64th of the range for pitch bend) is
+/// dropped, and the kept point before it ramps to the next (`CtrlShape::Ramp`), so a sweep plays
+/// as smoothly as it was recorded with a fraction of its points. Pedals and programs are kept.
+/// Returns how many went.
+pub fn thin_take(seq: &mut soundcraft_midi::Sequence) -> usize {
+    use soundcraft_midi::CtrlShape;
+    let mut lanes: Vec<(CtrlKind, u8)> = Vec::new();
+    for c in &seq.ctrls {
+        if !matches!(c.kind, CtrlKind::Program | CtrlKind::Cc(64..=69)) && !lanes.contains(&(c.kind, c.channel)) {
+            lanes.push((c.kind, c.channel));
+        }
+    }
+    let mut drop: Vec<usize> = Vec::new();
+    let mut ramps: Vec<usize> = Vec::new();
+    for (kind, ch) in lanes {
+        let tol = if kind == CtrlKind::PitchBend { 128.0 } else { 1.0 };
+        let lane: Vec<usize> = (0..seq.ctrls.len()).filter(|i| seq.ctrls.get(*i).is_some_and(|c| c.kind == kind && c.channel == ch)).collect();
+        let mut kept: Option<usize> = None;
+        for (k, i) in lane.iter().enumerate() {
+            let (Some(c), Some(next)) = (seq.ctrls.get(*i).copied(), lane.get(k + 1).and_then(|j| seq.ctrls.get(*j)).copied()) else { continue };
+            let on_line = kept.and_then(|a| seq.ctrls.get(a)).is_some_and(|a| {
+                next.tick > a.tick && a.shape.is_step() && {
+                    let x = (c.tick - a.tick) as f64 / (next.tick - a.tick) as f64;
+                    (f64::from(a.value) + f64::from(next.value - a.value) * x - f64::from(c.value)).abs() <= tol
+                }
+            });
+            // A held value (the same before and after) is not a ramp: it stays held.
+            let held = kept.and_then(|a| seq.ctrls.get(a)).is_some_and(|a| a.value == c.value && c.value == next.value);
+            match kept {
+                Some(a) if on_line || held => {
+                    drop.push(*i);
+                    if !held && !ramps.contains(&a) {
+                        ramps.push(a);
+                    }
+                }
+                _ => kept = Some(*i),
+            }
+        }
+    }
+    for a in &ramps {
+        if let Some(c) = seq.ctrls.get_mut(*a) {
+            c.shape = CtrlShape::Ramp(0.0);
+        }
+    }
+    drop.sort_unstable();
+    let before = seq.ctrls.len();
+    let mut i = 0;
+    seq.ctrls.retain(|_| {
+        let keep = drop.binary_search(&i).is_err();
+        i += 1;
+        keep
+    });
+    before - seq.ctrls.len()
 }
 
 #[cfg(test)]
@@ -490,6 +554,34 @@ mod tests {
     fn lane(e: &mut Engine, clip: u64, lane: &str) -> Vec<(i64, i64)> {
         let r = e.execute("midi.ctrls", &json!({"clip": clip, "lane": lane})).unwrap();
         r["events"].as_array().unwrap().iter().map(|x| (x["tick"].as_i64().unwrap(), x["value"].as_i64().unwrap())).collect()
+    }
+
+    /// Thinned on the way in: a mod-wheel sweep keeps its ends and ramps between them, a held
+    /// value stays held, a turn stays, the pedal is untouched.
+    #[test]
+    fn a_take_keeps_the_points_that_shape_a_move() {
+        use soundcraft_midi::{CtrlEvent, CtrlShape, Sequence};
+        let ev = |tick: i64, kind: CtrlKind, value: i32| CtrlEvent { tick, channel: 0, kind, value, shape: CtrlShape::Step };
+        let mut seq = Sequence::default();
+        // 0 → 100 in steps of 1, back down to 50, then held there.
+        for v in 0..=100 {
+            seq.ctrls.push(ev(i64::from(v) * 10, CtrlKind::Cc(1), v));
+        }
+        for v in (50..100).rev() {
+            seq.ctrls.push(ev(1_000 + i64::from(100 - v) * 10, CtrlKind::Cc(1), v));
+        }
+        for k in 0..5 {
+            seq.ctrls.push(ev(1_600 + k * 10, CtrlKind::Cc(1), 50));
+        }
+        seq.ctrls.push(ev(0, CtrlKind::Cc(64), 127));
+        seq.ctrls.push(ev(5, CtrlKind::Cc(64), 127));
+        seq.sort();
+        let removed = super::thin_take(&mut seq);
+        let cc1: Vec<(i64, i32, bool)> =
+            seq.ctrls.iter().filter(|c| c.kind == CtrlKind::Cc(1)).map(|c| (c.tick, c.value, c.shape.is_step())).collect();
+        assert_eq!(cc1, vec![(0, 0, false), (1_000, 100, false), (1_500, 50, true), (1_640, 50, true)], "{cc1:?}");
+        assert_eq!(seq.ctrls.iter().filter(|c| c.kind == CtrlKind::Cc(64)).count(), 2, "the pedal kept as played");
+        assert_eq!(removed, 101 + 50 + 5 - 4);
     }
 
     #[test]

@@ -138,6 +138,28 @@ pub fn zoom_about_span(v: MidiView, factor: f32, x: f32, width: f32, (lo, hi): (
     clamp_left(MidiView { zoom, left: if zoom.is_some() { left } else { lo as f64 }, ..v }, width, (lo, hi))
 }
 
+/// `v` fitted to `notes`: their time from the first start to the last end (with a little room
+/// either side) across `width`, and, with `rows`, their pitches from the highest to the lowest
+/// (a row's room above and below) down `height`. Unchanged with no notes.
+pub fn fit_notes(v: MidiView, notes: &[&soundcraft_midi::Note], width: f32, height: f32, span: (i64, i64), rows: bool) -> MidiView {
+    let (Some(t0), Some(t1)) = (notes.iter().map(|n| n.start).min(), notes.iter().map(|n| n.end()).max()) else { return v };
+    let len = t1.saturating_sub(t0).max(soundcraft_time::TICKS_PER_QUARTER / 4);
+    let pad = len / 16;
+    let fit = width / span.1.saturating_sub(span.0).max(1) as f32;
+    let z = (width / (len + 2 * pad).max(1) as f32).clamp(fit, MAX_PX_PER_TICK.max(fit));
+    let zoom = (z > fit * 1.0001).then_some(z);
+    let mut out = clamp_left(MidiView { zoom, left: t0.saturating_sub(pad) as f64, ..v }, width, span);
+    if rows {
+        let hi = notes.iter().map(|n| i32::from(n.pitch)).max().unwrap_or(60);
+        let lo = notes.iter().map(|n| i32::from(n.pitch)).min().unwrap_or(60);
+        let (min_h, max_h) = ROW_H_RANGE;
+        let row_h = (height / (hi - lo + 3).max(1) as f32).clamp(min_h, max_h);
+        // The highest note's row one row below the top.
+        out = MidiView { row_h, scroll: ((127 - hi - 1).max(0) as f32 * row_h).max(0.0), ..out };
+    }
+    out
+}
+
 /// `v` with its left edge inside the span `lo..hi`.
 fn clamp_left(v: MidiView, width: f32, (lo, hi): (i64, i64)) -> MidiView {
     let Some(z) = v.zoom else { return MidiView { left: lo as f64, ..v } };
@@ -160,6 +182,8 @@ pub fn row_zoom(v: MidiView, factor: f32, y: f32) -> MidiView {
 enum ViewOp {
     Rows(f32),
     Fit,
+    /// Fit the selected notes (or every note in the clip's window), in time and pitch.
+    Notes,
     /// A zoom factor: that many times the Edit window's zoom.
     Factor(f32),
 }
@@ -238,6 +262,9 @@ pub struct MidiEditorState {
     /// The MIDI channel (0-15) the controller lanes show and write; `None`: every channel, each
     /// its own line, new points on the clip's main channel.
     pub ctrl_channel: Option<u8>,
+    /// The lanes follow the selected note: with one note selected they show and write its
+    /// channel (in an MPE clip, that note's own expression), its length marked.
+    pub ctrl_follow_note: bool,
     /// With a key on the Key ruler: only the scale's rows (and those of pitches with notes).
     pub fold_scale: bool,
     /// The MIDI Event List's filters, Insert row and a position being typed.
@@ -247,11 +274,15 @@ pub struct MidiEditorState {
     pub drum_view: Option<bool>,
     /// The drum view shows every named drum, not only the rows with hits.
     pub drum_all_rows: bool,
+    /// The name typed in More › Drum Map for the selected notes' pitch.
+    pub drum_name: String,
     /// The rows the roll was last folded to (0: none), to centre the notes when folding turns
     /// on or off.
     pub fold_seen: u128,
     /// Drawn and dragged notes land on the scale.
     pub keep_scale: bool,
+    /// A moved note's start lands on a grid line (off: it keeps its offset from the grid).
+    pub snap_moves: bool,
     /// The Pencil stamps this chord (`None`: one note).
     pub chord: Option<crate::midi_edit_tools::Chord>,
     /// Of several selected MIDI clips, the one being edited (the others' notes show in their
@@ -271,6 +302,10 @@ pub struct MidiEditorState {
     pub ctrl_drag: Option<crate::midi_lanes::CtrlDrag>,
     /// The controller lanes as last drawn.
     pub drawn_lanes: Vec<crate::midi_lanes::LaneGeometry>,
+    /// Lanes › SysEx: the SysEx lane is shown (after the other lanes).
+    pub sysex_lane: bool,
+    /// A SysEx marker being dragged: its clip and index.
+    pub sysex_drag: Option<(ClipId, usize)>,
     /// The controller point a lane's right-click menu is about.
     pub ctrl_menu: Option<usize>,
     /// The editor's own grid (follows the Edit window's until one is picked).
@@ -281,12 +316,22 @@ pub struct MidiEditorState {
     pub ghost_tracks: Option<Vec<soundcraft_model::TrackId>>,
     /// The piano key held down: its note sounds until it is let go.
     pub piano_key: Option<u8>,
+    /// The pitch a note dragged to another pitch sounds at, while it is dragged.
+    pub drag_heard: Option<u8>,
     /// The hover details shown this frame (a note's or a ghost's).
     pub hover: Option<String>,
     /// A zoom factor `ui.midi_editor` asked for (0: Fit), applied when the roll is laid out.
     pub pending_zoom: Option<f32>,
     /// The zoom factor the view is at, if it is at one.
     pub zoom_factor: Option<f32>,
+    /// A note dragged on a track showing Notes ([`crate::track_notes`]).
+    pub track_drag: Option<crate::track_notes::TrackNoteDrag>,
+    /// The 14-bit and RPN/NRPN lanes shown under the controller lanes.
+    pub wide_lanes: Vec<soundcraft_engine::cmd::midi_wide::WideLane>,
+    /// A freehand drag in one of them: its lane and the (tick, value) points so far.
+    pub wide_draw: Option<(soundcraft_engine::cmd::midi_wide::WideLane, Vec<(i64, i32)>)>,
+    /// The 14-bit and RPN lanes as last drawn.
+    pub drawn_wide: Vec<(soundcraft_engine::cmd::midi_wide::WideLane, Rect)>,
 }
 
 impl Default for MidiEditorState {
@@ -313,12 +358,15 @@ impl Default for MidiEditorState {
             lanes: Vec::new(),
             ctrl_sel: None,
             ctrl_channel: None,
+            ctrl_follow_note: false,
             fold_scale: false,
             event_list: crate::midi_event_list::EventListState::default(),
             drum_view: None,
             drum_all_rows: false,
+            drum_name: String::new(),
             fold_seen: 0,
             keep_scale: false,
+            snap_moves: false,
             chord: None,
             active: None,
             others: Vec::new(),
@@ -327,14 +375,21 @@ impl Default for MidiEditorState {
             ctrls_follow: false,
             ctrl_drag: None,
             drawn_lanes: Vec::new(),
+            sysex_lane: false,
+            sysex_drag: None,
             ctrl_menu: None,
             grid: tools::MidiGrid::default(),
             ghosts: true,
             ghost_tracks: None,
             piano_key: None,
+            drag_heard: None,
             hover: None,
             pending_zoom: None,
             zoom_factor: None,
+            track_drag: None,
+            wide_lanes: Vec::new(),
+            wide_draw: None,
+            drawn_wide: Vec::new(),
         }
     }
 }
@@ -682,7 +737,8 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if ui.checkbox(&mut on, "Audition").on_hover_text("Play a note when it is clicked, moved or drawn").changed() {
             app.midi.audition = on;
         }
-        let lanes_text = if app.midi.lanes.is_empty() { "Lanes".to_string() } else { format!("Lanes ({})", app.midi.lanes.len()) };
+        let shown_lanes = app.midi.lanes.len() + app.midi.wide_lanes.len();
+        let lanes_text = if shown_lanes == 0 { "Lanes".to_string() } else { format!("Lanes ({shown_lanes})") };
         ui.menu_button(lanes_text, |ui| crate::midi_lanes::menu(app, ui, sequence))
             .response
             .on_hover_text("Show CC, pitch bend, aftertouch, poly pressure and program lanes under the velocity lane");
@@ -692,7 +748,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if ui
             .add_enabled(has_drums, egui::Checkbox::new(&mut dv, "Drum View"))
             .on_hover_text("A named row per drum, hits as diamonds")
-            .on_disabled_hover_text("For Juke and the drum synth")
+            .on_disabled_hover_text("For Juke, the drum synth and tracks with a drum map")
             .changed()
         {
             app.midi.drum_view = Some(dv);
@@ -705,6 +761,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         {
             app.midi.drum_all_rows = all_rows;
         }
+        ui.menu_button("Drum Map", |ui| drum_map_menu(app, ui, track, sequence))
+            .response
+            .on_hover_text("Name the drums of this track: the names override the instrument's and give any instrument a drum view");
         // Scale and chords.
         let keyed = !app.engine.session().key_signatures.is_empty();
         let mut fold = app.midi.fold_scale;
@@ -715,6 +774,14 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             .changed()
         {
             app.midi.fold_scale = fold;
+        }
+        let mut snap_moves = app.midi.snap_moves;
+        if ui
+            .checkbox(&mut snap_moves, "Snap Moves to the Grid")
+            .on_hover_text("A moved note's start lands on a grid line; off, it keeps its distance from the grid")
+            .changed()
+        {
+            app.midi.snap_moves = snap_moves;
         }
         let mut keep = app.midi.keep_scale;
         if ui
@@ -777,6 +844,14 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         if ui.checkbox(&mut chase, "Note Chase").on_hover_text("A note already sounding where playback starts is started there").changed() {
             let _ = app.run("midi.note_chase", json!({"on": chase}));
         }
+        let mut split = app.engine.session().edit.flag(soundcraft_engine::edit::SPLIT_NOTES);
+        if ui
+            .checkbox(&mut split, "Split Notes at the Cut")
+            .on_hover_text("Splitting a MIDI clip cuts a note across the cut in two, so both clips play their part of it")
+            .changed()
+        {
+            let _ = app.run("midi.split_notes", json!({"on": split}));
+        }
         let mut follows = clip.follow_chords.is_some();
         if ui
             .checkbox(&mut follows, "Follow Chord Lane")
@@ -805,9 +880,10 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             app.midi.selected = tools::same_pitch_selection(sequence, &app.midi.selected, None);
             ui.close();
         }
-        if ui.button("Select by Rule…").on_hover_text("Select the notes in pitch, velocity, length and beat ranges").clicked() {
+        if ui.button("Select by Rule…").on_hover_text("Select, delete, mute or change the notes in pitch, velocity, length and beat ranges").clicked()
+        {
             app.ops.midi_op = "select notes".into();
-            app.ops.rule_split = false;
+            app.ops.rule_action = "select";
             app.ui.show_midi_ops = true;
             ui.close();
         }
@@ -874,8 +950,12 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if tb.small_button("Fit").on_hover_text("Fit the whole clip (F over the notes)").clicked() {
         view_op = Some(ViewOp::Fit);
     }
+    if tb.small_button("Notes").on_hover_text("Zoom to the selected notes, or to every note").clicked() {
+        view_op = Some(ViewOp::Notes);
+    }
     match app.midi.pending_zoom.take() {
         Some(f) if f > 0.0 => view_op = Some(ViewOp::Factor(f)),
+        Some(f) if f < 0.0 => view_op = Some(ViewOp::Notes),
         Some(_) => view_op = Some(ViewOp::Fit),
         None => {}
     }
@@ -990,9 +1070,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         for k in crate::midi_lanes::lanes_with_data(sequence) {
             crate::midi_lanes::toggle(app, k, true);
         }
+        for l in soundcraft_engine::cmd::midi_wide::lanes_of(sequence) {
+            crate::midi_wide_lanes::toggle(app, l, true);
+        }
+        if !sequence.sysex.is_empty() {
+            app.midi.sysex_lane = true;
+        }
     }
-    // Controller lanes under the velocity lane, shrunk (not below 18 points) to leave the roll 80.
-    let n_lanes = app.midi.lanes.len();
+    // Controller lanes under the velocity lane, shrunk (not below 18 points) to leave the roll 80;
+    // the 14-bit and RPN lanes after them.
+    let n_lanes = app.midi.lanes.len() + app.midi.wide_lanes.len() + usize::from(app.midi.sysex_lane);
     let room = bottom - top - VEL_H - 4.0 - BAR_H - 80.0;
     let lane_h = crate::midi_lanes::lane_height(n_lanes, room);
     let lanes_h = n_lanes as f32 * (lane_h + crate::midi_lanes::LANE_GAP);
@@ -1011,7 +1098,22 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         })
         .collect();
     app.midi.drawn_lanes = lane_rects.clone();
-    let lanes_area = lane_rects.iter().fold(Rect::NOTHING, |a, l| a.union(l.rect));
+    let first_wide = app.midi.lanes.len();
+    let wide_rects: Vec<(soundcraft_engine::cmd::midi_wide::WideLane, Rect)> = (first_wide..)
+        .zip(app.midi.wide_lanes.iter())
+        .map(|(i, l)| {
+            let y = vel.max.y + crate::midi_lanes::LANE_GAP + i as f32 * (lane_h + crate::midi_lanes::LANE_GAP);
+            (*l, Rect::from_min_max(pos2(roll.min.x, y), pos2(roll.max.x, y + lane_h)))
+        })
+        .collect();
+    app.midi.drawn_wide = wide_rects.clone();
+    // The SysEx lane, last.
+    let sysex_rect = app.midi.sysex_lane.then(|| {
+        let i = first_wide + app.midi.wide_lanes.len();
+        let y = vel.max.y + crate::midi_lanes::LANE_GAP + i as f32 * (lane_h + crate::midi_lanes::LANE_GAP);
+        Rect::from_min_max(pos2(roll.min.x, y), pos2(roll.max.x, y + lane_h))
+    });
+    let lanes_area = lane_rects.iter().map(|l| l.rect).chain(wide_rects.iter().map(|w| w.1)).chain(sysex_rect).fold(Rect::NOTHING, |a, r| a.union(r));
     // The clip's view: fitted, and centred on its notes, the first time it opens.
     // Views of clips gone from the session go too.
     app.midi.views.retain(|id, _| s.find_clip(*id).is_some());
@@ -1031,6 +1133,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     match view_op {
         Some(ViewOp::Rows(f)) => view = row_zoom(view, f, roll.height() / 2.0),
         Some(ViewOp::Fit) => view = MidiView { zoom: None, left: span.0 as f64, ..view },
+        Some(ViewOp::Notes) => {
+            let picked: Vec<&soundcraft_midi::Note> = if app.midi.clip == Some(cid) && !app.midi.selected.is_empty() {
+                app.midi.selected.iter().filter_map(|i| sequence.notes.get(*i)).collect()
+            } else {
+                sequence.notes.iter().filter(|n| n.start >= 0 && n.start < len_ticks).collect()
+            };
+            // Folded rows are not semitones: only the time is fitted then.
+            let folded = app.midi.drawn.is_some_and(|g| g.fold != 0);
+            view = fit_notes(view, &picked, width, roll.height(), span, !folded);
+        }
         Some(ViewOp::Factor(f)) => {
             // About the middle of the roll.
             let fit = width / span.1.saturating_sub(span.0).max(1) as f32;
@@ -1075,6 +1187,13 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     app.midi.views.insert(cid, view);
     app.midi.drawn = Some(geo);
     app.midi.scroll = geo.scroll;
+    // An adaptive grid follows the zoom (from the next frame's snapping and lines).
+    if let tools::MidiGrid::Adaptive(t) = app.midi.grid {
+        let a = tools::adaptive_ticks(px_per_tick);
+        if a != t {
+            app.midi.grid = tools::MidiGrid::Adaptive(a);
+        }
+    }
     let row_h = geo.row_h;
     let rows = (roll.height() / row_h).floor() as i32;
     let x_of = |tick: i64| geo.x_of(tick);
@@ -1086,6 +1205,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let scale = clip_key.map(|(k, sc)| soundcraft_engine::vocal::key_set(k, sc));
     // Keep to Scale: a pitch drawn or dragged to goes to the nearest one in the scale.
     let keep_scale = app.midi.keep_scale;
+    let snap_moves = app.midi.snap_moves;
     let to_scale = |p: i32| match scale.filter(|_| keep_scale) {
         Some(set) => tools::nearest_in(set, p),
         None => p,
@@ -1172,6 +1292,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let ghost_notes = midi_ghosts::shown(app, &s, cid);
     let ghost_rects = midi_ghosts::rects(&ghost_notes, &x_of, &y_of, row_h);
     midi_ghosts::draw(&notes_p, &ghost_notes, &ghost_rects);
+    // The take the track is recording, drawn as it is played (it becomes a clip at Stop).
+    if let Some(tr) = s.track(track) {
+        let rec = Tokens::current().rec;
+        for (st, ln, p) in crate::live_midi::take_in_ticks(app, &s, tr, base_tick) {
+            let r = note_rect(st, ln, i32::from(p));
+            if r.intersects(roll) {
+                notes_p.rect(r, 2.0, rec.gamma_multiply(0.75), Stroke::new(1.0, rec), StrokeKind::Inside);
+            }
+        }
+    }
     let sibling_notes = midi_ghosts::siblings(&s, cid);
     let sibling_rects = midi_ghosts::rects(&sibling_notes, &x_of, &y_of, row_h);
     let others = app.midi.others.clone();
@@ -1436,14 +1566,17 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             app.midi.draw = None;
         }
     }
+    let mut hear: Option<u8> = None;
     if resp.dragged()
         && let (Some(d), Some(p)) = (&mut app.midi.drag, resp.interact_pointer_pos())
     {
         let n = d.grabbed;
         match d.edge {
-            // A moved note keeps its offset from the grid; an edge lands on a grid line.
+            // A moved note keeps its offset from the grid (with Snap Moves, its start lands on a
+            // line); an edge lands on a grid line.
             Edge::Move => {
-                d.dx_ticks = snap_rel(f64::from((p.x - d.start.x) / px_per_tick));
+                let raw = f64::from((p.x - d.start.x) / px_per_tick);
+                d.dx_ticks = if snap_moves && !alt { snap(n.start as f64 + raw).saturating_sub(n.start) } else { snap_rel(raw) };
                 // Folded, a row is not a semitone: the grabbed note goes to the row's pitch.
                 d.dy_semi = if geo.fold == 0 { -((p.y - d.start.y) / row_h).round() as i64 } else { i64::from(pitch_at(p.y) - i32::from(n.pitch)) };
                 if scale.is_some() && keep_scale {
@@ -1454,10 +1587,24 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             Edge::Start => d.dx_ticks = snap(geo.tick_at(p.x)).saturating_sub(n.start),
             Edge::End => d.dx_ticks = snap(geo.tick_at(p.x)).saturating_sub(n.end()),
         }
+        if d.edge == Edge::Move && d.dy_semi != 0 {
+            hear = u8::try_from(i64::from(n.pitch).saturating_add(d.dy_semi)).ok().filter(|p| *p <= 127);
+        }
+    }
+    // While a note is dragged to another pitch, that pitch sounds (as a held piano key does).
+    if let Some(h) = hear
+        && app.midi.audition
+        && app.midi.drag_heard != Some(h)
+    {
+        app.midi.drag_heard = Some(h);
+        tools::sound_pitch(app, cid, h);
     }
     if resp.drag_stopped()
         && let Some(d) = app.midi.drag.take()
     {
+        if app.midi.drag_heard.take().is_some() && app.midi.auditioning.is_some() {
+            app.stop_play();
+        }
         if d.from.is_none() && !app.midi.selected.contains(&d.index) {
             app.midi.selected.push(d.index);
         }
@@ -1657,6 +1804,12 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     }
     velocity_lane(app, ui, cid, &sequence.notes, vel, full.min.x, base, &x_of);
     crate::midi_lanes::lanes(app, ui, cid, sequence, &lane_rects, full.min.x, &geo, grid_ticks, len_ticks);
+    for (l, r) in &wide_rects {
+        crate::midi_wide_lanes::lane(app, ui, cid, sequence, *l, *r, full.min.x, &geo, grid_ticks, len_ticks);
+    }
+    if let Some(r) = sysex_rect {
+        crate::midi_sysex_lane::lane(app, ui, cid, sequence, r, full.min.x, &geo, grid_ticks, len_ticks);
+    }
     tools::note_bar(app, ui, cid, Rect::from_min_max(pos2(full.min.x, bottom), pos2(right, full.max.y)), alt);
     if cleanup {
         let rect = Rect::from_min_max(pos2(full.max.x - midi_cleanup_panel::PANEL_W, header.max.y), full.max);
@@ -1773,7 +1926,7 @@ pub fn audition_session(
         }
     }
     let c = copy.find_clip_mut(cid)?;
-    c.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: notes.to_vec(), ctrls: Vec::new() } };
+    c.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: notes.to_vec(), ctrls: Vec::new(), sysex: Vec::new() } };
     c.midi_cleanup = None;
     c.muted = false;
     Some((copy, from, to))
@@ -2127,6 +2280,40 @@ fn pattern_notice(app: &mut SoundApp, ui: &mut Ui, body: Rect, track: soundcraft
             let _ = app.run("pattern.to_midi", json!({"clip": cid.0}));
         }
     });
+}
+
+/// More › Drum Map: a name for the selected notes' pitch, General MIDI names, clear.
+fn drum_map_menu(app: &mut SoundApp, ui: &mut egui::Ui, track: soundcraft_model::TrackId, sequence: &soundcraft_midi::Sequence) {
+    let mut pitches: Vec<u8> = app.midi.selected.iter().filter_map(|i| sequence.notes.get(*i)).map(|n| n.pitch).collect();
+    pitches.sort_unstable();
+    pitches.dedup();
+    let label = match pitches.as_slice() {
+        [] => "Select a note to name its pitch".to_string(),
+        [p] => format!("Name {}:", soundcraft_midi::note_name(*p)),
+        _ => format!("Name {} pitches:", pitches.len()),
+    };
+    ui.label(label);
+    ui.horizontal(|ui| {
+        let r = ui.add_enabled(!pitches.is_empty(), egui::TextEdit::singleline(&mut app.midi.drum_name).desired_width(120.0));
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.add_enabled(!pitches.is_empty(), egui::Button::new("Name")).clicked() || enter) && !pitches.is_empty() {
+            let name = app.midi.drum_name.clone();
+            for p in &pitches {
+                let _ = app.run("track.drum_map", json!({"track": track.0, "pitch": p, "name": name}));
+            }
+            app.midi.drum_view = Some(true);
+        }
+    });
+    if ui.button("General MIDI Names").on_hover_text("Give every pitch without a name its General MIDI drum name").clicked() {
+        let _ = app.run("track.drum_map", json!({"track": track.0, "gm": true}));
+        app.midi.drum_view = Some(true);
+        ui.close();
+    }
+    let has_map = app.engine.session().track(track).is_some_and(|t| !t.drum_map.is_empty());
+    if ui.add_enabled(has_map, egui::Button::new("Clear Drum Map")).clicked() {
+        let _ = app.run("track.drum_map", json!({"track": track.0, "clear": true}));
+        ui.close();
+    }
 }
 
 #[cfg(test)]

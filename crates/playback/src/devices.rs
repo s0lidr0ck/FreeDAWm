@@ -373,6 +373,19 @@ pub(crate) fn named_device(host: &cpal::Host, name: &str, output: bool) -> Optio
     named_devices(host, output).into_iter().find(|(n, _)| n == name).map(|(_, d)| d)
 }
 
+/// Whether audio system `system` lists the output device `name` now: a device that went away
+/// has come back. Never probes ASIO (see [`audio_systems_with`]: a driver may still be loaded),
+/// nor a system that is not on this machine; both answer `false`. Can take a moment: call it off
+/// the UI thread.
+pub fn output_present(system: &str, name: &str) -> bool {
+    if system.eq_ignore_ascii_case("ASIO") {
+        return false;
+    }
+    let Some(id) = cpal::available_hosts().into_iter().find(|id| id.name().eq_ignore_ascii_case(system)) else { return false };
+    let Ok(host) = cpal::host_from_id(id) else { return false };
+    named_device(&host, name, true).is_some()
+}
+
 /// What the user should be told when the device that opened (`system`, `device`; `silent` when
 /// none did) is not the one `cfg` chose: the chosen audio system or output missing, so the
 /// default plays instead, or no device at all. `None` when it is what was chosen.

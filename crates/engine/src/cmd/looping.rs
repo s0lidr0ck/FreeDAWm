@@ -21,8 +21,54 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({}))
         }),
         cmd!(noundo "loop.select", "Select Loop Range", ["Edit"], Some("Ctrl+Alt+L"), "{}: selects the loop's exact range on the selected tracks (all tracks when none is selected) → {start, end}", has_loop, select),
+        cmd!(noundo "transport.skip_add", "Skip Range", [], None, "{start?, end?}: playback jumps over start–end (default: the edit selection), joined with skips it touches → {skips: [{start, end}]}", always, skip_add),
+        cmd!(noundo "transport.skip_clear", "Clear Skip Ranges", [], None, "{at?: position}: takes off the skip range containing `at`, else every one → {skips}", always, skip_clear),
         cmd!(query "loop.get", "Loop", [], None, "{} → {start, end} | null", always, |e, _| Ok(e.session().edit.loop_range.map_or(Value::Null, |r| json!({"start": r.start, "end": r.end})))),
     ]
+}
+
+fn skips_json(s: &Session) -> Value {
+    json!({"skips": s.edit.skips.iter().map(|r| json!({"start": r.start, "end": r.end})).collect::<Vec<_>>()})
+}
+
+/// The most skip ranges a session keeps.
+pub const MAX_SKIPS: usize = 256;
+
+fn skip_add(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "transport.skip_add";
+    let sel = e.session().edit.selection;
+    let st = position_param(e, C, p, "start")?.unwrap_or(sel.start).max(0);
+    let en = position_param(e, C, p, "end")?.unwrap_or(sel.end).max(0);
+    let r = Range::new(st, en);
+    if r.is_empty() {
+        return Err(bad(C, "make a range selection first"));
+    }
+    let skips = &mut e.session_mut().edit.skips;
+    // Joined with every skip it overlaps or touches.
+    let mut joined = r;
+    skips.retain(|k| {
+        let touches = k.start <= joined.end && joined.start <= k.end;
+        if touches {
+            joined = Range::new(joined.start.min(k.start), joined.end.max(k.end));
+        }
+        !touches
+    });
+    if skips.len() >= MAX_SKIPS {
+        return Err(bad(C, "too many skip ranges"));
+    }
+    let at = skips.partition_point(|k| k.start < joined.start);
+    skips.insert(at, joined);
+    Ok(skips_json(e.session()))
+}
+
+fn skip_clear(e: &mut Engine, p: &Value) -> Result<Value> {
+    let at = position_param(e, "transport.skip_clear", p, "at")?;
+    let skips = &mut e.session_mut().edit.skips;
+    match at {
+        Some(at) => skips.retain(|k| !(k.start <= at && at < k.end)),
+        None => skips.clear(),
+    }
+    Ok(skips_json(e.session()))
 }
 
 fn has_loop(e: &Engine) -> std::result::Result<(), String> {
@@ -71,6 +117,11 @@ fn select(e: &mut Engine, _: &Value) -> Result<Value> {
 /// after every command. The loop set this way does not mark the session modified (selecting
 /// never does), so the saved snapshot takes it too.
 pub(crate) fn sync_loop(e: &mut Engine, before: &Session) {
+    // Dynamic Transport keeps the loop apart from the selection: it is set on the ruler or by
+    // Set Loop.
+    if e.session().edit.flag(super::transport::DYNAMIC) {
+        return;
+    }
     let new = e.session().edit.selection;
     if new.is_empty() || new == before.edit.selection || e.session().edit.loop_range == Some(new) {
         return;

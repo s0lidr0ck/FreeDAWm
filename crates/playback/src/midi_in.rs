@@ -167,14 +167,30 @@ fn filter_bit(msg: [u8; 3]) -> u32 {
     }
 }
 
-/// A recorded event: its timeline sample, port slot, message and loop pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A recorded event: its timeline sample, port slot, message and loop pass. A System Exclusive
+/// message has `msg` `[0xF0, 0, 0]` and its whole bytes in `sysex` (`F0` first, `F7` last).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RecordedMidi {
     pub at: i64,
     pub port: u8,
     pub msg: [u8; 3],
     /// Loop recording: the pass it was played in (0 for the first, and without a loop).
     pub pass: u16,
+    pub sysex: Option<Arc<[u8]>>,
+}
+
+/// SysEx messages in flight between the ports and the UI thread (a round-robin pool: a message
+/// is overwritten after this many more came in).
+pub const SYSEX_SLOTS: usize = 64;
+
+/// SysEx messages one block keeps for recording (the rest of a burst is dropped and counted).
+pub const SYSEX_PER_BLOCK: usize = 16;
+
+/// A SysEx in the pool: its generation (which message of the slot) and bytes.
+#[derive(Default)]
+struct SysexSlot {
+    generation: u8,
+    bytes: Vec<u8>,
 }
 
 /// The rings, port identities and activity of the open MIDI input ports (see the module docs).
@@ -211,6 +227,39 @@ pub struct MidiHub {
     /// Claimed and learnt messages, and MIDI Machine Control, for the UI thread (several ports'
     /// driver threads push: a multi-producer ring).
     control: soundcraft_mix::external_midi::OutRing,
+    /// MIDI clock and timecode in: the sync messages the ports get, for the UI thread
+    /// ([`MidiHub::take_sync`]), while [`MidiHub::set_sync_in`] is on.
+    sync: soundcraft_mix::external_midi::OutRing,
+    sync_on: AtomicBool,
+    /// SysEx in: the bytes, written by the ports' driver threads and read by the UI thread (the
+    /// audio thread never touches them, only the slot numbers).
+    sysex_pool: Box<[std::sync::Mutex<SysexSlot>]>,
+    sysex_next: AtomicU32,
+    /// SysEx arrivals for the audio thread: (stamp, slot | generation << 8 | port << 16).
+    sysex_in: soundcraft_mix::external_midi::OutRing,
+    /// The arrivals of the block being rendered (audio thread only: written by `drain_into`,
+    /// read by the record and capture calls after it).
+    block_sysex: [(AtomicU64, AtomicU64); SYSEX_PER_BLOCK],
+    block_sysex_len: AtomicUsize,
+    /// SysEx messages lost: too long, a burst too big for a block, or overwritten before the UI
+    /// thread took them.
+    sysex_dropped: AtomicU64,
+}
+
+/// A sync message handed to the UI thread by [`MidiHub::take_sync`]: the port slot, when it came
+/// (µs on the hub's clock) and its bytes (`bytes[..len]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncMsg {
+    pub slot: u8,
+    pub at: u64,
+    pub bytes: [u8; 10],
+    pub len: usize,
+}
+
+impl SyncMsg {
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes.get(..self.len).unwrap_or(&[])
+    }
 }
 
 /// One message handed to the UI thread by [`MidiHub::take_control`].
@@ -259,6 +308,14 @@ impl MidiHub {
             claims: (0..MAX_MIDI_PORTS * CLAIM_BITS / 64).map(|_| AtomicU64::new(0)).collect(),
             learning: AtomicBool::new(false),
             control: soundcraft_mix::external_midi::OutRing::new(1024),
+            sync: soundcraft_mix::external_midi::OutRing::new(1024),
+            sync_on: AtomicBool::new(false),
+            sysex_pool: (0..SYSEX_SLOTS).map(|_| std::sync::Mutex::new(SysexSlot::default())).collect(),
+            sysex_next: AtomicU32::new(0),
+            sysex_in: soundcraft_mix::external_midi::OutRing::new(SYSEX_SLOTS),
+            block_sysex: std::array::from_fn(|_| (AtomicU64::new(0), AtomicU64::new(0))),
+            block_sysex_len: AtomicUsize::new(0),
+            sysex_dropped: AtomicU64::new(0),
         })
     }
 
@@ -309,6 +366,32 @@ impl MidiHub {
     }
 
     /// MIDI Thru: record-armed instrument and MIDI tracks play their live input.
+    /// MIDI clock and timecode in on or off: on, the ports' sync messages are kept for
+    /// [`MidiHub::take_sync`].
+    pub fn set_sync_in(&self, on: bool) {
+        self.sync_on.store(on, Ordering::Relaxed);
+    }
+
+    /// UI thread: the sync messages since the last call, oldest first.
+    pub fn take_sync(&self, out: &mut Vec<SyncMsg>) {
+        while let Some((a, b)) = self.sync.pop() {
+            let p = b.to_le_bytes();
+            let (slot, at) = ((a & 0xFF) as u8, a >> 8);
+            let msg = if p[0] == 0xF0 {
+                // A full frame, packed as F0 hr mn sc fr.
+                SyncMsg { slot, at, bytes: [0xF0, 0x7F, 0x7F, 0x01, 0x01, p[1], p[2], p[3], p[4], 0xF7], len: 10 }
+            } else {
+                let len = match p[0] {
+                    0xF2 => 3,
+                    0xF1 => 2,
+                    _ => 1,
+                };
+                SyncMsg { slot, at, bytes: [p[0], p[1], p[2], 0, 0, 0, 0, 0, 0, 0], len }
+            };
+            out.push(msg);
+        }
+    }
+
     pub fn set_thru(&self, on: bool) {
         self.thru.store(on, Ordering::Relaxed);
     }
@@ -423,7 +506,7 @@ impl MidiHub {
 
     /// A sender for slot `slot` (one per port connection: each ring has one producer).
     pub fn sink(self: &Arc<Self>, slot: usize) -> PortSink {
-        PortSink { hub: Arc::clone(self), slot }
+        PortSink { hub: Arc::clone(self), slot, partial: std::sync::Mutex::new((0, Vec::new())) }
     }
 
     /// Musical Typing's sender (its producer is the UI thread), its slot opened as the port
@@ -459,6 +542,35 @@ impl MidiHub {
             }
         }
         live.sort();
+        // SysEx is not played live: it is only recorded and captured.
+        let mut n = 0;
+        while let Some((stamp, packed)) = self.sysex_in.pop() {
+            match self.block_sysex.get(n) {
+                Some((a, b)) => {
+                    a.store(stamp, Ordering::Relaxed);
+                    b.store(packed, Ordering::Relaxed);
+                    n += 1;
+                }
+                None => {
+                    self.sysex_dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        self.block_sysex_len.store(n, Ordering::Relaxed);
+    }
+
+    /// The block holds anything to record or capture: live events or SysEx.
+    pub fn heard(&self, live: &LiveMidi) -> bool {
+        !live.is_empty() || self.block_sysex_len.load(Ordering::Relaxed) > 0
+    }
+
+    /// The block's SysEx arrivals as (stamp, port slot, record-ring message `[F0, slot, generation]`).
+    fn block_sysex(&self) -> impl Iterator<Item = (u64, u8, [u8; 3])> + '_ {
+        let n = self.block_sysex_len.load(Ordering::Relaxed);
+        self.block_sysex.iter().take(n).map(|(a, b)| {
+            let p = b.load(Ordering::Relaxed);
+            (a.load(Ordering::Relaxed), ((p >> 16) & 0xFF) as u8, [0xF0, (p & 0xFF) as u8, ((p >> 8) & 0xFF) as u8])
+        })
     }
 
     /// Audio thread: empties the rings unheard (nothing renders this block).
@@ -466,6 +578,49 @@ impl MidiHub {
         for ring in &self.rings {
             while ring.pop().is_some() {}
         }
+        while self.sysex_in.pop().is_some() {}
+        self.block_sysex_len.store(0, Ordering::Relaxed);
+    }
+
+    /// SysEx messages lost since the hub was made (too long, too many at once, or not taken in
+    /// time by the UI thread).
+    pub fn sysex_dropped(&self) -> u64 {
+        self.sysex_dropped.load(Ordering::Relaxed)
+    }
+
+    /// Driver thread: a whole SysEx from port slot `slot`, stamped `stamp`, into the pool for the
+    /// audio thread to place. Too long, it is dropped and counted.
+    fn sysex(&self, slot: usize, stamp: u64, bytes: &[u8]) {
+        if bytes.len() > soundcraft_midi::MAX_SYSEX || bytes.len() < 3 {
+            self.sysex_dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        let n = self.sysex_next.fetch_add(1, Ordering::Relaxed) as usize;
+        let (idx, generation) = (n % SYSEX_SLOTS, ((n / SYSEX_SLOTS) & 0xFF) as u8);
+        let Some(cell) = self.sysex_pool.get(idx) else { return };
+        if let Ok(mut c) = cell.lock() {
+            c.generation = generation;
+            c.bytes.clear();
+            c.bytes.extend_from_slice(bytes);
+        }
+        let packed = idx as u64 | (u64::from(generation) << 8) | ((slot as u64 & 0xFF) << 16);
+        if !self.sysex_in.push(stamp, packed) {
+            self.sysex_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// UI thread: the bytes of the SysEx a record-ring message `[F0, slot, generation]` points at, if
+    /// it was not overwritten since.
+    fn sysex_bytes(&self, msg: [u8; 3]) -> Option<Arc<[u8]>> {
+        let found = self
+            .sysex_pool
+            .get(usize::from(msg[1]))
+            .and_then(|c| c.lock().ok())
+            .and_then(|c| (c.generation == msg[2] && !c.bytes.is_empty()).then(|| Arc::from(c.bytes.as_slice())));
+        if found.is_none() {
+            self.sysex_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        found
     }
 
     /// Audio thread, while recording: the block's events for the UI thread, with the loop pass,
@@ -481,6 +636,16 @@ impl MidiHub {
         // only ever records at full speed (`Player::can_record` and `Player::set_speed` refuse
         // varispeed while recording). Were that to change, the age would scale by the speed.
         heard_into(&self.record, live, base, now, rate, pass, floor);
+        self.sysex_into(&self.record, base, now, rate, pass, floor);
+    }
+
+    /// The block's SysEx into `ring`, placed as [`heard_into`] places events.
+    fn sysex_into(&self, ring: &MidiRing, base: i64, now: u64, rate: f64, pass: u16, floor: i64) {
+        for (stamp, port, msg) in self.block_sysex() {
+            let age = ((now as f64 - stamp as f64) * rate / 1e6).round() as i64;
+            let at = base.saturating_sub(age).max(floor);
+            ring.push(at as u64, pack(msg) | (u64::from(port) << 24) | (u64::from(pass) << 32));
+        }
     }
 
     /// Audio thread, while playing and not recording: the block's events for Capture MIDI, placed
@@ -488,6 +653,7 @@ impl MidiHub {
     /// UI falls behind, what does not fit is dropped. Never allocates.
     pub fn capture_block(&self, live: &LiveMidi, base: i64, now: u64, rate: f64, pass: u16) {
         heard_into(&self.capture, live, base, now, rate, pass, i64::MIN);
+        self.sysex_into(&self.capture, base, now, rate, pass, i64::MIN);
     }
 
     /// Audio thread, with the transport stopped: the block's events for Capture MIDI on the
@@ -499,16 +665,37 @@ impl MidiHub {
             let packed = pack(e.msg) | (u64::from(e.port) << 24) | (u64::from(LISTENING) << 32);
             self.capture.push(at as u64, packed);
         }
+        for (stamp, port, msg) in self.block_sysex() {
+            let at = (stamp as f64 * rate / 1e6).round() as i64;
+            self.capture.push(at as u64, pack(msg) | (u64::from(port) << 24) | (u64::from(LISTENING) << 32));
+        }
     }
 
     /// UI thread: what was captured since the last call.
     pub fn take_captured(&self, out: &mut Vec<RecordedMidi>) {
-        drain_heard(&self.capture, out);
+        self.drain_heard(&self.capture, out);
     }
 
     /// UI thread: what was recorded since the last call.
     pub fn take_recorded(&self, out: &mut Vec<RecordedMidi>) {
-        drain_heard(&self.record, out);
+        self.drain_heard(&self.record, out);
+    }
+
+    /// Everything in a ring [`heard_into`] filled, as recorded events (a SysEx with its bytes, or
+    /// left out when they were overwritten before this).
+    fn drain_heard(&self, ring: &MidiRing, out: &mut Vec<RecordedMidi>) {
+        while let Some((at, packed)) = ring.pop() {
+            let mut msg = unpack(packed);
+            let mut sysex = None;
+            if msg[0] == 0xF0 {
+                sysex = self.sysex_bytes(msg);
+                if sysex.is_none() {
+                    continue;
+                }
+                msg = [0xF0, 0, 0];
+            }
+            out.push(RecordedMidi { at: at as i64, port: ((packed >> 24) & 0xFF) as u8, msg, pass: ((packed >> 32) & 0xFFFF) as u16, sysex });
+        }
     }
 
     /// Recorded events lost because the UI thread fell behind.
@@ -528,17 +715,12 @@ fn heard_into(ring: &MidiRing, live: &LiveMidi, base: i64, now: u64, rate: f64, 
     }
 }
 
-/// Everything in a ring [`heard_into`] filled, as recorded events.
-fn drain_heard(ring: &MidiRing, out: &mut Vec<RecordedMidi>) {
-    while let Some((at, packed)) = ring.pop() {
-        out.push(RecordedMidi { at: at as i64, port: ((packed >> 24) & 0xFF) as u8, msg: unpack(packed), pass: ((packed >> 32) & 0xFFFF) as u16 });
-    }
-}
-
 /// The sending end of one port slot's ring, handed to the port's driver callback.
 pub struct PortSink {
     hub: Arc<MidiHub>,
     slot: usize,
+    /// A SysEx begun in an earlier callback and not yet ended (`F7`), with its stamp.
+    partial: std::sync::Mutex<(u64, Vec<u8>)>,
 }
 
 impl PortSink {
@@ -552,15 +734,58 @@ impl PortSink {
         self.send_at(self.hub.now_us(), bytes);
     }
 
+    /// A SysEx or a piece of one (see [`PortSink::send_at`]): true when `bytes` was taken.
+    fn sysex_part(&self, stamp: u64, bytes: &[u8]) -> bool {
+        let first = bytes.first().copied().unwrap_or(0);
+        let Ok(mut p) = self.partial.lock() else { return false };
+        if first == 0xF0 {
+            p.0 = stamp;
+            p.1.clear();
+        } else if p.1.is_empty() || (first >= 0x80 && first != 0xF7) {
+            // Not a continuation. Anything but a real-time byte (which may come between the
+            // pieces) ends a SysEx left open, unfinished.
+            if first < 0xF8 {
+                p.1.clear();
+            }
+            return false;
+        }
+        if p.1.len() <= soundcraft_midi::MAX_SYSEX {
+            let room = soundcraft_midi::MAX_SYSEX + 1 - p.1.len();
+            p.1.extend_from_slice(bytes.get(..bytes.len().min(room)).unwrap_or(&[]));
+        }
+        if bytes.last() == Some(&0xF7) {
+            let (at, msg) = (p.0, std::mem::take(&mut p.1));
+            drop(p);
+            self.hub.sysex(self.slot, at, &msg);
+        }
+        true
+    }
+
     /// [`PortSink::send`] stamped `stamp` (µs since the hub was made), less the port's timing
     /// offset ([`MidiHub::set_offset`]).
     pub fn send_at(&self, stamp: u64, bytes: &[u8]) {
         let late = self.hub.offsets.get(self.slot).map_or(0, |o| o.load(Ordering::Relaxed));
         let stamp = stamp.saturating_sub(u64::from(late)).max(1);
+        // MIDI clock and timecode in, for the UI thread (`sync_in`).
+        if crate::sync_in::is_sync(bytes) {
+            if self.hub.sync_on.load(Ordering::Relaxed) {
+                let p = match bytes {
+                    [0xF0, _, _, _, _, hr, mn, sc, fr, ..] => [0xF0, *hr, *mn, *sc, *fr, 0, 0, 0],
+                    _ => [bytes.first().copied().unwrap_or(0), bytes.get(1).copied().unwrap_or(0), bytes.get(2).copied().unwrap_or(0), 0, 0, 0, 0, 0],
+                };
+                self.hub.sync.push((stamp << 8) | (self.slot as u64 & 0xFF), u64::from_le_bytes(p));
+            }
+            return;
+        }
         // MIDI Machine Control: the transport, for the UI thread.
         if let [0xF0, 0x7F, device, 0x06, command, ..] = bytes {
             let (a, b) = ((self.slot as u64 & 0xFF) | (1 << 9), u64::from_le_bytes([*device, *command, 0, 0, 0, 0, 0, 0]));
             self.hub.control.push(a, b);
+            return;
+        }
+        // System Exclusive: recorded and captured, never played live. A driver may hand one
+        // over in pieces: data bytes after an `F0` without its `F7` continue it.
+        if self.sysex_part(stamp, bytes) {
             return;
         }
         let Some(msg) = parse(bytes) else { return };
@@ -670,7 +895,7 @@ impl MidiInputs {
         MidiInputs { backend, hub, ports: Vec::new(), choices, reserved: Vec::new(), offsets: BTreeMap::new(), last_scan: None }
     }
 
-    /// The system's ports (`None` where there is no MIDI backend: the web build).
+    /// The system's ports (`None` where there is no MIDI backend).
     pub fn system(hub: Arc<MidiHub>, choices: BTreeMap<String, bool>) -> Option<MidiInputs> {
         system_backend().map(|b| MidiInputs::new(b, hub, choices))
     }
@@ -865,7 +1090,6 @@ impl DriverClock {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod system {
     use super::{MidiBackend, MidiConnection, PortSink};
 
@@ -878,7 +1102,7 @@ mod system {
     fn client() -> Result<midir::MidiInput, String> {
         let mut m = midir::MidiInput::new("FreeDAWm").map_err(|e| e.to_string())?;
         // SysEx comes through (MIDI Machine Control); the clock and active sensing do not.
-        m.ignore(midir::Ignore::TimeAndActiveSense);
+        m.ignore(midir::Ignore::ActiveSense);
         Ok(m)
     }
 
@@ -889,7 +1113,7 @@ mod system {
     pub fn open_raw(name: &str, to: std::sync::mpsc::Sender<Vec<u8>>) -> Result<Box<dyn MidiConnection>, String> {
         let mut m = midir::MidiInput::new("FreeDAWm surface").map_err(|e| e.to_string())?;
         // SysEx too (handshakes), but not the clock and active sensing.
-        m.ignore(midir::Ignore::TimeAndActiveSense);
+        m.ignore(midir::Ignore::ActiveSense);
         let port = m.ports().into_iter().find(|p| m.port_name(p).ok().as_deref() == Some(name)).ok_or_else(|| "not found".to_string())?;
         let conn = m
             .connect(
@@ -939,32 +1163,17 @@ mod system {
 /// Opens the system's input port `name` for a control surface: every message, SysEx included,
 /// goes to `to` as it comes (from the driver's thread). Dropping the connection closes the port.
 pub fn open_raw_input(name: &str, to: std::sync::mpsc::Sender<Vec<u8>>) -> Result<Box<dyn MidiConnection>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        system::open_raw(name, to)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = to;
-        Err(format!("{name}: no MIDI input here"))
-    }
+    system::open_raw(name, to)
 }
 
-/// The system's input port names (empty on the web).
+/// The system's input port names.
 pub fn system_port_names() -> Vec<String> {
     system_backend().map(|mut b| b.ports()).unwrap_or_default()
 }
 
-/// The system's MIDI backend (`None` on the web).
+/// The system's MIDI backend.
 pub fn system_backend() -> Option<Box<dyn MidiBackend>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Some(Box::new(system::Midir))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
+    Some(Box::new(system::Midir))
 }
 
 /// A backend with ports a test adds and removes, and the sinks of the ports it opened (to
@@ -1091,6 +1300,34 @@ impl MidiBackend for FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_messages_reach_the_ui_only_while_sync_in_is_on() {
+        let hub = MidiHub::new();
+        let sink = hub.sink(2);
+        sink.send_at(100, &[0xFA]);
+        let mut got = Vec::new();
+        hub.take_sync(&mut got);
+        assert!(got.is_empty(), "off: dropped");
+        hub.set_sync_in(true);
+        sink.send_at(200, &[0xF8]);
+        sink.send_at(300, &[0xF2, 4, 1]);
+        sink.send_at(400, &[0xF1, 0x23]);
+        sink.send_at(500, &[0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x21, 2, 3, 4, 0xF7]);
+        hub.take_sync(&mut got);
+        let seen: Vec<(u8, u64, Vec<u8>)> = got.iter().map(|m| (m.slot, m.at, m.bytes().to_vec())).collect();
+        assert_eq!(
+            seen,
+            vec![
+                (2, 200, vec![0xF8]),
+                (2, 300, vec![0xF2, 4, 1]),
+                (2, 400, vec![0xF1, 0x23]),
+                (2, 500, vec![0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x21, 2, 3, 4, 0xF7])
+            ]
+        );
+        // Never played or recorded.
+        assert!(hub.rings[2].pop().is_none());
+    }
 
     #[test]
     fn a_claimed_control_is_handed_over_instead_of_played_and_mmc_too() {
@@ -1247,8 +1484,8 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                RecordedMidi { at: 47_904, port: 2, msg: [0x91, 64, 90], pass: 3 },
-                RecordedMidi { at: 48_048, port: 2, msg: [0x81, 64, 0], pass: 3 }
+                RecordedMidi { at: 47_904, port: 2, msg: [0x91, 64, 90], pass: 3, sysex: None },
+                RecordedMidi { at: 48_048, port: 2, msg: [0x81, 64, 0], pass: 3, sysex: None }
             ]
         );
         // With a floor (the take's start): nothing before it.
@@ -1256,6 +1493,53 @@ mod tests {
         out.clear();
         hub.take_recorded(&mut out);
         assert_eq!(out.iter().map(|x| x.at).collect::<Vec<_>>(), vec![48_000, 48_048]);
+    }
+
+    #[test]
+    fn a_sysex_in_pieces_is_recorded_whole_at_its_start_and_never_played() {
+        let hub = MidiHub::new();
+        hub.set_slot(2, Some("Synth"));
+        let k = hub.sink(2);
+        // Two driver callbacks, a clock byte between them (it leaves the SysEx open).
+        k.send_at(8_000, &[0xF0, 0x43, 0x10]);
+        k.send_at(8_500, &[0xF8]);
+        k.send_at(9_000, &[0x4C, 0x00, 0xF7]);
+        k.send_at(9_500, &[0x90, 60, 100]);
+        let mut live = LiveMidi::new();
+        hub.drain_into(&mut live, 10_000, 64, 48_000.0);
+        assert_eq!(live.events().iter().map(|e| e.msg).collect::<Vec<_>>(), vec![[0x90, 60, 100]], "the instrument hears only the note");
+        assert!(hub.heard(&live));
+        hub.record_block(&live, 48_000, 10_000, 48_000.0, 1, i64::MIN);
+        let mut out = Vec::new();
+        hub.take_recorded(&mut out);
+        let sx: Vec<_> = out.iter().filter(|r| r.sysex.is_some()).collect();
+        assert_eq!(sx.len(), 1);
+        assert_eq!((sx[0].at, sx[0].port, sx[0].msg, sx[0].pass), (47_904, 2, [0xF0, 0, 0], 1), "placed from when it began");
+        assert_eq!(sx[0].sysex.as_deref(), Some(&[0xF0, 0x43, 0x10, 0x4C, 0x00, 0xF7][..]));
+        // Stopped, it is captured on the listening clock; a SysEx alone is enough to listen.
+        k.send_at(20_000, &[0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7]);
+        hub.drain_into(&mut live, 21_000, 64, 48_000.0);
+        assert!(live.is_empty() && hub.heard(&live));
+        hub.listen_block(&live, 48_000.0);
+        let mut cap = Vec::new();
+        hub.take_captured(&mut cap);
+        assert_eq!(cap.len(), 1);
+        assert_eq!((cap[0].at, cap[0].pass), (960, LISTENING));
+        // Not taken before many more came in: it is lost and counted, never wrong bytes.
+        k.send_at(30_000, &[0xF0, 0x01, 0xF7]);
+        hub.drain_into(&mut live, 31_000, 64, 48_000.0);
+        hub.capture_block(&live, 0, 31_000, 48_000.0, 0);
+        for i in 0..SYSEX_SLOTS {
+            hub.sysex(2, 40_000, &[0xF0, i as u8 & 0x7F, 0xF7]);
+        }
+        let before = hub.sysex_dropped();
+        cap.clear();
+        hub.take_captured(&mut cap);
+        assert!(cap.is_empty());
+        assert_eq!(hub.sysex_dropped(), before + 1);
+        // Too long: dropped and counted.
+        k.send_at(50_000, &[&[0xF0][..], &vec![0x01; soundcraft_midi::MAX_SYSEX], &[0xF7]].concat());
+        assert_eq!(hub.sysex_dropped(), before + 2);
     }
 
     #[test]
@@ -1268,7 +1552,7 @@ mod tests {
         hub.take_recorded(&mut rec);
         hub.take_captured(&mut cap);
         assert!(rec.is_empty(), "not a take's");
-        assert_eq!(cap, vec![RecordedMidi { at: 47_952, port: 1, msg: [0x90, 60, 90], pass: 2 }]);
+        assert_eq!(cap, vec![RecordedMidi { at: 47_952, port: 1, msg: [0x90, 60, 90], pass: 2, sysex: None }]);
     }
 
     #[test]

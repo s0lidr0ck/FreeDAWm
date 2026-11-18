@@ -1,6 +1,5 @@
 //! Model downloads in the app, against a local HTTP server (no real network): the job dialog's
 //! Download button, the personal-use confirm, and the control methods.
-#![cfg(not(target_arch = "wasm32"))]
 
 use egui::vec2;
 use egui_kittest::{

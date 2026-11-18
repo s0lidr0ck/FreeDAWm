@@ -11,6 +11,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.dock", "Arrange Panel", "", None),
     ("ui.capture_midi", "Capture MIDI", "Event > More MIDI > Capture MIDI", None),
     ("ui.midi_undo_pass", "Undo Last Pass", "Event > More MIDI > Undo Last Pass", None),
+    ("ui.midi_erase_held", "Erase Held Notes", "Event > More MIDI > Erase Held Notes", None),
+    ("ui.midi_own_channels", "Give Notes Their Own Channels", "", None),
+    ("ui.midi_clear_expression", "Clear the Note's Expression", "", None),
     ("window.step_input", "Step Input", "Event > More MIDI > Step Input", None),
     ("ui.quantize_audio", "Quantize Audio...", "Clip > Quantize Audio...", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
@@ -18,6 +21,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
     ("window.toggle_mix_edit", "Toggle Mix/Edit", "", Some("Cmd+=")),
     ("window.mix_separate", "Mix in Separate Window", "", None),
+    ("window.new_mix", "New Mix Window...", "", None),
     ("window.vocal_separate", "Vocal Editor in Separate Window", "", None),
     ("window.midi_editor_separate", "MIDI Editor in Separate Window", "", None),
     // Window › Sync: what the Edit and Mix windows share (`window_sync`).
@@ -32,6 +36,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.notes", "Notes", "", None),
     ("window.loudness", "Loudness Meter", "", None),
     ("window.mix_snapshots", "Mix Snapshots", "", None),
+    ("window.set_list", "Set List", "", None),
     ("window.control_room", "Control Room", "", None),
     ("ui.loudness_reset", "Reset Loudness Meter", "", None),
     ("window.lyrics", "Lyrics", "", None),
@@ -62,6 +67,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.metadata", "Metadata Inspector", "Window > Metadata Inspector", None),
     ("window.event_list", "MIDI Event List", "Window > MIDI Event List", Some("Alt+=")),
     ("window.midi_keyboard", "Musical Typing", "Window > Musical Typing", Some("Shift+K")),
+    ("window.chord_pads", "Chord Pads", "", None),
     // Ctrl+Shift+K is Export Clips as Files (Cmd+Shift+K) off macOS, so computer keys take Cmd+Alt+K.
     ("ui.musical_typing", "Computer Keys Play Notes", "", Some("Cmd+Alt+K")),
     ("window.workspace", "Workspace", "Window > New Workspace > Default", Some("Alt+I")),
@@ -98,12 +104,16 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.scout.profile_export", "Export Sound Profile…", "", None),
     ("ui.scout.capture_stems", "Capture Profiles per Stem", "", None),
     ("window.beat_detective", "Beat Detective", "", None),
+    ("window.process_history", "Process History", "", None),
+    ("window.sample_editor", "Sample Editor", "", None),
+    ("window.arrangements", "Arrangements", "", None),
     ("window.tempo_ops", "Tempo Operations", "", None),
     ("window.time_ops", "Time Operations", "", None),
     ("window.midi_ops", "MIDI Operations", "", None),
     ("window.rtp", "MIDI Real-Time Properties", "", None),
     ("window.input_quantize", "Input Quantize", "", None),
     ("window.click_countoff", "Click/Countoff", "", None),
+    ("window.disk_allocation", "Disk Allocation", "", None),
     ("window.midi_offsets", "MIDI Track Offsets", "", None),
     ("window.playback_engine", "Playback Engine", "", None),
     ("ui.audio_device", "Audio Device", "", None),
@@ -120,6 +130,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.preferences", "Preferences", "", None),
     ("ui.meter_ballistics", "Meter Ballistics", "", None),
     ("ui.copy_imported_audio", "Copy Imported Audio into the Project", "", None),
+    ("ui.plugin_process", "Run CLAP and VST3 Plug-ins in Their Own Process", "", None),
+    ("ui.plugin_restart", "Restart Plug-in", "", None),
     // The monitor stage (`monitor_ui`): heard on this computer, never in a bounce.
     ("monitor.ear", "Ear Correction", "", None),
     ("monitor.sim", "Simulated Output", "", None),
@@ -269,6 +281,9 @@ const DIALOG_COMMANDS: &[&str] = &[
     "transport.varispeed",
     "clip.transpose",
     "clip.loop_in_place",
+    "clip.elastic_properties",
+    "track.trim_automation_write",
+    "track.rename_selected",
     "lyrics.find",
     "track.new",
     "file.bounce_mix",
@@ -276,6 +291,7 @@ const DIALOG_COMMANDS: &[&str] = &[
     "ui.new_from_template",
     "file.import_audio",
     "file.import_midi",
+    "file.import_musicxml",
     "session.open",
     "session.save",
     "session.save_as",
@@ -319,8 +335,6 @@ pub struct Line {
     /// Where it is shown, `Menu > Submenu > Item`.
     pub display: &'static str,
     pub target: Target,
-    /// Left out of the web build.
-    pub desktop: bool,
 }
 
 fn parse_line(raw: &'static str) -> Option<Line> {
@@ -328,10 +342,6 @@ fn parse_line(raw: &'static str) -> Option<Line> {
     if line.is_empty() || line.starts_with("//") {
         return None;
     }
-    let (line, desktop) = match line.strip_suffix("[desktop]") {
-        Some(l) => (l.trim_end(), true),
-        None => (line, false),
-    };
     let (display, target) = match line.split_once(" = ") {
         Some((d, t)) => (d.trim(), t.trim()),
         None => (line, ""),
@@ -349,7 +359,7 @@ fn parse_line(raw: &'static str) -> Option<Line> {
     } else {
         Target::Path(target)
     };
-    Some(Line { display, target, desktop })
+    Some(Line { display, target })
 }
 
 /// Every line of `menubar.txt`, parsed once.
@@ -358,7 +368,7 @@ pub fn layout() -> &'static [Line] {
     LINES.get_or_init(|| MENUBAR.lines().filter_map(parse_line).collect())
 }
 
-/// The catalog or UI path a shown menu path runs through (`Window > More > Search` →
+/// The catalog or UI path a shown menu path runs through (`Window > Search` →
 /// `Window > Pro Tools Search`); any other path is returned as it is.
 pub fn source_path(path: &str) -> &str {
     layout()
@@ -373,7 +383,7 @@ pub fn source_path(path: &str) -> &str {
 
 /// Why the menu item at `path` is greyed out as "coming soon", if it is: `path` is its shown path,
 /// or a catalog path in the same menu with the same label (Event › MIDI Operations › Change
-/// Velocity… is shown as Event › More MIDI › Change Velocity…).
+/// Velocity… is shown as Event › Change Velocity…).
 pub fn soon_reason(path: &str) -> Option<&'static str> {
     fn ends(p: &str) -> (Option<&str>, Option<&str>) {
         (p.split(" > ").next(), p.rsplit(" > ").next())
@@ -400,7 +410,17 @@ pub fn menu_location(id: &str) -> Option<String> {
         }
         map
     });
-    places.get(id).cloned()
+    places.get(id).cloned().or_else(|| {
+        // Off the generated menus: the hand-built FreeDAWm menu, and the Options settings that
+        // moved to Setup › Preferences….
+        if crate::preferences::FROM_OPTIONS.contains(&id) {
+            Some("Setup › Preferences…".into())
+        } else if matches!(id, "window.tour" | "window.about" | "window.session_info" | "window.audio_health") {
+            Some("FreeDAWm".into())
+        } else {
+            None
+        }
+    })
 }
 
 fn collect_places(n: &MenuNode, extra: &[(&str, &str)], out: &mut Vec<(String, String)>) {
@@ -481,9 +501,6 @@ fn insert_line(roots: &mut Vec<MenuNode>, line: &Line) {
 pub fn tree() -> Vec<MenuNode> {
     let mut roots: Vec<MenuNode> = Vec::new();
     for line in layout() {
-        if line.desktop && cfg!(target_arch = "wasm32") {
-            continue;
-        }
         insert_line(&mut roots, line);
     }
     roots
@@ -528,6 +545,9 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                 brand(ui, &mut |ui| {
                     if ui.button("About FreeDAWm").clicked() {
                         app.ui.show_about = true;
+                    }
+                    if ui.button("Tour of FreeDAWm").clicked() {
+                        let _ = app.run("window.tour", json!({}));
                     }
                     if ui.button("Session Info").clicked() {
                         app.ui.show_session_info = true;
@@ -711,15 +731,75 @@ pub fn rulers_submenu(app: &mut SoundApp, ui: &mut egui::Ui) {
 
 /// Why a menu item is greyed out: the item's own reason, or the command's.
 fn disabled_reason(app: &SoundApp, id: Option<&str>) -> Option<String> {
-    let id = id?;
+    availability(app, id?).err()
+}
+
+/// Whether `id` names a UI-layer command (one [`run_ui_command`] handles, listed in
+/// [`UI_COMMANDS`]) rather than an engine command.
+pub fn is_ui_command(id: &str) -> bool {
+    UI_COMMANDS.iter().any(|c| c.0 == id)
+}
+
+/// Whether the menu item running `id` can be clicked now, and if not, why (its hover text). The
+/// one rule for every menu presentation: UI-layer commands answer here, engine commands through
+/// their own `enabled`; an id that is neither is greyed out and says so.
+pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
+    let when = |ok: bool, why: &str| if ok { Ok(()) } else { Err(why.to_string()) };
     match id {
-        "ui.mix.slim_editors" => Some("Needs Plugin Editors as in the VST".into()),
-        i if i.starts_with("ui.mix.width.") => Some("Select channels in the Mix window".into()),
-        "track.rename" => Some("Select a track".into()),
-        "ui.ml.text_midi" | "ui.ml.song" => Some("Wait for the running ML job".into()),
-        i if i.starts_with("ui.ml.") => Some("Select an audio clip or track".into()),
-        i if i.starts_with("clip.clean_") => Some("Select a clip cleaned by Clean Vocal".into()),
-        _ => soundcraft_engine::find_command(id).and_then(|c| (c.enabled)(&app.engine).err()),
+        i if i.starts_with("window.")
+            || i.starts_with("view.mix_section")
+            || i == "view.mix_slim"
+            || i.starts_with("monitor.")
+            || i.starts_with("hearing_test.")
+            || matches!(i, "process.run" | "ui.dock" | "ui.dock.reset" | "ui.mix.wide_editors") =>
+        {
+            Ok(())
+        }
+        // FireStation's own folder, where this platform keeps it; greyed out with where it looked.
+        "presets.import_firestation" => crate::fs_presets::available(app),
+        // The ML jobs need an audio track or clip to run on; Generate MIDI from Text and Generate
+        // Song need no source, only no job running.
+        "ui.ml.text_midi" | "ui.ml.song" => when(ml_idle(app), "Wait for the running ML job"),
+        i if i.starts_with("ui.ml.") => {
+            when(!app.engine.session().edit.selected_clips.is_empty() || !app.engine.target_tracks().is_empty(), "Select an audio clip or track")
+        }
+        // The slim layout is a layout of the VST-faithful editors: nothing to do without them.
+        "ui.mix.slim_editors" => when(app.ui.wide_editors, "Needs Plugin Editors as in the VST"),
+        "ui.mix.editors_larger" => {
+            let now = app.ui.editor_scale;
+            when(crate::editor_kit::step_editor_scale(now, true) > now, "Plugin editors are at their largest size")
+        }
+        "ui.mix.editors_smaller" => {
+            let now = app.ui.editor_scale;
+            when(crate::editor_kit::step_editor_scale(now, false) < now, "Plugin editors are at their smallest size")
+        }
+        "ui.mix.editors_actual" => when((app.ui.editor_scale - 1.0).abs() > 1e-3, "Plugin editors are at their actual size"),
+        i if i.starts_with("ui.mix.width.") => when(crate::channel_width::enabled(app, i), "Select channels in the Mix window"),
+        // Rename… opens its dialog on the first selected track.
+        "track.rename" => when(!app.engine.target_tracks().is_empty(), "Select a track"),
+        // Clean Vocal's follow-ups act on a cleaned clip only.
+        i if i.starts_with("clip.clean_") => when(cleaned_clip_selected(app), "Select a clip cleaned by Clean Vocal"),
+        // Undo Last Pass and Erase Held Notes act on a MIDI loop recording under way.
+        // The MIDI Editor's per-note expression (also in its Lanes menu).
+        "ui.midi_own_channels" => crate::midi_lanes::own_channels_available(app),
+        "ui.midi_clear_expression" => crate::midi_lanes::clear_expression_available(app),
+        "ui.midi_undo_pass" | "ui.midi_erase_held" => {
+            when(app.engine.transport.recording && app.midi_loop_preview.is_some(), "Works while loop recording MIDI")
+        }
+        // Make Harmony… harmonises a vocal track.
+        "ui.vocal_harmony" => {
+            when(app.engine.session().tracks.iter().any(soundcraft_model::Track::is_vocal), "No vocal track: mark one with Track › Vocal Track")
+        }
+        // Import › Reference… asks for the file with the desktop's file picker.
+        "ui.scout.import_reference" => when(app.services.pick_open.is_some(), "Needs the desktop app's file picker"),
+        i => match soundcraft_engine::find_command(i) {
+            Some(c) => {
+                (c.enabled)(&app.engine)?;
+                when(!app.engine.blocked_while_recording(i), "Stop recording first")
+            }
+            None if is_ui_command(i) => Ok(()),
+            None => Err(format!("`{i}` is not a command")),
+        },
     }
 }
 
@@ -729,6 +809,7 @@ fn hover_text(id: &str) -> Option<&'static str> {
         "window.mix_separate" => Some("Show Edit and Mix at once, e.g. one per monitor"),
         "window.vocal_separate" => Some("The Vocal Editor in its own window; closing it docks it back"),
         "window.notes" => Some("Session notes: a to-do list with check boxes, tags and times"),
+        "window.set_list" => Some("The show's songs (memory locations) played in order, with a big stage view"),
         "window.control_room" => Some("Monitor speakers with level, dim and mono; AFL/PFL listen; cue mixes and talkback"),
         "window.loudness" => Some("The master's loudness (momentary, short-term, integrated LUFS) and true peak while it plays"),
         "window.teleprompter" => Some("Big lyrics that follow the playhead through the lines on the Lyrics ruler"),
@@ -759,30 +840,7 @@ fn cleaned_clip_selected(app: &SoundApp) -> bool {
 
 /// Enabled and checked state shared by all menu presentations.
 pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) {
-    let enabled = match id {
-        Some(i)
-            if i.starts_with("window.")
-                || i.starts_with("view.mix_section")
-                || i == "view.mix_slim"
-                || matches!(i, "process.run" | "ui.dock" | "ui.dock.reset" | "presets.import_firestation" | "ui.mix.wide_editors") =>
-        {
-            true
-        }
-        // The ML jobs need an audio track or clip to run on.
-        // Generate MIDI from Text needs no source.
-        Some("ui.ml.text_midi" | "ui.ml.song") => ml_idle(app),
-        Some(i) if i.starts_with("ui.ml.") => !app.engine.session().edit.selected_clips.is_empty() || !app.engine.target_tracks().is_empty(),
-        // The slim layout is a layout of the VST-faithful editors: nothing to do without them.
-        Some("ui.mix.slim_editors") => app.ui.wide_editors,
-        Some(i) if i.starts_with("monitor.") || i.starts_with("hearing_test.") => true,
-        Some(i) if i.starts_with("ui.mix.width.") => crate::channel_width::enabled(app, i),
-        // Rename… opens its dialog on the first selected track.
-        Some("track.rename") => !app.engine.target_tracks().is_empty(),
-        // Clean Vocal's follow-ups act on a cleaned clip only.
-        Some(i) if i.starts_with("clip.clean_") => cleaned_clip_selected(app),
-        Some(i) => soundcraft_engine::find_command(i).is_some_and(|c| (c.enabled)(&app.engine).is_ok() && !app.engine.blocked_while_recording(i)),
-        None => false,
-    };
+    let enabled = id.is_some_and(|i| availability(app, i).is_ok());
     (enabled, checked_state(app, path, id))
 }
 
@@ -790,10 +848,23 @@ pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) 
 const FLAG_TOGGLES: &[(&str, &str)] = &[
     ("edit.snap_to_clips", soundcraft_engine::edit::SNAP_TO_CLIPS),
     ("edit.snap_to_markers", soundcraft_engine::edit::SNAP_TO_MARKERS),
+    ("edit.snap_to_cursor", soundcraft_engine::edit::SNAP_TO_CURSOR),
+    ("edit.adaptive_grid", soundcraft_engine::edit::ADAPTIVE_GRID),
     ("edit.snap_to_zero_crossings", soundcraft_engine::edit::SNAP_TO_ZERO),
     ("track.suspend_groups", "groups.suspended"),
     ("mix.pre_sends_ignore_mute", "mix.pre_sends_ignore_mute"),
     ("options.low_latency_monitoring", "options.low_latency_monitoring"),
+    ("options.momentary_solo", "options.momentary_solo"),
+    ("options.arm_follows_selection", soundcraft_engine::cmd::ARM_FOLLOWS_SELECTION),
+    ("options.record_lock", soundcraft_engine::cmd::RECORD_LOCK),
+    ("options.pre_record", soundcraft_engine::cmd::PRE_RECORD),
+    ("options.trackpunch", soundcraft_engine::cmd::TRACKPUNCH),
+    ("comp.matching_takes", soundcraft_engine::cmd::MATCHING_TAKES),
+    ("options.wait_for_note", "options.wait_for_note"),
+    ("options.input_only_monitoring", soundcraft_mix::INPUT_ONLY_MONITORING),
+    ("options.dynamic_transport", "options.dynamic_transport"),
+    ("options.suspend_on_silence", "options.suspend_on_silence"),
+    ("options.loops_follow", "import.loops_follow"),
     ("options.keyboard_lock", "options.edit_tool_mode_keyboard_lock"),
     ("view.track_number", "edit_view.track_number"),
     ("view.ruler_tempo_editor", "view.ruler.tempo_editor"),
@@ -824,6 +895,13 @@ fn checked_state(app: &SoundApp, path: &str, id: Option<&str>) -> bool {
     toggle_state(app, path, id).unwrap_or(false)
 }
 
+/// Whether the item for `id` (run through `path`; only its last part counts for a choice such as
+/// Pan Law's "-3 dB") shows a check mark: what Preferences reads for the settings that left the
+/// Options menu.
+pub fn is_checked(app: &SoundApp, path: &str, id: &str) -> bool {
+    checked_state(app, path, Some(id))
+}
+
 /// Whether the item for `id` (run through `path`) is a toggle that can show a check mark, and so
 /// takes the menu's check-mark column.
 pub fn is_toggle(app: &SoundApp, path: &str, id: Option<&str>) -> bool {
@@ -849,6 +927,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("options.click") => e.click,
         Some("options.delay_compensation") => e.delay_compensation,
         Some("options.pre_fader_metering") => e.pre_fader_metering,
+        Some("options.feedback_protection") => !e.flag(soundcraft_mix::NO_FEEDBACK_PROTECTION),
         Some("automation.thin_after_pass") => !e.flag(soundcraft_engine::cmd::KEEP_PASS_POINTS),
         Some("options.auto_fades") => e.value("playback.auto_fade_ms", soundcraft_mix::AUTO_FADE_MS) > 0.0,
         // `video.online` keeps the opposite flag (the engine's `OFFLINE_FLAG`).
@@ -899,6 +978,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.notes") => app.ui.show_notes,
         Some("window.loudness") => app.ui.show_loudness,
         Some("window.mix_snapshots") => app.ui.show_mix_snapshots,
+        Some("window.set_list") => app.ui.show_set_list,
         Some("window.control_room") => app.ui.show_control_room,
         Some("window.lyrics") => app.ui.show_lyrics,
         Some("window.teleprompter") => app.ui.show_teleprompter,
@@ -910,6 +990,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.score") => app.ui.show_score,
         Some("window.event_list") => app.ui.show_event_list,
         Some("window.midi_keyboard") => app.ui.show_midi_keyboard,
+        Some("window.chord_pads") => app.pads.open,
         Some("window.workspace") => app.ui.show_workspace,
         Some("window.preferences") => app.ui.show_preferences,
         Some("window.ear_profile") => app.ui.show_ear_profile,
@@ -1019,8 +1100,9 @@ fn mix_section_id(label: &str) -> &'static str {
     }
 }
 
-/// Parameters implied by the menu item a command was reached through.
-fn params_for(path: &str, id: &str) -> Value {
+/// Parameters implied by the menu item a command was reached through (Preferences' radio
+/// choices pass a path whose last part is the item's label, as the menu did).
+pub fn params_for(path: &str, id: &str) -> Value {
     let leaf = path.rsplit(" > ").next().unwrap_or("");
     match id {
         "view.ruler" => json!({"ruler": ruler_id(leaf)}),
@@ -1057,6 +1139,9 @@ const MENU_WINDOWS: &[(&str, &str)] = &[
     ("Setup > Preferences...", "window.preferences"),
     ("Setup > Session", "setup.session"),
     ("Event > Beat Detective", "window.beat_detective"),
+    ("Process > More > Process History", "window.process_history"),
+    ("Process > More > Sample Editor", "window.sample_editor"),
+    ("Track > More > Arrangements", "window.arrangements"),
     ("Event > Tempo Operations > Tempo Operations Window", "window.tempo_ops"),
     ("Event > Time Operations > Time Operations Window", "window.time_ops"),
     ("Event > MIDI Operations > MIDI Operations Window", "window.midi_ops"),
@@ -1092,22 +1177,15 @@ fn selection_frozen(app: &SoundApp) -> bool {
     soundcraft_engine::cmd::all_frozen(&app.engine, &app.engine.target_tracks())
 }
 
-/// No ML job running (desktop; the web app has no ML).
-#[cfg(not(target_arch = "wasm32"))]
+/// No ML job running.
 fn ml_idle(app: &SoundApp) -> bool {
     app.ml.running.is_none()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn ml_idle(_: &SoundApp) -> bool {
-    false
 }
 
 /// Menu-style invocation: may open a dialog.
 pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
     // The ML jobs run for minutes: from a menu or the palette they open their dialog and run on a
     // worker, never as the blocking engine command on the UI thread.
-    #[cfg(not(target_arch = "wasm32"))]
     if id.starts_with("ml.") && id != "ml.models" && !crate::ml_downloads::is_download_command(id) {
         if let Err(e) = crate::ml_ui::open(app, id, None) {
             app.ui.status = e;
@@ -1132,7 +1210,7 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
         }
         return;
     }
-    // Options › Pre/Post-Roll… sets the amounts too (its shortcut, Cmd+K, only toggles).
+    // Transport › Pre/Post-Roll… sets the amounts too (its shortcut, Cmd+K, only toggles).
     if id == "options.pre_post_roll" {
         app.dialogs.open_pre_post_roll(&app.engine);
         return;
@@ -1160,7 +1238,119 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
         return;
     }
     let params = params_for(path, id);
-    let _ = crate::dialogs::run_or_ask(app, id, params);
+    // An edit that may find nothing to act on is watched: the session before it, and the status.
+    let watched = watches_for_no_change(id).then(|| (app.engine.session_arc(), app.ui.status.clone()));
+    // A command clicked in a menu always answers in the status line when it fails: engine errors
+    // set it already, a UI-layer command's error only comes back here.
+    match crate::dialogs::run_or_ask(app, id, params) {
+        Err(e) => app.ui.status = readable_error(&e),
+        // It ran, said nothing, started no job and left the session as it was: say why, and
+        // drop the empty undo step it made.
+        Ok(_) => {
+            if let Some((before, status)) = watched
+                && app.ui.status == status
+                && app.dialogs.open.is_none()
+                && !(app.rendering() || app.open.is_some() || app.split.is_some())
+                && *before == *app.engine.session()
+            {
+                app.engine.drop_empty_step();
+                app.ui.status = nothing_changed(path, id);
+            }
+        }
+    }
+}
+
+/// What an edit clicked in a menu needs when it changed nothing (command id → the context it acts
+/// on). Undoable commands not listed get a general reason; the selection moves listed here are
+/// not undoable but act on the session's selection, so they are watched too.
+const NEEDS: &[(&str, &str)] = &[
+    ("edit.move_selection_left", "make an edit selection first (it moves by its own length)"),
+    ("edit.move_selection_right", "make an edit selection first (it moves by its own length)"),
+    ("edit.halve_selection", "make an edit selection first"),
+    ("edit.double_selection", "make an edit selection first"),
+    ("edit.remove_selection_top", "select two or more tracks first"),
+    ("edit.remove_selection_bottom", "select two or more tracks first"),
+    ("edit.extend_up_to_members", "select a folder track or one of its members"),
+    ("edit.extend_down_to_members", "select a folder track"),
+    ("edit.extend_to_start", "make an edit selection that starts after the session start"),
+    ("edit.nudge_start_earlier", "make an edit selection first"),
+    ("edit.nudge_start_later", "make an edit selection first"),
+    ("edit.nudge_end_earlier", "make an edit selection first"),
+    ("edit.select_track_clips", "the selected tracks have no clips, or they are all selected already"),
+    ("edit.select_muted_clips", "no clip is muted on the selected tracks"),
+    ("edit.heal", "select across a separation between pieces of the same clip"),
+    ("edit.fades_delete", "select clips with fades or crossfades"),
+    ("edit.clear_clip_gain", "select clips with clip gain"),
+    ("edit.clear_clip_effects", "select clips with clip effects"),
+    ("edit.clear_all_automation", "select a range with automation on the selected tracks"),
+    ("edit.clear_pan_automation", "select a range with pan automation"),
+    ("edit.clear_plugin_automation", "select a range with plug-in automation"),
+    ("edit.trim_to_close_gaps", "select clips with gaps between them"),
+    ("edit.automation_trim_to_all", "select a range on tracks with automation"),
+    ("edit.automation_glide_to_all", "select a range on tracks with automation"),
+    ("automation.thin", "select a range with automation to thin"),
+    ("automation.thin_all", "the session has no automation to thin"),
+    ("automation.volume_to_clip_gain", "select a range with volume automation"),
+    ("edit.automation_coalesce_clip_gain_to_volume", "select clips with clip gain"),
+    ("clip.automation_from_track", "select clips on tracks with automation"),
+    ("clip.automation_to_track", "select clips with their own automation"),
+    ("clip.automation_clear", "select clips with their own automation"),
+    ("edit.snap_next", "select a clip with a gap after it"),
+    ("edit.snap_previous", "select a clip with a gap before it"),
+    ("track.split_into_mono", "select a stereo or multichannel audio track"),
+    ("track.bypass_inserts", "select tracks with inserts"),
+    ("track.bypass_inserts_ae", "select tracks with inserts in slots A-E"),
+    ("track.bypass_inserts_fj", "select tracks with inserts in slots F-J"),
+    ("track.bypass_eq", "select tracks with an EQ insert"),
+    ("track.bypass_dynamics", "select tracks with a dynamics insert"),
+    ("track.bypass_reverb", "select tracks with a reverb insert"),
+    ("track.bypass_delay", "select tracks with a delay insert"),
+    ("track.bypass_modulation", "select tracks with a modulation insert"),
+    ("track.mute_sends_ae", "select tracks with sends A-E"),
+    ("track.mute_sends_fj", "select tracks with sends F-J"),
+    ("track.show_target_playlist", "designate a target playlist first (Track › Designate as Target Playlist)"),
+    ("track.toggle_recent_playlist", "show a target playlist first (Track › Show Target Playlist)"),
+    ("track.write_midi_rtp", "set MIDI real-time properties on the track first"),
+    ("track.set_record_to_input_only", "record-arm tracks first"),
+    ("track.coalesce_trim", "the selected tracks have no trim automation"),
+    ("track.clear_trim_automation", "the selected tracks have no trim automation"),
+    ("clip.send_to_back", "select clips that overlap others"),
+    ("clip.bring_to_front", "select clips that overlap others"),
+    ("clip.ungroup", "select a clip group"),
+    ("clip.ungroup_all", "the session has no clip groups"),
+    ("clip.quantize_to_grid", "select clips that are off the grid"),
+    ("clip.remove_warp", "select a warped clip"),
+    ("clip.remove_pitch_shift", "select a clip stretched with varispeed"),
+    ("event.remove_duplicate_notes", "the selected MIDI has no duplicate notes"),
+    ("event.restore_performance", "nothing to restore: Flatten Performance first"),
+];
+
+/// Whether a menu click on `id` is watched for changing nothing ([`NEEDS`]): undoable engine edits
+/// (their effect is the session, so an unchanged session means they did nothing) and the listed
+/// selection moves.
+fn watches_for_no_change(id: &str) -> bool {
+    NEEDS.iter().any(|(i, _)| *i == id) || soundcraft_engine::find_command(id).is_some_and(|c| c.undoable && !c.view)
+}
+
+/// The status line after a menu edit that changed nothing: the item, and what it needs.
+fn nothing_changed(path: &str, id: &str) -> String {
+    let item = path.split_once(" > ").map_or(path, |(_, rest)| rest).replace(" > ", " › ");
+    let item = item.trim_end_matches("...").trim_end_matches('…');
+    let need = NEEDS.iter().find(|(i, _)| *i == id).map_or("there is nothing in the selection for it to act on", |(_, n)| n);
+    format!("{item} changed nothing: {need}")
+}
+
+/// An error as the status line shows it: the engine's "bad parameters for `edit.space_clips`:
+/// select two or more clips" reads "Select two or more clips".
+pub fn readable_error(e: &str) -> String {
+    let why = e
+        .strip_prefix("bad parameters for `")
+        .or_else(|| e.strip_prefix('`').filter(|r| r.contains("` is not available: ")))
+        .and_then(|r| r.split_once("`: ").map(|(_, w)| w).or_else(|| r.split_once("` is not available: ").map(|(_, w)| w)))
+        .unwrap_or(e)
+        .trim();
+    let mut c = why.chars();
+    c.next().map_or_else(|| e.to_string(), |f| f.to_uppercase().chain(c).collect())
 }
 
 /// Keyboard shortcut for a dialog command, or one that would close a modified session: open its
@@ -1184,7 +1374,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "ui.quantize_audio" | "event.quantize" | "event.change_duration" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
+        || matches!(id, "ui.quantize_audio" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
@@ -1195,12 +1385,24 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if id == "ui.capture_midi" {
         return Some(crate::midi_devices::capture(app));
     }
+    if id == "window.new_mix" {
+        return Some(crate::mix_more::open(app));
+    }
     if id == "window.step_input" {
         crate::step_input::toggle(app);
         return Some(Ok(json!({"open": app.step.open})));
     }
     if id == "ui.midi_undo_pass" {
         return Some(crate::midi_devices::undo_last_pass(app));
+    }
+    if id == "ui.midi_erase_held" {
+        return Some(crate::midi_devices::erase_held_notes(app));
+    }
+    if id == "ui.midi_own_channels" {
+        return Some(crate::midi_lanes::own_channels(app));
+    }
+    if id == "ui.midi_clear_expression" {
+        return Some(crate::midi_lanes::clear_expression(app));
     }
     if id == "ui.quantize_audio" {
         app.dialogs.open = Some(crate::dialogs::Dialog::QuantizeAudio { strength: 100.0, swing: 0.0 });
@@ -1255,6 +1457,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if id == "ui.vocal_preset_save" {
         return Some(crate::vocal_editor::panel::save_command(app, p));
     }
+    if id == "ui.plugin_restart" {
+        return Some(crate::chain_view::restart_command(app, p));
+    }
     if let Some(r) = crate::preferences::run(app, id, p) {
         return Some(r);
     }
@@ -1270,7 +1475,6 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if let Some(r) = crate::scout::run(app, id, p) {
         return Some(r);
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(r) = crate::ml_ui::run(app, id, p) {
         return Some(r);
     }
@@ -1365,6 +1569,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.notes" => toggle(&mut app.ui.show_notes),
         "window.loudness" => toggle(&mut app.ui.show_loudness),
         "window.mix_snapshots" => toggle(&mut app.ui.show_mix_snapshots),
+        "window.set_list" => toggle(&mut app.ui.show_set_list),
         "window.control_room" => toggle(&mut app.ui.show_control_room),
         "ui.loudness_reset" => {
             if let Some(p) = &app.player {
@@ -1411,12 +1616,16 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.search" => toggle(&mut app.ui.show_search),
         "window.score" => toggle(&mut app.ui.show_score),
         "window.beat_detective" => toggle(&mut app.ui.show_beat_detective),
+        "window.process_history" => toggle(&mut app.ui.show_process_history),
+        "window.sample_editor" => toggle(&mut app.ui.show_sample_editor),
+        "window.arrangements" => toggle(&mut app.ui.show_arrangements),
         "window.tempo_ops" => toggle(&mut app.ui.show_tempo_ops),
         "window.time_ops" => toggle(&mut app.ui.show_time_ops),
         "window.midi_ops" => toggle(&mut app.ui.show_midi_ops),
         "window.rtp" => toggle(&mut app.ui.show_rtp),
         "window.input_quantize" => toggle(&mut app.ui.show_input_quantize),
         "window.click_countoff" => toggle(&mut app.ui.show_click_countoff),
+        "window.disk_allocation" => toggle(&mut app.ui.show_disk_allocation),
         "window.midi_offsets" => toggle(&mut app.ui.show_midi_offsets),
         "window.playback_engine" => toggle(&mut app.ui.show_playback_engine),
         "window.io_setup" => toggle(&mut app.ui.show_io_setup),
@@ -1431,6 +1640,13 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.task_manager" => toggle(&mut app.ui.show_task_manager),
         "window.metadata" => toggle(&mut app.ui.show_metadata),
         "window.event_list" => toggle(&mut app.ui.show_event_list),
+        "window.chord_pads" => {
+            app.pads.open = !app.pads.open;
+            if !app.pads.open {
+                crate::chord_pads::release(app);
+            }
+            json!({"value": app.pads.open})
+        }
         // Musical Typing opens ready to play: the computer keys on with the window, off with it.
         "window.midi_keyboard" => {
             let open = !app.ui.show_midi_keyboard;
@@ -1718,6 +1934,25 @@ pub fn parity() -> Value {
 mod tests {
     use super::*;
     use crate::{Services, SoundApp};
+
+    /// Every command a "changed nothing" reason is written for exists, and the message names the
+    /// item as shown, without its menu.
+    #[test]
+    fn the_reasons_for_changing_nothing_name_real_commands() {
+        for (id, need) in NEEDS {
+            assert!(soundcraft_engine::find_command(id).is_some(), "{id} is not a command");
+            assert!(!need.is_empty() && watches_for_no_change(id));
+        }
+        assert_eq!(
+            nothing_changed("Edit > Heal Separation", "edit.heal"),
+            "Heal Separation changed nothing: select across a separation between pieces of the same clip"
+        );
+        assert_eq!(
+            nothing_changed("Edit > Clear Special > Clip Gain", "edit.clear_clip_gain"),
+            "Clear Special › Clip Gain changed nothing: select clips with clip gain"
+        );
+        assert!(!watches_for_no_change("edit.copy"), "a copy changes the clipboard, not the session");
+    }
 
     #[test]
     fn mix_view_aliases_are_allocated_once() {

@@ -145,6 +145,7 @@ fn lane_rect_for(track: &Track, p: &AutoParam, row: Rect, tl: Rect) -> Rect {
 
 pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let t = Tokens::current();
+    comp_layers::refresh_matching(app.engine.session());
     drive_drag(app, ui.ctx());
     egui::Panel::top("edit_toolbar").exact_size(toolbar::HEIGHT).frame(egui::Frame::NONE.fill(t.toolbar_bg)).show(ui, |ui| toolbar::show(app, ui));
     egui::Panel::bottom("edit_status").exact_size(22.0).frame(egui::Frame::NONE.fill(t.toolbar_bg)).show(ui, |ui| status_bar(app, ui));
@@ -316,37 +317,52 @@ fn main_area_content(app: &mut SoundApp, ui: &mut Ui) {
     column_titles(ui, rulers_rect, &cols);
     // A track selected in the Mix window scrolls into view here.
     if let Some(id) = app.window_sync.reveal_edit.take() {
-        let s = app.engine.session();
+        // A pinned track is always in view; the others scroll in the room under the pinned.
+        let (pinned, scrolled) = pinned_split(app.engine.session(), tl.height() * 0.5);
+        let pinned_h: f32 = pinned.iter().map(|(_, h)| h + 1.0).sum();
         let mut top = 0.0;
-        for t in s.tracks.iter().filter(|x| in_edit_window(s, x)) {
-            let h = track_height(t);
-            if t.id == id {
-                app.edit_layout.scroll_y = crate::window_sync::scroll_to_show(top, top + h, app.edit_layout.scroll_y, tl.height()).max(0.0);
+        for (t, h) in scrolled {
+            if t == id {
+                app.edit_layout.scroll_y =
+                    crate::window_sync::scroll_to_show(top, top + h, app.edit_layout.scroll_y, (tl.height() - pinned_h).max(1.0)).max(0.0);
                 break;
             }
             top += h + 1.0;
         }
     }
-    // Tracks.
-    let mut y = tl.min.y - app.edit_layout.scroll_y;
+    // Tracks. Pinned ones (Track › Pin) stay at the top in their order while the others scroll
+    // under them; at most half the track area is pinned (the rest of the pinned ones scroll).
+    let (pinned, scrolled) = pinned_split(app.engine.session(), tl.height() * 0.5);
+    let pinned_h: f32 = pinned.iter().map(|(_, h)| h + 1.0).sum();
+    let mut y = tl.min.y - app.edit_layout.scroll_y + pinned_h;
     app.edit_layout.rows.clear();
-    let mut content_h = 0.0;
-    for t in app.engine.session().tracks.iter().filter(|x| in_edit_window(app.engine.session(), x)) {
-        let h = track_height(t);
-        app.edit_layout.rows.push((t.id.0, [full.min.x, y, tl.max.x, y + h]));
+    let mut fixed_y = tl.min.y;
+    for (id, h) in &pinned {
+        app.edit_layout.rows.push((id.0, [full.min.x, fixed_y, tl.max.x, fixed_y + h]));
+        fixed_y += h + 1.0;
+    }
+    let mut content_h = pinned_h;
+    for (id, h) in &scrolled {
+        app.edit_layout.rows.push((id.0, [full.min.x, y, tl.max.x, y + h]));
         y += h + 1.0;
         content_h += h + 1.0;
     }
     app.edit_layout.content_h = content_h;
-    let clip_rect = Rect::from_min_max(pos2(full.min.x, tl.min.y), pos2(full.max.x, tl.max.y));
-    for (id, r) in app.edit_layout.rows.clone() {
+    let pin_clip = Rect::from_min_max(pos2(full.min.x, tl.min.y), pos2(full.max.x, (tl.min.y + pinned_h).min(tl.max.y)));
+    let clip_rect = Rect::from_min_max(pos2(full.min.x, pin_clip.max.y), pos2(full.max.x, tl.max.y));
+    for (i, (id, r)) in app.edit_layout.rows.clone().into_iter().enumerate() {
         let row = rect(r);
-        if row.max.y >= clip_rect.min.y && row.min.y <= clip_rect.max.y {
+        let clip = if i < pinned.len() { pin_clip } else { clip_rect };
+        if row.max.y >= clip.min.y && row.min.y <= clip.max.y {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
-            child.set_clip_rect(clip_rect);
+            child.set_clip_rect(clip);
             track_row(app, &mut child, TrackId(id), row, tl, &cols);
             crate::browser::drop::target(app, &child, row, crate::browser::drop::DropTarget::Track(TrackId(id)));
         }
+    }
+    if pinned_h > 0.0 {
+        // The pinned tracks' edge: the others scroll under it.
+        ui.painter().hline(full.min.x..=tl.max.x, pin_clip.max.y - 0.5, Stroke::new(2.0, t.accent.gamma_multiply(0.6)));
     }
     // Below the tracks a click clears the selection and a double-click opens New Tracks.
     let empty = Rect::from_min_max(pos2(full.min.x, y.max(tl.min.y)), tl.max);
@@ -377,6 +393,24 @@ fn main_area_content(app: &mut SoundApp, ui: &mut Ui) {
             app.edit_layout.scroll_by(resp.drag_delta().y / frac, tl.height());
         }
     }
+}
+
+/// The Edit window's tracks with their heights, split into those that stay at the top (pinned,
+/// in session order, while they fit in `room`) and those that scroll.
+pub(crate) fn pinned_split(s: &Session, room: f32) -> (Vec<(TrackId, f32)>, Vec<(TrackId, f32)>) {
+    let mut pinned = Vec::new();
+    let mut scrolled = Vec::new();
+    let mut used = 0.0;
+    for t in s.tracks.iter().filter(|x| in_edit_window(s, x)) {
+        let h = track_height(t);
+        if t.pinned && used + h + 1.0 <= room {
+            used += h + 1.0;
+            pinned.push((t.id, h));
+        } else {
+            scrolled.push((t.id, h));
+        }
+    }
+    (pinned, scrolled)
 }
 
 fn in_edit_window(s: &Session, t: &Track) -> bool {
@@ -720,7 +754,40 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
                         }
                         crate::menus::ruler_context_menu(app, ui, id);
                     });
+                    // Skip ranges: a red band along the ruler's lower half.
+                    for k in &s.edit.skips {
+                        let (x0, x1) = (x_of(&s, tl, k.start).max(row.min.x), x_of(&s, tl, k.end).min(row.max.x));
+                        if x1 > x0 {
+                            let band = Rect::from_min_max(pos2(x0, row.center().y), pos2(x1, row.max.y));
+                            painter.rect_filled(band, 0.0, Color32::from_rgba_unmultiplied(0xd0, 0x40, 0x40, 0x50));
+                        }
+                    }
+                    let dynamic = s.edit.flag(soundcraft_engine::cmd::transport::DYNAMIC);
+                    if dynamic && let Some(x) = soundcraft_engine::cmd::transport::play_start(&s).map(|at| x_of(&s, tl, at)) {
+                        // The play start marker: a small green triangle on the ruler's lower edge.
+                        let y = row.max.y;
+                        let green = Color32::from_rgb(0x4c, 0xc3, 0x5a);
+                        painter.add(Shape::convex_polygon(vec![pos2(x - 5.0, y), pos2(x + 5.0, y), pos2(x, y - 7.0)], green, Stroke::NONE));
+                    }
                     if !handled
+                        && dynamic
+                        && s.edit.tool != Tool::Scrubber
+                        && (resp.clicked() || resp.dragged())
+                        && let Some(p) = resp.interact_pointer_pos()
+                    {
+                        // Dynamic Transport: a click moves the play start marker, a drag sets the
+                        // loop range; the edit selection stays as it is.
+                        let at = snap(&s, sample_at(&s, tl, p.x).max(0));
+                        let origin = ui.input(|i| i.pointer.press_origin()).map(|o| snap(&s, sample_at(&s, tl, o.x).max(0)));
+                        match origin.filter(|o| resp.dragged() && *o != at) {
+                            Some(o) => {
+                                let _ = app.run("loop.set", json!({"start": o.min(at), "end": o.max(at)}));
+                            }
+                            None => {
+                                let _ = app.run("transport.set_play_start", json!({"at": at}));
+                            }
+                        }
+                    } else if !handled
                         && (resp.clicked() || resp.dragged())
                         && let Some(p) = resp.interact_pointer_pos()
                     {
@@ -985,6 +1052,15 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
     for clip in shown {
         draw_clip(app, &painter, &s, track, clip, tl, lane, auto_view.is_some());
     }
+    // A closed folder's lane shows its members' clips as blocks: a selection on it edits them all.
+    if track.is_folder() && !track.folder_open {
+        let fill = clip_colors(track.color, false).0.gamma_multiply(0.85);
+        for r in folder_blocks(&s, track.id, view) {
+            let (x0, x1) = (x_of(&s, tl, r.start), x_of(&s, tl, r.end).max(x_of(&s, tl, r.start) + 1.0));
+            let b = Rect::from_min_max(pos2(x0, lane.min.y + 3.0), pos2(x1, lane.max.y - 3.0));
+            painter.rect(b, CornerRadius::same(2), fill, Stroke::new(1.0, Color32::from_rgb(10, 10, 10)), StrokeKind::Inside);
+        }
+    }
     // The pitch view: the lines over the clips, the TUNED badges over the lines; a double-click
     // on a line opens the editor and is not also the lane's.
     let mut pitch_claimed = false;
@@ -1002,7 +1078,6 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
     }
     draw_live_take(app, &painter, &s, track, tl, lane);
     crate::live_midi::draw(app, &painter, &s, track, tl, lane);
-    #[cfg(not(target_arch = "wasm32"))]
     crate::net_ui::draw_sketch(app, &painter, &s, track, tl, lane);
     crate::video_track::draw_lane(app, &painter, &s, track, tl, lane);
     if s.edit.grid_lines {
@@ -1041,6 +1116,9 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
         }
     }
     lane_interaction(app, ui, track, lane, tl, pitch_claimed, None);
+    if track.is_folder() && !track.folder_open {
+        folder_block_interaction(app, ui, track, lane, tl);
+    }
     if shows_layers(track) {
         comp_layers::layer_lanes(app, ui, track, row, main_h, tl, lane_bg);
     } else if track.view == "playlists" {
@@ -1139,7 +1217,9 @@ fn static_value(track: &Track, p: &AutoParam) -> f32 {
         AutoParam::Trim => 0.0,
         AutoParam::Width => track.mixer.width,
         AutoParam::Balance => track.mixer.balance,
-        AutoParam::Plugin { module, param } => track.mixer.module(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
+        AutoParam::Surround(i) => track.mixer.surround.unwrap_or_default().axis(*i),
+        AutoParam::Plugin { module, param } if param == soundcraft_model::MIX_PARAM => track.module_or_instrument(*module).map_or(1.0, |i| i.mix),
+        AutoParam::Plugin { module, param } => track.module_or_instrument(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }
 
@@ -1396,10 +1476,17 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
                 let resp = resp.on_hover_text(crate::scope::solo_hint(mac));
                 resp.context_menu(|ui| crate::scope::solo_menu(app, ui, id));
                 resp
+            } else if key == HeaderKey::Rec {
+                if m.record_safe {
+                    crate::widgets::paint_record_safe(ui.painter(), r);
+                }
+                resp.context_menu(|ui| crate::scope::rec_menu(app, ui, id));
+                resp
             } else {
                 resp
             };
-            if resp.clicked() {
+            let held = key == HeaderKey::Solo && crate::scope::momentary_solo(app, ui, crate::MainWindow::Edit, id, &resp, ui.input(|i| i.modifiers));
+            if resp.clicked() && !held {
                 // Alt: every track; Alt+Shift: the selected ones; on S, Ctrl solos exclusively.
                 let mods = ui.input(|i| i.modifiers);
                 match key {
@@ -1520,9 +1607,25 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
         }
     }
     let md = app.meters.get(&id).copied().unwrap_or_default();
-    #[cfg(not(target_arch = "wasm32"))]
     let md = crate::net_ui::with_remote_level(app, track, md);
     header_meter(ui, Rect::from_min_max(pos2(head.max.x - 8.0, head.min.y + 1.0), pos2(head.max.x, head.max.y - 1.5)), &md, track.channels() >= 2);
+    if track.kind.is_midi() {
+        midi_meter(ui, Rect::from_min_max(pos2(head.max.x - 12.0, head.min.y + 1.0), pos2(head.max.x - 9.0, head.max.y - 1.5)), md.midi);
+    }
+}
+
+/// An instrument or MIDI track's MIDI activity beside its level meter: a bar as high as the
+/// velocity of the notes its instrument is given (clips, live input, routed tracks).
+fn midi_meter(ui: &Ui, r: Rect, velocity: f32) {
+    let t = Tokens::current();
+    let p = ui.painter();
+    p.rect_filled(r, 0.0, Color32::BLACK);
+    let inner = r.shrink(0.5);
+    let col = t.accent;
+    p.rect_filled(inner, 0.0, col.gamma_multiply(0.15));
+    if velocity > 0.01 {
+        p.rect_filled(inner.with_min_y(inner.max.y - inner.height() * velocity.clamp(0.0, 1.0)), 0.0, col);
+    }
 }
 
 /// A small menu arrow, pointing down, or right for a closed folder.
@@ -1825,9 +1928,14 @@ pub fn view_label(track: &Track, v: &str) -> String {
 /// The lane name, with a module's id replaced by its plugin and parameter names.
 fn param_label(track: &Track, p: &AutoParam) -> String {
     if let AutoParam::Plugin { module, param } = p
-        && let Some(ins) = track.mixer.module(*module)
+        && let Some(ins) = track.module_or_instrument(*module)
         && let Some(info) = crate::mix_window::plugin_info(&ins.plugin)
     {
+        // A multi-mono unlinked channel's own lane names its channel.
+        if let Some((n, own)) = soundcraft_model::split_channel_param(param) {
+            let name = info.param(own).map_or(own, |pi| pi.name);
+            return format!("{} {name} (channel {})", info.name, n + 1);
+        }
         let name = info.param(param).map_or(param.as_str(), |pi| pi.name);
         return format!("{} {name}", info.name);
     }
@@ -1857,13 +1965,145 @@ pub fn lane_params(
         .collect()
 }
 
+/// What a drag on a closed folder's block does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BlockDrag {
+    Move,
+    TrimStart,
+    TrimEnd,
+}
+
+/// A closed folder's blocks under the Grabber, the Trim tool and the Smart Tool (its lower half,
+/// and at an edge): a click selects the block's clips (so Nudge moves them), a drag moves them
+/// (`edit.move_block`), and a drag from an edge trims them (`edit.trim_block`). Over the rest
+/// of the lane the ordinary lane gestures apply.
+fn folder_block_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, tl: Rect) {
+    let s = app.engine.session_arc();
+    let view = Range::new(sample_at(&s, tl, tl.min.x), sample_at(&s, tl, tl.max.x));
+    let tool = s.edit.tool;
+    if !matches!(tool, Tool::Grabber | Tool::Trim | Tool::Smart) {
+        return;
+    }
+    let key = ui.id().with(("folder-block", track.id.0));
+    // The block held, what the drag does, where it was pressed and where the pointer last was.
+    let held: Option<(Range, BlockDrag, f32, f32)> = ui.ctx().data(|d| d.get_temp(key));
+    let hover = ui.ctx().pointer_hover_pos();
+    for (i, b) in folder_blocks(&s, track.id, view).into_iter().enumerate() {
+        let (x0, x1) = (x_of(&s, tl, b.start), x_of(&s, tl, b.end).max(x_of(&s, tl, b.start) + 1.0));
+        let rect = Rect::from_min_max(pos2(x0, lane.min.y), pos2(x1, lane.max.y)).intersect(lane);
+        if rect.width() <= 0.0 {
+            continue;
+        }
+        let mode_at = |p: Pos2| {
+            let near = |x: f32| (p.x - x).abs() < 6.0;
+            match tool {
+                Tool::Trim => Some(if (p.x - x0) < (x1 - p.x) { BlockDrag::TrimStart } else { BlockDrag::TrimEnd }),
+                _ if near(x0) => Some(BlockDrag::TrimStart),
+                _ if near(x1) => Some(BlockDrag::TrimEnd),
+                Tool::Smart if p.y < lane.center().y => None,
+                _ => Some(BlockDrag::Move),
+            }
+        };
+        let mine = held.filter(|(r, ..)| *r == b);
+        let area = rect.expand2(vec2(6.0, 0.0)).intersect(lane);
+        let wants = hover.filter(|p| area.contains(*p)).and_then(mode_at);
+        // Pressed here and not yet a drag: the pointer may leave the area before it becomes one.
+        let pressed = ui.ctx().input(|i| i.pointer.any_down() && i.pointer.press_origin().is_some_and(|o| area.contains(o)));
+        if mine.is_none() && wants.is_none() && !pressed {
+            continue;
+        }
+        let resp = ui.interact(area, key.with(i), Sense::click_and_drag());
+        if let Some(m) = wants.or(mine.map(|x| x.1)) {
+            ui.ctx().set_cursor_icon(if m == BlockDrag::Move { egui::CursorIcon::Grab } else { egui::CursorIcon::ResizeHorizontal });
+        }
+        // What the drag does is decided where it was pressed (it starts a few points later).
+        let press = ui.ctx().input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
+        let started = if resp.drag_started()
+            && let Some(o) = press
+            && let Some(m) = mode_at(o)
+        {
+            let x = resp.interact_pointer_pos().map_or(o.x, |p| p.x);
+            ui.ctx().data_mut(|d| d.insert_temp(key, (b, m, o.x, x)));
+            Some((b, m, o.x, x))
+        } else {
+            None
+        };
+        // The pointer is followed while the button is down (the release frame may no longer say
+        // where it was pressed).
+        let mine = match (mine.or(started), resp.interact_pointer_pos()) {
+            (Some((r, m, o, _)), Some(p)) => {
+                ui.ctx().data_mut(|d| d.insert_temp(key, (r, m, o, p.x)));
+                Some((r, m, o, p.x))
+            }
+            (m, _) => m,
+        };
+        let total = mine.map_or(0.0, |(_, _, o, x)| x - o);
+        let by = soundcraft_time::to_samples(f64::from(total) * s.edit.zoom.samples_per_px);
+        if let Some((_, m, ..)) = mine
+            && resp.dragged()
+        {
+            // Where the block will land.
+            let (a, z) = match m {
+                BlockDrag::Move => (b.start + by, b.end + by),
+                BlockDrag::TrimStart => (b.start + by, b.end),
+                BlockDrag::TrimEnd => (b.start, b.end + by),
+            };
+            let ghost = Rect::from_min_max(pos2(x_of(&s, tl, a), lane.min.y + 2.0), pos2(x_of(&s, tl, z), lane.max.y - 2.0));
+            ui.painter().with_clip_rect(lane).rect_stroke(ghost, 2.0, Stroke::new(1.5, Tokens::current().accent), StrokeKind::Inside);
+        }
+        if resp.drag_stopped() {
+            ui.ctx().data_mut(|d| d.remove::<(Range, BlockDrag, f32, f32)>(key));
+            if let Some((_, m, ..)) = mine
+                && by != 0
+            {
+                let r = match m {
+                    BlockDrag::Move => app.run("edit.move_block", json!({"folder": track.id.0, "start": b.start, "end": b.end, "by": by})),
+                    BlockDrag::TrimStart | BlockDrag::TrimEnd => app.run(
+                        "edit.trim_block",
+                        json!({"folder": track.id.0, "start": b.start, "end": b.end, "edge": if m == BlockDrag::TrimStart { "start" } else { "end" }, "to": if m == BlockDrag::TrimStart { b.start + by } else { b.end + by }}),
+                    ),
+                };
+                if let Err(e) = r {
+                    app.ui.status = e;
+                }
+            }
+        } else if resp.clicked() {
+            // Grabbing the block selects its clips: Nudge then moves them.
+            let ids: Vec<u64> = soundcraft_engine::cmd::folder_block::block_clips(&s, track.id, b).iter().map(|c| c.id.0).collect();
+            if let Err(e) = app.run("edit.select", json!({"clips": ids, "tracks": [track.id.0], "start": b.start, "end": b.end})) {
+                app.ui.status = e;
+            }
+        }
+    }
+}
+
+/// A closed folder's blocks over `view`: where any member track (nested ones too) has a clip,
+/// overlapping clips joined into one block.
+pub fn folder_blocks(s: &Session, folder: TrackId, view: Range) -> Vec<Range> {
+    let mut spans: Vec<Range> = soundcraft_engine::cmd::folder_members(s, folder)
+        .into_iter()
+        .filter_map(|m| s.track(m))
+        .flat_map(|t| t.clips().iter().map(Clip::range))
+        .filter(|r| r.overlaps(&view) && !r.is_empty())
+        .collect();
+    spans.sort_by_key(|r| r.start);
+    let mut out: Vec<Range> = Vec::new();
+    for r in spans {
+        match out.last_mut() {
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => out.push(r),
+        }
+    }
+    out
+}
+
 /// The plain views the track view menu offers (before the plugin parameters).
 pub fn view_options(track: &Track) -> Vec<&'static str> {
     let mut opts: Vec<&str> = Vec::new();
     if track.kind.is_midi() {
         opts.extend(["notes", "regions", "blocks"]);
     } else if track.kind == TrackKind::Audio {
-        opts.extend(["waveform", "pitch", "blocks", "clip_gain", "warp", "playlists"]);
+        opts.extend(["waveform", "pitch", "spectral", "blocks", "clip_gain", "warp", "playlists"]);
     } else if track.kind.has_playlist() {
         opts.extend(["waveform", "blocks", "clip_gain", "playlists"]);
     }
@@ -1896,7 +2136,7 @@ pub(crate) fn track_preset_items(app: &mut SoundApp, ui: &mut Ui, id: TrackId, s
             let name = app.engine.session().track(id).map(|t| t.name.clone()).unwrap_or_default();
             app.dialogs.open = Some(crate::dialogs::Dialog::SaveTrackPreset { track: id, name, chain: false });
         } else {
-            // No presets folder (the web build): a path, for the clicked track.
+            // No presets folder: a path, for the clicked track.
             let _ = app.run("edit.select", json!({"tracks": [id.0]}));
             let _ = app.dialogs.open_for_command(&app.engine, "track.save_preset");
         }
@@ -1957,6 +2197,18 @@ fn strip_shape_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u
             app.engine.end_merge();
         }
         if m.pan.len() == 2 {
+            ui.horizontal(|ui| {
+                ui.label("Pans");
+                for (link, label, tip) in [
+                    (soundcraft_model::PanLink::Off, "Independent", "Each pan moves alone"),
+                    (soundcraft_model::PanLink::Link, "Linked", "Moving one pan moves the other by as much"),
+                    (soundcraft_model::PanLink::Mirror, "Mirrored", "Moving one pan moves the other by as much the other way"),
+                ] {
+                    if ui.selectable_label(m.pan_link == link, label).on_hover_text(tip).clicked() {
+                        let _ = app.run("mix.pan_link", json!({"tracks": selection, "link": link.id()}));
+                    }
+                }
+            });
             let mut w = m.width;
             let resp =
                 ui.add(egui::Slider::new(&mut w, -1.0..=1.0).text("Width")).on_hover_text("1: as it comes · 0: mono · -1: left and right swapped");
@@ -1977,6 +2229,32 @@ fn strip_shape_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u
             }
         }
     });
+}
+
+/// Track › Copy Settings to Selected: this track's inserts, sends or more onto the other selected
+/// tracks (`mix.copy_strip`), one undo step.
+fn copy_strip_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u64]) {
+    let others: Vec<u64> = selection.iter().copied().filter(|t| *t != id.0).collect();
+    ui.add_enabled_ui(!others.is_empty(), |ui| {
+        ui.menu_button("Copy Settings to Selected", |ui| {
+            for (label, sections) in [
+                ("Inserts and Sends", &["inserts", "sends"][..]),
+                ("Inserts", &["inserts"][..]),
+                ("Sends", &["sends"][..]),
+                ("Fader, Pan and Mutes", &["faders", "pan", "mutes"][..]),
+                ("Everything but Routing", &["faders", "pan", "mutes", "sends", "inserts", "delay"][..]),
+            ] {
+                if ui.button(label).clicked() {
+                    if let Err(e) = app.run("mix.copy_strip", json!({"from": id.0, "tracks": others, "sections": sections})) {
+                        app.ui.status = e;
+                    }
+                    ui.close();
+                }
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text("Select the tracks to copy onto as well");
 }
 
 fn freeze_submenu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, selection: &[u64]) {
@@ -2063,6 +2341,40 @@ fn freeze_targets(s: &Session, selection: &[u64], thaw: bool) -> (Vec<u64>, Vec<
     (tracks, skipped)
 }
 
+/// While Strip Silence's dialog is open: the parts of the selection on this track it would
+/// remove, shaded.
+fn draw_strip_preview(app: &SoundApp, ui: &Ui, id: TrackId, tl: Rect, lane: Rect) {
+    let Some(p) = crate::dialogs::strip_preview_shown(app, ui.ctx()) else { return };
+    let Some((_, keep)) = p.keep.iter().find(|(t, _)| *t == id) else { return };
+    let s = app.engine.session();
+    let painter = ui.painter().with_clip_rect(lane.intersect(tl));
+    let shade = Color32::from_rgba_unmultiplied(0, 0, 0, 140);
+    let mut from = p.range.0;
+    for &(a, b) in keep.iter().chain(std::iter::once(&(p.range.1, p.range.1))) {
+        if a > from {
+            let r = Rect::from_x_y_ranges(x_of(s, tl, from)..=x_of(s, tl, a), lane.y_range());
+            painter.rect_filled(r, 0.0, shade);
+        }
+        from = from.max(b);
+    }
+}
+
+/// The markers placed on track `id`'s lane: a line down the lane and the name at its top.
+fn draw_track_markers(app: &SoundApp, ui: &Ui, id: TrackId, tl: Rect, lane: Rect) {
+    let s = app.engine.session();
+    let painter = ui.painter().with_clip_rect(lane.intersect(tl));
+    for m in s.markers.iter().filter(|m| m.track == Some(id)) {
+        let x = x_of(s, tl, m.start);
+        if x < tl.min.x - 1.0 || x > tl.max.x + 1.0 {
+            continue;
+        }
+        let col = m.color.map_or(Color32::from_rgb(250, 200, 60), |[r, g, b]| Color32::from_rgb(r, g, b));
+        painter.line_segment([pos2(x, lane.min.y), pos2(x, lane.max.y)], Stroke::new(1.5, col));
+        painter.text(pos2(x + 3.0, lane.min.y + 2.0), Align2::LEFT_TOP, &m.name, regular(10.0), col);
+        painter.rect_filled(Rect::from_min_size(pos2(x - 3.0, lane.min.y), vec2(6.0, 6.0)), 1.0, col);
+    }
+}
+
 /// The track menu's Active/Inactive item for a track that is `inactive` now.
 pub fn inactive_label(inactive: bool) -> &'static str {
     if inactive { "Make Active" } else { "Make Inactive" }
@@ -2072,11 +2384,12 @@ pub fn inactive_label(inactive: bool) -> &'static str {
 /// `window` when it holds the track, else on the track alone.
 pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, window: crate::MainWindow) {
     let tid = id.0;
-    let items: [(&str, &str); 9] = [
+    let items: [(&str, &str); 10] = [
         ("Rename...", "ui.rename_track"),
         ("Duplicate...", "track.duplicate"),
         ("Make Inactive", "track.make_inactive"),
         ("Hide", "track.hide"),
+        ("Lock Track", "track.lock"),
         ("Delete", "track.delete"),
         ("Split into Mono", "track.split_into_mono"),
         ("Commit...", "track.commit"),
@@ -2088,12 +2401,19 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
         if selected.contains(&id) { selected.iter().map(|track| track.0).collect() } else { vec![tid] }
     };
     let inactive = app.engine.session().track(id).is_some_and(|t| t.inactive);
+    let locked = app.engine.session().track(id).is_some_and(|t| t.edit_locked);
     for (label, cmd) in items {
         // Make Inactive reads Make Active on an inactive track, and sets that state on the selection.
-        let label = if cmd == "track.make_inactive" { inactive_label(inactive) } else { label };
+        let label = match cmd {
+            "track.make_inactive" => inactive_label(inactive),
+            "track.lock" if locked => "Unlock Track",
+            _ => label,
+        };
         if ui.button(label).clicked() {
             if cmd == "track.make_inactive" {
                 let _ = app.run(cmd, json!({"tracks": selection, "inactive": !inactive}));
+            } else if cmd == "track.lock" {
+                let _ = app.run(cmd, json!({"tracks": selection, "value": !locked}));
             } else if cmd == "ui.rename_track" {
                 let name = app.engine.session().track(id).map(|t| t.name.clone()).unwrap_or_default();
                 app.dialogs.open_rename_track(id, &name);
@@ -2109,8 +2429,12 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
             }
             freeze_submenu(app, ui, id, &selection);
         }
+        if cmd == "track.move_to_new_folder"
+            && ui.button("Move to New Basic Folder").on_hover_text("A folder that only organises: no bus, the tracks keep their outputs").clicked()
+        {
+            let _ = app.run(cmd, json!({"tracks": selection, "routing": false}));
+        }
     }
-    #[cfg(not(target_arch = "wasm32"))]
     ml_menu(app, ui, json!({"track": tid}));
     // Lyrics from Transcribe Lyrics: clear them (one undo step).
     if app.engine.session().track(id).is_some_and(soundcraft_model::track_has_lyrics) && ui.button("Clear Lyrics").clicked() {
@@ -2156,6 +2480,7 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
         });
     }
     strip_shape_menu(app, ui, id, &selection);
+    copy_strip_menu(app, ui, id, &selection);
     if app.engine.session().track(id).is_some_and(|track| track.folder.is_some()) && ui.button("Remove from Folder").clicked() {
         let _ = app.run("track.remove_from_folder", json!({"tracks": selection}));
     }
@@ -2277,7 +2602,9 @@ fn draw_live_take(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &
         None if s.edit.loop_record && !sel.is_empty() => (sel.start, Some(sel.len()), 0),
         None => (app.record_start, None, 0),
     };
-    let Some((origin, span)) = soundcraft_engine::io::live_span(start, pass, app.punch, len, latency) else { return };
+    // A take armed during the recording starts where it was armed.
+    let late = app.take_plan.as_ref().and_then(|p| p.takes.iter().rev().find(|t| t.track == track.id)).and_then(|t| t.late).unwrap_or(0);
+    let Some((origin, span)) = soundcraft_engine::io::live_span(start.saturating_add(late), pass, app.punch, len, latency) else { return };
     let r = Rect::from_min_max(pos2(x_of(s, tl, span.start), lane.min.y + 1.0), pos2(x_of(s, tl, span.end), lane.max.y - 1.0));
     let t = Tokens::current();
     let (body, _, wave) = clip_colors([t.rec.r(), t.rec.g(), t.rec.b()], false);
@@ -2354,11 +2681,19 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
                         preview = Clip { fade_in, fade_out, ..clip.clone() };
                         &preview
                     };
-                    crate::waveform::draw(&painter.with_clip_rect(vis), s, tl, shown, audio, track.channels(), body_r, wave);
-                    let n = track.channels().min(audio.peaks.len()).max(1);
-                    for k in 1..n {
-                        let y = body_r.min.y + body_r.height() / n as f32 * k as f32;
-                        painter.line_segment([pos2(vis.min.x, y), pos2(vis.max.x, y)], Stroke::new(1.0, body.gamma_multiply(0.7)));
+                    if track.view == "spectral" {
+                        let pass = painter.ctx().cumulative_pass_nr();
+                        crate::spectral::draw(&painter.with_clip_rect(vis), s, tl, shown, audio, pass, body_r);
+                        if crate::spectral::pending() {
+                            painter.ctx().request_repaint();
+                        }
+                    } else {
+                        crate::waveform::draw(&painter.with_clip_rect(vis), s, tl, shown, audio, track.channels(), body_r, wave);
+                        let n = track.channels().min(audio.peaks.len()).max(1);
+                        for k in 1..n {
+                            let y = body_r.min.y + body_r.height() / n as f32 * k as f32;
+                            painter.line_segment([pos2(vis.min.x, y), pos2(vis.max.x, y)], Stroke::new(1.0, body.gamma_multiply(0.7)));
+                        }
                     }
                 }
             } else if s.live_stretch.contains_key(source) {
@@ -2370,31 +2705,23 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
         }
         ClipContent::Video { .. } => {} // thumbnails: video_track::draw_lane
         ClipContent::Midi { sequence } => {
-            let (lo, hi) = sequence.notes.iter().fold((127u8, 0u8), |(lo, hi), n| (lo.min(n.pitch), hi.max(n.pitch)));
-            let (lo, hi) = if lo > hi { (48, 72) } else { (lo.saturating_sub(2), hi.saturating_add(2)) };
-            let span = f32::from(hi.saturating_sub(lo).max(1));
-            let base = s.tempo.samples_to_ticks(clip.start, s.sample_rate);
             let p = painter.with_clip_rect(vis);
-            for n in sequence.notes.iter().filter(|n| n.start >= 0) {
-                let a = s.tempo.tick_to_samples(base.saturating_add(n.start), s.sample_rate);
-                let b = s.tempo.tick_to_samples(base.saturating_add(n.end()), s.sample_rate).min(clip.end());
-                let nx0 = x_of(s, tl, a);
-                let nx1 = x_of(s, tl, b).max(nx0 + 2.0);
-                if nx1 < vis.min.x || nx0 > vis.max.x {
+            let picked =
+                |i: usize| app.midi.clip == Some(clip.id) && app.midi.selected.contains(&i) && crate::track_notes::edits_notes(track, s.edit.tool);
+            for (i, r) in crate::track_notes::note_rects(s, clip, tl, body_r) {
+                if r.max.x < vis.min.x || r.min.x > vis.max.x {
                     continue;
                 }
-                let y = body_r.max.y - 3.0 - (f32::from(n.pitch.saturating_sub(lo)) / span) * (body_r.height() - 6.0);
-                let nh = ((body_r.height() - 6.0) / span).clamp(1.5, 6.0);
+                let Some(n) = sequence.notes.get(i) else { continue };
                 let vcol = if crate::theme::is_light() {
                     Color32::from_rgb(20, 20 + n.velocity, 40)
                 } else {
                     wave.gamma_multiply(0.5 + f32::from(n.velocity) / 254.0)
                 };
-                p.rect_filled(
-                    Rect::from_min_max(pos2(nx0, y - nh * 0.5), pos2(nx1, y + nh * 0.5)),
-                    1.0,
-                    if selected { Color32::from_rgb(16, 16, 16) } else { vcol },
-                );
+                p.rect_filled(r, 1.0, if selected { Color32::from_rgb(16, 16, 16) } else { vcol });
+                if picked(i) {
+                    p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_rgb(250, 250, 250)), StrokeKind::Outside);
+                }
             }
         }
     }
@@ -2509,6 +2836,19 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
     if s.edit.flag("view.clip.rating") && clip.rating > 0 && name_h > 0.0 {
         painter.text(pos2(r.max.x - 18.0, r.min.y + 7.0), Align2::RIGHT_CENTER, "★".repeat(usize::from(clip.rating.min(5))), regular(9.0), ov);
     }
+    // Clip Notes: a mark in the name bar, and the notes beside the pointer while it rests there.
+    if !clip.notes.is_empty() && name_h > 0.0 {
+        let mark = Rect::from_center_size(pos2(r.max.x - 8.0, r.min.y + 7.0), vec2(12.0, 12.0));
+        painter.text(mark.center(), Align2::CENTER_CENTER, "✎", regular(10.0), ov);
+        let ctx = painter.ctx();
+        if ctx.pointer_hover_pos().is_some_and(|p| mark.contains(p) && painter.clip_rect().contains(p)) {
+            let id = egui::Id::new(("clip_notes_tip", clip.id.0));
+            egui::Tooltip::always_open(ctx.clone(), painter.layer_id(), id, mark).show(|ui| {
+                ui.set_max_width(320.0);
+                ui.label(clip.notes.as_str());
+            });
+        }
+    }
     if s.edit.flag("view.clip.sync_point") && clip.sync_point > 0 {
         let x = x_of(s, tl, clip.start + clip.sync_point);
         painter.add(Shape::convex_polygon(
@@ -2616,6 +2956,14 @@ fn draw_automation(painter: &egui::Painter, s: &Session, track: &Track, p: &Auto
     };
     let line: Vec<Pos2> = pts.iter().map(|(x, y)| pos2(*x, *y)).collect();
     painter.add(Shape::line(line, Stroke::new(1.5, t.automation_line)));
+    // Automation inside clips: over each clip with a lane for `p`, the lane as it plays there.
+    for c in clip_automation_lines(s, track, p, tl, lane) {
+        painter.rect_filled(Rect::from_x_y_ranges(c.x0..=c.x1, lane.y_range()), 0.0, t.accent.gamma_multiply(0.08));
+        painter.add(Shape::line(c.line, Stroke::new(2.0, t.accent)));
+        for pt in c.points {
+            painter.circle(pt, 3.0, Color32::from_rgb(40, 40, 40), Stroke::new(1.5, t.accent));
+        }
+    }
     // Segment midpoint handles: drag up or down to bend, double-click to straighten.
     let hover = painter.ctx().input(|i| i.pointer.hover_pos());
     for (mid, _) in segment_handles(s, tl, lane, track, p) {
@@ -2640,6 +2988,104 @@ fn draw_automation(painter: &egui::Painter, s: &Session, track: &Track, p: &Auto
     painter.text(pos2(lane.min.x + 6.0, lane.min.y + 9.0), Align2::LEFT_CENTER, param_label(track, p), regular(10.0), t.text_dim);
 }
 
+/// One clip's automation for a lane, as drawn over the clip: its span on screen, the lane as it
+/// plays there (the clip's points; a dB lane adds to the track's: `Track::played`) and the
+/// clip's own points on that line.
+struct ClipAutoLine {
+    x0: f32,
+    x1: f32,
+    line: Vec<Pos2>,
+    points: Vec<Pos2>,
+}
+
+/// The clips of `track` with automation of their own for `p` that show in `lane` (muted clips
+/// play none, so show none).
+fn clip_automation_lines(s: &Session, track: &Track, p: &AutoParam, tl: Rect, lane: Rect) -> Vec<ClipAutoLine> {
+    let Some(played) = track.played.iter().find(|l| &l.param == p) else { return Vec::new() };
+    let range = lane_range(track, p);
+    let def = p.range().2;
+    let yv = |at: Samples| auto_y(lane, range, played.value_at(at, def));
+    let mut out = Vec::new();
+    for c in track.clips().iter().filter(|c| !c.muted) {
+        let Some(cl) = c.automation.iter().find(|l| &l.param == p && !l.points.is_empty()) else { continue };
+        let (x0, x1) = (x_of(s, tl, c.start).max(lane.min.x), x_of(s, tl, c.end()).min(lane.max.x));
+        if x1 <= x0 {
+            continue;
+        }
+        let mut line = Vec::new();
+        let mut x = x0;
+        while x < x1 {
+            line.push(pos2(x, yv(sample_at(s, tl, x))));
+            x += 3.0;
+        }
+        line.push(pos2(x1, yv(sample_at(s, tl, x1).min(c.end().saturating_sub(1)))));
+        let points = cl
+            .points
+            .iter()
+            .map(|pt| c.start.saturating_add(pt.at))
+            .filter(|at| *at >= c.start && *at < c.end())
+            .map(|at| pos2(x_of(s, tl, at), yv(at)))
+            .filter(|q| q.x >= lane.min.x - 4.0 && q.x <= lane.max.x + 4.0)
+            .collect();
+        out.push(ClipAutoLine { x0, x1, line, points });
+    }
+    out
+}
+
+/// The clip's own automation point under `pos` (within 6 points) in a lane showing `p`: the clip
+/// and the point's time from the clip's start. Found where [`clip_automation_lines`] draws it.
+fn clip_point_at(s: &Session, tl: Rect, lane: Rect, track: &Track, p: &AutoParam, pos: Pos2) -> Option<(ClipId, Samples)> {
+    let played = track.played.iter().find(|l| &l.param == p)?;
+    let (range, def) = (lane_range(track, p), p.range().2);
+    track
+        .clips()
+        .iter()
+        .filter(|c| !c.muted)
+        .flat_map(|c| c.automation.iter().filter(|l| &l.param == p).flat_map(move |l| l.points.iter().map(move |q| (c, q.at))))
+        .filter(|(c, off)| (0..c.length).contains(off))
+        .map(|(c, off)| {
+            let at = c.start.saturating_add(off);
+            (c.id, off, pos2(x_of(s, tl, at), auto_y(lane, range, played.value_at(at, def))).distance(pos))
+        })
+        .filter(|(_, _, d)| *d <= 6.0)
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(c, off, _)| (c, off))
+}
+
+/// The clip at `at` with a lane of its own for `p`: a point added there by mouse goes on it.
+fn clip_lane_at<'a>(track: &'a Track, p: &AutoParam, at: Samples) -> Option<&'a Clip> {
+    track
+        .clips()
+        .iter()
+        .rev()
+        .filter(|c| !c.muted && c.start <= at && at < c.end())
+        .find(|c| c.automation.iter().any(|l| &l.param == p && !l.points.is_empty()))
+}
+
+/// What a clip point stores for the value `v` the pointer shows at `at`: on a dB lane the clip's
+/// points add to the track's lane, so the point is the difference.
+fn clip_point_value(track: &Track, p: &AutoParam, at: Samples, v: f32) -> f32 {
+    if soundcraft_model::clip_automation::adds(p) {
+        let def = p.range().2;
+        v - track.lane(p).map_or(def, |l| l.value_at(at, def))
+    } else {
+        v
+    }
+}
+
+/// Adds a point where the pointer is on a lane showing `param`: on the clip's own lane when the
+/// clip there has one for it, otherwise on the track's.
+fn add_lane_point(app: &mut SoundApp, track: &Track, param: &AutoParam, at: Samples, value: f32) {
+    let pid = automation_id(param);
+    let _ = match clip_lane_at(track, param, at) {
+        Some(c) => app.run(
+            "clip.automation_point",
+            json!({"clip": c.id.0, "param": pid, "at": at - c.start, "value": clip_point_value(track, param, at, value)}),
+        ),
+        None => app.run("automation.set_point", json!({"track": track.id.0, "param": pid, "at": at, "value": value})),
+    };
+}
+
 fn t_accent_fill() -> Color32 {
     Tokens::current().accent.gamma_multiply(0.25)
 }
@@ -2654,7 +3100,7 @@ fn points_in_band(s: &Session, tl: Rect, lane: Rect, track: &Track, p: &AutoPara
 }
 
 /// The values an automation lane spans, bottom to top.
-fn lane_range(track: &Track, p: &AutoParam) -> (f32, f32) {
+pub(crate) fn lane_range(track: &Track, p: &AutoParam) -> (f32, f32) {
     if matches!(p, AutoParam::Volume | AutoParam::SendLevel(_)) {
         (-60.0, 12.0)
     } else if *p == AutoParam::Trim {
@@ -2736,9 +3182,9 @@ fn breakpoint_at(s: &Session, tl: Rect, lane: Rect, track: &Track, p: &AutoParam
 
 fn plugin_range(track: &Track, p: &AutoParam) -> (f32, f32) {
     if let AutoParam::Plugin { module, param } = p
-        && let Some(ins) = track.mixer.module(*module)
+        && let Some(ins) = track.module_or_instrument(*module)
         && let Some(info) = crate::mix_window::plugin_info(&ins.plugin)
-        && let Some(pi) = info.param(param)
+        && let Some(pi) = info.param(soundcraft_model::split_channel_param(param).map_or(param.as_str(), |(_, own)| own))
     {
         return (pi.min, pi.max);
     }
@@ -2755,6 +3201,62 @@ pub fn snap(s: &Session, at: Samples) -> Samples {
 }
 
 /// [`snap`] for an edit point on `track`: also to the zero crossing of its audio when asked.
+/// The join nearest `x` (within 8 points) where one clip on `track` ends as another starts or
+/// overlaps it: the sample the Smart Tool's crossfade centres on.
+fn crossfade_join_near(s: &Session, tl: Rect, track: &Track, x: f32) -> Option<Samples> {
+    let clips = track.clips();
+    clips
+        .iter()
+        .filter(|c| c.is_audio())
+        .filter_map(|c| {
+            let d = clips.iter().find(|d| d.id != c.id && d.is_audio() && d.start <= c.end() && d.start > c.start && d.end() > c.end())?;
+            Some(c.end().saturating_add(d.start) / 2)
+        })
+        .map(|edge| (edge, (x_of(s, tl, edge) - x).abs()))
+        .filter(|(_, dx)| *dx < 8.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(edge, _)| edge)
+}
+
+/// Separation grab (Pro Tools' Separation Grabber): a Grabber drag that starts inside a range
+/// selection on one of its tracks, over a clip the range cuts into, separates the clips at the
+/// range's edges (the move on release joins this undo step) and returns the pieces inside it, selected, for the drag to
+/// move. `None` (nothing done) for any other drag.
+fn separation_grab(app: &mut SoundApp, s: &Session, track: TrackId, hit: Option<&Clip>, at: Samples) -> Option<Vec<ClipId>> {
+    let r = s.edit.selection;
+    let c = hit?;
+    let cuts = r.start > c.start || r.end < c.end();
+    if r.is_empty() || !s.edit.selected_tracks.contains(&track) || !r.contains(at) || !cuts || !c.range().overlaps(&r) {
+        return None;
+    }
+    app.run("edit.separate", json!({})).ok()?;
+    let s = app.engine.session();
+    let ids: Vec<ClipId> = s
+        .tracks
+        .iter()
+        .filter(|t| s.edit.selected_tracks.contains(&t.id))
+        .flat_map(|t| t.clips().iter().filter(|c| c.start >= r.start && c.end() <= r.end).map(|c| c.id))
+        .collect();
+    let list: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    app.run("edit.select", json!({"clips": list, "exact": true})).ok()?;
+    app.join_next_edit = true;
+    (!ids.is_empty()).then_some(ids)
+}
+
+/// A click of the Scissors (separate the clip there, on the track and the tracks an active edit
+/// group spreads the point to) or the Mute tool (mute or unmute the clip, its clip group and the
+/// clips an edit group brings along).
+fn scissors_or_mute(app: &mut SoundApp, s: &Session, tool: Tool, track: TrackId, c: &Clip, at: Samples) {
+    if tool == Tool::Scissors {
+        if at > c.start && at < c.end() && app.run("edit.select", json!({"tracks": [track.0], "start": at, "end": at})).is_ok() {
+            let _ = app.run("edit.separate", json!({"at": at}));
+        }
+    } else {
+        let ids: Vec<u64> = ops::with_edit_groups(s, &ops::group_members(s, c.id)).iter().map(|id| id.0).collect();
+        let _ = app.run("edit.mute_clips", json!({"clips": ids}));
+    }
+}
+
 pub fn snap_on(s: &Session, at: Samples, track: TrackId) -> Samples {
     let on = s.edit.edit_mode.is_grid() || s.edit.flag(ops::SNAP_TO_GRID);
     let gridded = if on { s.edit.grid.snap(at, &s.grid_ctx()) } else { at };
@@ -2960,6 +3462,7 @@ pub fn auto_value_text(param: &AutoParam, v: f32) -> String {
         AutoParam::Volume | AutoParam::SendLevel(_) | AutoParam::Trim if v <= -144.0 + 1e-3 => "-inf dB".into(),
         AutoParam::Volume | AutoParam::SendLevel(_) | AutoParam::Trim => format!("{v:+.1} dB"),
         AutoParam::Width => format!("{:.0}%", v.clamp(-1.0, 1.0) * 100.0),
+        AutoParam::Surround(_) => format!("{v:.2}"),
         AutoParam::Pan(_) | AutoParam::SendPan(_) | AutoParam::Balance => {
             let n = (v.clamp(-1.0, 1.0) * 100.0).round() as i32;
             match n {
@@ -3001,6 +3504,10 @@ pub fn parse_auto_value(param: &AutoParam, text: &str) -> Option<f32> {
             "on" | "unmuted" | "off" | "0" | "no" => Some(0.0),
             _ => None,
         },
+        AutoParam::Surround(_) => {
+            let (lo, hi, _) = param.range();
+            num(&t).map(|v| v.clamp(lo, hi))
+        }
         AutoParam::Plugin { .. } => num(&t),
     }
 }
@@ -3046,11 +3553,14 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             let param = shown.clone()?;
             breakpoint_at(s, tl, lane, track, &param, p).map(|at| (param, at))
         });
+        let at = resp.interact_pointer_pos().map(|p| sample_at(s, tl, p.x).max(0));
         ui.ctx().data_mut(|d| {
             d.insert_temp(menu_clip_id, clip);
             d.insert_temp(menu_point_id, point);
+            d.insert_temp(id.with("menu_at"), at);
         });
     }
+    let menu_at = ui.ctx().data(|d| d.get_temp::<Option<Samples>>(id.with("menu_at"))).flatten();
     // The clip may have been removed or moved since the right-click; only use it if it still exists.
     let menu_clip = ui.ctx().data(|d| d.get_temp::<Option<ClipId>>(menu_clip_id)).flatten().filter(|c| track.clips().iter().any(|x| x.id == *c));
     let menu_point = ui
@@ -3067,8 +3577,19 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             }
             ui.menu_button("Show Lane Below", |ui| crate::auto_lanes::add_lane_menu(app, ui, track, Some(p)));
         }
-        (None, None) => clip_context_menu(app, ui, menu_clip),
+        (None, None) => {
+            clip_context_menu(app, ui, menu_clip);
+            // A marker on this track's lane, where the menu was opened.
+            if let Some(at) = menu_at
+                && ui.button("Add Track Marker Here").clicked()
+            {
+                let _ = app.run("markers.add", json!({"at": at, "track": track.id.0}));
+                ui.close();
+            }
+        }
     });
+    draw_track_markers(app, ui, track.id, tl, lane);
+    draw_strip_preview(app, ui, track.id, tl, lane);
     if sub.is_some() {
         // Nothing is dropped on an automation lane.
     } else {
@@ -3083,7 +3604,32 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             let spot = Spot::source(s, soundcraft_model::SourceId(src.0), track.id, at);
             spot_or_run(app, spot);
         }
-        if resp.dnd_hover_payload::<crate::DragSource>().is_some() {
+        // A clip dropped from the Clip List: a copy there (`clip.copy_to` keeps to tracks of
+        // its kind and the overlap mode).
+        if egui::DragAndDrop::has_payload_of_type::<crate::DragClip>(ui.ctx())
+            && let Some(c) = resp.dnd_release_payload::<crate::DragClip>()
+            && let Some(p) = ui.ctx().pointer_latest_pos()
+        {
+            let s = app.engine.session();
+            let at = drag_snap(s, sample_at(s, tl, p.x).max(0), ui.input(|i| i.modifiers.command));
+            if let Err(e) = app.run("clip.copy_to", json!({"clips": [c.0], "track": track.id.0, "at": at})) {
+                app.ui.status = e;
+            }
+        }
+        if egui::DragAndDrop::has_payload_of_type::<crate::DragCaptured>(ui.ctx())
+            && let Some(c) = resp.dnd_release_payload::<crate::DragCaptured>()
+            && let Some(p) = ui.ctx().pointer_latest_pos()
+        {
+            let s = app.engine.session();
+            let at = drag_snap(s, sample_at(s, tl, p.x).max(0), ui.input(|i| i.modifiers.command));
+            if let Err(e) = app.run("clip.place_captured", json!({"clip": c.0, "track": track.id.0, "at": at})) {
+                app.ui.status = e;
+            }
+        }
+        if resp.dnd_hover_payload::<crate::DragSource>().is_some()
+            || resp.dnd_hover_payload::<crate::DragClip>().is_some()
+            || resp.dnd_hover_payload::<crate::DragCaptured>().is_some()
+        {
             ui.painter().rect_stroke(lane, 0.0, Stroke::new(2.0, Tokens::current().accent), StrokeKind::Inside);
         }
         // Audio files dropped from outside onto an instrument track load its sampler.
@@ -3098,6 +3644,10 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     let at = sample_at(&s, tl, p.x).max(0);
     let origin = if resp.drag_started() { ui.input(|i| i.pointer.press_origin()).unwrap_or(p) } else { p };
     let at_origin = sample_at(&s, tl, origin.x).max(0);
+    // On a MIDI track showing Notes, its notes are edited in place.
+    if sub.is_none() && crate::track_notes::interact(app, ui, &resp, track, lane, tl) {
+        return;
+    }
     // Clean Vocal's badge on a cleaned clip: a click flips Original/Cleaned (undoable).
     if let Some(c) = clip_at(track, at).filter(|c| clean_badge(&s, tl, lane, c).is_some_and(|r| r.contains(p))) {
         if resp.hovered() {
@@ -3119,13 +3669,19 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         }
     }
     let auto_view = sub.cloned().or_else(|| AutoParam::parse(&track.view));
-    let point_hit = if matches!(tool, Tool::Smart | Tool::Grabber | Tool::Pencil) {
+    // A clip's own automation point (drawn over the track's line there) is grabbed first.
+    let clip_point_hit = if matches!(tool, Tool::Smart | Tool::Grabber | Tool::Pencil) {
+        shown.clone().and_then(|param| clip_point_at(&s, tl, lane, track, &param, origin).map(|(c, at)| (param, c, at)))
+    } else {
+        None
+    };
+    let point_hit = if clip_point_hit.is_none() && matches!(tool, Tool::Smart | Tool::Grabber | Tool::Pencil) {
         shown.clone().and_then(|param| breakpoint_at(&s, tl, lane, track, &param, origin).map(|at| (param, at)))
     } else {
         None
     };
     // A segment's midpoint handle, when no breakpoint is under the press.
-    let segment_hit = if point_hit.is_none() && matches!(tool, Tool::Smart | Tool::Grabber | Tool::Pencil) {
+    let segment_hit = if point_hit.is_none() && clip_point_hit.is_none() && matches!(tool, Tool::Smart | Tool::Grabber | Tool::Pencil) {
         shown.clone().and_then(|param| segment_handle_at(&s, tl, lane, track, &param, origin).map(|(at, rising)| (param, at, rising)))
     } else {
         None
@@ -3177,7 +3733,7 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     };
     // Effective tool under the Smart tool; on a breakpoint every tool that edits one grabs it.
     let eff = match tool {
-        _ if point_hit.is_some() || gain_point.is_some() => Tool::Grabber,
+        _ if point_hit.is_some() || clip_point_hit.is_some() || gain_point.is_some() => Tool::Grabber,
         Tool::Smart => {
             if let Some(c) = &hit {
                 if near_edge(c).is_some() {
@@ -3200,11 +3756,13 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             Tool::Selector => egui::CursorIcon::Text,
             Tool::Zoom => egui::CursorIcon::ZoomIn,
             Tool::Pencil => egui::CursorIcon::Crosshair,
+            Tool::Scissors if hit.is_some() => egui::CursorIcon::VerticalText,
+            Tool::Mute if hit.is_some() => egui::CursorIcon::PointingHand,
             _ => egui::CursorIcon::Default,
         };
         ui.ctx().set_cursor_icon(icon);
     }
-    let fade_corner = if tool == Tool::Smart && point_hit.is_none() {
+    let fade_corner = if tool == Tool::Smart && point_hit.is_none() && clip_point_hit.is_none() {
         fade_handle.map(|(_, side)| side).or_else(|| {
             hit.as_ref().and_then(|c| {
                 let xs = x_of(&s, tl, c.start);
@@ -3227,6 +3785,16 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     if fade_corner.is_some() && resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
     }
+    // The Smart Tool's crossfade zone: the lower corners where two clips meet. A drag from it
+    // draws a crossfade centred on the join, as wide as the drag.
+    let xfade_at = |q: Pos2| {
+        (tool == Tool::Smart && point_hit.is_none() && fade_corner.is_none() && auto_view.is_none() && q.y > lane.max.y - lane.height() * 0.28)
+            .then(|| crossfade_join_near(&s, tl, track, q.x))
+            .flatten()
+    };
+    if resp.hovered() && xfade_at(p).is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
+    }
     if (curve_handle.is_some() || segment_hit.is_some()) && resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
     }
@@ -3248,6 +3816,11 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         app.auto_sel.as_ref().is_some_and(|sel| sel.track == track.id && &sel.param == param && sel.points.contains(&at))
     };
     if resp.drag_started()
+        && let Some((param, clip, at)) = &clip_point_hit
+    {
+        app.auto_sel = None;
+        app.gesture = Some(Gesture::ClipPoint { track: track.id, clip: *clip, param: param.clone(), at: *at });
+    } else if resp.drag_started()
         && let Some((param, at, rising)) = &segment_hit
     {
         let start = track.lane(param).and_then(|l| l.points.iter().find(|x| x.at == *at)).map_or(0.0, |x| x.curve);
@@ -3304,6 +3877,11 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         app.gesture = Some(Gesture::FadeCurve { clip: c.id, fade_in, curvature: fade_curve_drag_value(fade, anchor, height, p.y), anchor, height });
         ui.ctx().request_repaint();
     } else if resp.drag_started()
+        && let Some(edge) = xfade_at(origin)
+    {
+        app.gesture = Some(Gesture::Crossfade { track: track.id, edge, to: edge });
+        ui.ctx().request_repaint();
+    } else if resp.drag_started()
         && let (Some(fade_in), Some(c)) = (fade_corner, hit.as_ref())
     {
         app.gesture = fade_drag_range(c, fade_in, at).map(|range| Gesture::Fade {
@@ -3313,6 +3891,20 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             to: if fade_in { range.end } else { range.start },
         });
         ui.ctx().request_repaint();
+    } else if resp.drag_started()
+        && eff == Tool::Grabber
+        && let Some(clips) = separation_grab(app, &s, track.id, hit.as_ref(), at_origin)
+    {
+        // Separation grab: the range's middle, cut free, moves.
+        app.gesture = Some(Gesture::MoveClips {
+            clips,
+            grab_at: at_origin,
+            delta: 0,
+            from_track: track.id,
+            to_track: track.id,
+            copy: mods.ctrl,
+            keep_time: mods.alt,
+        });
     } else if resp.drag_started() {
         app.gesture = match eff {
             Tool::Selector | Tool::Smart => {
@@ -3354,12 +3946,27 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             Tool::Pencil if auto_view.is_none() && track.kind.is_midi() => {
                 hit.is_none().then_some(Gesture::MidiClip { track: track.id, from: at_origin, to: at_origin })
             }
+            Tool::Pencil
+                if auto_view.is_none()
+                    && s.edit.zoom.samples_per_px <= crate::waveform::PENCIL_SAMPLES_PER_POINT
+                    && hit.as_ref().is_some_and(|c| c.is_audio() && c.stretch == 1.0 && c.warp.is_empty() && c.loop_len == 0 && !c.reversed) =>
+            {
+                // At sample zoom the Pencil redraws the clip's samples (`clip.draw_samples` on release).
+                hit.as_ref().map(|c| {
+                    let top = lane.min.y + 1.0 + clip_name_height(&s, lane);
+                    let body = Rect::from_min_max(pos2(lane.min.x, top), pos2(lane.max.x, (lane.max.y - 1.0).max(top)));
+                    let channels = track.channels();
+                    let (ch, v) = crate::waveform::pencil_value(&s, c, channels, body, at_origin, origin.y);
+                    Gesture::DrawWave { clip: c.id, ch, channels, body: (body.min.y, body.max.y), points: vec![(at_origin, v)] }
+                })
+            }
             Tool::Pencil => {
                 // The press is the series' first point (egui reports the drag once the pointer moved).
                 let first = auto_view.as_ref().map(|param| (at_origin, auto_value(lane, lane_range(track, param), origin.y)));
                 Some(Gesture::Pencil { track: track.id, param: auto_view.clone(), points: first.into_iter().collect(), line: mods.shift })
             }
             Tool::Zoom => Some(Gesture::ZoomBox { start: origin.x }),
+            Tool::Scissors | Tool::Mute => None,
         };
     }
     if let Some(Gesture::ClipGain { clip, track: t, pos, anchor, fine, fader_bottom }) = &mut app.gesture
@@ -3420,6 +4027,15 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         let _ = app.run("clip.gain_line", json!({"clip": c.id.0, "points": env}));
         return;
     }
+    if (resp.clicked() || resp.double_clicked())
+        && let Some((param, clip, at)) = &clip_point_hit
+    {
+        // Alt-click deletes a clip's own point, as a track's; a click on one does nothing else.
+        if mods.alt && resp.clicked() {
+            let _ = app.run("clip.automation_delete", json!({"clip": clip.0, "param": automation_id(param), "points": [at]}));
+        }
+        return;
+    }
     if resp.clicked()
         && let Some((param, at)) = &point_hit
     {
@@ -3455,12 +4071,17 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             Tool::Zoom => {
                 let _ = app.run(if mods.alt { "view.zoom_out" } else { "view.zoom_in" }, json!({}));
             }
+            Tool::Scissors | Tool::Mute => {
+                if let Some(c) = &hit {
+                    scissors_or_mute(app, &s, eff, track.id, c, snap_on(&s, at, track.id));
+                }
+            }
             Tool::Pencil => {
                 // One click of the Pencil adds a point wherever the lane shows automation (on the
                 // line's midpoint handle too); Smart and Grabber need a double-click.
                 if let Some(param) = &shown {
                     let value = auto_value(lane, lane_range(track, param), p.y);
-                    let _ = app.run("automation.set_point", json!({"track": track.id.0, "param": automation_id(param), "at": at, "value": value}));
+                    add_lane_point(app, track, param, at, value);
                 } else if track.kind.is_midi() && hit.is_none() {
                     new_midi_clip(app, &s, track.id, at, at);
                 }
@@ -3492,7 +4113,7 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         && let Some(param) = &auto_view
     {
         let value = auto_value(lane, lane_range(track, param), p.y);
-        let _ = app.run("automation.set_point", json!({"track": track.id.0, "param": automation_id(param), "at": at, "value": value}));
+        add_lane_point(app, track, param, at, value);
         return;
     }
     // A double-click selects the clip; on a MIDI clip it opens the MIDI Editor with any tool, on
@@ -3607,6 +4228,12 @@ fn fade_curve_drag_value(fade: soundcraft_model::Fade, anchor: (f32, f32), heigh
 }
 
 /// Runs before anything is painted, against the last frame's layout.
+/// How often a warp marker being dragged is moved for real (and heard), seconds.
+const WARP_AUDITION_SECS: f64 = 0.08;
+
+/// Where the undo history stood when a warp-marker drag first moved its marker (egui temp data).
+const WARP_DRAG_BASE: &str = "warp_drag_base";
+
 fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
     app.point_readout = None;
     if app.gesture.is_none() || matches!(app.gesture, Some(Gesture::Fader { .. })) {
@@ -3615,6 +4242,14 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
     let (s, tl) = (app.engine.session_arc(), rect(app.edit_layout.timeline));
     let p = ctx.pointer_latest_pos();
     if !ctx.input(|i| i.pointer.any_down()) {
+        // A warp-marker drag moved its marker to be heard: those steps go, quietly, and the
+        // release makes the move as one step.
+        if let Some(n) = ctx.data_mut(|d| d.remove_temp::<usize>(egui::Id::new(WARP_DRAG_BASE))) {
+            while app.engine.undo_history().len() > n && app.engine.undo_label() == Some("Warp Marker") {
+                app.engine.undo_discard();
+            }
+        }
+        let s = app.engine.session_arc();
         finish_drag(app, &s, tl, p);
         return;
     }
@@ -3647,10 +4282,30 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 app.ui.status = "Copy".into();
             }
         }
-        Some(Gesture::TrimStart { to, .. } | Gesture::TrimEnd { to, .. } | Gesture::WarpMarker { to, .. }) => {
-            *to = drag_snap(&s, at, ctx.input(|i| i.modifiers.command))
+        Some(Gesture::TrimStart { clip, to, .. }) => *to = trim_snap(&s, *clip, true, at, ctx.input(|i| i.modifiers.command)),
+        Some(Gesture::TrimEnd { clip, to, .. }) => *to = trim_snap(&s, *clip, false, at, ctx.input(|i| i.modifiers.command)),
+        Some(Gesture::WarpMarker { clip, index, to }) => {
+            let new = drag_snap(&s, at, ctx.input(|i| i.modifiers.command));
+            // Heard while dragging: the marker moves as the pointer goes (at most every
+            // WARP_AUDITION_SECS), the real-time stretcher playing it. The release takes these
+            // steps back and makes the move once, so the drag is one undo step.
+            let now = ctx.input(|i| i.time);
+            let last = egui::Id::new("warp_audition_at");
+            if new != *to {
+                *to = new;
+                if ctx.data(|d| d.get_temp::<f64>(last)).is_none_or(|t| now - t >= WARP_AUDITION_SECS) {
+                    ctx.data_mut(|d| d.insert_temp(last, now));
+                    let base = egui::Id::new(WARP_DRAG_BASE);
+                    if ctx.data(|d| d.get_temp::<usize>(base)).is_none() {
+                        let n = app.engine.undo_history().len();
+                        ctx.data_mut(|d| d.insert_temp(base, n));
+                    }
+                    let _ = app.engine.execute("clip.warp_marker", &json!({"clip": clip.0, "op": "move", "index": *index, "to": new}));
+                }
+            }
         }
         Some(Gesture::MidiClip { to, .. }) => *to = at,
+        Some(Gesture::Crossfade { to, .. }) => *to = at,
         Some(Gesture::Fade { clip, fade_in, to, .. }) => {
             if let Some(range) = s.find_clip(*clip).and_then(|(_, c)| fade_drag_range(c, *fade_in, at)) {
                 *to = if *fade_in { range.end } else { range.start };
@@ -3702,6 +4357,28 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                     let _ =
                         app.engine.execute_merged("automation.set_point", &json!({"track": track.0, "param": pid, "at": to, "value": value}), &key);
                     *from = to;
+                }
+            }
+        }
+        Some(Gesture::ClipPoint { track, clip, param, at: from }) => {
+            // Between its neighbours and inside the clip; the value read as the line shows it.
+            if let Some(t) = s.track(*track)
+                && let Some((_, row)) = rows.iter().find(|(i, _)| *i == t.id.0)
+                && let Some(c) = t.clips().iter().find(|c| c.id == *clip)
+                && let Some(points) = c.automation.iter().find(|l| &l.param == param).map(|l| l.points.as_slice())
+                && let Some(i) = points.iter().position(|pt| pt.at == *from)
+            {
+                let lane = lane_rect_for(t, param, rect(*row), tl);
+                let last = c.length.saturating_sub(1).max(0);
+                let lo = i.checked_sub(1).and_then(|j| points.get(j)).map_or(0, |pt| pt.at.saturating_add(1));
+                let hi = points.get(i + 1).map_or(last, |pt| pt.at.saturating_sub(1)).min(last);
+                let to = snap(&s, at).saturating_sub(c.start).clamp(lo, hi.max(lo));
+                let value = clip_point_value(t, param, c.start.saturating_add(to), auto_value(lane, lane_range(t, param), p.y));
+                if to != *from || points.get(i).is_some_and(|pt| (pt.value - value).abs() > 1e-6) {
+                    let params = json!({"clip": clip.0, "param": automation_id(param), "from": *from, "at": to, "value": value});
+                    if app.engine.execute_merged("clip.automation_point", &params, &format!("clip_point:{}", clip.0)).is_ok() {
+                        *from = to;
+                    }
                 }
             }
         }
@@ -3769,6 +4446,19 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 app.auto_sel = (!points.is_empty()).then(|| crate::AutoSelection { track: *track, param: param.clone(), points });
             }
         }
+        Some(Gesture::DrawWave { clip, ch, channels, body, points }) => {
+            if let Some((_, c)) = s.find_clip(*clip) {
+                // Every point keeps to the band the stroke started in.
+                let n = (*channels).max(1);
+                let h = (body.1 - body.0) / n as f32;
+                let band = Rect::from_min_max(pos2(tl.min.x, body.0 + h * *ch as f32), pos2(tl.max.x, body.0 + h * (*ch + 1) as f32));
+                let y = p.y.clamp(band.min.y, band.max.y);
+                let (_, v) = crate::waveform::pencil_value(&s, c, 1, band, at, y);
+                if points.last().is_none_or(|(a, _)| *a != at) {
+                    points.push((at, v));
+                }
+            }
+        }
         Some(Gesture::Pencil { track, param: Some(param), points, line }) => {
             if let Some(t) = s.track(*track)
                 && let Some((_, row)) = rows.iter().find(|(i, _)| *i == t.id.0)
@@ -3776,7 +4466,9 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
                 let lane = lane_rect_for(t, param, rect(*row), tl);
                 let param = param.clone();
                 let value = auto_value(lane, lane_range(t, &param), p.y);
-                if *line && !points.is_empty() {
+                // A shape (Pencil Shape) is drawn from the press and the pointer on release.
+                let shaped = soundcraft_engine::cmd::current_pencil_shape(&s) != soundcraft_model::PencilShape::Free;
+                if (*line || shaped) && !points.is_empty() {
                     // A straight line: the press and the pointer.
                     points.truncate(1);
                     points.push((at, value));
@@ -3809,7 +4501,9 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
     }
     if let Some(Gesture::Select { track, anchor, tracks }) = &app.gesture {
         let (track, anchor, tracks) = (*track, *anchor, tracks.clone());
-        let r = Range::new(anchor, snap_on(&s, at, track));
+        // The suspend modifier lets the selection's end go free of the grid, clips and markers.
+        let end = if ctx.input(|i| i.modifiers.command) { at } else { snap_on(&s, at, track) };
+        let r = Range::new(anchor, end);
         if tracks != s.edit.selected_tracks || r != s.edit.selection {
             let ids: Vec<u64> = tracks.iter().map(|x| x.0).collect();
             let _ = app.run("edit.select", json!({"tracks": ids, "start": r.start, "end": r.end}));
@@ -3833,7 +4527,17 @@ fn drive_drag(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
+    // A separation grab's move joins the undo step of the separate that began it.
+    let join = std::mem::take(&mut app.join_next_edit);
     match app.gesture.take() {
+        Some(Gesture::MoveClips { clips, delta, from_track, to_track, copy: false, .. }) if join && s.edit.edit_mode != EditMode::Spot => {
+            let spot = Spot::clips(s, grabbed_first(s, &clips, from_track), (to_track != from_track).then_some(to_track), delta);
+            if let Some((id, params)) = spot.and_then(|sp| sp.command(s))
+                && let Err(e) = app.engine.execute_joined(&id, &params)
+            {
+                app.ui.status = e.to_string();
+            }
+        }
         Some(Gesture::MoveClips { clips, delta, from_track, to_track, copy: false, .. }) => drop_clips(app, clips, delta, from_track, to_track),
         Some(Gesture::MoveClips { clips, delta, to_track, copy: true, keep_time, .. }) => {
             if app.ui.status == "Copy" {
@@ -3845,7 +4549,25 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
             if !keep_time {
                 params["at"] = json!(first.saturating_add(delta).max(0));
             }
-            let _ = app.run("clip.copy_to", params);
+            if join {
+                if let Err(e) = app.engine.execute_joined("clip.copy_to", &params) {
+                    app.ui.status = e.to_string();
+                }
+            } else {
+                let _ = app.run("clip.copy_to", params);
+            }
+        }
+        Some(Gesture::Crossfade { track, edge, to }) => {
+            // Centred on the join, as wide as the drag either way; `edit.fades_create` keeps it
+            // inside the audio both clips have (and says when it had to make it shorter).
+            let to = p.map_or(to, |p| sample_at(s, tl, p.x).max(0));
+            let half = to.saturating_sub(edge).saturating_abs();
+            if half > 0 {
+                let _ = app.run(
+                    "edit.fades_create",
+                    json!({"tracks": [track.0], "start": edge.saturating_sub(half).max(0), "end": edge.saturating_add(half)}),
+                );
+            }
         }
         Some(Gesture::Fade { clip, fade_in, to, .. }) => {
             let to = p.map_or(to, |p| sample_at(s, tl, p.x).max(0));
@@ -3879,19 +4601,30 @@ fn finish_drag(app: &mut SoundApp, s: &Session, tl: Rect, p: Option<Pos2>) {
         }
         Some(Gesture::TrimEnd { clip, to, stretch: true, .. }) => stretch_clip(app, clip, to, false),
         Some(Gesture::WarpMarker { clip, index, to }) => {
+            // (The moves made to hear the drag were taken back by `drive_drag`: this is its one step.)
             let _ = app.run("clip.warp_marker", json!({"clip": clip.0, "op": "move", "index": index, "to": to}));
         }
         Some(Gesture::TrimStart { clip, to, .. }) => trim_clip(app, clip, to, true),
         Some(Gesture::TrimEnd { clip, to, .. }) => trim_clip(app, clip, to, false),
         Some(Gesture::MidiClip { track, from, to }) => new_midi_clip(app, s, track, from, to),
-        Some(Gesture::Pencil { track, param, points, .. }) => {
+        Some(Gesture::DrawWave { clip, ch, points, .. }) => {
+            // One "Draw Samples" step for the whole stroke.
+            if let Some((from, values)) = crate::sample_editor::stroke_values(&points)
+                && let Err(e) = app.run("clip.draw_samples", json!({"clip": clip.0, "at": from, "values": values, "channel": ch}))
+            {
+                app.ui.status = e;
+            }
+        }
+        Some(Gesture::Pencil { track, param, points, line }) => {
             // One "Draw Automation" step that replaces what was under the drag (no sawtooth).
             if let Some(param) = param.filter(|_| s.track(track).is_some())
                 && !points.is_empty()
             {
                 let pid = automation_id(&param);
                 let series: Vec<(Samples, f32)> = points;
-                let _ = app.run("automation.draw", json!({"track": track.0, "param": pid, "points": series}));
+                // Shift at the press draws a line whatever the shape.
+                let shape = if line { soundcraft_model::PencilShape::Line } else { soundcraft_engine::cmd::current_pencil_shape(s) };
+                let _ = app.run("automation.draw", json!({"track": track.0, "param": pid, "points": series, "shape": shape.id()}));
             }
         }
         Some(Gesture::ZoomBox { start }) => {
@@ -3913,6 +4646,22 @@ fn automation_id(p: &AutoParam) -> String {
 }
 
 /// Grid snapping while dragging; holding Cmd/Ctrl swaps Grid and Slip.
+/// Where a trim of `clip`'s start (or end) dragged to `at` puts the edge. In relative Grid mode
+/// the edge moves by whole grid steps from where it was, keeping its offset from the grid;
+/// otherwise as [`drag_snap`].
+fn trim_snap(s: &Session, clip: ClipId, start: bool, at: Samples, flip: bool) -> Samples {
+    let relative = s.edit.edit_mode.is_grid() && s.edit.flag(ops::RELATIVE_GRID) && !flip;
+    match s.find_clip(clip).filter(|_| relative) {
+        Some((_, c)) => {
+            let (g, ctx) = (&s.edit.grid, s.grid_ctx());
+            let edge = if start { c.start } else { c.end() };
+            let line = g.line_at_or_before(edge, &ctx);
+            edge.saturating_add(g.snap(line.saturating_add(at.saturating_sub(edge)), &ctx).saturating_sub(line))
+        }
+        None => drag_snap(s, at, flip),
+    }
+}
+
 fn drag_snap(s: &Session, at: Samples, flip: bool) -> Samples {
     let gridded = if s.edit.edit_mode.is_grid() != flip { s.edit.grid.snap(at, &s.grid_ctx()) } else { at };
     // The suspend modifier lets go of clip edges and markers too.
@@ -4042,7 +4791,6 @@ fn new_midi_clip(app: &mut SoundApp, s: &Session, track: TrackId, from: Samples,
 
 /// The ML jobs for a track or clip (`target` = `{"track": id}` or `{"clip": id}`): each opens
 /// its dialog.
-#[cfg(not(target_arch = "wasm32"))]
 fn ml_menu(app: &mut SoundApp, ui: &mut Ui, target: serde_json::Value) {
     for (id, label, _) in crate::ml_ui::MENU_ITEMS.iter().filter(|m| m.0.starts_with("ui.ml.")) {
         if ui.button(*label).clicked() {
@@ -4078,6 +4826,10 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
         let name = app.engine.session().find_clip(c).map(|(_, x)| x.name.clone()).unwrap_or_default();
         app.dialogs.open_rename_clip(c, &name);
     }
+    if ui.button("Notes...").clicked() {
+        let text = app.engine.session().find_clip(c).map(|(_, x)| x.notes.clone()).unwrap_or_default();
+        app.dialogs.open_clip_notes(c, &text);
+    }
     if ui.button("Delete").clicked() {
         let _ = app.run("edit.select", json!({"clips": ids}));
         let _ = app.run("edit.clear", json!({}));
@@ -4107,6 +4859,8 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
         });
     });
     clean_menu(app, ui, c);
+    crate::midi_fx_menu::clip_menu(app, ui, c);
+    crate::field_menu::clip_menu(app, ui, c);
     if app.engine.session().find_clip(c).is_some_and(|(_, x)| x.is_audio()) {
         ui.separator();
         if ui.button("Tune Vocal…").on_hover_text("Open the Vocal Editor on this clip").clicked() {
@@ -4123,11 +4877,8 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
             ui.close();
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        ui.separator();
-        ml_menu(app, ui, json!({"clip": c.0}));
-    }
+    ui.separator();
+    ml_menu(app, ui, json!({"clip": c.0}));
 }
 
 /// Clean Vocal's controls on a cleaned clip: Original/Cleaned, the Amount (a drag is one undo
@@ -4315,6 +5066,15 @@ fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
         let x = x_of(s, tl, *to);
         painter.line_segment([pos2(x, r[1]), pos2(x, r[3])], Stroke::new(2.0, Color32::WHITE));
     }
+    if let Some(Gesture::Crossfade { track, edge, to }) = &app.gesture
+        && let Some((_, r)) = app.edit_layout.rows.iter().find(|(id, _)| *id == track.0)
+    {
+        // The crossfade being drawn: its span shaded on the track.
+        let half = to.saturating_sub(*edge).saturating_abs();
+        let (x0, x1) = (x_of(s, tl, edge.saturating_sub(half)), x_of(s, tl, edge.saturating_add(half)));
+        painter.rect_filled(Rect::from_min_max(pos2(x0, r[1]), pos2(x1.max(x0 + 1.0), r[3])), 0.0, Color32::from_white_alpha(40));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
+    }
     if let Some(at) = scroll_to {
         let _ = app.engine.execute("view.scroll", &json!({"to": at}));
     }
@@ -4339,6 +5099,36 @@ mod tests {
         assert_eq!(follow_update(true, Follow::Page, 1_000, SPAN, 1_000, None, false, 96_000), (false, Some(95_000)));
         // Past 90 % of the width already turns it.
         assert_eq!(follow_update(true, Follow::Page, 1_000, SPAN, 1_000, None, false, 10_500), (false, Some(9_500)));
+    }
+
+    /// A clip's own automation shows over the clip in the track's lane: the volume as it plays
+    /// there (the clip's -6 dB on the track's 0 dB) with the clip's point on it.
+    #[test]
+    fn clip_automation_shows_over_its_clip() {
+        let mut s = Session::default();
+        let t = s.add_track(soundcraft_model::TrackKind::Audio, soundcraft_model::ChannelFormat::Mono, None);
+        let id = s.new_clip_id();
+        let mut c = soundcraft_model::Clip::audio(id, "c", soundcraft_model::SourceId(1), 0, 48_000, 48_000);
+        let mut lane = soundcraft_model::AutomationLane::new(AutoParam::Volume);
+        lane.set_point(1_000, -6.0);
+        c.automation.push(lane);
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(c);
+        s.track_mut(t).unwrap().refresh_played();
+        let tl = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 100.0));
+        let lane_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 60.0));
+        s.edit.zoom.scroll = 0;
+        s.edit.zoom.samples_per_px = 192.0;
+        let tr = s.track(t).unwrap().clone();
+        let lines = clip_automation_lines(&s, &tr, &AutoParam::Volume, tl, lane_rect);
+        assert_eq!(lines.len(), 1);
+        let l = &lines[0];
+        let (cx0, cx1) = (x_of(&s, tl, 48_000), x_of(&s, tl, 96_000).min(1000.0));
+        assert!((l.x0 - cx0).abs() < 1e-3 && (l.x1 - cx1).abs() < 1e-3, "over the clip: {} {} vs {cx0} {cx1}", l.x0, l.x1);
+        assert_eq!(l.points.len(), 1);
+        let y = auto_y(lane_rect, lane_range(&tr, &AutoParam::Volume), -6.0);
+        assert!((l.points[0].y - y).abs() < 0.5, "at -6 dB: {} vs {y}", l.points[0].y);
+        // No lane of its own for pan: nothing shows.
+        assert!(clip_automation_lines(&s, &tr, &AutoParam::Pan(0), tl, lane_rect).is_empty());
     }
 
     #[test]
@@ -4468,13 +5258,26 @@ mod tests {
         assert_eq!(c.source(), clip.source(), "adding a marker renders nothing");
         let at = warp_positions(h.state().engine.session(), &c)[1];
         let undo_len = h.state().engine.undo_history().len();
-        drag(&mut h, pos2(x_of(&s, tl, at), y), pos2(x_of(&s, tl, at) + 40.0, y));
+        // Dragged: the marker moves (and is heard) before the release.
+        let (from, to) = (pos2(x_of(&s, tl, at), y), pos2(x_of(&s, tl, at) + 40.0, y));
+        h.hover_at(from);
+        h.drag_at(from);
+        h.step();
+        for k in 1..=8 {
+            h.hover_at(from + (to - from) * (k as f32 / 8.0));
+            h.step();
+        }
+        let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
+        assert!(warp_positions(h.state().engine.session(), &c)[1] > at, "moved while dragging");
+        h.drop_at(to);
+        h.step();
         let c = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
         let moved = warp_positions(h.state().engine.session(), &c)[1];
         assert!(moved > at, "{at} → {moved}");
         assert_ne!(c.source(), clip.source(), "the clip plays the warped render");
         assert_eq!((c.start, c.length), (clip.start, clip.length), "the clip keeps its place");
-        assert_eq!(h.state().engine.undo_history().len(), undo_len + 1, "one step");
+        let hist = h.state().engine.undo_history();
+        assert_eq!(hist.len(), undo_len + 1, "one step: {:?}", &hist[undo_len..]);
         click_with(&mut h, pos2(x_of(&s, tl, moved), y), egui::Modifiers::ALT);
         h.run_steps(2);
         assert_eq!(h.state().engine.session().find_clip(clip.id).unwrap().1.warp.len(), 2);
@@ -4488,7 +5291,9 @@ mod tests {
         let tl = timeline(&h);
         let (clip, lane) = clip_on_screen(&h, |a, b| b - a > 120.0 && a > tl.min.x + 10.0 && b < tl.max.x - 200.0);
         let s = h.state().engine.session().clone();
-        let edge = pos2(x_of(&s, tl, clip.end()) - 2.0, lane.center().y + lane.height() / 4.0);
+        // Mid-height: the clip ends where the next begins, and the lower corner of a join is the
+        // Smart Tool's crossfade zone.
+        let edge = pos2(x_of(&s, tl, clip.end()) - 2.0, lane.center().y);
         h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
         drag(&mut h, edge, edge + vec2(80.0, 0.0));
         h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
@@ -4779,7 +5584,9 @@ mod tests {
         let mut h = smart_demo();
         let tl = timeline(&h);
         let (clip, lane) = clip_on_screen(&h, |xs, xe| xe > tl.min.x + 100.0 && xe < tl.max.x - 20.0 && xe - xs > 100.0);
-        let press = pos2(x_of(h.state().engine.session(), tl, clip.end()) - 2.0, lane.min.y + lane.height() * 0.75);
+        // Mid-height: below it, at a join (this clip ends where the next begins), the Smart Tool
+        // draws a crossfade instead.
+        let press = pos2(x_of(h.state().engine.session(), tl, clip.end()) - 2.0, lane.center().y);
         quick_drag(&mut h, press, press - vec2(40.0, 0.0));
         let after = h.state().engine.session().find_clip(clip.id).unwrap().1.clone();
         assert_eq!(after.start, clip.start, "the clip moved instead of being trimmed");
@@ -4900,6 +5707,11 @@ mod tests {
         h.step();
         let (l, r) = loudness(&h);
         assert!(l > r + 10.0, "reversed: loud on the left ({l} vs {r})");
+        // Looped in place over its whole window, it is still drawn reversed.
+        h.state_mut().engine.session_mut().find_clip_mut(clip.id).unwrap().loop_len = clip.length;
+        h.step();
+        let (l, r) = loudness(&h);
+        assert!(l > r + 10.0, "looped and reversed: loud on the left ({l} vs {r})");
     }
 
     #[test]
@@ -5565,6 +6377,28 @@ mod tests {
         assert_eq!(h.state().engine.undo_history().len(), undo_len);
     }
 
+    /// Track › Pin: a pinned track stays at the top of the track area while the others scroll
+    /// under it; unpinned, it scrolls with them again.
+    #[test]
+    fn a_pinned_track_stays_in_view_while_the_others_scroll() {
+        let mut h = harness(20);
+        let ids = row_ids(&h);
+        h.state_mut().engine.execute("track.pin", &json!({"tracks": [ids[12].0], "value": true})).unwrap();
+        h.step();
+        let top = timeline(&h).min.y;
+        let pinned = |h: &Harness<SoundApp>| rect(h.state().edit_layout.rows.iter().find(|(i, _)| *i == ids[12].0).unwrap().1);
+        assert!((pinned(&h).min.y - top).abs() < 0.5, "pinned at the top: {} vs {top}", pinned(&h).min.y);
+        assert_eq!(h.state().edit_layout.rows[1].0, ids[0].0, "the others follow under it");
+        h.state_mut().edit_layout.scroll_y = 500.0;
+        h.step();
+        assert!((pinned(&h).min.y - top).abs() < 0.5, "still at the top after scrolling");
+        assert!(row(&h, 1).max.y < pinned(&h).max.y, "the first unpinned track scrolled away under it");
+        h.state_mut().engine.execute("track.pin", &json!({"tracks": [ids[12].0], "value": false})).unwrap();
+        h.state_mut().edit_layout.scroll_y = 0.0;
+        h.step();
+        assert_eq!(row_ids(&h), ids, "back in its place");
+    }
+
     #[test]
     fn a_drag_keeps_going_when_its_row_scrolls_away() {
         let mut h = harness(20);
@@ -5757,6 +6591,78 @@ mod tests {
             h.state_mut().engine.execute("edit.undo", &json!({})).unwrap();
             assert_eq!(volume_points(&h, track), before, "{tool}: one undo step");
         }
+    }
+
+    /// A clip with two points of its own on its volume lane (-20 dB at 30% and 60% of it), the
+    /// track showing Volume: the screen position of each point, the clip and its track.
+    fn clip_points_on_screen(tool: &str) -> (Harness<'static, SoundApp>, TrackId, ClipId, [Pos2; 2]) {
+        let mut engine = soundcraft_engine::demo::demo_engine();
+        engine.execute("edit.tool", &json!({"tool": tool})).unwrap();
+        let mut h = harness_with(engine);
+        let tl = timeline(&h);
+        let (clip, _) = clip_on_screen(&h, |xs, xe| xs > tl.min.x + 30.0 && xe < tl.max.x - 100.0 && xe - xs > 200.0);
+        let track = h.state().engine.session().find_clip(clip.id).unwrap().0;
+        for f in [0.3, 0.6] {
+            let at = (clip.length as f64 * f) as i64;
+            h.state_mut().engine.execute("clip.automation_point", &json!({"clip": clip.id.0, "param": "volume", "at": at, "value": -20.0})).unwrap();
+        }
+        h.state_mut().engine.execute("track.view", &json!({"track": track.0, "view": "volume"})).unwrap();
+        h.run_steps(2);
+        let s = h.state().engine.session_arc();
+        let t = s.track(track).unwrap();
+        let i = h.state().edit_layout.rows.iter().position(|(id, _)| *id == track.0).unwrap();
+        let lane = lane_rect(t, row(&h, i), tl);
+        let y = auto_y(lane, lane_range(t, &AutoParam::Volume), -20.0);
+        let c = s.find_clip(clip.id).unwrap().1;
+        let at: Vec<Pos2> = c.automation[0].points.iter().map(|p| pos2(x_of(&s, tl, c.start + p.at), y)).collect();
+        (h, track, clip.id, [at[0], at[1]])
+    }
+
+    fn clip_volume_points(h: &Harness<SoundApp>, clip: ClipId) -> Vec<(Samples, f32)> {
+        let s = h.state().engine.session();
+        s.find_clip(clip)
+            .and_then(|(_, c)| c.automation.iter().find(|l| l.param == AutoParam::Volume))
+            .map(|l| l.points.iter().map(|p| (p.at, p.value)).collect())
+            .unwrap_or_default()
+    }
+
+    /// A clip's own points are edited by mouse where they are drawn: a drag moves one (one undo
+    /// step), Alt-click deletes it, and a click of the Pencil inside the clip adds one to the
+    /// clip, not the track; the clip and the track's lane stay as they were.
+    #[test]
+    fn a_clips_own_points_are_dragged_deleted_and_added_by_mouse() {
+        for tool in ["smart", "grabber"] {
+            let (mut h, track, clip, [a, b]) = clip_points_on_screen(tool);
+            let clips = h.state().engine.session().track(track).unwrap().clips().to_vec();
+            let before = clip_volume_points(&h, clip);
+            let to = b + vec2(-30.0, -15.0);
+            drag(&mut h, b, to);
+            let s = h.state().engine.session_arc();
+            let points = clip_volume_points(&h, clip);
+            assert_eq!(points.len(), 2, "{tool}: {points:?} ({})", h.state().ui.status);
+            assert_eq!(points[0], before[0], "{tool}: the other point stays");
+            let start = s.find_clip(clip).unwrap().1.start;
+            let want = sample_at(&s, timeline(&h), to.x) - start;
+            assert!((points[1].0 - want).abs() as f64 <= s.edit.zoom.samples_per_px * 2.0, "{tool}: {} vs {want}", points[1].0);
+            assert!(points[1].1 > -20.0 + 1.0, "{tool}: dragged up, {}", points[1].1);
+            assert!(x_of(&s, timeline(&h), start + points[1].0) > a.x, "{tool}");
+            assert!(volume_points(&h, track).is_empty(), "{tool}: the track's lane has no points");
+            assert_eq!(
+                s.track(track).unwrap().clips().iter().map(|c| (c.id, c.start)).collect::<Vec<_>>(),
+                clips.iter().map(|c| (c.id, c.start)).collect::<Vec<_>>(),
+                "{tool}: the clips stay"
+            );
+            h.state_mut().engine.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(clip_volume_points(&h, clip), before, "{tool}: one undo step");
+            h.run_steps(2);
+            click_with(&mut h, a, egui::Modifiers::ALT);
+            assert_eq!(clip_volume_points(&h, clip), before[1..], "{tool}: Alt-click deleted it");
+        }
+        let (mut h, track, clip, [a, b]) = clip_points_on_screen("pencil");
+        let between = pos2((a.x + b.x) / 2.0, a.y - 20.0);
+        click(&mut h, between);
+        assert_eq!(clip_volume_points(&h, clip).len(), 3, "{}", h.state().ui.status);
+        assert!(volume_points(&h, track).is_empty(), "the Pencil wrote on the clip, not the track");
     }
 
     #[test]

@@ -2,9 +2,8 @@
 //! question with a fresh package of the ticked captures), the answer streaming into the panel,
 //! and the finished answer stored with `scout.answer` (its guides parsed, bad ones noted).
 //!
-//! The network call is the host's (`Services::ask_claude`, native only): this crate stays
-//! wasm-clean. The API key never passes through here; the host reads it from its own settings
-//! file. Errors (no key, no network, a refused key, a cut stream) become plain messages in the
+//! The network call is the host's (`Services::ask_claude`). The API key never passes through
+//! here; the host reads it from its own settings file. Errors (no key, no network, a refused key, a cut stream) become plain messages in the
 //! conversation, and the question goes back in the box.
 
 use super::{guides, package};
@@ -20,8 +19,6 @@ pub const SYSTEM: &str = "You are Scout, an in-DAW mixing assistant. Follow ai_r
 pub const MAX_TOKENS: u32 = 8192;
 /// Earlier turns sent with a follow-up (the newest ones; older ones are left out).
 pub const CONTEXT_TURNS: usize = 8;
-/// The hint where there is no network call (the web build).
-pub const WEB_HINT: &str = "Use Copy on the web build";
 pub const EMPTY: &str = "Claude sent an empty answer";
 pub const STOPPED: &str = "The answer stopped before it finished";
 
@@ -124,7 +121,7 @@ fn package_tracks(pkg: &Value) -> Vec<String> {
     names
 }
 
-/// Whether Send can work here: a host network call (never on the web build).
+/// Whether Send can work here: the host gives a network call (a bare app, as in tests, has none).
 pub fn can_send(app: &SoundApp) -> bool {
     app.services.ask_claude.is_some()
 }
@@ -162,7 +159,7 @@ pub(crate) fn session_replaced(app: &mut SoundApp) {
 /// (default: the typed question and the ticked captures).
 pub fn send(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
     let Some(ask) = app.services.ask_claude.clone() else {
-        return Err(WEB_HINT.into());
+        return Err("Send is not available here: use Copy".into());
     };
     if app.scout.asking.as_ref().is_some_and(Asking::busy) {
         return Err("Scout is still waiting for the last answer".into());

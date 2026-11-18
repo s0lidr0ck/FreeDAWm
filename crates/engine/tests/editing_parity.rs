@@ -598,6 +598,29 @@ fn a_clip_groups_trims_and_fades_act_on_every_member() {
 
 // ---- tier 2: snapping to clip edges, markers and zero crossings ------------------------------
 
+/// Options › Snap › Adaptive Grid: a musical grid's note value follows the zoom, its lines
+/// about 16 points apart (120 bpm at 48 kHz: a 16th is 6,000 samples, a quarter 24,000).
+#[test]
+fn the_adaptive_grid_follows_the_zoom() {
+    use soundcraft_time::{GridValue, NoteValue};
+    let mut e = engine("grid");
+    let note = |e: &Engine| match e.session().edit.grid {
+        GridValue::Note { value, .. } => Some(value),
+        _ => None,
+    };
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 1500.0}));
+    assert_eq!(note(&e), Some(NoteValue::Sixteenth), "off: the grid stays");
+    run(&mut e, "edit.adaptive_grid", json!({}));
+    assert_eq!(note(&e), Some(NoteValue::Quarter), "on: a quarter is 16 points at this zoom");
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 375.0}));
+    assert_eq!(note(&e), Some(NoteValue::Sixteenth));
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 6000.0}));
+    assert_eq!(note(&e), Some(NoteValue::Bar), "zoomed out, bars");
+    run(&mut e, "view.grid", json!({"value": {"seconds": 1.0}}));
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 375.0}));
+    assert!(matches!(e.session().edit.grid, GridValue::Seconds(_)), "a time grid stays as chosen");
+}
+
 #[test]
 fn edit_points_snap_to_clip_edges_markers_and_zero_crossings() {
     use soundcraft_engine::edit::{magnet_target, snap_point, zero_crossing_near};
@@ -619,6 +642,11 @@ fn edit_points_snap_to_clip_edges_markers_and_zero_crossings() {
     assert_eq!(snap_point(s, 10_020, 10_100, 100, None, &[]), 10_000);
     run(&mut e, "edit.snap_to_markers", json!({}));
     assert_eq!(magnet_target(e.session(), 29_950, 100, &[]), Some(30_000));
+    // The playhead pulls only when asked.
+    e.session_mut().edit.playhead = 40_000;
+    assert_eq!(magnet_target(e.session(), 40_060, 100, &[]), None, "the playhead is off");
+    run(&mut e, "edit.snap_to_cursor", json!({}));
+    assert_eq!(magnet_target(e.session(), 40_060, 100, &[]), Some(40_000));
 
     // Zero crossings: a sine of period 100 in the clip's file, crossing every 50 samples.
     let wave: Vec<f32> = (0..100_000).map(|i| ((i as f64 + 0.5) * std::f64::consts::TAU / 100.0).sin() as f32).collect();
@@ -842,4 +870,87 @@ fn an_edit_on_one_track_of_an_edit_group_applies_to_the_others() {
     run(&mut e, "edit.move_clips", json!({"clips": [kc[0].0], "by": 1_000}));
     assert_eq!(clips(&e, n)[0], (10_200, 4_000, 100_000));
     let _ = rc;
+}
+
+// ---- round three: the open rows ----------------------------------------------------------
+
+#[test]
+fn redo_history_lists_the_undone_steps_next_first() {
+    let mut e = engine("slip");
+    for _ in 0..3 {
+        run(&mut e, "track.new", json!({"count": 1}));
+    }
+    let labels = e.undo_history();
+    assert!(e.redo_history().is_empty());
+    e.undo();
+    e.undo();
+    let n = labels.len();
+    assert_eq!(e.redo_history(), vec![labels[n - 2].clone(), labels[n - 1].clone()]);
+    e.redo();
+    assert_eq!(e.redo_history(), vec![labels[n - 1].clone()]);
+}
+
+#[test]
+fn a_locked_track_refuses_edits_to_its_clips_and_takes_none_new() {
+    let mut e = engine("slip");
+    let (t, c) = track(&mut e, &[(0, 1000, 0), (2000, 1000, 2000)]);
+    let (u, d) = track(&mut e, &[(5000, 1000, 0)]);
+    run(&mut e, "track.lock", json!({"tracks": [t.0]}));
+    let before = clips(&e, t);
+    run(&mut e, "edit.select", json!({"clips": [c[0].0]}));
+    assert!(e.execute("edit.clear", &json!({})).is_err(), "delete refused");
+    assert!(e.execute("edit.move_clips", &json!({"clips": [c[1].0], "by": 100})).is_err(), "move refused");
+    assert!(e.execute("edit.move_clips", &json!({"clips": [d[0].0], "track": t.0})).is_err(), "nothing lands on it");
+    assert!(e.execute("mix.record_arm", &json!({"tracks": [t.0], "value": true})).is_err(), "no recording onto it");
+    assert_eq!(clips(&e, t), before);
+    // Other tracks edit as before; Insert Time still moves the locked clips.
+    run(&mut e, "edit.move_clips", json!({"clips": [d[0].0], "by": 100}));
+    assert_eq!(clips(&e, u), vec![(5100, 1000, 0)]);
+    run(&mut e, "event.insert_time", json!({"start": 1500, "length": 500}));
+    assert_eq!(clips(&e, t), vec![(0, 1000, 0), (2500, 1000, 2000)]);
+    run(&mut e, "track.lock", json!({"tracks": [t.0]}));
+    run(&mut e, "edit.select", json!({"clips": [c[0].0]}));
+    run(&mut e, "edit.clear", json!({}));
+    assert_eq!(clips(&e, t).len(), 1, "unlocked, it edits again");
+}
+
+#[test]
+fn a_view_location_recalls_the_zoom_heights_and_shown_tracks() {
+    let mut e = engine("slip");
+    let a = new_track(&mut e);
+    let b = new_track(&mut e);
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 300.0}));
+    run(&mut e, "view.scroll", json!({"to": 48_000}));
+    run(&mut e, "track.height", json!({"tracks": [a.0], "height": "large"}));
+    let n = run(&mut e, "markers.add", json!({"kind": "none", "name": "Drums view"}))["number"].clone();
+    let view = |e: &Engine| {
+        let s = e.session();
+        (s.edit.zoom.samples_per_px, s.edit.zoom.scroll, s.track(a).unwrap().height, s.track(b).unwrap().hidden)
+    };
+    let kept = view(&e);
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 4000.0}));
+    run(&mut e, "view.scroll", json!({"to": 0}));
+    run(&mut e, "track.height", json!({"tracks": [a.0], "height": "small"}));
+    run(&mut e, "track.hide", json!({"tracks": [b.0], "hidden": true}));
+    let playhead = e.session().edit.playhead;
+    run(&mut e, "markers.recall", json!({"number": n}));
+    assert_eq!(view(&e), kept);
+    assert_eq!(e.session().edit.playhead, playhead, "a view location leaves the playhead");
+    // A plain marker keeps no view unless asked to.
+    let m = run(&mut e, "markers.add", json!({"at": 1000}))["number"].clone();
+    run(&mut e, "view.zoom_set", json!({"samples_per_px": 4000.0}));
+    run(&mut e, "markers.recall", json!({"number": m}));
+    assert_eq!(e.session().edit.zoom.samples_per_px, 4000.0);
+}
+
+#[test]
+fn a_marker_can_sit_on_a_track() {
+    let mut e = engine("slip");
+    let a = new_track(&mut e);
+    let n = run(&mut e, "markers.add", json!({"at": 4800, "track": a.0, "name": "breath"}))["number"].clone();
+    let track_of = |e: &Engine| e.session().markers.iter().find(|m| m.name == "breath").and_then(|m| m.track);
+    assert_eq!(track_of(&e), Some(a));
+    run(&mut e, "markers.edit", json!({"number": n, "track": null}));
+    assert_eq!(track_of(&e), None);
+    assert!(e.execute("markers.add", &json!({"track": 999_999})).is_err(), "no such track");
 }

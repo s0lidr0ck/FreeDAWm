@@ -73,7 +73,10 @@ pub const P_TD_BIAS: usize = 50;
 pub const P_BD_MODE: usize = 51;
 pub const P_DP_DIODE: usize = 52;
 pub const P_OCD_MODE: usize = 53;
-pub const NUM_PARAMS: usize = 54;
+/// FreeDAWm's addition after the C++'s parameters: the circuits run at 8x rather than 4x (a third
+/// half-band stage). Off by default: a session saved before it plays exactly as it did.
+pub const P_OS8: usize = 54;
+pub const NUM_PARAMS: usize = 55;
 
 /// `std::clamp`-free `clampT`: `v < lo ? lo : (v > hi ? hi : v)` (NaN passes through).
 #[inline(always)]
@@ -296,6 +299,8 @@ struct Channel {
     down: [Biquad; 4],
     /// The half-band oversampler, base-rate stage first (FreeDAWm's).
     os: [Stage; 2],
+    /// Its third stage, outermost, run only at 8x ([`P_OS8`]).
+    os3: Stage,
     in_hp_x1: f32,
     in_hp_y1: f32,
     out_hp_x1: f32,
@@ -376,6 +381,8 @@ struct Settings {
     halfband: bool,
     /// The half-bands' round-trip delay, in samples.
     os_latency: usize,
+    /// 8x rather than 4x ([`P_OS8`]; half-bands only).
+    os8: bool,
     // ---- parameter state
     drive_knob: f32,
     tone_knob: f32,
@@ -550,6 +557,7 @@ impl Default for Settings {
         Settings {
             halfband: true,
             os_latency: 0,
+            os8: false,
             drive_knob: 0.5,
             tone_knob: 0.5,
             level_knob: 0.5,
@@ -1155,6 +1163,17 @@ impl DistEngineDsp {
                 s.trim_lin = 10.0f32.powf(s.trim_db / 20.0);
             }
             P_LINK => s.linked = v > 0.5,
+            P_OS8 => {
+                if (v > 0.5) != s.os8 {
+                    s.os8 = v > 0.5;
+                    // The circuits' time step and the oversampler change (set_rate clears the
+                    // half-bands): start them afresh.
+                    let fs = s.fs_base;
+                    self.set_rate(fs);
+                    self.reset_states();
+                    self.apply_model();
+                }
+            }
             i if (P_TS_LO..=P_OCD_HI).contains(&i) => {
                 // tsLo, tsHi, ratLo, ratHi, ... in pairs: lo[k] / hi[k]
                 let k = (i - P_TS_LO) / 2;
@@ -1200,21 +1219,31 @@ impl DistEngineDsp {
         }
     }
 
-    // ---------------------------------------------------------------- init (cmajor init())
-    pub fn prepare(&mut self, sample_rate: f64) {
+    /// The base rate, the circuits' time step (4x, or 8x with [`P_OS8`]), and the half-bands
+    /// with their delay, all stages cleared. Returns the 4x rate (the C++'s filters run there).
+    fn set_rate(&mut self, sample_rate: f64) -> f64 {
         let s = &mut self.s;
         s.fs_base = sample_rate;
-        let os_fs = s.fs_base * 4.0;
-        s.os_t = 1.0 / os_fs;
-
-        let fc = 0.4 * s.fs_base;
+        let factor = if s.os8 && s.halfband { 8.0 } else { 4.0 };
+        s.os_t = 1.0 / (s.fs_base * factor);
         // the half-bands: their coefficients do not depend on the rate
-        let hb_coefs = [hb::coefs_for_stage(0), hb::coefs_for_stage(1)];
-        s.os_latency = hb::round_trip_latency(&hb_coefs, 2);
+        let hb_coefs = [hb::coefs_for_stage(0), hb::coefs_for_stage(1), hb::coefs_for_stage(2)];
+        s.os_latency = hb::round_trip_latency(&hb_coefs, if factor > 4.0 { 3 } else { 2 });
         for c in &mut self.ch {
             for (st, coefs) in c.os.iter_mut().zip(&hb_coefs) {
                 st.set(coefs);
             }
+            c.os3.set(&hb_coefs[2]);
+        }
+        s.fs_base * 4.0
+    }
+
+    // ---------------------------------------------------------------- init (cmajor init())
+    pub fn prepare(&mut self, sample_rate: f64) {
+        let os_fs = self.set_rate(sample_rate);
+        let s = &mut self.s;
+        let fc = 0.4 * s.fs_base;
+        for c in &mut self.ch {
             c.up[0] = butter_lp(fc, os_fs, 0.5098);
             c.up[1] = butter_lp(fc, os_fs, 0.6013);
             c.up[2] = butter_lp(fc, os_fs, 0.8999);
@@ -1249,9 +1278,9 @@ impl DistEngineDsp {
     /// new C++ instance), in place: nothing is allocated. The caller pushes the parameters again.
     pub fn reset(&mut self) {
         let fs = self.s.fs_base;
-        let halfband = self.s.halfband;
+        let (halfband, os8) = (self.s.halfband, self.s.os8);
         *self = DistEngineDsp::new();
-        self.s.halfband = halfband;
+        (self.s.halfband, self.s.os8) = (halfband, os8);
         self.prepare(fs);
     }
 
@@ -2171,6 +2200,19 @@ fn oversampled(halfband: bool, c: &mut Channel, vin: f32, mut core: impl FnMut(&
     y
 }
 
+/// [`oversampled`] at 8x, half-bands only: the outermost stage around the 4x pair.
+fn oversampled8(c: &mut Channel, vin: f32, mut core: impl FnMut(&mut Channel, f64) -> f64) -> f32 {
+    let u = hb::up4(&mut c.os, f64::from(vin));
+    let mut d = [0.0f64; 4];
+    for (dk, uk) in d.iter_mut().zip(u) {
+        let (a, b) = c.os3.up(uk);
+        let ya = f64::from(core(c, f64::from(a as f32)) as f32);
+        let yb = f64::from(core(c, f64::from(b as f32)) as f32);
+        *dk = c.os3.down(ya, yb);
+    }
+    hb::down4(&mut c.os, d) as f32
+}
+
 // ---------------------------------------------------------------- per-channel processing
 /// One base-rate sample of one channel: `(output, the NaN guard fired)`. On `true` the caller
 /// resets the solver states of both channels, as the C++ guard does in place.
@@ -2181,7 +2223,11 @@ fn process_channel(s: &Settings, c: &mut Channel, x: f32) -> (f32, bool) {
 
     let vin = hp_in * s.trim_sm * (INPUT_VOLTS as f32);
 
-    let mut y = oversampled(s.halfband, c, vin, |c, u| core_sample(s, c, u));
+    let mut y = if s.os8 && s.halfband {
+        oversampled8(c, vin, |c, u| core_sample(s, c, u))
+    } else {
+        oversampled(s.halfband, c, vin, |c, u| core_sample(s, c, u))
+    };
 
     if s.circuit_idx == 2 || s.circuit_idx == 4 {
         // Muff / DS-1 passive tone: LP branch and HP branch blended by the pot

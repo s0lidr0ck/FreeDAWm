@@ -5,6 +5,7 @@
 use super::*;
 use crate::cmd;
 use soundcraft_midi::ops::{self, DurationOp};
+use soundcraft_model::ClipContent;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -25,6 +26,27 @@ pub fn specs() -> Vec<CommandSpec> {
             "{factor: 2 (half time) | 0.5 (double time) | 0.1..10, clips?, indices?} — starts from the first note and lengths scale",
             has_selection,
             time_scale
+        ),
+        cmd!(
+            "event.invert_pitch",
+            "Invert Pitches",
+            [],
+            None,
+            "{axis?: MIDI pitch (half steps allowed; default the middle of the notes' range), clips?, indices?} — the pitches mirrored around the axis",
+            has_selection,
+            |e, p| {
+                let axis = p.get("axis").and_then(Value::as_f64).filter(|a| a.is_finite()).map(|a| a.clamp(0.0, 127.0));
+                super::event::midi_op(e, p, move |n, _| ops::invert_pitch(n, axis))
+            }
+        ),
+        cmd!(
+            "event.flam",
+            "Flam",
+            [],
+            None,
+            "{ticks?: 30 (before each note), velocity?: 70 (% of the note's), clips?, indices?} — a grace note of the same pitch before each note -> {added}",
+            has_selection,
+            flam
         ),
         cmd!(
             "event.strum",
@@ -72,6 +94,32 @@ fn strum(e: &mut Engine, p: &Value) -> Result<Value> {
         Some(other) => return Err(bad("event.strum", format!("`direction` is up or down, not `{other}`"))),
     };
     super::event::midi_op(e, p, move |n, _| ops::strum(n, step, up))
+}
+
+fn flam(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "event.flam";
+    let ticks = i64_or(p, "ticks", 30).clamp(1, 480);
+    let pct = f64_or(p, "velocity", 70.0);
+    let ids = clip_ids_param(e, p);
+    let only: Option<Vec<usize>> =
+        p.get("indices").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|x| x as usize).collect());
+    if only.is_some() && ids.len() != 1 {
+        return Err(bad(C, "`indices` needs exactly one clip"));
+    }
+    let mut added = 0;
+    for id in ids {
+        let Some(c) = e.session_mut().find_clip_mut(id) else { continue };
+        let ClipContent::Midi { sequence } = &mut c.content else { continue };
+        let picked: Vec<soundcraft_midi::Note> = match &only {
+            Some(idx) => idx.iter().filter_map(|i| sequence.notes.get(*i).copied()).collect(),
+            None => sequence.notes.clone(),
+        };
+        let graces = ops::flam_notes(&picked, ticks, pct);
+        added += graces.len();
+        sequence.notes.extend(graces);
+        sequence.sort();
+    }
+    Ok(serde_json::json!({"added": added}))
 }
 
 fn humanize(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -126,5 +174,28 @@ mod tests {
         e.execute("event.humanize", &json!({"clips": [clip], "timing": 0, "velocity": 0})).unwrap();
         assert_eq!(notes(&mut e, clip).last(), Some(&(72, 960, 480)));
         e.execute("event.fix_overlaps", &json!({"clips": [clip]})).unwrap();
+    }
+
+    #[test]
+    fn invert_mirrors_the_pitches_and_flam_adds_grace_notes() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 192_000})).unwrap()["clip"].as_u64().unwrap();
+        for (pitch, start) in [(60, 0), (64, 960), (67, 1_920)] {
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": pitch, "start_ticks": start, "length_ticks": 480, "velocity": 100})).unwrap();
+        }
+        // Around the middle of their range (63.5): C-G, E-D#, G-C.
+        e.execute("event.invert_pitch", &json!({"clips": [clip]})).unwrap();
+        assert_eq!(notes(&mut e, clip), vec![(67, 0, 480), (63, 960, 480), (60, 1_920, 480)]);
+        e.execute("event.invert_pitch", &json!({"clips": [clip], "axis": 60, "indices": [0]})).unwrap();
+        assert_eq!(notes(&mut e, clip)[0], (53, 0, 480));
+        let undo = e.undo_history().len();
+        // A grace 30 ticks before the second and third notes; the first, at the clip's start, gets none.
+        let r = e.execute("event.flam", &json!({"clips": [clip], "ticks": 30, "velocity": 50})).unwrap();
+        assert_eq!(r["added"], 2);
+        assert_eq!(e.undo_history().len(), undo + 1);
+        assert_eq!(notes(&mut e, clip), vec![(53, 0, 480), (63, 930, 30), (63, 960, 480), (60, 1_890, 30), (60, 1_920, 480)]);
+        let v = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+        assert_eq!(v["notes"][1]["velocity"], 50);
     }
 }

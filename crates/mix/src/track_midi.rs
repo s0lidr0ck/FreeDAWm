@@ -17,6 +17,13 @@
 //!   and plays nothing.
 //! - **Mute.** A muted source (by its mute, a solo elsewhere or its VCA) lets go of the notes it
 //!   holds on the target and starts no new ones until it is heard again.
+//! - **Layers and splits.** The state may name up to [`MAX_ZONES`] targets, each with a key range
+//!   and a velocity range ([`Zone`]; `"12 0 59 1 127;13 60 127 1 127"`): one track then plays
+//!   several instruments, a note reaching each target whose ranges hold it (overlapping ranges
+//!   layer, side by side ones split). Each target reads the source's events through its zone
+//!   ([`Zone::passes`]): note-ons by key and velocity, note-offs and polyphonic pressure by key,
+//!   everything else (pedal, bend, controllers) to every target. A plain track id is one zone
+//!   over every key and velocity, as before.
 //!
 //! On the audio thread nothing here allocates or panics: the events go into a fixed
 //! [`MidiOut`] ring (full, an event is dropped and counted).
@@ -67,14 +74,94 @@ pub fn create(id: &str) -> Option<Box<dyn Plugin>> {
     (id == ID).then(|| Box::new(TrackMidi::new()) as Box<dyn Plugin>)
 }
 
-/// The target track id kept in a MIDI to Track instrument's state (`None`: another instrument,
-/// or no target).
+/// The first target track id kept in a MIDI to Track instrument's state (`None`: another
+/// instrument, or no target).
 pub fn target_of(ins: &soundcraft_model::Insert) -> Option<soundcraft_model::TrackId> {
-    if ins.plugin != ID {
-        return None;
+    zones_of(ins).first().map(|z| z.track)
+}
+
+/// Most targets (layers and splits) one MIDI to Track instrument plays.
+pub const MAX_ZONES: usize = 4;
+
+/// One target of a MIDI to Track instrument and the notes it takes: keys `lo..=hi` and note-on
+/// velocities `lo..=hi`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Zone {
+    pub track: soundcraft_model::TrackId,
+    pub keys: (u8, u8),
+    pub vel: (u8, u8),
+}
+
+impl Zone {
+    /// Every key and velocity, for `track`.
+    pub fn all(track: soundcraft_model::TrackId) -> Zone {
+        Zone { track, keys: (0, 127), vel: (1, 127) }
     }
-    let bytes = ins.state_bytes()?;
-    std::str::from_utf8(&bytes).ok()?.trim().parse::<u64>().ok().map(soundcraft_model::TrackId)
+
+    /// Whether this zone takes every note (a plain MIDI to Track route).
+    pub fn is_all(&self) -> bool {
+        self.keys == (0, 127) && self.vel.0 <= 1 && self.vel.1 >= 127
+    }
+
+    /// Whether `msg` reaches this zone's target: note-ons by key and velocity, note-offs and
+    /// polyphonic pressure by key, every other message always. Audio thread: no allocation.
+    #[inline]
+    pub fn passes(&self, msg: [u8; 3]) -> bool {
+        let key = msg[1] & 0x7F;
+        let in_keys = (self.keys.0..=self.keys.1).contains(&key);
+        match msg[0] & 0xF0 {
+            0x90 if msg[2] > 0 => in_keys && (self.vel.0..=self.vel.1).contains(&(msg[2] & 0x7F)),
+            0x80 | 0x90 | 0xA0 => in_keys,
+            _ => true,
+        }
+    }
+
+    /// The zone as its state text (`track keylo keyhi vello velhi`).
+    pub fn text(&self) -> String {
+        format!("{} {} {} {} {}", self.track.0, self.keys.0, self.keys.1, self.vel.0, self.vel.1)
+    }
+}
+
+/// The zones kept in a MIDI to Track instrument's state, at most [`MAX_ZONES`] (empty: another
+/// instrument, or no target). A plain track id is one zone over everything. Hostile text gives
+/// what parses: ranges clamped and put in order, a zone that does not parse left out.
+pub fn zones_of(ins: &soundcraft_model::Insert) -> Vec<Zone> {
+    if ins.plugin != ID {
+        return Vec::new();
+    }
+    let Some(bytes) = ins.state_bytes() else { return Vec::new() };
+    let Ok(text) = std::str::from_utf8(&bytes) else { return Vec::new() };
+    parse_zones(text)
+}
+
+/// [`zones_of`]'s reading of the state text.
+pub fn parse_zones(text: &str) -> Vec<Zone> {
+    let byte = |s: Option<&str>, d: u8| s.and_then(|x| x.parse::<u64>().ok()).map_or(d, |v| v.min(127) as u8);
+    let mut out: Vec<Zone> = Vec::new();
+    for part in text.split(';') {
+        let mut it = part.split_whitespace();
+        let Some(track) = it.next().and_then(|t| t.parse::<u64>().ok()) else { continue };
+        let (k0, k1, v0, v1) = (byte(it.next(), 0), byte(it.next(), 127), byte(it.next(), 1), byte(it.next(), 127));
+        let vel = (v0.min(v1).max(1), v0.max(v1).max(1));
+        out.push(Zone { track: soundcraft_model::TrackId(track), keys: (k0.min(k1), k0.max(k1)), vel });
+        if out.len() >= MAX_ZONES {
+            break;
+        }
+    }
+    out
+}
+
+/// The state text for `zones` (a single zone over everything keeps the plain-id form).
+pub fn zones_text(zones: &[Zone]) -> String {
+    match zones {
+        [z] if z.is_all() => z.track.0.to_string(),
+        _ => zones.iter().take(MAX_ZONES).map(Zone::text).collect::<Vec<_>>().join(";"),
+    }
+}
+
+/// The zone of `ins` that plays `target` (the first, when it names that track twice).
+pub fn zone_for(ins: &soundcraft_model::Insert, target: soundcraft_model::TrackId) -> Option<Zone> {
+    zones_of(ins).into_iter().find(|z| z.track == target)
 }
 
 /// The MIDI to Track instrument (see the module docs).
@@ -270,5 +357,24 @@ mod tests {
         };
         assert_eq!(target_of(&ins), Some(soundcraft_model::TrackId(42)));
         assert_eq!(target_of(&soundcraft_model::Insert::new("subtractive_synth")), None);
+        assert_eq!(zones_of(&ins), vec![Zone::all(soundcraft_model::TrackId(42))]);
+    }
+
+    #[test]
+    fn zones_read_split_and_layer_and_hostile_text_is_tamed() {
+        use soundcraft_model::TrackId;
+        let z = parse_zones("12 0 59 1 127;13 60 127 1 127; 14 60 127 100 127");
+        assert_eq!(z.len(), 3);
+        assert_eq!(zones_text(&z), "12 0 59 1 127;13 60 127 1 127;14 60 127 100 127");
+        assert_eq!(zones_text(&[Zone::all(TrackId(9))]), "9");
+        let (low, high, loud) = (z[0], z[1], z[2]);
+        assert!(low.passes([0x90, 59, 100]) && !low.passes([0x90, 60, 100]));
+        assert!(high.passes([0x90, 60, 30]) && !loud.passes([0x90, 60, 30]) && loud.passes([0x91, 72, 110]));
+        assert!(loud.passes([0x80, 60, 0]) && loud.passes([0x90, 60, 0]), "note-offs by key only");
+        assert!(!low.passes([0xA0, 70, 50]) && low.passes([0xB0, 64, 127]) && low.passes([0xE0, 0, 64]));
+        let hostile = parse_zones("x;7 300 -1 0 0;8 90 10 127 5;;1;2;3;4;5");
+        assert_eq!(hostile[0], Zone { track: TrackId(7), keys: (127, 127), vel: (1, 1) }, "300 is 127; -1 reads as nothing, so the top");
+        assert_eq!(hostile[1], Zone { track: TrackId(8), keys: (10, 90), vel: (5, 127) });
+        assert_eq!(hostile.len(), MAX_ZONES);
     }
 }

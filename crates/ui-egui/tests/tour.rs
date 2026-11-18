@@ -1,5 +1,5 @@
 //! The first-run tour: closed unless the host opens it (a fresh app in a test shows none), a card
-//! at a time with Next and Back, Skip closes it, and Window › More › Tour of FreeDAWm opens it.
+//! at a time with Next and Back, Skip closes it, and FreeDAWm › Tour of FreeDAWm opens it.
 
 use egui::vec2;
 use egui_kittest::Harness;

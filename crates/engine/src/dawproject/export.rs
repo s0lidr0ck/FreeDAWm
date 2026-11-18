@@ -360,7 +360,7 @@ impl Ex<'_> {
             let n = format!("{}: input trim ({:+.1} dB) is not carried", t.name, t.mixer.trim_db);
             self.note(n);
         }
-        if t.mixer.phase_invert {
+        if t.mixer.inverts_any() {
             let n = format!("{}: phase invert is not carried", t.name);
             self.note(n);
         }
@@ -780,7 +780,7 @@ impl Ex<'_> {
             AutoParam::SendPan(i) => (AutoParam::SendPan(*i), "normalized", Box::new(|v: f32| f64::from((v.clamp(-1.0, 1.0) + 1.0) / 2.0))),
             AutoParam::Mute => (AutoParam::Mute, "", Box::new(|v: f32| if v >= 0.5 { 1.0 } else { 0.0 })),
             AutoParam::SendMute(i) => (AutoParam::SendMute(*i), "", Box::new(|v: f32| if v >= 0.5 { 0.0 } else { 1.0 })),
-            AutoParam::Width | AutoParam::Balance => {
+            AutoParam::Width | AutoParam::Balance | AutoParam::Surround(_) => {
                 let n = format!("{}: {} automation is not carried", t.name, lane.param.label());
                 self.note(n);
                 return None;

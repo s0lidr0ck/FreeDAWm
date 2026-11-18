@@ -188,6 +188,78 @@ fn snap_to_grid_snaps_the_edit_cursor_while_slip_moves_stay_free() {
 }
 
 #[test]
+fn the_selection_start_end_and_length_can_be_typed() {
+    let (mut app, ctx, _, _) = app("slip", "selector", &[]);
+    app.engine.execute("view.main_counter", &json!({"format": "bars_beats"})).unwrap();
+    let sel = |app: &SoundApp| app.engine.session().edit.selection;
+    for (field, text) in [("start", "3|1|000"), ("length", "1|2|000")] {
+        app.dialogs.open_selection_field(field, "");
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![Event::Text(text.into())]);
+        frame(&ctx, &mut app, key(Key::Enter));
+        assert!(app.dialogs.open.is_none(), "{field}");
+    }
+    // Bar 3 at 120 bpm in 4/4 is 4 s in; a bar and two beats is 3 s.
+    assert_eq!((sel(&app).start, sel(&app).end), (SEC * 4, SEC * 7));
+    app.dialogs.open_selection_field("end", "");
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![Event::Text("6|1|000".into())]);
+    frame(&ctx, &mut app, key(Key::Enter));
+    assert_eq!((sel(&app).start, sel(&app).end), (SEC * 4, SEC * 10));
+}
+
+#[test]
+fn f6_with_f7_or_f7_with_f8_chooses_the_smart_tool() {
+    let (mut app, ctx, _, _) = app("slip", "grabber", &[]);
+    let tool = |app: &SoundApp| app.engine.session().edit.tool;
+    let down = |k, pressed| key_event(k, pressed, Modifiers::NONE);
+    for (held, pressed) in [(Key::F7, Key::F6), (Key::F6, Key::F7), (Key::F8, Key::F7), (Key::F7, Key::F8)] {
+        frame(&ctx, &mut app, key(Key::F5));
+        frame(&ctx, &mut app, vec![down(held, true)]);
+        frame(&ctx, &mut app, vec![down(pressed, true)]);
+        frame(&ctx, &mut app, vec![down(pressed, false), down(held, false)]);
+        assert_eq!(format!("{:?}", tool(&app)), "Smart", "{held:?} then {pressed:?}");
+    }
+    // Alone, each key still chooses its own tool.
+    frame(&ctx, &mut app, key(Key::F7));
+    assert_eq!(format!("{:?}", tool(&app)), "Selector");
+}
+
+#[test]
+fn the_suspend_modifier_lets_a_selection_go_off_the_grid() {
+    let (mut app, ctx, t, _) = app("grid", "selector", &[]);
+    let s = app.engine.session();
+    let step = s.edit.grid.step_samples(0, &s.grid_ctx());
+    let (from, to) = (point(&app, t, step), point(&app, t, 3 * step + step / 3));
+    // Cmd (Ctrl off macOS) held through the drag.
+    let held = |ctx: &egui::Context, app: &mut SoundApp, e: Event| {
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1000.0))),
+            events: vec![Event::ModifiersChanged(Modifiers::COMMAND), e],
+            ..Default::default()
+        };
+        ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        })
+        .textures_delta
+        .clear();
+    };
+    held(&ctx, &mut app, Event::PointerMoved(from));
+    held(&ctx, &mut app, button(from, true));
+    for k in 1..=5 {
+        held(&ctx, &mut app, Event::PointerMoved(from + (to - from) * (k as f32 / 5.0)));
+    }
+    let end = app.engine.session().edit.selection.end;
+    held(&ctx, &mut app, button(to, false));
+    frame(&ctx, &mut app, vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    assert_ne!(end % step, 0, "held: off the grid ({end})");
+    // Without it the end snaps to the grid.
+    drag_between(&ctx, &mut app, from, to);
+    assert_eq!(app.engine.session().edit.selection.end % step, 0);
+}
+
+#[test]
 fn mode_keys_add_snap_to_grid_and_cycle_past_a_locked_shuffle() {
     let (mut app, ctx, _, _) = app("slip", "grabber", &[]);
     let state = |app: &SoundApp| (app.engine.session().edit.edit_mode, app.engine.session().edit.flag(SNAP_TO_GRID));
@@ -340,4 +412,85 @@ fn f4_pressed_before_f1_leaves_the_kind_of_grid_alone() {
     frame(&ctx, &mut app, vec![f4(false)]);
     let ed = &app.engine.session().edit;
     assert_eq!((ed.edit_mode, ed.flag(SNAP_TO_GRID), ed.flag(RELATIVE_GRID)), (EditMode::Shuffle, true, false));
+}
+
+/// The Scissors tool separates the clip under a click there; the Mute tool mutes it and a
+/// second click unmutes it. Clicks on empty space do nothing.
+#[test]
+fn scissors_and_mute_tools_act_on_the_clicked_clip() {
+    let (mut app, ctx, t, _) = app("slip", "scissors", &[(0, 4 * SEC)]);
+    let at = point(&app, t, 2 * SEC);
+    click(&ctx, &mut app, at);
+    let clips = app.engine.session().track(t).unwrap().clips().to_vec();
+    assert_eq!(clips.len(), 2, "one clip split in two");
+    let cut = clips[1].start;
+    assert!((cut - 2 * SEC).abs() < 1000, "split where clicked: {cut}");
+    let empty = point(&app, t, 6 * SEC);
+    click(&ctx, &mut app, empty);
+    assert_eq!(app.engine.session().track(t).unwrap().clips().len(), 2, "a click on no clip cuts nothing");
+
+    app.run("edit.tool", json!({"tool": "mute"})).unwrap();
+    let left = point(&app, t, SEC / 2);
+    click(&ctx, &mut app, left);
+    let muted: Vec<bool> = app.engine.session().track(t).unwrap().clips().iter().map(|c| c.muted).collect();
+    assert_eq!(muted, vec![true, false], "only the clicked clip mutes");
+    click(&ctx, &mut app, left);
+    assert!(app.engine.session().track(t).unwrap().clips().iter().all(|c| !c.muted), "a second click unmutes");
+}
+
+/// The Smart Tool's lower corner where two clips meet draws a crossfade centred on the join,
+/// as wide as the drag either way (one undo step).
+#[test]
+fn smart_tool_drag_at_a_join_draws_a_crossfade() {
+    let (mut app, ctx, t, ids) = app("slip", "smart", &[(0, 2 * SEC), (2 * SEC, 2 * SEC)]);
+    let low = |app: &SoundApp, at: i64| {
+        let p = point(app, t, at);
+        let row = app.edit_layout.rows.iter().find(|(id, _)| *id == t.0).unwrap().1;
+        pos2(p.x, row[1] + app.engine.session().track(t).unwrap().height.points() * 0.95)
+    };
+    let (from, to) = (low(&app, 2 * SEC), low(&app, 2 * SEC + SEC / 4));
+    drag_between(&ctx, &mut app, from, to);
+    let s = app.engine.session();
+    let (a, b) = (s.find_clip(ids[0]).unwrap().1, s.find_clip(ids[1]).unwrap().1);
+    assert!(a.fade_out.len > SEC / 3 && b.fade_in.len > SEC / 3, "a crossfade about half a second wide: {} {}", a.fade_out.len, b.fade_in.len);
+    assert!(a.end() > 2 * SEC && b.start < 2 * SEC, "the clips overlap across the join");
+    assert_eq!(app.engine.undo_label(), Some("Create..."));
+}
+
+/// Relative Grid: a trim moves the clip's edge by whole grid steps and keeps its offset from
+/// the grid (absolute Grid puts it on a line).
+#[test]
+fn relative_grid_trims_move_by_whole_steps() {
+    // 120 bpm at 48 kHz: a 16th (the default grid) is 6,000 samples.
+    let (mut app, ctx, t, ids) = app("relative_grid", "trim", &[(1000, 4 * SEC)]);
+    let end = 1000 + 4 * SEC;
+    drag(&ctx, &mut app, t, end - 100, end + 13_000);
+    let c = app.engine.session().find_clip(ids[0]).unwrap().1.clone();
+    assert_eq!((c.end() - end) % 6000, 0, "whole steps: {}", c.end() - end);
+    assert_eq!(c.end() - end, 12_000, "two steps");
+    let (mut app, ctx, t, ids) = app_abs();
+    drag(&ctx, &mut app, t, end - 100, end + 13_000);
+    assert_eq!(app.engine.session().find_clip(ids[0]).unwrap().1.end() % 6000, 0, "absolute: on a line");
+}
+
+fn app_abs() -> (SoundApp, egui::Context, TrackId, Vec<ClipId>) {
+    app("grid", "trim", &[(1000, 4 * SEC)])
+}
+
+/// Separation grab: a Grabber drag inside a range selection cuts the range out of the clip
+/// and moves only that piece, in one undo step.
+#[test]
+fn a_grabber_drag_inside_a_range_moves_the_range_alone() {
+    let (mut app, ctx, t, _) = app("slip", "grabber", &[(0, 6 * SEC)]);
+    app.run("edit.select", json!({"tracks": [t.0], "start": SEC, "end": 2 * SEC})).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    drag(&ctx, &mut app, t, SEC * 3 / 2, SEC * 7 / 2);
+    let spans: Vec<(i64, i64)> = app.engine.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end())).collect();
+    let moved = spans.iter().find(|(a, b)| b - a == SEC && *a > 2 * SEC).copied();
+    let (a, _) = moved.unwrap_or_else(|| panic!("the range's piece moved: {spans:?}"));
+    assert!((a - 3 * SEC).abs() < SEC / 20, "by the drag: {spans:?}");
+    assert!(spans.iter().any(|&(a, b)| a == 0 && b == SEC), "what was before the range stays: {spans:?}");
+    app.run("edit.undo", json!({})).unwrap();
+    let spans: Vec<(i64, i64)> = app.engine.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end())).collect();
+    assert_eq!(spans, vec![(0, 6 * SEC)], "one undo step takes back the separate and the move");
 }

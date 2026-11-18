@@ -37,6 +37,15 @@ pub fn specs() -> Vec<CommandSpec> {
             tempo_move
         ),
         cmd!(
+            "event.time_warp",
+            "Time Warp",
+            [],
+            None,
+            "{tick | bar: a bar line (not bar 1), to: position it should land on} — Time Warp: the tempo from the tempo change before the bar line is set so the bar lands at `to`; a change at the bar line keeps the tempo after it, so later bars keep their tempo (they move with it). Refused inside a ramp → {tick, bpm}",
+            always,
+            time_warp
+        ),
+        cmd!(
             "event.tempo_ramp",
             "Ramp to Next Tempo",
             [],
@@ -400,6 +409,39 @@ fn tempo_move(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"tick": to, "bpm": bpm}))
 }
 
+fn time_warp(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "event.time_warp";
+    let s = e.session();
+    let sr = s.sample_rate;
+    let tick = match (p.get("tick").and_then(Value::as_i64), p.get("bar").and_then(Value::as_i64)) {
+        (Some(t), _) => t,
+        (None, Some(bar)) => s.tempo.bar_start_tick(bar),
+        _ => return Err(bad(id, "`tick` or `bar` required")),
+    };
+    if tick <= 0 {
+        return Err(bad(id, "bar 1 stays where it is: drag a later bar line"));
+    }
+    let to = position_param(e, id, p, "to")?.ok_or_else(|| bad(id, "`to` required"))?;
+    let anchor = s.tempo.tempos().iter().rev().find(|t| t.tick < tick).copied().ok_or_else(|| bad(id, "no tempo before the bar"))?;
+    if anchor.ramp || s.tempo.in_ramp(tick) {
+        return Err(bad(id, "the bar is inside a tempo ramp: take the ramp off first"));
+    }
+    let from = s.tempo.tick_to_samples(anchor.tick, sr);
+    if to <= from {
+        return Err(bad(id, "the bar can't move before the tempo change it follows"));
+    }
+    let beats = (tick - anchor.tick) as f64 / soundcraft_time::TICKS_PER_QUARTER as f64;
+    let bpm = beats * 60.0 / ((to - from) as f64 / sr.as_f64());
+    let after = s.tempo.tempo_at_tick(tick);
+    let mut map = s.tempo.clone();
+    if !map.tempos().iter().any(|t| t.tick == tick) {
+        map.set_tempo(tick, after).map_err(|err| bad(id, err.to_string()))?;
+    }
+    map.set_tempo(anchor.tick, bpm).map_err(|err| bad(id, format!("that would need {bpm:.1} BPM: {err}")))?;
+    e.session_mut().tempo = map;
+    Ok(json!({"tick": tick, "bpm": bpm}))
+}
+
 fn tempo_ramp(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.tempo_ramp";
     let tick = event_tick(e, id, p)?;
@@ -689,6 +731,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn time_warp_lands_a_bar_where_it_is_dropped_and_keeps_later_tempo() {
+        let mut e = Engine::default();
+        let sr = e.session().sample_rate;
+        // 120 BPM 4/4: bar 3 starts at 4 s. Dragged to 3.5 s: the first two bars play faster.
+        let bar3 = e.session().tempo.bar_start_tick(3);
+        let r = e.execute("event.time_warp", &json!({"bar": 3, "to": 168_000})).unwrap();
+        assert!((r["bpm"].as_f64().unwrap() - 120.0 * 4.0 / 3.5).abs() < 1e-6, "{r}");
+        let t = &e.session().tempo;
+        assert_eq!(t.tick_to_samples(bar3, sr), 168_000);
+        assert_eq!(t.tempo_at_tick(bar3), 120.0, "after the bar the tempo is as it was");
+        assert_eq!(t.tick_to_samples(t.bar_start_tick(4), sr), 168_000 + 96_000, "bar 4 keeps a 2 s bar");
+        // The next warp of a later bar works from the change the first left at bar 3.
+        e.execute("event.time_warp", &json!({"bar": 5, "to": 168_000 + 4 * 48_000 + 24_000})).unwrap();
+        let t = &e.session().tempo;
+        assert_eq!(t.tick_to_samples(bar3, sr), 168_000, "bar 3 stays");
+        assert_eq!(t.tick_to_samples(t.bar_start_tick(5), sr), 168_000 + 4 * 48_000 + 24_000);
+        // One undo step each; bar 1 and moves before the anchor are refused.
+        assert!(e.undo());
+        assert_eq!(e.session().tempo.tempos().len(), 2);
+        assert!(e.execute("event.time_warp", &json!({"bar": 1, "to": 100})).is_err());
+        assert!(e.execute("event.time_warp", &json!({"bar": 4, "to": 100_000})).is_err(), "before bar 3's change");
+        assert!(e.execute("event.time_warp", &json!({"bar": 2, "to": 10})).is_err(), "an impossible tempo");
+    }
+
+    #[test]
     fn straighten_puts_a_drifting_click_on_the_grid() {
         let pos = ramp(100.0, 110.0, 81, 0.4);
         let (mut e, tracks, cids) = click_session(&[&pos]);
@@ -784,7 +851,7 @@ pub(crate) mod tests {
             })
             .collect();
         let cid = s.new_clip_id();
-        crate::edit::place_clip(s, t, Clip::midi(cid, "keys", 0, len, Sequence { notes, ctrls: Vec::new() }));
+        crate::edit::place_clip(s, t, Clip::midi(cid, "keys", 0, len, Sequence { notes, ctrls: Vec::new(), sysex: Vec::new() }));
         let (beats, downbeats) = detected(&mut e);
         let r = e.execute("event.tempo_conform", &json!({"beats": beats, "downbeats": downbeats, "bpm": 105.0})).unwrap();
         assert_eq!(r["midi_clips"], 1);

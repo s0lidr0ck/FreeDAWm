@@ -427,6 +427,13 @@ pub enum VelocityOp {
     },
     /// Random offset of up to ± the amount.
     Humanize(u8),
+    /// Each velocity's distance from `center` (the notes' average when `None`) times `factor`:
+    /// below 1 compresses the dynamics towards it, above 1 expands them (non-finite factors leave
+    /// velocities unchanged).
+    Compress {
+        center: Option<u8>,
+        factor: f32,
+    },
 }
 
 fn clamp_vel(v: i64) -> u8 {
@@ -467,6 +474,18 @@ pub fn change_velocity_with_seed(notes: &mut [Note], op: VelocityOp, seed: u64) 
             for n in notes.iter_mut() {
                 let d = round_i64(rng.next_signed() * f64::from(amount));
                 n.velocity = clamp_vel(i64::from(n.velocity) + d);
+            }
+        }
+        VelocityOp::Compress { center, factor } => {
+            if !factor.is_finite() || notes.is_empty() {
+                return;
+            }
+            let c = match center {
+                Some(c) => f64::from(c),
+                None => notes.iter().map(|n| f64::from(n.velocity)).sum::<f64>() / notes.len() as f64,
+            };
+            for n in notes.iter_mut() {
+                n.velocity = clamp_vel(round_i64(c + (f64::from(n.velocity) - c) * f64::from(factor)));
             }
         }
     }
@@ -525,6 +544,37 @@ pub fn change_duration(notes: &mut [Note], op: DurationOp) {
             }
         }
     }
+}
+
+/// Mirrors the pitches around `axis` (a MIDI pitch, half steps allowed: 62.5 mirrors D and D#
+/// onto each other), by default the middle of the lowest and highest note, so the notes keep
+/// their range. A note that would leave the keyboard stays where it is.
+pub fn invert_pitch(notes: &mut [Note], axis: Option<f64>) {
+    let (Some(lo), Some(hi)) = (notes.iter().map(|n| n.pitch).min(), notes.iter().map(|n| n.pitch).max()) else { return };
+    let axis = axis.filter(|a| a.is_finite()).unwrap_or((f64::from(lo) + f64::from(hi)) / 2.0);
+    for n in notes.iter_mut() {
+        let to = (2.0 * axis - f64::from(n.pitch)).round();
+        if (0.0..=127.0).contains(&to) {
+            n.pitch = to as u8;
+        }
+    }
+}
+
+/// A grace note before each note for a flam: the same pitch and channel, `ticks` earlier and
+/// `ticks` long (at least one), at `velocity_pct` percent of the note's velocity. A note too
+/// near the clip's start for its grace (which would land before tick 0) gets none.
+pub fn flam_notes(notes: &[Note], ticks: i64, velocity_pct: f64) -> Vec<Note> {
+    let ticks = ticks.max(1);
+    notes
+        .iter()
+        .filter(|n| n.start >= 0 && n.start >= ticks)
+        .map(|n| Note {
+            start: n.start - ticks,
+            length: ticks,
+            velocity: clamp_vel(round_i64(f64::from(n.velocity) * velocity_pct.clamp(0.0, 200.0) / 100.0)),
+            ..*n
+        })
+        .collect()
 }
 
 /// Plays the notes backwards in the span they cover: a note ending `d` ticks before the last end

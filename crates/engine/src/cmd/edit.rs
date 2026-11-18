@@ -14,7 +14,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "edit.restore_last_selection", "Restore Last Selection", ["Edit"], Some("Cmd+Alt+Z"), "{}", has_last_selection, restore_selection),
         cmd!("edit.cut", "Cut", ["Edit"], Some("Cmd+X"), "{tracks?, start?, end?}", has_range, |e, p| cut_copy(e, p, true, "edit.cut")),
         cmd!(noundo "edit.copy", "Copy", ["Edit"], Some("Cmd+C"), "{tracks?, start?, end?}", has_range, |e, p| cut_copy(e, p, false, "edit.copy")),
-        cmd!("edit.paste", "Paste", ["Edit"], Some("Cmd+V"), "{tracks?, at?}", has_clipboard, paste),
+        cmd!(
+            "edit.paste",
+            "Paste",
+            ["Edit"],
+            Some("Cmd+V"),
+            "{tracks?, at?, clips?} — pastes what was cut or copied: clips and automation; after Copy Special › Clip Gain the gain curve onto the clips under the paste range (as edit.paste_clip_gain), after Copy Special › Clip Effects the settings onto the selected clips (as edit.paste_clip_effects)",
+            has_anything_to_paste,
+            paste
+        ),
         cmd!("edit.clear", "Clear", ["Edit"], Some("Cmd+B"), "{tracks?, start?, end?}", has_range, clear),
         cmd!("edit.cut_clip_gain", "Clip Gain", ["Edit", "Cut Special"], Some("Cmd+Ctrl+X"), "{}", has_range, |e, p| {
             super::edit_more::copy_clip_gain(e, p)?;
@@ -49,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
             repeat_to_fill
         ),
         cmd!(noundo "edit.select_all", "Select All", ["Edit"], Some("Cmd+A"), "{}", always, select_all),
-        cmd!(noundo "edit.select", "Set Edit Selection", [], None, "{tracks?: [id|name], start?, end?, clips?: [id], sources?: [id] (Clip List files), exact?: bool (ignore edit groups)}", always, select),
+        cmd!(noundo "edit.select", "Set Edit Selection", [], None, "{tracks?: [id|name], start?, end?, length?: samples | text in the main counter's format (the end moves to start + length), clips?: [id], sources?: [id] (Clip List files), exact?: bool (ignore edit groups and closed folders)} — a closed folder brings its members, so an edit on it edits them all", always, select),
         cmd!(noundo "edit.select_none", "Deselect All", [], None, "{}", always, |e, _| {
             let s = e.session_mut();
             s.edit.selected_tracks.clear();
@@ -102,6 +110,15 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("edit.trim_to_file_boundaries", "To File Boundaries", ["Edit", "Trim"], None, "{clips?}", has_selection, trim_to_file),
         cmd!("edit.trim_to_fill_selection", "To Fill Selection", ["Edit", "Trim"], None, "{}", has_range, trim_to_fill),
+        cmd!(
+            "edit.trim_to_close_gaps",
+            "To Close Gaps",
+            [],
+            None,
+            "{clips?} — each selected audio clip's end runs on to the start of the clip after it, as far as its file (or loop) has audio",
+            has_selection,
+            close_gaps
+        ),
         cmd!("edit.mute_clips", "Mute", ["Edit"], Some("Cmd+M"), "{clips?}", has_selection, mute_clips),
         cmd!(
             "edit.copy_to_new_playlist",
@@ -122,11 +139,20 @@ pub fn specs() -> Vec<CommandSpec> {
             strip_silence
         ),
         cmd!(
+            query "edit.strip_silence_preview",
+            "Strip Silence Preview",
+            [],
+            None,
+            "{threshold_db?, min_length_ms?, pad_before_ms?, pad_after_ms?} — what Strip Silence would keep on each selected track, changing nothing -> {tracks: [{track, keep: [[start, end], …]}], start, end}",
+            has_range,
+            strip_silence_preview
+        ),
+        cmd!(
             "edit.fades_create",
             "Create...",
             ["Edit", "Fades"],
             Some("Cmd+F"),
-            "{shape?: linear|equal power|s-curve|exponential|logarithmic, in_shape?, out_shape?, in_curvature?: -1..1, out_curvature?: -1..1, batch_length?: samples (fades both ends of clips inside the range), tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1, alone?: bool}",
+            "{shape?: linear|equal power|s-curve|exponential|logarithmic, in_shape?, out_shape?, in_curvature?: -1..1, out_curvature?: -1..1, batch_length?: samples (fades both ends of clips inside the range), placement?: selection|before|centered|after (where a crossfade sits against the cut: as the selection lies, or the selection's length before, centred on or after it), tracks?, start?, end?} or {clip: id, side: in|out, length: samples, shape?, curvature?: -1..1, alone?: bool}",
             has_range,
             fades_create
         ),
@@ -171,6 +197,24 @@ pub fn specs() -> Vec<CommandSpec> {
             |e, p| toggle_flag(e, p, ops::SNAP_TO_MARKERS)
         ),
         cmd!(
+            noundo "edit.adaptive_grid",
+            "Adaptive Grid",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — a musical grid follows the zoom: its note value is the one whose lines are nearest 16 points apart",
+            always,
+            |e, p| toggle_flag(e, p, ops::ADAPTIVE_GRID)
+        ),
+        cmd!(
+            noundo "edit.snap_to_cursor",
+            "Snap to Playhead",
+            [],
+            None,
+            "{value?: bool} (toggles when omitted) — edit points, moves and trims snap to the playhead within 8 pixels",
+            always,
+            |e, p| toggle_flag(e, p, ops::SNAP_TO_CURSOR)
+        ),
+        cmd!(
             noundo "edit.snap_to_zero_crossings",
             "Snap to Zero Crossings",
             [],
@@ -188,7 +232,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             shuffle_lock
         ),
-        cmd!(noundo "edit.tool", "Edit Tool", [], Some("F5-F10"), "{tool: zoom|trim|selector|grabber|scrubber|pencil|smart}", always, |e, p| {
+        cmd!(noundo "edit.tool", "Edit Tool", [], Some("F5-F10"), "{tool: zoom|trim|selector|grabber|scrubber|pencil|smart|scissors|mute}", always, |e, p| {
             let t = str_param(p, "tool").and_then(soundcraft_model::Tool::from_id).ok_or_else(|| bad("edit.tool", "unknown tool"))?;
             e.session_mut().edit.tool = t;
             Ok(json!({"tool": t}))
@@ -445,10 +489,88 @@ fn cut_track(s: &mut Session, t: TrackId, r: soundcraft_time::Range, sh: bool, f
     ops::clear_range(s, t, r, sh);
 }
 
+/// Where `cb`'s clips come from: the session `s` (load `load`) and the files its audio clips
+/// play, with their audio as loaded now.
+pub(crate) fn clip_origin(s: &soundcraft_model::Session, cb: &crate::Clipboard, load: u64) -> crate::ClipOrigin {
+    let mut sources: Vec<(soundcraft_model::Source, Option<crate::SharedAudio>)> = Vec::new();
+    for c in cb.tracks.iter().flatten() {
+        if let soundcraft_model::ClipContent::Audio { source, .. } = &c.content
+            && !sources.iter().any(|(x, _)| x.id == *source)
+            && let Some(src) = s.sources.iter().find(|x| x.id == *source)
+        {
+            sources.push((src.clone(), s.pool.get(*source).cloned().map(crate::SharedAudio)));
+        }
+    }
+    crate::ClipOrigin { load, rate: s.sample_rate.hz(), sources }
+}
+
+/// The clipboard as `id` pastes it into this session. Clips copied in another session play
+/// files this one lacks: each such file's audio comes along as a new source of this session
+/// (written to its Audio Files on save, as an import is; one already brought is reused) and the
+/// clips are pointed at it. Refused, with the file named, when that audio was never loaded or
+/// is at another sample rate.
+fn clipboard_here(e: &mut Engine, id: &str) -> Result<crate::Clipboard> {
+    let mut cb = e.clipboard.clone();
+    let Some(origin) = cb.origin.clone().filter(|o| o.load != e.loads) else { return Ok(cb) };
+    let mut map: Vec<(soundcraft_model::SourceId, soundcraft_model::SourceId)> = Vec::new();
+    for (src, audio) in &origin.sources {
+        let s = e.session();
+        let Some(audio) = audio else {
+            return Err(bad(id, format!("the audio of “{}”, copied from another session, was not loaded: import the file instead", src.name)));
+        };
+        if origin.rate != s.sample_rate.hz() {
+            return Err(bad(
+                id,
+                format!(
+                    "“{}” was copied from a session at {} Hz; this one is at {} Hz: import the file instead",
+                    src.name,
+                    origin.rate,
+                    s.sample_rate.hz()
+                ),
+            ));
+        }
+        let have = s.sources.iter().find(|x| s.pool.get(x.id).is_some_and(|a| std::sync::Arc::ptr_eq(a, &audio.0))).map(|x| x.id);
+        let new = match have {
+            Some(x) => x,
+            None => crate::io::add_source_audio(e.session_mut(), &src.name, std::sync::Arc::clone(&audio.0), src.format),
+        };
+        map.push((src.id, new));
+    }
+    for c in cb.tracks.iter_mut().flatten() {
+        if let soundcraft_model::ClipContent::Audio { source, .. } = &mut c.content
+            && let Some((_, new)) = map.iter().find(|(old, _)| old == source)
+        {
+            *source = *new;
+        }
+    }
+    Ok(cb)
+}
+
+/// Paste's clipboard: clips and automation, or what Copy Special › Clip Gain / Clip Effects put
+/// there.
+fn has_anything_to_paste(e: &Engine) -> std::result::Result<(), String> {
+    let cb = &e.clipboard;
+    if cb.tracks.is_empty() && cb.clip_gain.is_empty() && cb.clip_effects.is_empty() && cb.clip_modules.is_empty() {
+        Err("the clipboard is empty".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
+    // Copy Special › Clip Gain and Clip Effects fill a clipboard of their own: Paste puts it back
+    // where it belongs (one step, labelled Paste).
+    if e.clipboard.tracks.is_empty() {
+        if !e.clipboard.clip_gain.is_empty() {
+            return super::edit_more::paste_clip_gain(e, p);
+        }
+        if !e.clipboard.clip_effects.is_empty() || !e.clipboard.clip_modules.is_empty() {
+            return super::edit_more::paste_clip_effects(e, p);
+        }
+    }
     let tracks = tracks_required(e, "edit.paste", p)?;
     let given = position_param(e, "edit.paste", p, "at")?;
-    let cb = e.clipboard.clone();
+    let cb = clipboard_here(e, "edit.paste")?;
     let s = e.session();
     let at = match given {
         Some(at) => at,
@@ -548,7 +670,7 @@ fn repeat_to_fill(e: &mut Engine, p: &Value) -> Result<Value> {
     let range = range_param(e, "edit.paste_repeat_to_fill", p)?;
     let len = e.clipboard.length.max(1);
     let tracks = tracks_required(e, "edit.paste_repeat_to_fill", p)?;
-    let cb = e.clipboard.clone();
+    let cb = clipboard_here(e, "edit.paste_repeat_to_fill")?;
     let s = e.session_mut();
     let mut at = range.start;
     let mut n = 0;
@@ -605,6 +727,16 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
                     t.push(m);
                 }
             }
+            // A closed folder edits as one clip: its members (nested ones too) come with it.
+            let closed: Vec<soundcraft_model::TrackId> =
+                t.iter().filter(|id| s.track(**id).is_some_and(|x| x.is_folder() && !x.folder_open)).copied().collect();
+            for f in closed {
+                for m in super::track::folder_members(s, f) {
+                    if !t.contains(&m) {
+                        t.push(m);
+                    }
+                }
+            }
             let order: Vec<soundcraft_model::TrackId> = s.tracks.iter().map(|x| x.id).collect();
             t.sort_by_key(|x| order.iter().position(|o| o == x).unwrap_or(usize::MAX));
         }
@@ -613,7 +745,22 @@ fn select(e: &mut Engine, p: &Value) -> Result<Value> {
     match (st, en) {
         (Some(a), Some(b)) => ed.selection = soundcraft_time::Range::new(a.max(0), b.max(0)),
         (Some(a), None) => ed.selection = soundcraft_time::Range::point(a.max(0)),
+        (None, Some(b)) if p.get("length").is_none() => ed.selection = soundcraft_time::Range::new(ed.selection.start.min(b.max(0)), b.max(0)),
         _ => {}
+    }
+    // A typed length runs from the selection's start.
+    if let Some(v) = p.get("length") {
+        let start = ed.selection.start;
+        let len = match (v.as_i64(), v.as_str()) {
+            (Some(n), _) => n,
+            (None, Some(text)) => soundcraft_time::parse_length(text, start, s.edit.main_counter, s.sample_rate, &s.tempo, s.frame_rate)
+                .map_err(|err| bad("edit.select", err.to_string()))?,
+            _ => -1,
+        };
+        if len < 0 {
+            return Err(bad("edit.select", "`length` is a number of samples or a length in the main counter's format"));
+        }
+        ed.selection = soundcraft_time::Range::new(start, start.saturating_add(len.min(MAX_POSITION)));
     }
     if let Some(mut c) = clips {
         // A clip in a clip group brings the whole group (unless `exact`), so it selects, moves,
@@ -878,6 +1025,12 @@ fn heal(e: &mut Engine, p: &Value) -> Result<Value> {
 fn trim_to_selection(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "edit.trim_to_selection", p)?;
     let r = range_param(e, "edit.trim_to_selection", p)?;
+    if shuffle(e.session()) {
+        return shuffle_trims(e, &tracks, |c| {
+            let i = c.range().intersect(&r).filter(|i| *i != c.range())?;
+            Some(((i.start > c.start).then_some(i.start), (i.end < c.end()).then_some(i.end)))
+        });
+    }
     let s = e.session_mut();
     let n: usize = tracks.iter().map(|t| ops::trim_to(s, *t, r)).sum();
     Ok(json!({"trimmed": n}))
@@ -886,8 +1039,47 @@ fn trim_to_selection(e: &mut Engine, p: &Value) -> Result<Value> {
 fn trim_edge(e: &mut Engine, p: &Value, start: bool) -> Result<Value> {
     let tracks = tracks_required(e, "edit.trim", p)?;
     let at = position_param(e, "edit.trim", p, "at")?.unwrap_or(e.session().edit.selection.start);
+    if shuffle(e.session()) {
+        return shuffle_trims(e, &tracks, |c| (at > c.start && at < c.end()).then_some(if start { (Some(at), None) } else { (None, Some(at)) }));
+    }
     let s = e.session_mut();
     let n: usize = tracks.iter().map(|t| if start { ops::trim_start_to(s, *t, at) } else { ops::trim_end_to(s, *t, at) }).sum();
+    Ok(json!({"trimmed": n}))
+}
+
+/// Shuffle's trims: each clip on `tracks` that `edges` gives a new start and/or end is trimmed as
+/// the Trim tool trims in Shuffle: its start stays put, and the clips after it (and their
+/// automation) move by the change in length.
+fn shuffle_trims(
+    e: &mut Engine,
+    tracks: &[soundcraft_model::TrackId],
+    edges: impl Fn(&soundcraft_model::Clip) -> Option<(Option<Samples>, Option<Samples>)>,
+) -> Result<Value> {
+    let s = e.session_mut();
+    let mut n = 0;
+    for t in tracks {
+        // Later clips move as each one is trimmed, so the edges are worked out one clip at a time, last first.
+        let mut todo: Vec<(soundcraft_model::ClipId, Samples)> =
+            s.track(*t).map(|tr| tr.clips().iter().map(|c| (c.id, c.start)).collect()).unwrap_or_default();
+        todo.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
+        for (id, _) in todo {
+            let Some((start, end)) = s.find_clip(id).and_then(|(_, c)| edges(c)) else { continue };
+            // A start trim in Shuffle keeps the clip where it is, so an end given in the old
+            // timeline is that far after the clip's start.
+            let cs = s.find_clip(id).map_or(0, |(_, c)| c.start);
+            let end = match (start, end) {
+                (Some(a), Some(b)) => Some(cs.saturating_add(b.saturating_sub(a))),
+                (_, b) => b,
+            };
+            if start.is_some() {
+                let _ = ops::trim_clip(s, id, start, None, true);
+            }
+            if end.is_some() {
+                let _ = ops::trim_clip(s, id, None, end, true);
+            }
+            n += 1;
+        }
+    }
     Ok(json!({"trimmed": n}))
 }
 
@@ -927,6 +1119,39 @@ fn trim_to_fill(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({"trimmed": n}))
+}
+
+fn close_gaps(e: &mut Engine, p: &Value) -> Result<Value> {
+    let ids = clip_ids_param(e, p);
+    Ok(json!({"trimmed": close_gaps_of(e.session_mut(), ids)}))
+}
+
+/// Trim each of `ids`' ends on to the next clip, as far as its file goes: how many changed.
+pub(crate) fn close_gaps_of(s: &mut Session, ids: Vec<ClipId>) -> usize {
+    let mut n = 0;
+    for id in ids {
+        let Some((frames, _, hi)) = trim_limits(s, id) else { continue };
+        let Some(c) = s.find_clip_mut(id) else { continue };
+        if hi == Samples::MAX || hi <= c.end() || !c.is_audio() {
+            continue;
+        }
+        // The furthest the end can go with audio under it: a loop repeats; a reversed clip's end
+        // reads back towards the file's start, a plain one on towards its end.
+        let room = if c.loop_len > 0 {
+            Samples::MAX
+        } else if c.reversed {
+            c.end().saturating_add(c.timeline_span(c.source_offset()))
+        } else {
+            let file_start = c.start - c.timeline_span(c.source_offset());
+            file_start.saturating_add(c.timeline_span(frames))
+        };
+        let to = hi.min(room);
+        if to > c.end() {
+            c.trim_end_to(to);
+            n += 1;
+        }
+    }
+    n
 }
 
 /// How far a trim may extend an audio clip: its source length in frames, and the earliest
@@ -975,13 +1200,30 @@ fn copy_to_new_playlist(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"tracks": tracks.len()}))
 }
 
-fn strip_silence(e: &mut Engine, p: &Value) -> Result<Value> {
-    let tracks = tracks_required(e, "edit.strip_silence", p)?;
-    let r = range_param(e, "edit.strip_silence", p)?;
+/// Strip Silence's settings from `p`: threshold (dB), minimum length and the two pads (samples).
+fn strip_settings(e: &Engine, p: &Value) -> (f32, Samples, Samples, Samples) {
     let thr = f32_or(p, "threshold_db", -48.0).clamp(-96.0, 0.0);
     let sr = e.session().sample_rate;
     let ms = |k: &str, d: f64| sr.samples(f64_or(p, k, d).clamp(0.0, 10_000.0) / 1000.0);
-    let (min_len, pre, post) = (ms("min_length_ms", 50.0), ms("pad_before_ms", 5.0), ms("pad_after_ms", 20.0));
+    (thr, ms("min_length_ms", 50.0), ms("pad_before_ms", 5.0), ms("pad_after_ms", 20.0))
+}
+
+fn strip_silence_preview(e: &mut Engine, p: &Value) -> Result<Value> {
+    let tracks = tracks_required(e, "edit.strip_silence_preview", p)?;
+    let r = range_param(e, "edit.strip_silence_preview", p)?;
+    let (thr, min_len, pre, post) = strip_settings(e, p);
+    let mut out = Vec::new();
+    for t in tracks {
+        let keep = crate::io::strip_preview(e.session(), t, r, thr, min_len, pre, post)?;
+        out.push(json!({"track": t.0, "keep": keep}));
+    }
+    Ok(json!({"tracks": out, "start": r.start, "end": r.end}))
+}
+
+fn strip_silence(e: &mut Engine, p: &Value) -> Result<Value> {
+    let tracks = tracks_required(e, "edit.strip_silence", p)?;
+    let r = range_param(e, "edit.strip_silence", p)?;
+    let (thr, min_len, pre, post) = strip_settings(e, p);
     let s = e.session_mut();
     let mut kept = 0;
     for t in &tracks {
@@ -1076,13 +1318,28 @@ fn fades_create(e: &mut Engine, p: &Value) -> Result<Value> {
         out_shape: side_shape("out_shape")?,
         out_curvature: bend("out_curvature")?,
         batch,
+        placement: match str_param(p, "placement") {
+            None => ops::XfadePlacement::Selection,
+            Some(v) => {
+                ops::XfadePlacement::from_id(v).ok_or_else(|| bad("edit.fades_create", "`placement` is selection, before, centered or after"))?
+            }
+        },
     };
+    let short: usize = tracks.iter().map(|t| ops::short_crossfades(e.session(), *t, r, spec.placement)).sum();
     let s = e.session_mut();
     let n: usize = tracks.iter().map(|t| ops::create_fades_with(s, *t, r, &spec)).sum();
     if n == 0 {
         return Err(bad("edit.fades_create", "the selection must cover a clip start, end or the boundary between two clips"));
     }
-    Ok(json!({"fades": n}))
+    let mut out = json!({"fades": n, "short": short});
+    if short > 0 {
+        // Shown in the status line: the crossfade is shorter on one side than the selection.
+        out["warning"] = json!(format!(
+            "{short} crossfade{} shorter than the selection: not enough audio beyond the cut",
+            if short == 1 { " is" } else { "s are" }
+        ));
+    }
+    Ok(out)
 }
 
 fn fades_delete(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -1226,6 +1483,97 @@ fn consolidate(e: &mut Engine, p: &Value) -> Result<Value> {
 mod tests {
     use super::*;
     use soundcraft_model::{ChannelFormat, Clip, ClipContent, TrackId, TrackKind};
+
+    /// Parity section 7: Heal Separation joins a split MIDI clip back into one (a note across the
+    /// cut plays on again); clips whose settings differ stay apart.
+    #[test]
+    fn heal_joins_split_midi_clips() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap()["clip"].as_u64().unwrap();
+        for (pitch, start) in [(60, 0), (64, 1800), (67, 2400)] {
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": pitch, "start_ticks": start, "length_ticks": 480})).unwrap();
+        }
+        let notes = |e: &Engine| -> Vec<(i64, i64, Vec<(u8, i64, i64)>)> {
+            e.session()
+                .track(t)
+                .unwrap()
+                .clips()
+                .iter()
+                .map(|c| match &c.content {
+                    ClipContent::Midi { sequence } => {
+                        (c.start, c.length, sequence.notes.iter().filter(|n| n.start >= 0).map(|n| (n.pitch, n.start, n.length)).collect())
+                    }
+                    _ => (c.start, c.length, Vec::new()),
+                })
+                .collect()
+        };
+        let whole = notes(&e);
+        e.execute("edit.separate", &json!({"tracks": [t.0], "at": 48_000})).unwrap();
+        assert_eq!(notes(&e).len(), 2);
+        // The right half transposed: left apart.
+        let right = e.session().track(t).unwrap().clips()[1].id;
+        e.session_mut().find_clip_mut(right).unwrap().midi_transpose = 2;
+        e.execute("edit.heal", &json!({"tracks": [t.0], "start": 0, "end": 96_000})).unwrap();
+        assert_eq!(notes(&e).len(), 2);
+        e.session_mut().find_clip_mut(right).unwrap().midi_transpose = 0;
+        let r = e.execute("edit.heal", &json!({"tracks": [t.0], "start": 0, "end": 96_000})).unwrap();
+        assert_eq!(r["healed"], 1);
+        assert_eq!(notes(&e), whole, "one clip again, the note across the cut whole");
+    }
+
+    /// Parity section 7: a MIDI clip copied in one session pastes into the next one opened (the
+    /// clipboard belongs to the program, not to the session).
+    #[test]
+    fn a_midi_clip_copied_in_one_session_pastes_into_another() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+        let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 96_000})).unwrap()["clip"].as_u64().unwrap();
+        e.execute("midi.note_add", &json!({"clip": clip, "pitch": 64, "start_ticks": 480})).unwrap();
+        e.execute("edit.copy", &json!({"tracks": [t.0], "start": 0, "end": 96_000})).unwrap();
+        e.execute("session.new", &json!({"name": "Second"})).unwrap();
+        let t2 = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Lead"));
+        e.execute("edit.paste", &json!({"tracks": [t2.0], "at": 48_000})).unwrap();
+        let tr = e.session().track(t2).unwrap();
+        let pasted = tr.clips().iter().find_map(|c| match &c.content {
+            ClipContent::Midi { sequence } => Some((c.start, sequence.notes.iter().map(|n| (n.pitch, n.start)).collect::<Vec<_>>())),
+            _ => None,
+        });
+        assert_eq!(pasted, Some((48_000, vec![(64, 480)])));
+    }
+
+    /// An audio clip copied in one session and pasted into another brings its audio along as
+    /// a new source of that session (once, however often it is pasted); a clip whose audio was
+    /// never loaded is refused with the file named.
+    #[test]
+    fn an_audio_clip_pasted_into_another_session_brings_its_audio() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Vox"));
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 48_000]] };
+        let src = crate::io::add_source(e.session_mut(), "Vox_01", buf, None, soundcraft_audio_io::FileFormat::Wav);
+        let s = e.session_mut();
+        let id = s.new_clip_id();
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(Clip::audio(id, "Vox_01", src, 0, 0, 48_000));
+        e.execute("edit.copy", &json!({"tracks": [t.0], "start": 0, "end": 48_000})).unwrap();
+        e.execute("session.new", &json!({"name": "Second"})).unwrap();
+        let t2 = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Dbl"));
+        e.execute("edit.paste", &json!({"tracks": [t2.0], "at": 0})).unwrap();
+        e.execute("edit.paste", &json!({"tracks": [t2.0], "at": 96_000})).unwrap();
+        let s = e.session();
+        assert_eq!(s.sources.len(), 1, "one source brought along, reused by the second paste");
+        let new = s.sources[0].id;
+        assert!(s.sources[0].unsaved, "written to this session's Audio Files on save");
+        assert!(s.pool.get(new).is_some(), "its audio plays");
+        let clips = s.track(t2).unwrap().clips();
+        assert_eq!(clips.len(), 2);
+        assert!(clips.iter().all(|c| matches!(c.content, ClipContent::Audio { source, .. } if source == new)));
+        // Audio that was never loaded cannot come along: refused, naming the file.
+        if let Some(o) = e.clipboard.origin.as_mut() {
+            o.sources[0].1 = None;
+        }
+        let err = e.execute("edit.paste", &json!({"tracks": [t2.0], "at": 200_000})).unwrap_err().to_string();
+        assert!(err.contains("Vox_01"), "{err}");
+    }
 
     #[test]
     fn targeted_fade_curvature_saves_reopens_and_undoes_without_changing_lengths() {
@@ -1429,9 +1777,9 @@ mod tests {
         let (mut e, t, at) = keys();
         let s = e.session_mut();
         let cc = soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: soundcraft_midi::CtrlKind::Cc(1), value: 64, shape: Default::default() };
-        let a = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), note(3, 2, 62), note(5, 1, 63)], ctrls: vec![] };
-        let b = soundcraft_midi::Sequence { notes: vec![note(0, 1, 64)], ctrls: vec![] };
-        let c = soundcraft_midi::Sequence { notes: vec![note(1, 1, 65)], ctrls: vec![cc] };
+        let a = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), note(3, 2, 62), note(5, 1, 63)], ctrls: vec![], sysex: Vec::new() };
+        let b = soundcraft_midi::Sequence { notes: vec![note(0, 1, 64)], ctrls: vec![], sysex: Vec::new() };
+        let c = soundcraft_midi::Sequence { notes: vec![note(1, 1, 65)], ctrls: vec![cc], sysex: Vec::new() };
         for (start, end, seq, muted) in [(0, 4, a, false), (6, 8, b, true), (8, 12, c, false)] {
             let id = s.new_clip_id();
             let mut clip = Clip::midi(id, "Keys", at(start), at(end) - at(start), seq);
@@ -1454,9 +1802,9 @@ mod tests {
         let q = soundcraft_time::TICKS_PER_QUARTER;
         let lower = soundcraft_midi::Note { channel: 2, ..note(0, 1, 48) };
         let ks = soundcraft_midi::CtrlEvent { tick: 0, channel: 2, kind: soundcraft_midi::CtrlKind::Cc(64), value: 127, shape: Default::default() };
-        let printed = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), lower], ctrls: vec![ks] };
+        let printed = soundcraft_midi::Sequence { notes: vec![note(0, 1, 60), lower], ctrls: vec![ks], sysex: Vec::new() };
         // A plain clip whose notes say channel 10: it plays them on channel 1.
-        let plain = soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![] };
+        let plain = soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![], sysex: vec![] };
         for (start, end, seq, chans) in [(0, 4, printed, true), (4, 8, plain, false)] {
             let id = s.new_clip_id();
             let mut clip = Clip::midi(id, "Keys", at(start), at(end) - at(start), seq);
@@ -1485,7 +1833,7 @@ mod tests {
                 "Keys",
                 0,
                 at(4),
-                soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![] },
+                soundcraft_midi::Sequence { notes: vec![soundcraft_midi::Note { channel: 9, ..note(0, 1, 36) }], ctrls: vec![], sysex: vec![] },
             ),
         );
         e.execute("edit.select", &json!({"tracks": [t.0], "start": 0, "end": at(4)})).unwrap();
@@ -1520,6 +1868,64 @@ mod tests {
         let (mut e, t, ids) = trim_session(&[(0, 10_000, 0), (20_000, 10_000, 20_000), (40_000, 5_000, 0)]);
         e.execute("edit.trim_to_file_boundaries", &json!({"clips": [ids[1].0]})).unwrap();
         assert_eq!(bounds(&e, t), vec![(0, 10_000, 0), (10_000, 40_000, 10_000), (40_000, 45_000, 0)]);
+    }
+
+    #[test]
+    fn shuffle_trims_from_the_menu_keep_the_clip_start_and_close_up_what_follows() {
+        let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 20_000), (30_000, 5_000, 0)]);
+        e.execute("edit.mode", &json!({"mode": "shuffle"})).unwrap();
+        e.execute("edit.trim_to_selection", &json!({"tracks": [t.0], "start": 2_000, "end": 8_000})).unwrap();
+        assert_eq!(bounds(&e, t), vec![(0, 6_000, 2_000), (6_000, 16_000, 20_000), (26_000, 31_000, 0)]);
+        e.execute("edit.trim_end_to_insertion", &json!({"tracks": [t.0], "at": 4_000})).unwrap();
+        assert_eq!(bounds(&e, t), vec![(0, 4_000, 2_000), (4_000, 14_000, 20_000), (24_000, 29_000, 0)]);
+        e.execute("edit.trim_start_to_insertion", &json!({"tracks": [t.0], "at": 9_000})).unwrap();
+        assert_eq!(bounds(&e, t), vec![(0, 4_000, 2_000), (4_000, 9_000, 25_000), (19_000, 24_000, 0)]);
+        // In Slip they trim in place, as before.
+        e.execute("edit.mode", &json!({"mode": "slip"})).unwrap();
+        e.execute("edit.trim_end_to_insertion", &json!({"tracks": [t.0], "at": 2_000})).unwrap();
+        assert_eq!(bounds(&e, t), vec![(0, 2_000, 2_000), (4_000, 9_000, 25_000), (19_000, 24_000, 0)]);
+    }
+
+    #[test]
+    fn a_crossfade_short_of_audio_beyond_the_cut_warns() {
+        let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 30_000)]);
+        let v = e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_000, "end": 11_000})).unwrap();
+        assert_eq!(v["short"], 0);
+        assert!(v.get("warning").is_none());
+        // The second clip has only 500 samples before its start: the crossfade's first half is short.
+        let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 500)]);
+        let v = e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_000, "end": 11_000})).unwrap();
+        assert_eq!(v["short"], 1);
+        assert!(v["warning"].as_str().unwrap().contains("not enough audio"));
+    }
+
+    #[test]
+    fn a_crossfade_sits_before_across_or_after_the_cut_as_chosen() {
+        let fades = |e: &Engine, t: TrackId| -> Vec<(Samples, Samples)> {
+            e.session().track(t).unwrap().clips().iter().map(|c| (c.fade_in.len, c.fade_out.len)).collect()
+        };
+        for (placement, a_end, b_start) in [("before", 10_000, 9_400), ("centered", 10_300, 9_700), ("after", 10_600, 10_000)] {
+            let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 30_000)]);
+            e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_500, "end": 10_100, "placement": placement})).unwrap();
+            let b = bounds(&e, t);
+            assert_eq!((b[0].1, b[1].0), (a_end, b_start), "{placement}");
+            assert_eq!(fades(&e, t), vec![(0, 600), (600, 0)], "{placement}: the selection's length");
+        }
+        // As selected: the selection's own sides (500 before, 100 after), as before.
+        let (mut e, t, _) = trim_session(&[(0, 10_000, 0), (10_000, 10_000, 30_000)]);
+        e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_500, "end": 10_100})).unwrap();
+        let b = bounds(&e, t);
+        assert_eq!((b[0].1, b[1].0), (10_100, 9_500));
+        assert!(e.execute("edit.fades_create", &json!({"tracks": [t.0], "start": 9_500, "end": 10_100, "placement": "sideways"})).is_err());
+    }
+
+    #[test]
+    fn trim_to_close_gaps_runs_each_end_on_to_the_next_clip_as_far_as_its_file_goes() {
+        // The file holds 60 000 frames, so the second clip has 5 000 of audio from its start.
+        let (mut e, t, ids) = trim_session(&[(0, 10_000, 0), (20_000, 3_000, 55_000), (40_000, 5_000, 0)]);
+        let all: Vec<u64> = ids.iter().map(|c| c.0).collect();
+        assert_eq!(e.execute("edit.trim_to_close_gaps", &json!({"clips": all})).unwrap()["trimmed"], 2);
+        assert_eq!(bounds(&e, t), vec![(0, 20_000, 0), (20_000, 25_000, 55_000), (40_000, 45_000, 0)]);
     }
 
     #[test]

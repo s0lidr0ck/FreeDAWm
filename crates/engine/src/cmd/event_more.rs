@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select/Split Notes...",
             ["Event", "MIDI Operations"],
             None,
-            "{clips?, pitch_from?: 0, pitch_to?: 127, velocity_from?: 1, velocity_to?: 127, length_from?, length_to?: ticks, start_from?, start_to?: ticks from the clip start, in_bar_from?, in_bar_to?: ticks from the bar line, action?: select|split} — the notes in each clip's window matching every range (`clips: [{clip, indices}]`, `indices` too for one clip); split moves them to a new MIDI track",
+            "{clips?, pitch_from?: 0, pitch_to?: 127, velocity_from?: 1, velocity_to?: 127, length_from?, length_to?: ticks, start_from?, start_to?: ticks from the clip start, in_bar_from?, in_bar_to?: ticks from the bar line, channel_from?, channel_to?: 1..16, action?: select|split|delete|mute|unmute|change, velocity_add?: -127..127, velocity_scale?: percent, transpose?: -127..127, length_scale?: percent, length_set?: ticks, channel_set?: 1..16, target?: notes|events (events: kinds?: [cc|pitch_bend|pressure|poly_pressure|program], number_from?/number_to?: 0..127, value_from?/value_to?, start_*, in_bar_*, channel_*; action select|delete|change with value_scale?: percent, value_add?, number_set?: 0..127 (CCs), channel_set?: 1..16)} — the notes in each clip's window matching every range (`clips: [{clip, indices}]`, `indices` too for one clip); split moves them to a new MIDI track, delete removes them, mute and unmute mute them, change applies the given changes to them (a rule-based transformer)",
             has_selection,
             select_split
         ),
@@ -136,7 +136,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Beat Detective",
             ["Event"],
             None,
-            "{tracks?, start?, end?, sensitivity?: 0.5, separate?: false, set_tempo?: false}",
+            "{tracks?, start?, end?, sensitivity?: 0.5, separate?: false, set_tempo?: false, conform?: false, strength?: 100, groove?: name, smooth?: false} — finds the hits; `separate` cuts at them; `conform` (cuts first) moves each piece that share of the way to the grid, or to `groove`; `smooth` (cuts first) runs each piece on to the next and crossfades the joins",
             has_range,
             beat_detective
         ),
@@ -311,12 +311,25 @@ fn midi_clip_ids(e: &Engine, p: &Value) -> Vec<(TrackId, ClipId)> {
 
 fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "event.select_split_notes";
+    match str_param(p, "target").unwrap_or("notes") {
+        "notes" => {}
+        "events" => return select_events(e, p),
+        other => return Err(bad(id, format!("unknown target `{other}` (notes or events)"))),
+    }
     let rule = note_rule(p);
-    let split = match str_param(p, "action") {
-        None | Some("select") => false,
-        Some("split") => true,
-        Some(a) => return Err(bad(id, format!("unknown action `{a}`"))),
-    };
+    // Channels from 1, as shown.
+    let ch = |k: &str, d: i64| p.get(k).and_then(Value::as_i64).unwrap_or(d).clamp(1, 16) as u8 - 1;
+    let (c0, c1) = (ch("channel_from", 1), ch("channel_to", 16));
+    let channels = c0.min(c1)..=c0.max(c1);
+    let action = str_param(p, "action").unwrap_or("select");
+    if !matches!(action, "select" | "split" | "delete" | "mute" | "unmute" | "change") {
+        return Err(bad(id, format!("unknown action `{action}`")));
+    }
+    let split = action == "split";
+    let change = NoteChange::of(p);
+    if action == "change" && change.is_none() {
+        return Err(bad(id, "give a change: velocity_add, velocity_scale, transpose, length_scale, length_set or channel_set"));
+    }
     let clips = midi_clip_ids(e, p);
     if clips.is_empty() {
         return Err(bad(id, "select MIDI clips"));
@@ -334,7 +347,7 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         let bar_start = |x: i64| tempo.bar_start_tick(tempo.bar_beat_at_tick(base.saturating_add(x)).bar).saturating_sub(base);
         let picked: Vec<usize> = soundcraft_midi::ops::select_matching(&sequence.notes, &rule, bar_start)
             .into_iter()
-            .filter(|i| sequence.notes.get(*i).is_some_and(|n| n.start >= 0))
+            .filter(|i| sequence.notes.get(*i).is_some_and(|n| n.start >= 0 && channels.contains(&(n.channel & 0x0F))))
             .collect();
         let (mut hit, mut rest) = (Vec::new(), Vec::new());
         for (i, n) in sequence.notes.iter().enumerate() {
@@ -342,6 +355,28 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         matched += hit.len();
         found.push(json!({"clip": cid.0, "indices": picked}));
+        if matches!(action, "delete" | "mute" | "unmute" | "change") && !hit.is_empty() {
+            if let Some(cl) = s.find_clip_mut(cid)
+                && let ClipContent::Midi { sequence } = &mut cl.content
+            {
+                match action {
+                    "delete" => sequence.notes = rest,
+                    _ => {
+                        for i in &picked {
+                            if let Some(n) = sequence.notes.get_mut(*i) {
+                                match action {
+                                    "mute" => n.muted = true,
+                                    "unmute" => n.muted = false,
+                                    _ => change.apply(n),
+                                }
+                            }
+                        }
+                        sequence.sort();
+                    }
+                }
+            }
+            continue;
+        }
         if !split || hit.is_empty() {
             continue;
         }
@@ -361,17 +396,200 @@ fn select_split(e: &mut Engine, p: &Value) -> Result<Value> {
         };
         let mut nc = c.clone();
         nc.id = s.new_clip_id();
-        nc.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: hit, ctrls: Vec::new() } };
+        nc.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence { notes: hit, ctrls: Vec::new(), sysex: Vec::new() } };
         crate::edit::place_clip(s, nt, nc);
     }
-    let mut out = json!({"matched": matched, "split": split, "tracks": new_tracks.values().collect::<Vec<_>>()});
-    if !split {
+    let mut out = json!({"matched": matched, "split": split, "action": action, "tracks": new_tracks.values().collect::<Vec<_>>()});
+    if action == "select" {
         if let [one] = found.as_slice() {
             out["indices"] = one["indices"].clone();
         }
         out["clips"] = Value::Array(found);
     }
     Ok(out)
+}
+
+/// The kinds of controller event `event.select_split_notes` with `target: events` names.
+const EVENT_KINDS: [&str; 5] = ["cc", "pitch_bend", "pressure", "poly_pressure", "program"];
+
+fn kind_name(k: soundcraft_midi::CtrlKind) -> &'static str {
+    use soundcraft_midi::CtrlKind as K;
+    match k {
+        K::Cc(_) => "cc",
+        K::PitchBend => "pitch_bend",
+        K::ChannelPressure => "pressure",
+        K::PolyPressure(_) => "poly_pressure",
+        K::Program => "program",
+    }
+}
+
+/// `event.select_split_notes` with `target: events`: the controller events (control changes,
+/// pitch bend, channel and poly pressure, program changes) of each clip matching every
+/// condition, selected, deleted or changed, in one undo step. Conditions: `kinds`, the
+/// controller number (a CC's, or a poly pressure's key) `number_from`..`number_to`, the value
+/// `value_from`..`value_to` (in the kind's own range: pitch bend -8192..8191), `start_from`..
+/// `start_to` and `in_bar_from`..`in_bar_to` (ticks), `channel_from`..`channel_to` (1..16).
+/// Changes: `value_scale` (percent; pitch bend scaled about its centre), `value_add`, `number_set`
+/// (a CC's controller number), `channel_set`.
+fn select_events(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "event.select_split_notes";
+    let kinds: Vec<String> = match p.get("kinds") {
+        None | Some(Value::Null) => EVENT_KINDS.iter().map(|k| (*k).to_string()).collect(),
+        Some(v) => {
+            let list: Vec<String> = v.as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+            if list.is_empty() || list.iter().any(|k| !EVENT_KINDS.contains(&k.as_str())) {
+                return Err(bad(C, format!("`kinds` lists some of {}", EVENT_KINDS.join(", "))));
+            }
+            list
+        }
+    };
+    let action = str_param(p, "action").unwrap_or("select");
+    if !matches!(action, "select" | "delete" | "change") {
+        return Err(bad(C, format!("action `{action}` is for notes: events are selected, deleted or changed")));
+    }
+    let int = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v.round() as i64);
+    let range = |a: &str, b: &str, lo: i64, hi: i64| {
+        let (x, y) = (int(a).unwrap_or(lo).clamp(lo, hi), int(b).unwrap_or(hi).clamp(lo, hi));
+        x.min(y)..=x.max(y)
+    };
+    let numbers = range("number_from", "number_to", 0, 127);
+    let values = range("value_from", "value_to", -8192, 8191);
+    let starts = range("start_from", "start_to", 0, i64::MAX);
+    let in_bar = (int("in_bar_from").is_some() || int("in_bar_to").is_some()).then(|| range("in_bar_from", "in_bar_to", 0, i64::MAX));
+    let channels = range("channel_from", "channel_to", 1, 16);
+    let scale = p.get("value_scale").and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1000.0));
+    let add = int("value_add").map(|v| v.clamp(-16383, 16383));
+    let number_set = int("number_set").map(|v| v.clamp(0, 127) as u8);
+    let channel_set = int("channel_set").map(|v| (v.clamp(1, 16) - 1) as u8);
+    if action == "change" && scale.is_none() && add.is_none() && number_set.is_none() && channel_set.is_none() {
+        return Err(bad(C, "give a change: value_scale, value_add, number_set or channel_set"));
+    }
+    let clips = midi_clip_ids(e, p);
+    if clips.is_empty() {
+        return Err(bad(C, "select MIDI clips"));
+    }
+    let s = e.session_mut();
+    let (mut matched, mut found) = (0usize, Vec::new());
+    for (_, cid) in clips {
+        let Some(c) = s.find_clip(cid).map(|(_, c)| c.clone()) else { continue };
+        let ClipContent::Midi { sequence } = &c.content else { continue };
+        let base = s.tempo.samples_to_ticks(c.start, s.sample_rate);
+        let tempo = &s.tempo;
+        let bar_start = |x: i64| tempo.bar_start_tick(tempo.bar_beat_at_tick(base.saturating_add(x)).bar).saturating_sub(base);
+        let picked: Vec<usize> = sequence
+            .ctrls
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| {
+                use soundcraft_midi::CtrlKind as K;
+                let number = match x.kind {
+                    K::Cc(n) | K::PolyPressure(n) => Some(i64::from(n)),
+                    _ => None,
+                };
+                kinds.iter().any(|k| k == kind_name(x.kind))
+                    && number.is_none_or(|n| numbers.contains(&n))
+                    && values.contains(&i64::from(x.value))
+                    && x.tick >= 0
+                    && starts.contains(&x.tick)
+                    && in_bar.as_ref().is_none_or(|r| r.contains(&x.tick.saturating_sub(bar_start(x.tick))))
+                    && channels.contains(&(i64::from(x.channel & 0x0F) + 1))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        matched += picked.len();
+        let kinds_found: Vec<&str> = picked.iter().filter_map(|i| sequence.ctrls.get(*i)).map(|x| kind_name(x.kind)).collect();
+        found.push(json!({"clip": cid.0, "indices": picked, "kinds": kinds_found}));
+        if action == "select" || picked.is_empty() {
+            continue;
+        }
+        let Some(cl) = s.find_clip_mut(cid) else { continue };
+        let ClipContent::Midi { sequence } = &mut cl.content else { continue };
+        if action == "delete" {
+            let mut i = 0;
+            sequence.ctrls.retain(|_| {
+                let keep = !picked.contains(&i);
+                i += 1;
+                keep
+            });
+            continue;
+        }
+        for i in &picked {
+            let Some(x) = sequence.ctrls.get_mut(*i) else { continue };
+            let (lo, hi) = super::midi_ctrl::lane_range(x.kind);
+            let mut v = f64::from(x.value);
+            if let Some(k) = scale {
+                v = v * k / 100.0;
+            }
+            let v = (v.round() as i64).saturating_add(add.unwrap_or(0)).clamp(i64::from(lo), i64::from(hi));
+            x.value = v as i32;
+            if let (Some(n), soundcraft_midi::CtrlKind::Cc(_)) = (number_set, x.kind) {
+                x.kind = soundcraft_midi::CtrlKind::Cc(n);
+            }
+            if let Some(ch) = channel_set {
+                x.channel = ch;
+            }
+        }
+        sequence.sort();
+    }
+    let mut out = json!({"matched": matched, "action": action, "target": "events"});
+    if action == "select" {
+        if let [one] = found.as_slice() {
+            out["indices"] = one["indices"].clone();
+            out["kinds"] = one["kinds"].clone();
+        }
+        out["clips"] = Value::Array(found);
+    }
+    Ok(out)
+}
+
+/// What `event.select_split_notes` with `action: change` does to each matching note.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct NoteChange {
+    velocity_add: i64,
+    /// Percent.
+    velocity_scale: Option<f64>,
+    transpose: i64,
+    /// Percent.
+    length_scale: Option<f64>,
+    length_set: Option<i64>,
+    /// 0..15.
+    channel_set: Option<u8>,
+}
+
+impl NoteChange {
+    fn of(p: &Value) -> NoteChange {
+        let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+        NoteChange {
+            velocity_add: num("velocity_add").map_or(0, |v| v.round().clamp(-127.0, 127.0) as i64),
+            velocity_scale: num("velocity_scale").map(|v| v.clamp(0.0, 1000.0)),
+            transpose: num("transpose").map_or(0, |v| v.round().clamp(-127.0, 127.0) as i64),
+            length_scale: num("length_scale").map(|v| v.clamp(1.0, 10_000.0)),
+            length_set: num("length_set").map(|v| v.round().clamp(1.0, 1e9) as i64),
+            channel_set: num("channel_set").map(|v| (v.round().clamp(1.0, 16.0) as u8) - 1),
+        }
+    }
+
+    fn is_none(&self) -> bool {
+        *self == NoteChange::default()
+    }
+
+    fn apply(&self, n: &mut soundcraft_midi::Note) {
+        let mut v = f64::from(n.velocity);
+        if let Some(k) = self.velocity_scale {
+            v = v * k / 100.0;
+        }
+        n.velocity = (v.round() as i64 + self.velocity_add).clamp(1, 127) as u8;
+        n.pitch = (i64::from(n.pitch) + self.transpose).clamp(0, 127) as u8;
+        if let Some(l) = self.length_set {
+            n.length = l;
+        }
+        if let Some(k) = self.length_scale {
+            n.length = ((n.length as f64 * k / 100.0).round() as i64).max(1);
+        }
+        if let Some(c) = self.channel_set {
+            n.channel = c;
+        }
+    }
 }
 
 /// The rule `event.select_split_notes` picks notes by (see its parameters).
@@ -750,8 +968,14 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
         }
         (b * 100.0).round() / 100.0
     });
-    let separate = bool_or(p, "separate", false);
+    let (conform, smooth) = (bool_or(p, "conform", false), bool_or(p, "smooth", false));
+    let separate = bool_or(p, "separate", false) || conform || smooth;
     let set_tempo = bool_or(p, "set_tempo", false);
+    let strength = (f64_or(p, "strength", 100.0) / 100.0).clamp(0.0, 1.0);
+    let groove = match str_param(p, "groove").map(str::trim).filter(|g| !g.is_empty()) {
+        Some(name) => Some(super::groove::groove_named(e.session(), name).ok_or_else(|| bad(id, format!("no groove called '{name}'")))?),
+        None => None,
+    };
     let s = e.session_mut();
     let mut separated = 0;
     if separate {
@@ -759,6 +983,14 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
             for b in &beats {
                 separated += crate::edit::separate_at(s, *t, *b);
             }
+        }
+    }
+    let (mut conformed, mut smoothed) = (0, 0);
+    if conform || smooth {
+        for t in &tracks {
+            let (c, m) = conform_pieces(s, *t, r, &beats, conform.then_some((strength, groove.as_ref())), smooth);
+            conformed += c;
+            smoothed += m;
         }
     }
     if set_tempo && let Some(b) = bpm {
@@ -771,7 +1003,83 @@ fn beat_detective(e: &mut Engine, p: &Value) -> Result<Value> {
         s.tempo.set_span(t0, t1, len, b).map_err(|err| bad(id, err.to_string()))?;
     }
     let shown: Vec<Samples> = beats.iter().take(2000).copied().collect();
-    Ok(json!({"beats": shown, "count": beats.len(), "bpm": bpm, "separated": separated}))
+    Ok(json!({"beats": shown, "count": beats.len(), "bpm": bpm, "separated": separated, "conformed": conformed, "smoothed": smoothed}))
+}
+
+/// Crossfade Beat Detective's smoothing puts at each join.
+const SMOOTH_CROSSFADE_SECONDS: f64 = 0.005;
+
+/// Beat Detective's conform and smoothing on `track` after it was cut at `beats`: the pieces
+/// starting at a hit inside `r` move that share of the way (`conform`: strength, groove) to the
+/// grid line or groove point nearest, a later piece winning where two then overlap (the earlier
+/// one's end is trimmed to it); `smooth` runs each piece's end on to the next piece, as far as its
+/// file goes, and crossfades every join. Edit-locked clips stay. Returns (moved, joins smoothed).
+fn conform_pieces(
+    s: &mut Session,
+    track: TrackId,
+    r: Range,
+    beats: &[Samples],
+    conform: Option<(f64, Option<&soundcraft_midi::ops::Groove>)>,
+    smooth: bool,
+) -> (usize, usize) {
+    let Some(tr) = s.track(track) else { return (0, 0) };
+    let inside = |c: &Clip| c.is_audio() && c.start >= r.start && c.start < r.end;
+    let mut moves: Vec<(ClipId, Samples)> = Vec::new();
+    if let Some((strength, groove)) = conform {
+        for c in tr.clips().iter().filter(|c| inside(c) && !c.edit_locked && beats.binary_search(&c.start).is_ok()) {
+            let full = match groove {
+                Some(g) => {
+                    let (map, sr) = (&s.tempo, s.sample_rate);
+                    let t = map.samples_to_ticks(c.start, sr);
+                    let bar = map.bar_start_tick(map.bar_beat_at_tick(t).bar);
+                    map.tick_to_samples(g.nearest(t, bar), sr).saturating_sub(c.start)
+                }
+                None => crate::edit::quantize_delta(s, c, 1.0, 0.0),
+            };
+            let d = soundcraft_time::to_samples(full as f64 * strength);
+            if d != 0 {
+                moves.push((c.id, d));
+            }
+        }
+    }
+    let moved = moves.len();
+    if let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) {
+        for c in &mut pl.clips {
+            if let Some((_, d)) = moves.iter().find(|(id, _)| *id == c.id) {
+                c.start = c.start.saturating_add(*d);
+            }
+        }
+        pl.sort();
+        // A piece moved over the end of the one before it: the later start wins.
+        let starts: Vec<(ClipId, Samples)> = pl.clips.iter().filter(|c| inside(c)).map(|c| (c.id, c.start)).collect();
+        for w in starts.windows(2) {
+            let (Some((a, _)), Some((_, next))) = (w.first(), w.get(1)) else { continue };
+            if let Some(c) = pl.clips.iter_mut().find(|c| c.id == *a)
+                && c.end() > *next
+                && *next > c.start
+            {
+                c.trim_end_to(*next);
+            }
+        }
+    }
+    if !smooth {
+        return (moved, 0);
+    }
+    let pieces: Vec<ClipId> = s.track(track).map(|t| t.clips().iter().filter(|c| inside(c)).map(|c| c.id).collect()).unwrap_or_default();
+    super::edit::close_gaps_of(s, pieces);
+    let joins: Vec<Samples> = s
+        .track(track)
+        .map(|t| {
+            let mut v: Vec<&Clip> = t.clips().iter().filter(|c| inside(c)).collect();
+            v.sort_by_key(|c| c.start);
+            v.windows(2).filter_map(|w| Some((w.first()?, w.get(1)?))).filter(|(a, b)| a.end() == b.start).map(|(_, b)| b.start).collect()
+        })
+        .unwrap_or_default();
+    let half = s.sample_rate.samples(SMOOTH_CROSSFADE_SECONDS / 2.0).max(1);
+    for j in &joins {
+        crate::edit::create_fades(s, track, Range::new(j - half, j + half), soundcraft_model::FadeShape::EqualPower);
+    }
+    (moved, joins.len())
 }
 
 fn identify_beat(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -992,6 +1300,29 @@ mod tests {
         assert!((e.session().tempo.tempo_at_tick(0) - 60.0).abs() < 1e-9);
     }
 
+    /// Parity section 7: notes split out by channel.
+    #[test]
+    fn notes_are_picked_and_split_by_channel() {
+        let (mut e, t) = midi_engine();
+        let notes = json!([
+            {"pitch": 36, "start_ticks": 0, "channel": 9},
+            {"pitch": 60, "start_ticks": 0},
+            {"pitch": 64, "start_ticks": 480, "channel": 1}
+        ]);
+        let cid = e.execute("event.retrospective_record", &json!({"track": t.0, "notes": notes})).unwrap()["clip"].as_u64().unwrap();
+        let r = e.execute("event.select_split_notes", &json!({"clips": [cid], "channel_from": 2, "channel_to": 10})).unwrap();
+        let picked: Vec<u64> = r["indices"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap()).collect();
+        assert_eq!(picked.len(), 2, "channels 2 and 10: {r}");
+        e.execute("edit.select", &json!({"clips": [cid]})).unwrap();
+        let r = e.execute("event.select_split_notes", &json!({"channel_from": 10, "channel_to": 10, "action": "split"})).unwrap();
+        assert_eq!(r["matched"], 1);
+        let nt = e.session().tracks.iter().find(|x| x.id != t).unwrap();
+        match &nt.clips()[0].content {
+            ClipContent::Midi { sequence } => assert_eq!((sequence.notes[0].pitch, sequence.notes[0].channel), (36, 9)),
+            _ => panic!(),
+        }
+    }
+
     #[test]
     fn split_notes_to_new_track() {
         let (mut e, t) = midi_engine();
@@ -1011,6 +1342,121 @@ mod tests {
             ClipContent::Midi { sequence } => assert_eq!(sequence.notes[0].pitch, 72),
             _ => panic!(),
         }
+    }
+
+    /// Parity section 7: a rule-based transformer: the notes matching a rule are deleted, muted
+    /// or changed (velocity, transpose, length, channel), one undo step each.
+    #[test]
+    fn matching_notes_are_deleted_muted_or_changed() {
+        let (mut e, t) = midi_engine();
+        let notes = json!([
+            {"pitch": 36, "start_ticks": 0, "velocity": 120},
+            {"pitch": 60, "start_ticks": 240, "velocity": 30},
+            {"pitch": 62, "start_ticks": 480, "velocity": 100, "length_ticks": 480},
+            {"pitch": 64, "start_ticks": 720, "velocity": 20}
+        ]);
+        let cid = e.execute("event.retrospective_record", &json!({"track": t.0, "notes": notes})).unwrap()["clip"].as_u64().unwrap();
+        let notes_of = |e: &Engine| match &e.session().find_clip(ClipId(cid)).unwrap().1.content {
+            ClipContent::Midi { sequence } => sequence.notes.iter().map(|n| (n.pitch, n.velocity, n.length, n.muted, n.channel)).collect::<Vec<_>>(),
+            _ => panic!(),
+        };
+        // Quiet notes go.
+        let r = e.execute("event.select_split_notes", &json!({"clips": [cid], "velocity_to": 40, "action": "delete"})).unwrap();
+        assert_eq!(r["matched"], 2);
+        assert_eq!(notes_of(&e).iter().map(|n| n.0).collect::<Vec<_>>(), vec![36, 62]);
+        assert!(e.undo());
+        // Mute them instead.
+        e.execute("event.select_split_notes", &json!({"clips": [cid], "velocity_to": 40, "action": "mute"})).unwrap();
+        assert_eq!(notes_of(&e).iter().map(|n| n.3).collect::<Vec<_>>(), vec![false, true, false, true]);
+        assert!(e.undo());
+        // Change the notes of C4 and up: half as loud plus 10, up an octave, twice as long, channel 2.
+        let change = json!({"clips": [cid], "pitch_from": 60, "action": "change", "velocity_scale": 50, "velocity_add": 10, "transpose": 12, "length_scale": 200, "channel_set": 2});
+        e.execute("event.select_split_notes", &change).unwrap();
+        let after = notes_of(&e);
+        assert_eq!((after[0].0, after[0].1, after[0].4), (36, 120, 0), "the kick is untouched");
+        assert_eq!(after[2], (74, 60, 960, false, 1));
+        assert!(e.execute("event.select_split_notes", &json!({"clips": [cid], "action": "change"})).is_err(), "no change given");
+        assert!(e.execute("event.select_split_notes", &json!({"clips": [cid], "action": "explode"})).is_err());
+    }
+
+    /// The transformer on controller events (`target: events`): picked by kind, number, value,
+    /// position and channel; selected, deleted or changed (value scaled and offset, CC number and
+    /// channel set) in one undo step each; the notes left alone.
+    #[test]
+    fn matching_controller_events_are_selected_deleted_or_changed() {
+        use soundcraft_midi::{CtrlEvent, CtrlKind, CtrlShape};
+        let (mut e, t) = midi_engine();
+        let cid = e
+            .execute("event.retrospective_record", &json!({"track": t.0, "notes": [{"pitch": 60, "start_ticks": 0, "velocity": 90}]}))
+            .unwrap()["clip"]
+            .as_u64()
+            .unwrap();
+        let ev = |tick, channel, kind, value| CtrlEvent { tick, channel, kind, value, shape: CtrlShape::default() };
+        if let Some(c) = e.session_mut().find_clip_mut(ClipId(cid))
+            && let ClipContent::Midi { sequence } = &mut c.content
+        {
+            sequence.ctrls = vec![
+                ev(0, 0, CtrlKind::Cc(1), 100),
+                ev(240, 0, CtrlKind::Cc(7), 40),
+                ev(480, 1, CtrlKind::Cc(1), 20),
+                ev(720, 0, CtrlKind::PitchBend, 4000),
+                ev(960, 0, CtrlKind::Program, 5),
+                ev(1200, 0, CtrlKind::ChannelPressure, 70),
+            ];
+        }
+        let ctrls = |e: &Engine| match &e.session().find_clip(ClipId(cid)).unwrap().1.content {
+            ClipContent::Midi { sequence } => sequence.ctrls.iter().map(|c| (c.tick, c.channel, c.kind, c.value)).collect::<Vec<_>>(),
+            _ => panic!(),
+        };
+        let pick = |e: &mut Engine, rule: Value| {
+            let mut p = rule;
+            p["clips"] = json!([cid]);
+            p["target"] = json!("events");
+            let r = e.execute("event.select_split_notes", &p).unwrap();
+            r["indices"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap()).collect::<Vec<_>>()
+        };
+        assert_eq!(pick(&mut e, json!({})), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(pick(&mut e, json!({"kinds": ["cc"], "number_from": 1, "number_to": 1})), vec![0, 2]);
+        assert_eq!(pick(&mut e, json!({"kinds": ["cc"], "value_from": 50})), vec![0]);
+        assert_eq!(pick(&mut e, json!({"channel_from": 2, "channel_to": 2})), vec![2]);
+        assert_eq!(pick(&mut e, json!({"kinds": ["pitch_bend", "program"]})), vec![3, 4]);
+        assert_eq!(pick(&mut e, json!({"start_from": 700, "kinds": ["pressure"]})), vec![5]);
+        let undo = e.undo_history().len();
+        // Delete the mod wheel on channel 1.
+        let r = e
+            .execute(
+                "event.select_split_notes",
+                &json!({"clips": [cid], "target": "events", "kinds": ["cc"], "number_from": 1, "number_to": 1, "channel_to": 1, "action": "delete"}),
+            )
+            .unwrap();
+        assert_eq!(r["matched"], 1);
+        assert_eq!(ctrls(&e).len(), 5);
+        assert_eq!(e.undo_history().len(), undo + 1);
+        assert!(e.undo());
+        // Every CC: half its value plus 3, moved to CC 11, channel 4; the bend halved about 0.
+        e.execute("event.select_split_notes", &json!({"clips": [cid], "target": "events", "kinds": ["cc", "pitch_bend"], "action": "change", "value_scale": 50, "value_add": 3, "number_set": 11, "channel_set": 4}))
+            .unwrap();
+        let after = ctrls(&e);
+        assert_eq!(after[0], (0, 3, CtrlKind::Cc(11), 53));
+        assert_eq!(after[2], (480, 3, CtrlKind::Cc(11), 13));
+        assert_eq!(after[3], (720, 3, CtrlKind::PitchBend, 2003), "a bend keeps its kind");
+        assert_eq!(after[4], (960, 0, CtrlKind::Program, 5), "a program change not named is untouched");
+        // Clamped to the kind's range.
+        e.execute(
+            "event.select_split_notes",
+            &json!({"clips": [cid], "target": "events", "kinds": ["program"], "action": "change", "value_add": 500}),
+        )
+        .unwrap();
+        assert_eq!(ctrls(&e)[4].3, 127);
+        // The note is untouched; actions for notes only are refused for events.
+        match &e.session().find_clip(ClipId(cid)).unwrap().1.content {
+            ClipContent::Midi { sequence } => assert_eq!((sequence.notes[0].pitch, sequence.notes[0].velocity), (60, 90)),
+            _ => panic!(),
+        }
+        assert!(e.execute("event.select_split_notes", &json!({"clips": [cid], "target": "events", "action": "mute"})).is_err());
+        assert!(e.execute("event.select_split_notes", &json!({"clips": [cid], "target": "events", "kinds": ["sysex"]})).is_err());
+        assert!(e.execute("event.select_split_notes", &json!({"clips": [cid], "target": "events", "action": "change"})).is_err());
+        assert!(e.execute("event.select_split_notes", &json!({"clips": [cid], "target": "chords"})).is_err());
     }
 
     /// Parity section 7: notes picked by rule (pitch, velocity, length, start, place in the bar),
@@ -1073,6 +1519,76 @@ mod tests {
         }
         let r = e.execute("event.extract_chords", &json!({"tracks": [keys.0], "start": 0, "end": far + 48_000 * 600})).unwrap();
         assert!(!r["chords"].as_array().unwrap().is_empty(), "{r}");
+    }
+
+    /// A mono track holding one 96 000-frame clip (a 4/4 bar at 120 bpm) with noise hits at `hits`.
+    fn hits_session(hits: &[usize]) -> (Engine, TrackId) {
+        let mut s = Session::default();
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        let mut buf = vec![0.0f32; 96_000];
+        let mut seed = 0x2545_f491_u32;
+        for &h in hits {
+            for (i, x) in buf.iter_mut().skip(h).take(3_000).enumerate() {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                *x = (seed as f32 / u32::MAX as f32 - 0.5) * 1.6 * (-(i as f32) / 400.0).exp();
+            }
+        }
+        let audio = soundcraft_audio_io::AudioBuffer { sample_rate: s.sample_rate.hz(), channels: vec![buf] };
+        let src = crate::io::add_source(&mut s, "hits", audio, None, soundcraft_audio_io::FileFormat::Wav);
+        let id = s.new_clip_id();
+        crate::edit::place_clip(&mut s, t, Clip::audio(id, "hits", src, 0, 0, 96_000));
+        (Engine::new(s), t)
+    }
+
+    fn spans(e: &Engine, t: TrackId) -> Vec<(Samples, Samples)> {
+        e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end())).collect()
+    }
+
+    #[test]
+    fn beat_detective_conforms_the_hits_to_the_grid_and_smooths_the_gaps() {
+        // Hits a little off the sixteenths at 6 000, 24 000, 48 000 and 72 000.
+        let (mut e, t) = hits_session(&[7_000, 25_500, 46_800, 72_800]);
+        let r = e.execute("event.beat_detective", &json!({"tracks": [t.0], "start": 0, "end": 96_000, "conform": true})).unwrap();
+        assert_eq!(r["conformed"], 4, "{r}");
+        let starts: Vec<Samples> = spans(&e, t).iter().map(|x| x.0).collect();
+        assert_eq!(starts, vec![0, 6_000, 24_000, 48_000, 72_000], "each piece starts on the grid line nearest its hit");
+        let gaps = spans(&e, t).windows(2).filter(|w| w[0].1 < w[1].0).count();
+        assert_eq!(gaps, 1, "the piece moved earlier leaves a gap before the next");
+        assert!(e.undo());
+        // Half way, then smoothed: no gaps, a crossfade at every join.
+        let r = e
+            .execute("event.beat_detective", &json!({"tracks": [t.0], "start": 0, "end": 96_000, "conform": true, "strength": 50, "smooth": true}))
+            .unwrap();
+        assert_eq!(r["smoothed"], 4, "{r}");
+        let sp = spans(&e, t);
+        assert!((sp[1].0 - 6_500).abs() < 300 && (sp[2].0 - 24_750).abs() < 300, "half way: {sp:?}");
+        assert!(sp.windows(2).all(|w| w[0].1 >= w[1].0), "no gaps: {sp:?}");
+        let fades = e.session().track(t).unwrap().clips().iter().filter(|c| c.fade_in.len > 0).count();
+        assert_eq!(fades, 4, "a crossfade at each join");
+    }
+
+    #[test]
+    fn a_groove_comes_from_an_audio_clips_hits_and_beat_detective_follows_it() {
+        let (mut e, t) = hits_session(&[7_000, 25_500, 46_800, 72_800]);
+        let clip = e.session().track(t).unwrap().clips()[0].id;
+        let r = e.execute("event.groove_from_clip", &json!({"clip": clip.0, "name": "Drums", "grid": "1/16"})).unwrap();
+        // Each sixteenth is a point; the four with a hit sit where the hit is (960 ticks a beat).
+        let points: Vec<i64> = r["points"].as_array().unwrap().iter().filter_map(serde_json::Value::as_i64).collect();
+        assert_eq!(points.len(), 16, "{r}");
+        for hit in [280, 1_020, 1_872, 2_912] {
+            assert!(points.iter().any(|p| (p - hit).abs() <= 4), "{hit}: {r}");
+        }
+        // Hits on the grid, conformed to that groove, land where the first clip's hits were.
+        let (mut e2, t2) = hits_session(&[6_000, 24_000, 48_000, 72_000]);
+        let g = crate::cmd::groove::groove_named(e.session(), "Drums").unwrap();
+        e2.session_mut().grooves.push(g);
+        e2.execute("event.beat_detective", &json!({"tracks": [t2.0], "start": 0, "end": 96_000, "conform": true, "groove": "Drums"})).unwrap();
+        let starts: Vec<Samples> = spans(&e2, t2).iter().map(|x| x.0).collect();
+        for (got, want) in starts.iter().skip(1).zip([7_000, 25_500, 46_800, 72_800]) {
+            assert!((got - want).abs() < 400, "{starts:?}");
+        }
     }
 
     #[test]

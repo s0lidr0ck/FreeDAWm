@@ -6,7 +6,7 @@ merged.
 
 ## Build and run
 
-- Rust stable (1.95 or later for the desktop and web apps; the core crates build from 1.90).
+- Rust stable (1.95 or later for the desktop app; the core crates build from 1.90).
 - Linux: `pkg-config`, the ALSA, PipeWire and JACK headers (`libasound2-dev libpipewire-0.3-dev
   libjack-jackd2-dev` / `alsa-lib-devel pipewire-devel pipewire-jack-audio-connection-kit-devel`),
   OpenSSL headers,
@@ -18,7 +18,6 @@ merged.
 ```sh
 cargo run --release -p soundcraft -- --demo     # the app (`freedawm`) with the demo song
 cargo run -p soundcraft-cli -- --help           # the headless CLI (`freedawm-cli`)
-cd apps/soundcraft-web && trunk serve --release # the web build
 ```
 
 The crates and cargo packages keep their `soundcraft-*` names (FreeDAWm is a fork of SoundCraft);
@@ -31,8 +30,7 @@ repository; a binary built with it carries the SDK's licence terms (see
 ## Before you open a pull request
 
 `cargo xtask ci` must pass. It runs, in order: `cargo fmt --check`, `cargo clippy --workspace
---all-targets -- -D warnings`, `cargo test --workspace`, the asset check, the layering check and
-the WebAssembly check. CI runs the same command on every pull request.
+--all-targets -- -D warnings`, `cargo test --workspace`, the asset check and the layering check. CI runs the same command on every pull request.
 
 While you work, test the crates you touch: `cargo test -p <crate> <filter>`. Some tests print
 `SKIPPED` when local-only reference audio is missing; that is expected.

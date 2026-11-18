@@ -61,6 +61,8 @@ pub fn default_key_knobs(info: &PluginInfo) -> Vec<&'static str> {
         "channel_strip" => vec!["comp_threshold", "output_gain"],
         // A drum kit's strip: its level, feel and the two returns (the pads have their window).
         "juke" => vec!["level", "humanize", "return_a", "return_b"],
+        // The FM synth: its algorithm, how bright (the first modulator's level) and its level.
+        "fm_synth" => vec!["algorithm", "op2_level", "level"],
         // FireStation engines: Station's own key knobs (`EngineUi::key_knobs`).
         _ => match engine_ui(info.id).map(|u| u.key_knobs).filter(|k| !k.is_empty()) {
             Some(keys) => keys.to_vec(),

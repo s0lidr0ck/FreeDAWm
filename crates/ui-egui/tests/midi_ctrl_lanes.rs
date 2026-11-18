@@ -187,6 +187,7 @@ fn lane_helpers() {
             .iter()
             .map(|k| soundcraft_midi::CtrlEvent { tick: 0, channel: 0, kind: *k, value: 0, shape: Default::default() })
             .collect(),
+        sysex: Vec::new(),
     };
     assert_eq!(midi_lanes::lanes_with_data(&seq), vec![CtrlKind::Cc(1), CtrlKind::Cc(11), CtrlKind::PitchBend, CtrlKind::Program]);
     assert_eq!(midi_lanes::lane_height(2, 400.0), midi_lanes::LANE_H);
@@ -209,7 +210,7 @@ fn with_channels(h: &mut Harness<'_, SoundApp>, clip: u64) -> Vec<(i64, i64)> {
 fn lanes_show_and_write_one_channel() {
     use soundcraft_midi::{Note, Sequence};
     let n = |channel| Note { probability: 100, pitch: 60, velocity: 100, muted: false, release_velocity: 64, channel, start: 0, length: 10 };
-    let seq = Sequence { notes: vec![n(2), n(2), n(0)], ctrls: Vec::new() };
+    let seq = Sequence { notes: vec![n(2), n(2), n(0)], ctrls: Vec::new(), sysex: Vec::new() };
     assert_eq!(midi_lanes::main_channel(&seq), 2);
     assert_eq!(midi_lanes::main_channel(&Sequence::default()), 0);
     assert_eq!(midi_lanes::write_channel(Some(5), &seq), 5);

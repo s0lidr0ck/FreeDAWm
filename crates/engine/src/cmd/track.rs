@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move to New Folder...",
             ["Track"],
             Some("Cmd+Alt+Shift+N"),
-            "{tracks?, name?}",
+            "{tracks?, name?, routing?: true} — `routing: false` makes a basic folder: it only organises (no bus, no audio path; its members keep their outputs)",
             has_selection,
             move_to_folder
         ),
@@ -89,6 +89,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("track.delete", "Delete", ["Track"], None, "{tracks?}", has_selection, delete),
         cmd!("track.rename", "Rename Track", [], None, "{track, name}", has_tracks, rename),
+        cmd!(
+            "track.rename_selected",
+            "Rename Selected Tracks...",
+            ["Track"],
+            None,
+            "{pattern, start?: number (1), tracks?} | {find, replace?: \"\", tracks?} | {trim_start?: n, trim_end?: n, tracks?} — renames the selected tracks in track order: by one pattern (`*` is a track's name, `#` the running number, `##` pads it to two digits; without a `#` the number goes at the end), by replacing every `find` in each name with `replace`, or by trimming characters off each name's start and end → {names}",
+            has_selection,
+            rename_selected
+        ),
         cmd!("track.comments", "Track Comments", [], None, "{track, comments}", has_tracks, comments),
         cmd!("track.color", "Track Color", [], None, "{tracks?, color: [r,g,b] | palette index}", has_selection, color),
         cmd!(
@@ -114,6 +123,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{tracks?, view: waveform|pitch|blocks|notes|volume|pan|mute|<automation id>}",
             has_selection,
             view
+        ),
+        cmd!(
+            "track.lock",
+            "Lock Track",
+            [],
+            None,
+            "{tracks?, value?: bool} (toggles when omitted) — a locked track's clips cannot be added, changed or removed, and it cannot be record-armed",
+            has_selection,
+            |e, p| flag(e, p, "track.lock", |t, v| t.edit_locked = v, |t| t.edit_locked)
         ),
         cmd!("track.hide", "Hide Track", [], None, "{tracks?, hidden?: bool}", has_selection, |e, p| flag(
             e,
@@ -543,13 +561,20 @@ fn split_mono(e: &mut Engine, p: &Value) -> Result<Value> {
         if src.channels() < 2 || src.kind != TrackKind::Audio {
             continue;
         }
+        // A field recorder's names for the channels (iXML), when its file is on the track.
+        let named: Vec<String> =
+            src.clips().iter().find_map(|c| c.source()).and_then(|f| s.field_info.get(&f.0)).map(|f| f.channels.clone()).unwrap_or_default();
         for ch in 0..src.channels() {
             let suffix = match (src.channels(), ch) {
                 (2, 0) => "L".to_string(),
                 (2, 1) => "R".to_string(),
                 _ => format!("{}", ch + 1),
             };
-            let id = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(&format!("{}.{suffix}", src.name)));
+            let track_name = match named.get(ch).map(|n| n.trim()).filter(|n| !n.is_empty()) {
+                Some(n) => n.to_string(),
+                None => format!("{}.{suffix}", src.name),
+            };
+            let id = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(&track_name));
             let mut clips = src.clips().to_vec();
             for c in &mut clips {
                 c.id = s.new_clip_id();
@@ -604,6 +629,7 @@ fn unique_folder_bus_name(s: &Session, base: &str, own: Option<soundcraft_model:
 fn move_to_folder(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.move_to_new_folder", p)?;
     let name = str_param(p, "name").map(str::to_string);
+    let routing = bool_or(p, "routing", true);
     let s = e.session_mut();
     let first_idx = tracks.iter().filter_map(|t| s.track_index(*t)).min().unwrap_or(0);
     let fid = s.add_track(TrackKind::Folder, ChannelFormat::Stereo, Some(name.as_deref().unwrap_or("Folder")));
@@ -611,6 +637,21 @@ fn move_to_folder(e: &mut Engine, p: &Value) -> Result<Value> {
     if let Some(i) = s.track_index(fid) {
         let f = s.tracks.remove(i);
         s.tracks.insert(first_idx.min(s.tracks.len()), f);
+    }
+    if !routing {
+        // A basic folder: it holds its members (show, hide, collapse, select, spill) and passes
+        // no audio; nothing is rerouted, so the mix is unchanged.
+        if let Some(f) = s.track_mut(fid) {
+            f.mixer.input = Route::None;
+            f.mixer.output = Route::None;
+        }
+        for t in &tracks {
+            if let Some(tr) = s.track_mut(*t) {
+                tr.folder = Some(fid);
+            }
+        }
+        place_under(s, fid, &tracks);
+        return Ok(json!({"folder": fid, "bus": null}));
     }
     // A routing folder sums its members through its own bus.
     let fname = s.track(fid).map(|x| x.name.clone()).unwrap_or_else(|| "Folder".into());
@@ -629,6 +670,11 @@ fn move_to_folder(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     place_under(s, fid, &tracks);
     Ok(json!({"folder": fid, "bus": bus}))
+}
+
+/// The tracks inside `folder`, directly or through nested folders, in session order.
+pub fn folder_members(s: &Session, folder: TrackId) -> Vec<TrackId> {
+    s.tracks.iter().filter(|t| in_folder(s, t.id, folder)).map(|t| t.id).collect()
 }
 
 /// Whether `track` sits inside `folder`, directly or through nested folders.
@@ -833,6 +879,130 @@ fn delete(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": tracks.len()}))
 }
 
+/// The name `pattern` gives a track called `old` numbered `n`: `*` is the old name, a run of
+/// `#` the number (padded with zeros to the run's length), anything else as written. Without a
+/// `#` the number follows the pattern after a space.
+pub fn batch_name(pattern: &str, old: &str, n: u64) -> String {
+    let mut out = String::new();
+    let mut numbered = false;
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => out.push_str(old),
+            '#' => {
+                let mut width = 1;
+                while chars.peek() == Some(&'#') {
+                    chars.next();
+                    width += 1;
+                }
+                out.push_str(&format!("{n:0width$}"));
+                numbered = true;
+            }
+            c => out.push(c),
+        }
+    }
+    if !numbered {
+        out = format!("{} {n}", out.trim_end());
+    }
+    out.trim().chars().take(64).collect()
+}
+
+/// A name with every `find` replaced by `with` (Pro Tools' batch rename Replace), trimmed and
+/// cut to 64 characters as a typed name is. An empty `find` leaves it as it was.
+pub fn replaced_name(old: &str, find: &str, with: &str) -> String {
+    if find.is_empty() {
+        return old.to_string();
+    }
+    old.replace(find, with).trim().chars().take(64).collect()
+}
+
+/// A name with `start` characters taken off its start and `end` off its end (batch rename
+/// Trim); empty when that is all of it.
+pub fn trimmed_name(old: &str, start: usize, end: usize) -> String {
+    let n = old.chars().count();
+    let keep = n.saturating_sub(start).saturating_sub(end);
+    old.chars().skip(start).take(keep).collect::<String>().trim().to_string()
+}
+
+/// How Rename Selected Tracks names each track.
+#[derive(Clone, Copy)]
+enum Renaming<'a> {
+    Pattern(&'a str, u64),
+    Replace(&'a str, &'a str),
+    Trim(usize, usize),
+}
+
+/// Track › Rename Selected Tracks…: every target track named, in track order, by one pattern and
+/// a running number ([`batch_name`]), by find and replace ([`replaced_name`]) or by trimming
+/// characters off its ends ([`trimmed_name`]). One undo step; refused (nothing renamed) when a
+/// new name would be empty or taken by another track.
+fn rename_selected(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.rename_selected";
+    let count = |k: &str| p.get(k).and_then(Value::as_u64).map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let how = if let Some(find) = str_param(p, "find") {
+        if find.is_empty() {
+            return Err(bad(C, "`find`: the text to replace"));
+        }
+        Renaming::Replace(find, str_param(p, "replace").unwrap_or(""))
+    } else if count("trim_start").is_some() || count("trim_end").is_some() {
+        let (a, b) = (count("trim_start").unwrap_or(0), count("trim_end").unwrap_or(0));
+        if a == 0 && b == 0 {
+            return Err(bad(C, "trim at least one character"));
+        }
+        Renaming::Trim(a, b)
+    } else {
+        let pattern = str_param(p, "pattern")
+            .filter(|x| !x.trim().is_empty())
+            .ok_or_else(|| bad(C, "`pattern` required (`*` the name, `#` the number), or `find`, or `trim_start`/`trim_end`"))?;
+        Renaming::Pattern(pattern, p.get("start").and_then(Value::as_u64).unwrap_or(1))
+    };
+    let targets = if p.get("tracks").is_some() { tracks_required(e, C, p)? } else { e.target_tracks() };
+    let s = e.session();
+    let order: Vec<TrackId> = s
+        .tracks
+        .iter()
+        .map(|t| t.id)
+        .filter(|id| targets.contains(id))
+        .filter(|id| s.track(*id).is_some_and(|t| t.kind != TrackKind::Master))
+        .collect();
+    if order.is_empty() {
+        return Err(bad(C, "select the tracks to rename"));
+    }
+    let mut names: Vec<(TrackId, String)> = Vec::new();
+    for (i, id) in order.iter().enumerate() {
+        let old = s.track(*id).map(|t| t.name.as_str()).unwrap_or_default();
+        let name = match how {
+            Renaming::Pattern(pattern, start) => batch_name(pattern, old, start.saturating_add(i as u64)),
+            Renaming::Replace(find, with) => replaced_name(old, find, with),
+            Renaming::Trim(a, b) => trimmed_name(old, a, b),
+        };
+        if name.is_empty() {
+            return Err(bad(C, format!("the pattern leaves track {} without a name", i + 1)));
+        }
+        if names.iter().any(|(_, n)| *n == name) || s.tracks.iter().any(|t| t.name == name && !order.contains(&t.id)) {
+            return Err(bad(C, format!("a track named `{name}` would be there twice")));
+        }
+        names.push((*id, name));
+    }
+    let s = e.session_mut();
+    for (id, name) in &names {
+        let bus = s.track(*id).and_then(|track| match (track.kind, &track.mixer.input) {
+            (TrackKind::Folder, Route::Bus(bus)) => Some(*bus),
+            _ => None,
+        });
+        if let Some(track) = s.track_mut(*id) {
+            track.name.clone_from(name);
+        }
+        if let Some(bus) = bus {
+            let bus_name = unique_folder_bus_name(s, &format!("{name} Bus"), Some(bus));
+            if let Some(bus) = s.busses.iter_mut().find(|candidate| candidate.id == bus) {
+                bus.name = bus_name;
+            }
+        }
+    }
+    Ok(json!({"names": names.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>()}))
+}
+
 fn rename(e: &mut Engine, p: &Value) -> Result<Value> {
     let t = track_param(e, "track.rename", p, "track")?.ok_or_else(|| bad("track.rename", "`track` required"))?;
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("track.rename", "`name` required"))?;
@@ -923,7 +1093,7 @@ fn height_step(e: &mut Engine, p: &Value, taller: bool) -> Result<Value> {
 fn view(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.view", p)?;
     let v = str_param(p, "view").ok_or_else(|| bad("track.view", "`view` required"))?.to_string();
-    let plain = matches!(v.as_str(), "waveform" | "pitch" | "blocks" | "notes" | "regions" | "clip_gain" | "warp" | "playlists");
+    let plain = matches!(v.as_str(), "waveform" | "pitch" | "spectral" | "blocks" | "notes" | "regions" | "clip_gain" | "warp" | "playlists");
     // Automation views are stored by text id; a legacy chain position becomes the module's id.
     let mut views = Vec::new();
     for t in &tracks {
@@ -1015,7 +1185,7 @@ fn auto_lanes(e: &mut Engine, p: &Value) -> Result<Value> {
         let mut ids: Vec<String> = Vec::new();
         for l in tr.automation.iter().filter(|l| !l.points.is_empty()) {
             let ok = match &l.param {
-                soundcraft_model::AutoParam::Plugin { module, .. } => tr.mixer.module(*module).is_some(),
+                soundcraft_model::AutoParam::Plugin { module, .. } => tr.module_or_instrument(*module).is_some(),
                 _ => true,
             };
             let id = l.param.id();
@@ -1416,6 +1586,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_batch_name_is_the_pattern_with_the_name_and_a_number() {
+        assert_eq!(batch_name("Gtr #", "x", 3), "Gtr 3");
+        assert_eq!(batch_name("* ##", "Kick", 4), "Kick 04");
+        assert_eq!(batch_name("Vox", "a", 2), "Vox 2");
+        assert_eq!(batch_name("#-*", "Bass", 10), "10-Bass");
+    }
+
+    /// Rename Selected Tracks: the selected tracks in track order, one undo step; a clash with
+    /// an unselected track renames nothing.
+    #[test]
+    fn renaming_the_selected_tracks_numbers_them_in_order() {
+        let mut e = Engine::default();
+        for n in ["A", "B", "C", "Gtr 1"] {
+            e.execute("track.new", &json!({"name": n})).unwrap();
+        }
+        let ids: Vec<TrackId> = e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).map(|t| t.id).collect();
+        e.execute("edit.select", &json!({"tracks": [ids[2].0, ids[0].0]})).unwrap();
+        let names = |e: &Engine| e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).map(|t| t.name.clone()).collect::<Vec<_>>();
+        assert!(e.execute("track.rename_selected", &json!({"pattern": "Gtr #"})).is_err(), "Gtr 1 is another track's");
+        assert_eq!(names(&e), ["A", "B", "C", "Gtr 1"]);
+        e.execute("track.rename_selected", &json!({"pattern": "Gtr #", "start": 5})).unwrap();
+        assert_eq!(names(&e), ["Gtr 5", "B", "Gtr 6", "Gtr 1"]);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(names(&e), ["A", "B", "C", "Gtr 1"]);
+    }
+
+    #[test]
+    fn replace_and_trim_names() {
+        assert_eq!(replaced_name("Gtr DI 1", "DI", "Amp"), "Gtr Amp 1");
+        assert_eq!(replaced_name("aaa", "a", "b"), "bbb");
+        assert_eq!(replaced_name("Gtr", "", "x"), "Gtr");
+        assert_eq!(replaced_name("Kick In", " In", ""), "Kick");
+        assert_eq!(trimmed_name("01 Kick", 3, 0), "Kick");
+        assert_eq!(trimmed_name("Kick.wav", 0, 4), "Kick");
+        assert_eq!(trimmed_name("Ünï", 1, 1), "n", "characters, not bytes");
+        assert_eq!(trimmed_name("ab", 1, 5), "");
+    }
+
+    /// Rename Selected Tracks' other modes: find and replace in each selected name, and trim
+    /// characters off their ends; one undo step each, and nothing when a name would clash or
+    /// end up empty.
+    #[test]
+    fn the_selected_tracks_are_renamed_by_find_and_replace_or_trimmed() {
+        let mut e = Engine::default();
+        for n in ["01 Kick DI", "02 Snare DI", "03 Bass DI", "Kick"] {
+            e.execute("track.new", &json!({"name": n})).unwrap();
+        }
+        let ids: Vec<TrackId> = e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).map(|t| t.id).collect();
+        let names = |e: &Engine| e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).map(|t| t.name.clone()).collect::<Vec<_>>();
+        e.execute("edit.select", &json!({"tracks": [ids[0].0, ids[1].0, ids[2].0]})).unwrap();
+        let undo = e.undo_history().len();
+        e.execute("track.rename_selected", &json!({"find": " DI", "replace": ""})).unwrap();
+        assert_eq!(names(&e), ["01 Kick", "02 Snare", "03 Bass", "Kick"]);
+        assert_eq!(e.undo_history().len(), undo + 1);
+        assert!(e.execute("track.rename_selected", &json!({"trim_start": 3})).is_err(), "Kick is another track's");
+        assert_eq!(names(&e), ["01 Kick", "02 Snare", "03 Bass", "Kick"]);
+        e.execute("edit.select", &json!({"tracks": [ids[1].0, ids[2].0]})).unwrap();
+        e.execute("track.rename_selected", &json!({"trim_start": 3})).unwrap();
+        assert_eq!(names(&e), ["01 Kick", "Snare", "Bass", "Kick"]);
+        assert!(e.execute("track.rename_selected", &json!({"trim_end": 9})).is_err(), "a name would be empty");
+        assert!(e.execute("track.rename_selected", &json!({"find": ""})).is_err());
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(names(&e), ["01 Kick", "02 Snare", "03 Bass", "Kick"]);
+    }
+
+    #[test]
     fn ambisonics_above_third_order_is_refused_and_third_order_is_filled() {
         let mut e = Engine::default();
         for f in ["4th Order Ambisonics", "7th Order Ambisonics"] {
@@ -1567,6 +1803,29 @@ mod tests {
         assert_eq!(folder.mixer.input, snare.mixer.output);
         assert_eq!(s.track_index(folder.id).unwrap() + 1, s.track_index(kick.id).unwrap());
         assert_eq!(s.track_index(kick.id).unwrap() + 1, s.track_index(snare.id).unwrap());
+    }
+
+    /// A basic folder holds its members without touching their routing: no bus is made, their
+    /// outputs stay, and tracks moved in or out later keep theirs too.
+    #[test]
+    fn a_basic_folder_only_organises() {
+        let mut e = crate::demo::demo_engine();
+        let busses = e.session().busses.len();
+        let outs = |e: &Engine| e.session().tracks.iter().map(|t| (t.id, t.mixer.output.clone())).collect::<Vec<_>>();
+        let before = outs(&e);
+        let r = e.execute("track.move_to_new_folder", &json!({"tracks": ["Kick", "Snare"], "name": "Drums", "routing": false})).unwrap();
+        assert!(r["bus"].is_null());
+        let folder = TrackId(r["folder"].as_u64().unwrap());
+        assert_eq!(e.session().busses.len(), busses, "no bus");
+        let f = e.session().track(folder).unwrap();
+        assert_eq!((f.mixer.input.clone(), f.mixer.output.clone()), (Route::None, Route::None), "no audio path");
+        assert!(before.iter().all(|(t, o)| e.session().track(*t).is_none_or(|tr| tr.mixer.output == *o)), "outputs kept");
+        let kick = e.session().track_by_name("Kick").unwrap().id;
+        assert_eq!(e.session().track(kick).unwrap().folder, Some(folder));
+        let other = e.session().tracks.iter().find(|t| t.kind == TrackKind::Audio && t.folder.is_none()).unwrap().id;
+        e.execute("track.move_to_folder", &json!({"tracks": [other.0], "folder": folder.0})).unwrap();
+        e.execute("track.remove_from_folder", &json!({"tracks": [kick.0]})).unwrap();
+        assert!(before.iter().all(|(t, o)| e.session().track(*t).is_none_or(|tr| tr.mixer.output == *o)), "still kept");
     }
 
     #[test]

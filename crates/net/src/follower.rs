@@ -19,9 +19,11 @@ use std::time::{Duration, Instant};
 
 use crate::discovery::Found;
 use crate::hub::{TakeClock, read_line};
+use crate::pairing::exchange::{self, Exchange, LinkKeys, Side};
 use crate::proto::{BoothTransport, FollowerReport, SketchNote};
 use crate::sync::{ClockMap, SyncPoint, push_point, sync_point};
 use crate::take::{BoothAnchor, TakeEnvelope, TakePayload};
+use zeroize::Zeroizing;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -891,23 +893,59 @@ fn q_rate(s: &Option<(Arc<soundcraft_playback::stream::StreamIn>, u32)>) -> u32 
     s.as_ref().map_or(48_000, |(_, r)| (*r).max(1))
 }
 
-/// One request to a booth on a fresh connection (pairing), its `result`.
-fn one_call(addr: &str, msg: &Value) -> Result<Value, String> {
-    let a = addr.to_socket_addrs().map_err(|e| e.to_string())?.find(SocketAddr::is_ipv4).ok_or("no address")?;
-    let mut s = TcpStream::connect_timeout(&a, Duration::from_secs(3)).map_err(|e| format!("cannot reach the booth: {e}"))?;
-    // Over the internet the first call also makes the connection (hole punching): give it time.
-    s.set_read_timeout(Some(Duration::from_secs(20))).map_err(|e| e.to_string())?;
-    writeln!(s, "{msg}").map_err(|e| e.to_string())?;
-    let mut r = BufReader::new(s);
-    let mut buf = Vec::new();
-    read_line(&mut r, &mut buf, 1 << 20)?;
-    let v: Value = serde_json::from_slice(&buf).map_err(|e| e.to_string())?;
-    if v["ok"] == true { Ok(v["result"].clone()) } else { Err(v["error"].as_str().unwrap_or("refused").to_string()) }
+/// A connection to a booth for pairing calls.
+struct Calls {
+    s: TcpStream,
+    r: BufReader<TcpStream>,
 }
 
+impl Calls {
+    fn open(addr: &str) -> Result<Calls, String> {
+        let a = addr.to_socket_addrs().map_err(|e| e.to_string())?.find(SocketAddr::is_ipv4).ok_or("no address")?;
+        let s = TcpStream::connect_timeout(&a, Duration::from_secs(3)).map_err(|e| format!("cannot reach the booth: {e}"))?;
+        // Over the internet the first call also makes the connection (hole punching): give it time.
+        s.set_read_timeout(Some(Duration::from_secs(20))).map_err(|e| e.to_string())?;
+        let r = BufReader::new(s.try_clone().map_err(|e| e.to_string())?);
+        Ok(Calls { s, r })
+    }
+
+    /// One request, its `result` (or the booth's error, at most a line of it).
+    fn call(&mut self, msg: &Value) -> Result<Value, String> {
+        writeln!(self.s, "{msg}").map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        if !read_line(&mut self.r, &mut buf, 1 << 20)? {
+            return Err("the booth closed the connection".into());
+        }
+        let v: Value = serde_json::from_slice(&buf).map_err(|e| e.to_string())?;
+        if v["ok"] == true {
+            Ok(v["result"].clone())
+        } else {
+            Err(v["error"].as_str().map_or_else(|| "refused".to_string(), |e| crate::pairing::clean_text(e, 300)))
+        }
+    }
+}
+
+/// One request to a booth on a fresh connection (pairing), its `result`.
+fn one_call(addr: &str, msg: &Value) -> Result<Value, String> {
+    Calls::open(addr)?.call(msg)
+}
+
+/// What this PC says when the booth's FreeDAWm would take the code itself.
+pub const UPDATE_BOOTH: &str = "update FreeDAWm on the booth to pair with it: this PC pairs by a newer exchange in which the code is never sent";
+
+/// What this PC says when the booth's confirmation does not match.
+pub const WRONG_OR_BETWEEN: &str =
+    "wrong code, or another computer is answering for the booth: check the code on the booth's screen and type it again";
+
 /// Asks the booth at `addr` to pair: it shows a code on its screen. Returns the request's id.
+/// A booth that does not speak this PC's pairing ([`crate::pairing::PAIRING_VERSION`]) is
+/// refused before any code is typed (the code would otherwise be sent to it).
 pub fn pair_request(addr: &str, my_name: &str) -> Result<String, String> {
-    let r = one_call(addr, &json!({"id": 1, "method": "pair.request", "params": {"name": my_name}}))?;
+    let version = crate::pairing::PAIRING_VERSION;
+    let r = one_call(addr, &json!({"id": 1, "method": "pair.request", "params": {"name": my_name, "pairing": version}}))?;
+    if r["pairing"].as_u64().is_none_or(|v| v < version) {
+        return Err(UPDATE_BOOTH.into());
+    }
     r["request"].as_str().map(str::to_string).ok_or_else(|| "no request id".to_string())
 }
 
@@ -919,9 +957,25 @@ pub fn pair_invite(addr: &str, secret: &str, my_name: &str) -> Result<(String, S
     Ok((token, r["pc"].as_str().unwrap_or("").to_string()))
 }
 
-/// The code from the booth's screen: the token (and the booth's own name).
-pub fn pair_confirm(addr: &str, request: &str, code: &str) -> Result<(String, String), String> {
-    let r = one_call(addr, &json!({"id": 1, "method": "pair.confirm", "params": {"request": request, "code": code}}))?;
+/// The code from the booth's screen: the token (and the booth's own name). The code is never
+/// sent: it is the password of the key exchange ([`crate::pairing::exchange`]) over `keys`, the
+/// booth's link key this PC dialled and its own (`LinkKeys::PLAIN` on the plain link). The
+/// booth's confirmation is checked before this PC sends its own; the code is wiped after.
+pub fn pair_confirm(addr: &str, request: &str, code: String, keys: LinkKeys) -> Result<(String, String), String> {
+    let code = Zeroizing::new(code);
+    let (ex, mine) = Exchange::start(Side::Pc, &code, keys);
+    drop(code);
+    let mut c = Calls::open(addr)?;
+    let r = c.call(&json!({"id": 1, "method": "pair.exchange", "params": {"request": request, "msg": crate::audio::b64_encode(&mine)}}))?;
+    let field = |k: &str, len: usize| r[k].as_str().filter(|s| s.len() <= 4 * len).and_then(crate::audio::b64_decode);
+    let (Some(theirs), Some(tag)) = (field("msg", exchange::MSG_LEN), field("confirm", exchange::TAG_LEN)) else {
+        return Err("the booth's answer was damaged: ask again".into());
+    };
+    let confirmed = ex.finish(&theirs).map_err(|_| "the booth's answer was damaged: ask again".to_string())?;
+    if !confirmed.check(&tag) {
+        return Err(WRONG_OR_BETWEEN.into());
+    }
+    let r = c.call(&json!({"id": 2, "method": "pair.finish", "params": {"confirm": crate::audio::b64_encode(&confirmed.tag())}}))?;
     let token = r["token"].as_str().ok_or("no token")?.to_string();
     Ok((token, r["pc"].as_str().unwrap_or("").to_string()))
 }

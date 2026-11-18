@@ -8,6 +8,11 @@
 //! space selects the points inside, the Pencil drags a freehand line that replaces what it crosses,
 //! Delete removes the selected points. The sustain lane is on/off.
 //!
+//! With **Lanes › Channel › Follow the Selected Note** on and one note selected, the lanes show
+//! and write that note's channel and mark its length: in an MPE clip (a channel per note, see
+//! `Event › Give Notes Their Own Channels`) that is the note's own tuning, pressure and
+//! brightness (`soundcraft_midi::note_expr`).
+//!
 //! The lanes show one MIDI channel (picked under **Lanes › Channel**) or every channel, each
 //! channel its own line; new points go on the picked channel, or with every channel shown on the
 //! clip's main channel (the one most of its notes use).
@@ -195,9 +200,26 @@ pub fn write_channel(shown: Option<u8>, seq: &Sequence) -> u8 {
     shown.unwrap_or_else(|| main_channel(seq))
 }
 
+/// The channel the lanes show: the selected note's when they follow it (one note selected),
+/// else the one picked (`None`: every channel).
+pub fn shown_channel(app: &SoundApp, seq: &Sequence) -> Option<u8> {
+    followed_note(app, seq).map(|n| n.channel).or(app.midi.ctrl_channel)
+}
+
+/// The note the lanes follow: the one selected note, while they follow it.
+pub fn followed_note(app: &SoundApp, seq: &Sequence) -> Option<soundcraft_midi::Note> {
+    if !app.midi.ctrl_follow_note {
+        return None;
+    }
+    match app.midi.selected.as_slice() {
+        [i] => seq.notes.get(*i).copied(),
+        _ => None,
+    }
+}
+
 /// The selected points of `kind` on the shown channel (stale ones dropped).
 fn selected(app: &SoundApp, seq: &Sequence, kind: CtrlKind) -> Vec<usize> {
-    let ch = app.midi.ctrl_channel;
+    let ch = shown_channel(app, seq);
     match &app.midi.ctrl_sel {
         Some((k, v)) if *k == kind => {
             v.iter().copied().filter(|i| seq.ctrls.get(*i).is_some_and(|c| c.kind == kind && ch.is_none_or(|ch| c.channel == ch))).collect()
@@ -272,6 +294,18 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
     })
     .response
     .on_hover_text("Polyphonic aftertouch: a lane per key");
+    let mut sysex = app.midi.sysex_lane;
+    let sysex_text = if seq.sysex.is_empty() { "SysEx".to_string() } else { format!("SysEx \u{2022} ({})", seq.sysex.len()) };
+    if ui
+        .checkbox(&mut sysex, sysex_text)
+        .on_hover_text("System Exclusive messages as markers: hover for the bytes, drag to move, Alt-click to delete")
+        .changed()
+    {
+        app.midi.sysex_lane = sysex;
+    }
+    ui.menu_button("14-bit and RPN", |ui| crate::midi_wide_lanes::menu(app, ui, seq))
+        .response
+        .on_hover_text("A 14-bit controller pair or an RPN/NRPN parameter as one value, 0 to 16383");
     ui.separator();
     ui.label(egui::RichText::new("A drag on empty lane space").small());
     for (tool, name, tip) in [
@@ -284,17 +318,29 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
         }
     }
     ui.separator();
-    ui.menu_button(channel_menu_label(app.midi.ctrl_channel), |ui| {
+    let label = if app.midi.ctrl_follow_note { "Channel: Selected Note".to_string() } else { channel_menu_label(app.midi.ctrl_channel) };
+    ui.menu_button(label, |ui| {
         let used: Vec<u8> = (0u8..16).filter(|ch| seq.ctrls.iter().any(|c| c.channel == *ch)).collect();
-        if ui.radio(app.midi.ctrl_channel.is_none(), "All Channels").clicked() {
+        let follow = ui
+            .radio(app.midi.ctrl_follow_note, "Follow the Selected Note")
+            .on_hover_text("With one note selected: its channel, over its length (in an MPE clip, the note's own expression)");
+        if follow.clicked() {
+            app.midi.ctrl_follow_note = !app.midi.ctrl_follow_note;
+            app.midi.ctrl_sel = None;
+            ui.close();
+        }
+        ui.separator();
+        if ui.radio(app.midi.ctrl_channel.is_none() && !app.midi.ctrl_follow_note, "All Channels").clicked() {
             app.midi.ctrl_channel = None;
+            app.midi.ctrl_follow_note = false;
             app.midi.ctrl_sel = None;
             ui.close();
         }
         for ch in 0u8..16 {
             let text = if used.contains(&ch) { format!("Channel {} \u{2022}", ch + 1) } else { format!("Channel {}", ch + 1) };
-            if ui.radio(app.midi.ctrl_channel == Some(ch), text).clicked() {
+            if ui.radio(app.midi.ctrl_channel == Some(ch) && !app.midi.ctrl_follow_note, text).clicked() {
                 app.midi.ctrl_channel = Some(ch);
+                app.midi.ctrl_follow_note = false;
                 app.midi.ctrl_sel = None;
                 ui.close();
             }
@@ -302,20 +348,86 @@ pub fn menu(app: &mut SoundApp, ui: &mut Ui, seq: &Sequence) {
     })
     .response
     .on_hover_text("The channel the lanes show and new points go on");
+    // The selected note's own expression (MPE): channels of its own, and clearing it.
+    if app.midi.clip.is_some() {
+        let r = ui.add_enabled(!seq.notes.is_empty(), egui::Button::new("Give Notes Their Own Channels"));
+        let r = r.on_hover_text("Each note on a channel of its own (2-16), so each carries its own bend, pressure and brightness (MPE)");
+        if r.clicked() {
+            if let Err(e) = own_channels(app) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+        let r = ui.add_enabled(clear_expression_available(app).is_ok(), egui::Button::new("Clear the Note's Expression"));
+        let r = r.on_disabled_hover_text("Select one note on a channel of its own");
+        if r.clicked() {
+            if let Err(e) = clear_expression(app) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+    }
     ui.separator();
     if ui.button("Show Lanes with Data").clicked() {
         for k in lanes_with_data(seq) {
             toggle(app, k, true);
         }
+        for l in soundcraft_engine::cmd::midi_wide::lanes_of(seq) {
+            crate::midi_wide_lanes::toggle(app, l, true);
+        }
         ui.close();
     }
-    if ui.add_enabled(!app.midi.lanes.is_empty(), egui::Button::new("Hide All Lanes")).clicked() {
+    if ui.add_enabled(!app.midi.lanes.is_empty() || !app.midi.wide_lanes.is_empty(), egui::Button::new("Hide All Lanes")).clicked() {
         app.midi.lanes.clear();
+        app.midi.wide_lanes.clear();
         ui.close();
     }
 }
 
 /// The Lanes menu's channel item.
+/// The MIDI Editor's clip and its notes, when one is open.
+fn editor_clip(app: &SoundApp) -> Option<(ClipId, &Sequence)> {
+    let cid = app.midi.clip?;
+    match &app.engine.session().find_clip(cid)?.1.content {
+        soundcraft_model::ClipContent::Midi { sequence } => Some((cid, sequence)),
+        _ => None,
+    }
+}
+
+/// Give Notes Their Own Channels (the Lanes menu and Event menu): whether it can run, or why not.
+pub(crate) fn own_channels_available(app: &SoundApp) -> Result<(), String> {
+    match editor_clip(app) {
+        None => Err("Open a MIDI clip in the MIDI Editor".into()),
+        Some((_, seq)) if seq.notes.is_empty() => Err("The clip in the MIDI Editor has no notes".into()),
+        Some(_) => Ok(()),
+    }
+}
+
+/// Puts each note of the MIDI Editor's clip on a channel of its own (`midi.own_channels`).
+pub(crate) fn own_channels(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    own_channels_available(app)?;
+    let cid = app.midi.clip.ok_or("Open a MIDI clip in the MIDI Editor")?;
+    app.run("midi.own_channels", serde_json::json!({"clip": cid.0}))
+}
+
+/// Clear the Note's Expression: whether it can run, or why not.
+pub(crate) fn clear_expression_available(app: &SoundApp) -> Result<(), String> {
+    let Some((_, seq)) = editor_clip(app) else { return Err("Open a MIDI clip in the MIDI Editor".into()) };
+    match app.midi.selected.as_slice() {
+        [i] if !soundcraft_midi::note_expr::shares_channel(seq, *i) => Ok(()),
+        [_] => Err("The selected note shares its channel: give notes their own channels first".into()),
+        _ => Err("Select one note on a channel of its own".into()),
+    }
+}
+
+/// Clears the selected note's own bend, pressure and brightness (`midi.note_expr_set`).
+pub(crate) fn clear_expression(app: &mut SoundApp) -> Result<serde_json::Value, String> {
+    clear_expression_available(app)?;
+    let (Some(cid), [i]) = (app.midi.clip, app.midi.selected.as_slice()) else { return Err("Select one note on a channel of its own".into()) };
+    let i = *i;
+    app.run("midi.note_expr_set", serde_json::json!({"clip": cid.0, "index": i, "kind": "all", "points": []}))
+}
+
 pub fn channel_menu_label(ch: Option<u8>) -> String {
     match ch {
         Some(c) => format!("Channel: {}", u16::from(c) + 1),
@@ -375,7 +487,12 @@ fn lane(app: &mut SoundApp, ui: &mut Ui, cid: ClipId, seq: &Sequence, lg: &LaneG
         let y = lg.y_of(0);
         p.line_segment([pos2(r.min.x, y), pos2(r.max.x, y)], Stroke::new(1.0, Color32::from_rgb(60, 60, 64)));
     }
-    let shown_ch = app.midi.ctrl_channel;
+    let shown_ch = shown_channel(app, seq);
+    // The followed note's length, marked behind the points.
+    if let Some(n) = followed_note(app, seq) {
+        let span = Rect::from_x_y_ranges(geo.x_of(n.start)..=geo.x_of(n.end()), r.y_range());
+        p.rect_filled(span.intersect(r), 0.0, Color32::from_rgba_unmultiplied(120, 190, 250, 22));
+    }
     let events = events_of(seq, kind, shown_ch);
     let channel = write_channel(shown_ch, seq);
     let sel = selected(app, seq, kind);

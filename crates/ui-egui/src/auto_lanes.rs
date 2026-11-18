@@ -38,6 +38,12 @@ pub fn choices(s: &Session, track: &Track) -> Vec<Choice> {
                     }
                 }
             }
+            // The surround panner's position, on a track that has one.
+            if track.mixer.surround.is_some() || (0..4).any(|i| has_data(track, &AutoParam::Surround(i))) {
+                for (i, label) in ["surround left-right", "surround front-back", "surround height", "surround divergence"].into_iter().enumerate() {
+                    v.push(top(AutoParam::Surround(u8::try_from(i).unwrap_or(0)), label));
+                }
+            }
         }
         if track.kind != TrackKind::Master {
             v.push(top(AutoParam::Mute, "mute"));
@@ -64,8 +70,14 @@ pub fn choices(s: &Session, track: &Track) -> Vec<Choice> {
             v.push(Choice { group: Some(group.clone()), param: p, label: format!("send {} {label}", letter.to_ascii_lowercase()) });
         }
     }
-    for ins in &track.mixer.inserts {
+    // The instrument's parameters, under its name (lanes name it by `INSTRUMENT_MODULE`).
+    let instrument = track.instrument.as_ref().map(|i| soundcraft_model::Insert { id: soundcraft_model::INSTRUMENT_MODULE, ..i.clone() });
+    for ins in instrument.iter().chain(&track.mixer.inserts) {
         let Some(info) = crate::mix_window::plugin_info(&ins.plugin) else { continue };
+        v.push(Choice { group: Some(info.name.to_string()), param: AutoParam::bypass(ins.id), label: "Bypass".into() });
+        if ins.id != soundcraft_model::INSTRUMENT_MODULE {
+            v.push(Choice { group: Some(info.name.to_string()), param: AutoParam::wet_mix(ins.id), label: "Mix".into() });
+        }
         for p in crate::edit_window::lane_params(track, ins, info) {
             let name = crate::module_drawer::dial_name(ins, p.id).unwrap_or(p.name);
             v.push(Choice {
@@ -73,6 +85,20 @@ pub fn choices(s: &Session, track: &Track) -> Vec<Choice> {
                 param: AutoParam::Plugin { module: ins.id, param: p.id.to_string() },
                 label: name.to_string(),
             });
+        }
+        // Multi-mono unlinked: every other channel's own lanes, under the module's name.
+        if ins.multi_mono && ins.multi_mono_unlinked && ins.id != soundcraft_model::INSTRUMENT_MODULE {
+            let channels = soundcraft_mix::strip_channels(track, soundcraft_mix::main_channels(s));
+            for c in 1..channels {
+                for p in crate::edit_window::lane_params(track, ins, info) {
+                    let name = crate::module_drawer::dial_name(ins, p.id).unwrap_or(p.name);
+                    v.push(Choice {
+                        group: Some(format!("{} (channel {})", info.name, c + 1)),
+                        param: AutoParam::Plugin { module: ins.id, param: soundcraft_model::channel_param_id(c, p.id) },
+                        label: format!("{name} ({})", c + 1),
+                    });
+                }
+            }
         }
     }
     v
@@ -134,7 +160,7 @@ pub fn shown_lanes(track: &Track) -> Vec<AutoParam> {
     for id in &track.auto_lanes {
         let Some(p) = AutoParam::parse(id) else { continue };
         if let AutoParam::Plugin { module, .. } = &p
-            && track.mixer.module(*module).is_none()
+            && track.module_or_instrument(*module).is_none()
         {
             continue;
         }

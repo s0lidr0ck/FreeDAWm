@@ -15,11 +15,17 @@
 //!   order (WASAPI): one block is kept queued ahead, so an output callback that runs first, or
 //!   twice in a row, still finds input, and a surplus is skipped only beyond one more block of
 //!   slack (two inputs before an output is jitter there).
-//! - [`InputFeed::drift`]: two clocks (two WASAPI devices). Linear interpolation, its ratio steered
+//! - [`InputFeed::drift`]: two clocks (two WASAPI devices). Its ratio is steered
 //!   so the latency tracks twice the input callback size, or an output callback plus an input
 //!   callback when that is more. The fill is refined with the time since the last push, so the
 //!   steering sees drift long before a whole block slips. Its latency is that averaged fill (read
-//!   it live: it moves with the callback sizes, and while bunched-up input drains).
+//!   it live: it moves with the callback sizes, and while bunched-up input drains). At one
+//!   nominal rate (clock drift alone) it reads by linear interpolation; when the device's rate
+//!   differs from the session's it reads through the band-limited windowed sinc of
+//!   [`crate::resample`] (32 taps, cut-off below the lower Nyquist), so a 96 kHz input into a
+//!   48 kHz session does not alias. The sinc reads [`resample::HALF`] frames into the queue;
+//!   the target fill is that much higher and the reported latency that much lower, so takes are
+//!   placed as before.
 //!
 //! The output callback announces itself with [`InputFeed::begin`] (it pops exactly that many
 //! frames: the direct path) or [`InputFeed::begin_elastic`] (the resampler, which pops whole mix
@@ -27,6 +33,8 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+
+use crate::resample::{self, Kernel, TAPS};
 
 /// Single-producer single-consumer FIFO of samples. The slots are atomics, so it needs no lock
 /// and no `unsafe`.
@@ -176,8 +184,17 @@ struct Drift {
     integral: F64,
     phase: F64,
     adjust: F64,
-    /// The input frame being read from (per channel).
+    /// The input frame being read from (per channel; linear interpolation only).
     cur: Box<[AtomicU32]>,
+    /// The band-limited kernel when the rates differ (read only: tabulated at creation).
+    sinc: Option<Box<Kernel>>,
+}
+
+impl Drift {
+    /// Frames the reader keeps queued beyond the read point: the sinc's lead.
+    fn lead(&self) -> usize {
+        if self.sinc.is_some() { resample::HALF } else { 0 }
+    }
 }
 
 enum Kind {
@@ -223,7 +240,6 @@ pub struct InputFeed {
     overflows: AtomicU64,
     /// The input callback's reported latency (capture to callback), in ns.
     input_latency_ns: AtomicU64,
-    #[cfg(not(target_arch = "wasm32"))]
     clock: std::time::Instant,
 }
 
@@ -245,21 +261,13 @@ impl InputFeed {
             underflows: AtomicU64::new(0),
             overflows: AtomicU64::new(0),
             input_latency_ns: AtomicU64::new(0),
-            #[cfg(not(target_arch = "wasm32"))]
             clock: std::time::Instant::now(),
         }
     }
 
-    /// Now on the feed's clock, in ns (never 0); 0 where there is no clock (the web).
+    /// Now on the feed's clock, in ns (never 0).
     fn now_ns(&self) -> u64 {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            u64::try_from(self.clock.elapsed().as_nanos()).unwrap_or(u64::MAX).saturating_add(1)
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            0
-        }
+        u64::try_from(self.clock.elapsed().as_nanos()).unwrap_or(u64::MAX).saturating_add(1)
     }
 
     /// One clock: the reader pops exactly the frames asked for (see the module docs). Holds
@@ -295,6 +303,7 @@ impl InputFeed {
             phase: F64::new(0.0),
             adjust: F64::new(0.0),
             cur: (0..ch).map(|_| AtomicU32::new(0)).collect(),
+            sinc: (in_rate != out_rate).then(|| Kernel::for_step(in_rate / out_rate)),
         };
         Arc::new(InputFeed::new(ch, max_frames.clamp(4096, 1 << 16).saturating_mul(8), Kind::Drift(drift)))
     }
@@ -326,11 +335,12 @@ impl InputFeed {
     #[cfg(test)]
     fn read_position(&self) -> f64 {
         let consumed = self.ring.tail.load(Ordering::Relaxed) / self.channels;
-        let phase = match &self.kind {
-            Kind::Drift(d) => d.phase.get(),
-            Kind::Fixed { .. } => 0.0,
+        let (phase, lead) = match &self.kind {
+            Kind::Drift(d) => (d.phase.get(), d.lead() as f64),
+            Kind::Fixed { .. } => (0.0, 0.0),
         };
-        consumed as f64 - 1.0 + phase
+        // Linear: between the frame popped last and the next; sinc: `HALF - 1` frames in.
+        consumed as f64 - 1.0 + lead + phase
     }
 
     #[cfg(test)]
@@ -551,20 +561,28 @@ impl InputFeed {
         // At least an output callback (in input frames) plus an input callback: at the pop the
         // queue is the target less the input on its way (up to an input callback).
         let out_frames = (self.out_block.load(Ordering::Relaxed).max(frames) as f64 * d.nominal).ceil() as usize;
-        let target = (2 * block).max(out_frames.saturating_add(block)).min(cap / 2).max(1);
+        let lead = d.lead();
+        let target = (2 * block).max(out_frames.saturating_add(block)).saturating_add(lead).min(cap / 2).max(1).max(lead * 2);
+        // Frames the read needs queued: the frame after the read point, or the sinc's taps.
+        let need = if d.sinc.is_some() { TAPS } else { 1 };
         let mut fill = self.ring.len() / ch;
         if !self.primed.load(Ordering::Relaxed) {
             if fill < target {
                 return;
             }
-            // Start reading: from the first queued frame, at the target fill.
+            // Start reading: from the first queued frame (the sinc: `HALF - 1` frames in), at
+            // the target fill.
             self.ring.skip((fill - target) * ch);
-            self.ring.pop_with(ch, |i, x| {
-                if let Some(c) = d.cur.get(i) {
-                    c.store(x.to_bits(), Ordering::Relaxed);
-                }
-            });
-            fill = target.saturating_sub(1);
+            if d.sinc.is_none() {
+                self.ring.pop_with(ch, |i, x| {
+                    if let Some(c) = d.cur.get(i) {
+                        c.store(x.to_bits(), Ordering::Relaxed);
+                    }
+                });
+                fill = target.saturating_sub(1);
+            } else {
+                fill = target;
+            }
             d.phase.set(0.0);
             d.avg.set(fill as f64);
             d.integral.set(0.0);
@@ -595,7 +613,7 @@ impl InputFeed {
         // The latency is the averaged fill, in output frames: what the input really waits, which
         // the steering holds at the target but which moves with it (the callback sizes) and
         // away from it for a while (input that bunched up drains slowly).
-        let extra = (avg / d.nominal).round();
+        let extra = ((avg - lead as f64) / d.nominal).round();
         self.extra.store(if extra > 0.0 { extra.min(f64::from(u32::MAX)) as u32 } else { 0 }, Ordering::Relaxed);
         let err = avg - target as f64;
         let integral = (d.integral.get() + err * dt).clamp(-MAX_ADJUST / KI, MAX_ADJUST / KI);
@@ -605,18 +623,30 @@ impl InputFeed {
         let step = d.nominal * (1.0 + adjust);
         let mut phase = d.phase.get();
         for f in 0..frames {
-            if self.ring.len() < ch {
+            if self.ring.len() < need * ch {
                 // Ran dry: silence, and wait for the target fill again.
                 self.underflows.fetch_add(1, Ordering::Relaxed);
                 self.primed.store(false, Ordering::Relaxed);
                 break;
             }
-            let fr = phase as f32;
-            for (c, cur) in d.cur.iter().enumerate() {
-                let a = f32::from_bits(cur.load(Ordering::Relaxed));
-                let b = self.ring.peek(c);
-                if let Some(o) = out.get_mut(c).and_then(|v| v.get_mut(f)) {
-                    *o = a + (b - a) * fr;
+            if let Some(k) = &d.sinc {
+                // Band-limited: the taps are the queue's first `TAPS` frames, the read point
+                // `phase` past frame `HALF - 1`.
+                let w = k.weights(phase);
+                for c in 0..ch {
+                    let acc: f64 = w.iter().enumerate().map(|(j, wj)| f64::from(*wj) * f64::from(self.ring.peek(j * ch + c))).sum();
+                    if let Some(o) = out.get_mut(c).and_then(|v| v.get_mut(f)) {
+                        *o = acc as f32;
+                    }
+                }
+            } else {
+                let fr = phase as f32;
+                for (c, cur) in d.cur.iter().enumerate() {
+                    let a = f32::from_bits(cur.load(Ordering::Relaxed));
+                    let b = self.ring.peek(c);
+                    if let Some(o) = out.get_mut(c).and_then(|v| v.get_mut(f)) {
+                        *o = a + (b - a) * fr;
+                    }
                 }
             }
             phase += step;
@@ -1081,6 +1111,32 @@ mod tests {
         assert!(extra > 1900.0, "the reported latency follows the fill: {extra}");
         assert!((extra - real).abs() < 96.0, "within 2 ms of the real latency: {extra} vs {real}");
         assert_eq!(feed.underflows(), 0);
+    }
+
+    /// A 96 kHz input read into a 48 kHz session: a tone above the session's Nyquist (30 kHz,
+    /// which linear interpolation folds to 18 kHz) is filtered out, and one in band (1 kHz)
+    /// passes at its level.
+    #[test]
+    fn a_faster_input_is_read_band_limited() {
+        let level = |freq: f64| {
+            let feed = InputFeed::drift(1, 96_000, 48_000, 512);
+            let mut buf = planar(1, 480);
+            let mut out = Vec::new();
+            for b in 0..200usize {
+                let block: Vec<f32> = (0..960).map(|i| (2.0 * std::f64::consts::PI * freq * (b * 960 + i) as f64 / 96_000.0).sin() as f32).collect();
+                feed.push(&block);
+                feed.pop_into(&mut buf, 480);
+                if b >= 100 {
+                    out.extend_from_slice(&buf[0]);
+                }
+            }
+            assert_eq!(feed.underflows(), 0);
+            (out.iter().map(|x| f64::from(*x) * f64::from(*x)).sum::<f64>() / out.len() as f64).sqrt()
+        };
+        let pass = level(1_000.0);
+        assert!((pass - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.01, "in band at its level: {pass}");
+        let fold = level(30_000.0);
+        assert!(fold < 0.01, "above the session's Nyquist, filtered (linear left ~0.3): {fold}");
     }
 
     #[test]

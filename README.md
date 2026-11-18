@@ -404,8 +404,7 @@ FreeDAWm added these crates:
 - `soundcraft-plugin-scan`: out-of-process plugin scanning
 
 Errors are values, not panics: a bad file or a bad command gives a message, never a crash.
-`cargo xtask ci` runs formatting, clippy, the tests, the asset and layering checks and the
-WebAssembly build.
+`cargo xtask ci` runs formatting, clippy, the tests and the asset and layering checks.
 
 ## Status
 

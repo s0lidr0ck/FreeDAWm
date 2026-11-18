@@ -287,9 +287,9 @@ fn check(channels: usize, sample_rate: u32, depth: BitDepth) -> Result<u32> {
     }
 }
 
-fn stream_info(channels: usize, sample_rate: u32, bps: u32, total: u64) -> Vec<u8> {
+fn stream_info(channels: usize, sample_rate: u32, bps: u32, total: u64, last: bool) -> Vec<u8> {
     let mut si = BitWriter::new();
-    si.write(1, 1); // last metadata block
+    si.write(u64::from(last), 1); // last metadata block
     si.write(0, 7); // STREAMINFO
     si.write(34, 24);
     si.write(BLOCK_SIZE as u64, 16);
@@ -307,10 +307,29 @@ fn stream_info(channels: usize, sample_rate: u32, bps: u32, total: u64) -> Vec<u
     si.into_bytes()
 }
 
+/// A `VORBIS_COMMENT` metadata block (type 4, the last one) holding `comments` (`KEY=value`).
+fn vorbis_comment_block(comments: &[String]) -> Vec<u8> {
+    const VENDOR: &str = "FreeDAWm";
+    let mut body = Vec::new();
+    body.extend_from_slice(&u32::try_from(VENDOR.len()).unwrap_or(0).to_le_bytes());
+    body.extend_from_slice(VENDOR.as_bytes());
+    body.extend_from_slice(&u32::try_from(comments.len()).unwrap_or(0).to_le_bytes());
+    for c in comments {
+        body.extend_from_slice(&u32::try_from(c.len()).unwrap_or(0).to_le_bytes());
+        body.extend_from_slice(c.as_bytes());
+    }
+    let len = u32::try_from(body.len()).unwrap_or(0).min(0x00ff_ffff);
+    let mut out = (0x8400_0000u32 | len).to_be_bytes().to_vec();
+    out.extend_from_slice(&body);
+    out
+}
+
 /// A FLAC stream written block by block; [`Writer::finish`] fills in the total sample count.
 pub(crate) struct Writer<W> {
     out: W,
     start: u64,
+    /// A `VORBIS_COMMENT` block follows STREAMINFO (which is then not the last block).
+    tagged: bool,
     channels: usize,
     sample_rate: u32,
     bps: u32,
@@ -325,14 +344,19 @@ pub(crate) struct Writer<W> {
 }
 
 impl<W: Write + Seek> Writer<W> {
-    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, depth: BitDepth, dither: bool) -> Result<Self> {
+    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, depth: BitDepth, dither: bool, comments: &[String]) -> Result<Self> {
         let bps = check(channels, sample_rate, depth)?;
         let start = out.stream_position()?;
+        let tagged = !comments.is_empty();
         out.write_all(b"fLaC")?;
-        out.write_all(&stream_info(channels, sample_rate, bps, 0))?;
+        out.write_all(&stream_info(channels, sample_rate, bps, 0, !tagged))?;
+        if tagged {
+            out.write_all(&vorbis_comment_block(comments))?;
+        }
         Ok(Writer {
             out,
             start,
+            tagged,
             channels,
             sample_rate,
             bps,
@@ -423,7 +447,7 @@ impl<W: Write + Seek> Writer<W> {
             return Err(crate::failed_write_error());
         }
         self.write_frame()?;
-        let info = stream_info(self.channels, self.sample_rate, self.bps, self.frames);
+        let info = stream_info(self.channels, self.sample_rate, self.bps, self.frames, !self.tagged);
         self.out.seek(SeekFrom::Start(self.start.saturating_add(4)))?;
         self.out.write_all(&info)?;
         self.out.seek(SeekFrom::End(0))?;
@@ -439,7 +463,7 @@ pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool) -> Result
     let mut out = Vec::new();
     out.try_reserve(frames.saturating_mul(buf.channels.len()).saturating_mul(bps as usize / 8) / 2)
         .map_err(|_| AudioError::TooLarge("cannot allocate FLAC output".into()))?;
-    let mut w = Writer::new(Cursor::new(out), buf.channels.len(), buf.sample_rate, depth, dither)?;
+    let mut w = Writer::new(Cursor::new(out), buf.channels.len(), buf.sample_rate, depth, dither, &[])?;
     w.write(&buf.channels, frames)?;
     Ok(w.finish()?.into_inner())
 }

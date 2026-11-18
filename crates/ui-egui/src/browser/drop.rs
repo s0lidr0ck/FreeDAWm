@@ -384,15 +384,10 @@ fn reveal(path: &std::path::Path) -> std::io::Result<()> {
     std::process::Command::new("open").arg("-R").arg(path).spawn().map(|_| ())
 }
 
-#[cfg(all(not(target_os = "windows"), not(target_os = "macos"), not(target_arch = "wasm32")))]
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn reveal(path: &std::path::Path) -> std::io::Result<()> {
     let folder = path.parent().unwrap_or(path);
     std::process::Command::new("xdg-open").arg(folder).spawn().map(|_| ())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn reveal(_path: &std::path::Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 /// Registers a chain's tiles (replaced when dropped on), the gaps above each tile and its "+" row

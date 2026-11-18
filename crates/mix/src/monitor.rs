@@ -131,7 +131,7 @@ impl MixEngine {
             let talk = cue.talkback && (tb_from > 0.0 || tb_to > 0.0);
             for (k, c) in h.iter_mut().enumerate() {
                 let (mut gv, mut tv) = (from, tb_from);
-                let src = tb_in.filter(|_| talk).and_then(|(first, width)| self.input.get(track_input_channel(k, first, width)));
+                let src = tb_in.filter(|_| talk).and_then(|(first, width)| track_input_channel(k, first, width).and_then(|i| self.input.get(i)));
                 for (i, x) in c.iter_mut().take(frames).enumerate() {
                     gv = ramp(gv, to, step);
                     tv = ramp(tv, tb_to, step);

@@ -1,4 +1,4 @@
-//! Event › More MIDI › Change Velocity…: a dialog with set, add, scale and ramp, acting on the
+//! Event › Change Velocity…: a dialog with set, add, scale and ramp, acting on the
 //! notes selected in the MIDI Editor, else on the selected MIDI clips.
 
 use serde_json::json;
@@ -30,7 +30,7 @@ fn run(app: &mut SoundApp, d: &VelocityDialog) {
 #[test]
 fn the_menu_item_opens_the_dialog() {
     let (mut app, _) = app_with_clip();
-    menus::invoke_menu(&mut app, "event.change_velocity", "Event > More MIDI > Change Velocity...");
+    menus::invoke_menu(&mut app, "event.change_velocity", "Event > Change Velocity...");
     assert!(matches!(app.dialogs.open, Some(Dialog::ChangeVelocity(_))));
 }
 
@@ -68,6 +68,12 @@ fn quantize_and_change_duration_menu_items_ask_before_acting() {
             app.run(id, p).unwrap_or_else(|e| panic!("{op}: {e}"));
         }
     }
+    // Transpose in the key: scale steps (C major by default: the band's key).
+    app.ops.midi_op = "transpose".into();
+    app.ops.transpose_in_key = true;
+    app.ops.transpose = 2;
+    let (id, p) = soundcraft_ui_egui::ops_windows::midi_op_params(&app.ops).unwrap();
+    assert_eq!((id, p["steps"].as_i64()), ("event.transpose", Some(2)));
     // Every grid the window offers is one the command reads.
     for g in soundcraft_ui_egui::ops_windows::QUANTIZE_GRIDS {
         app.run("event.quantize", json!({"grid": g, "clips": [clip.0]})).unwrap();
@@ -96,6 +102,21 @@ fn it_acts_on_the_selected_clips_with_each_mode() {
     assert_eq!(velocities(&mut app, clip), vec![100, 100, 100]);
     run(&mut app, &VelocityDialog { mode: VelocityMode::Ramp, from: 20, to: 120, ..Default::default() });
     assert_eq!(velocities(&mut app, clip), vec![20, 70, 120]);
+    run(&mut app, &VelocityDialog { mode: VelocityMode::Limit, min: 30, max: 100, ..Default::default() });
+    assert_eq!(velocities(&mut app, clip), vec![30, 70, 100]);
+    // Halfway to their average (66.7).
+    run(&mut app, &VelocityDialog { mode: VelocityMode::Compress, compress: 50.0, ..Default::default() });
+    assert_eq!(velocities(&mut app, clip), vec![48, 68, 83]);
+    // Randomise: each moves by at most the amount, and two runs do not repeat the same offsets.
+    let before = velocities(&mut app, clip);
+    run(&mut app, &VelocityDialog { mode: VelocityMode::Randomise, random: 10, ..Default::default() });
+    let once = velocities(&mut app, clip);
+    assert!(once.iter().zip(&before).all(|(a, b)| a.abs_diff(*b) <= 10), "{once:?} against {before:?}");
+    assert_ne!(once, before);
+    let d = app.run("edit.undo", json!({}));
+    assert!(d.is_ok());
+    run(&mut app, &VelocityDialog { mode: VelocityMode::Randomise, random: 10, ..Default::default() });
+    assert_ne!(velocities(&mut app, clip), once, "a new seed each time");
 }
 
 #[test]
@@ -106,4 +127,9 @@ fn with_the_editor_open_it_acts_on_the_selected_notes_only() {
     app.midi.selected = vec![1, 2];
     run(&mut app, &VelocityDialog { mode: VelocityMode::Ramp, from: 10, to: 30, ..Default::default() });
     assert_eq!(velocities(&mut app, clip), vec![100, 10, 30]);
+    // Limit and compress on the picked notes only.
+    run(&mut app, &VelocityDialog { mode: VelocityMode::Compress, compress: 0.0, ..Default::default() });
+    assert_eq!(velocities(&mut app, clip), vec![100, 20, 20]);
+    run(&mut app, &VelocityDialog { mode: VelocityMode::Limit, min: 50, max: 127, ..Default::default() });
+    assert_eq!(velocities(&mut app, clip), vec![100, 50, 50]);
 }

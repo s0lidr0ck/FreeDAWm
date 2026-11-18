@@ -9,12 +9,6 @@
 //! input is analysed and rendered; the output is a 24-bit WAV with as many channels as the input
 //! (each a copy of the render).
 
-#[cfg(target_arch = "wasm32")]
-fn main() {
-    println!("vocal_ab: desktop only");
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::process::ExitCode {
     match desktop::run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -25,7 +19,6 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod desktop {
     use soundcraft_vocal::metrics::{harmonic_flux_db, steady_frames};
     use soundcraft_vocal::resynth::render_all;

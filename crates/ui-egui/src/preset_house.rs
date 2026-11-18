@@ -10,6 +10,9 @@
 //!   when the insert menu adds one. Kept in the preset folder's `.defaults.json`.
 //! - **A/B** in every narrow drawer and plug-in window ([`ab_toggle`]): two sets of settings to
 //!   flip between, as the wide editors have.
+//! - **Copy and paste settings** between instances in every narrow drawer and plug-in window
+//!   ([`copy_settings`], [`paste_settings`]): what a preset would hold, onto another instance of
+//!   the same plug-in on any track. One undo step.
 
 use crate::SoundApp;
 use serde_json::{Map, Value, json};
@@ -17,7 +20,7 @@ use soundcraft_dsp::PluginInfo;
 use soundcraft_model::{Insert, ModuleId, TrackId};
 use std::path::PathBuf;
 
-/// The folder of a plug-in's user presets (`None`: no preset folder, e.g. the web build).
+/// The folder of a plug-in's user presets (`None`: no preset folder, e.g. a bare app).
 pub fn user_dir(app: &SoundApp, plugin: &str) -> Option<PathBuf> {
     app.preset_dir.as_ref().map(|d| d.join(crate::preset_folder_name(plugin)))
 }
@@ -190,6 +193,33 @@ pub fn apply_default(app: &mut SoundApp, track: TrackId, module: ModuleId) -> Op
 struct Ab {
     on_b: bool,
     other: Option<Map<String, Value>>,
+    /// A hosted plug-in's other side: its whole state (CLAP state; VST3 component and controller
+    /// state), base64 as `Insert::state` holds it.
+    other_state: Option<String>,
+}
+
+/// A hosted plug-in's state now: read from the running instance (what was set in its own
+/// editor), else the state the module stores.
+fn hosted_state_now(app: &SoundApp, track: TrackId, ins: &Insert) -> Option<String> {
+    let live = app.player.as_ref().and_then(|p| p.capture_state(track, soundcraft_mix::SlotKey::Module(ins.id)));
+    live.filter(|b| !b.is_empty()).map(|b| soundcraft_model::b64::encode(&b)).or_else(|| ins.state.clone())
+}
+
+/// [`ab_toggle`] for a hosted plug-in: A and B are its state chunks, read from the live instance
+/// and loaded back into it (the instance is made again from the state, as a hosted preset is).
+/// One undo step. `Err` when the plug-in has no state to compare yet.
+pub fn ab_toggle_hosted(app: &mut SoundApp, ctx: &egui::Context, track: TrackId, ins: &Insert) -> Result<(), String> {
+    let key = ab_key(track, ins.id);
+    let mut ab = ctx.data(|d| d.get_temp::<Ab>(key)).unwrap_or_default();
+    let now = hosted_state_now(app, track, ins).ok_or("The plug-in has no settings to compare yet (it is not loaded)")?;
+    if let Some(other) = ab.other_state.take() {
+        let name = if ins.preset.trim().is_empty() { if ab.on_b { "A" } else { "B" }.to_string() } else { ins.preset.clone() };
+        app.run("mix.module_preset", json!({"track": track.0, "module": ins.id.0, "preset": name, "state": other}))?;
+    }
+    ab.other_state = Some(now);
+    ab.on_b = !ab.on_b;
+    ctx.data_mut(|d| d.insert_temp(key, ab));
+    Ok(())
 }
 
 fn ab_key(track: TrackId, module: ModuleId) -> egui::Id {
@@ -218,6 +248,46 @@ pub fn ab_toggle(app: &mut SoundApp, ctx: &egui::Context, track: TrackId, ins: &
     ab.other = Some(now);
     ab.on_b = !ab.on_b;
     ctx.data_mut(|d| d.insert_temp(key, ab));
+}
+
+/// The settings last copied from a module: its plug-in and the values a preset would hold.
+#[derive(Clone)]
+struct Copied {
+    plugin: String,
+    params: Map<String, Value>,
+}
+
+fn copied_key() -> egui::Id {
+    egui::Id::new("preset-copied-settings")
+}
+
+/// Copies a module's settings (every parameter but Bypass and those its editor keeps out of
+/// presets: a reference, a link group, a capture) for [`paste_settings`].
+pub fn copy_settings(ctx: &egui::Context, ins: &Insert, info: &PluginInfo) {
+    let skip = crate::editors::not_in_presets(info.id);
+    let params: Map<String, Value> = info
+        .params
+        .iter()
+        .filter(|p| p.id != "bypass" && !skip.contains(&p.id))
+        .map(|p| (p.id.to_string(), json!(ins.params.get(p.id).copied().unwrap_or(p.default))))
+        .collect();
+    ctx.data_mut(|d| d.insert_temp(copied_key(), Copied { plugin: info.id.to_string(), params }));
+}
+
+/// The name of the plug-in whose settings are copied, when they would paste onto `plugin`.
+pub fn can_paste(ctx: &egui::Context, plugin: &str) -> bool {
+    ctx.data(|d| d.get_temp::<Copied>(copied_key())).is_some_and(|c| c.plugin == plugin)
+}
+
+/// Pastes the copied settings onto module `module` of `track` (the same plug-in only). One undo
+/// step; the module's preset name is left as it is.
+pub fn paste_settings(app: &mut SoundApp, ctx: &egui::Context, track: TrackId, module: ModuleId) -> Result<(), String> {
+    let copied = ctx.data(|d| d.get_temp::<Copied>(copied_key())).ok_or("Nothing copied")?;
+    let plugin = app.engine.session().track(track).and_then(|t| t.module(module)).map(|i| i.plugin.clone());
+    if plugin.as_deref() != Some(copied.plugin.as_str()) {
+        return Err("The copied settings are for another plug-in".into());
+    }
+    app.run("mix.module_params", json!({"track": track.0, "module": module.0, "params": copied.params})).map(|_| ())
 }
 
 #[cfg(test)]
@@ -303,6 +373,69 @@ mod tests {
         let i = app_ins(&app);
         ab_toggle(&mut app, &ctx, t, &i, info);
         assert_eq!(app_ins(&app).params.get("harmonics").copied(), Some(90.0));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A hosted plug-in's A and B are its whole state: B starts as a copy of A, a change made
+    /// there (in its editor, here stored as a hosted preset does) is kept as B, and each flip is
+    /// one undo step that makes the instance again from the other state. With no state at all
+    /// there is nothing to compare.
+    #[test]
+    fn ab_flips_a_hosted_plugins_state() {
+        let mut engine = Engine::new(soundcraft_model::Session::default());
+        engine.execute("track.new", &json!({"name": "Bass"})).unwrap();
+        let t = engine.session().tracks[0].id;
+        let m = engine.session_mut().track_mut(t).unwrap().mixer.add_module(Insert::new("vst3:0123456789ABCDEF0123456789ABCDEF"), None).unwrap();
+        let mut app = SoundApp::new(engine, None, crate::Services::default());
+        let ctx = egui::Context::default();
+        let ins = |app: &SoundApp| app.engine.session().tracks[0].mixer.inserts[0].clone();
+        let state = |app: &SoundApp| ins(app).state_bytes();
+        let i = ins(&app);
+        assert!(ab_toggle_hosted(&mut app, &ctx, t, &i).is_err(), "no state: nothing to compare");
+        app.run("mix.module_state", json!({"track": t.0, "module": m.0, "state": soundcraft_model::b64::encode(b"A-side")})).unwrap();
+        let i = ins(&app);
+        ab_toggle_hosted(&mut app, &ctx, t, &i).unwrap();
+        assert!(on_b(&ctx, t, m));
+        assert_eq!(state(&app).as_deref(), Some(&b"A-side"[..]), "B starts as a copy");
+        app.run("mix.module_preset", json!({"track": t.0, "module": m.0, "preset": "Bright", "state": soundcraft_model::b64::encode(b"B-side")}))
+            .unwrap();
+        let load_b = ins(&app).state_load;
+        let i = ins(&app);
+        ab_toggle_hosted(&mut app, &ctx, t, &i).unwrap();
+        assert!(!on_b(&ctx, t, m));
+        assert_eq!(state(&app).as_deref(), Some(&b"A-side"[..]));
+        assert_ne!(ins(&app).state_load, load_b, "the instance is made again from A");
+        let i = ins(&app);
+        ab_toggle_hosted(&mut app, &ctx, t, &i).unwrap();
+        assert_eq!(state(&app).as_deref(), Some(&b"B-side"[..]));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(state(&app).as_deref(), Some(&b"A-side"[..]), "one undo step per flip");
+    }
+
+    /// The parity list's "copy settings to another instance" from a narrow drawer or plug-in
+    /// window: Copy Settings on one Heft, Paste Settings on another (on another track); a
+    /// different plug-in refuses them.
+    #[test]
+    fn settings_copy_to_another_instance() {
+        let (mut app, dir) = app_with_presets();
+        let ctx = egui::Context::default();
+        let info = soundcraft_dsp::plugin_info("heft").unwrap();
+        app.run("track.new", json!({"name": "Kick"})).unwrap();
+        let (a, b) = (app.engine.session().tracks[0].id, app.engine.session().tracks[1].id);
+        app.run("mix.module_add", json!({"track": a.0, "plugin": "heft"})).unwrap();
+        app.run("mix.module_add", json!({"track": b.0, "plugin": "heft"})).unwrap();
+        app.run("mix.module_add", json!({"track": b.0, "plugin": "keel"})).unwrap();
+        let ins = |app: &SoundApp, t: usize, i: usize| app.engine.session().tracks[t].mixer.inserts[i].clone();
+        let (ma, mb, mk) = (ins(&app, 0, 0).id, ins(&app, 1, 0).id, ins(&app, 1, 1).id);
+        app.run("mix.module_params", json!({"track": a.0, "module": ma.0, "params": {"harmonics": 70.0}})).unwrap();
+        assert!(!can_paste(&ctx, "heft"));
+        copy_settings(&ctx, &ins(&app, 0, 0), info);
+        assert!(can_paste(&ctx, "heft") && !can_paste(&ctx, "keel"));
+        paste_settings(&mut app, &ctx, b, mb).unwrap();
+        assert_eq!(ins(&app, 1, 0).params.get("harmonics").copied(), Some(70.0));
+        assert!(paste_settings(&mut app, &ctx, b, mk).is_err());
+        app.run("edit.undo", json!({})).unwrap();
+        assert_ne!(ins(&app, 1, 0).params.get("harmonics").copied(), Some(70.0), "one undo step");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

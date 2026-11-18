@@ -3,7 +3,10 @@
 pub mod drums;
 pub mod dynamics;
 pub mod eq;
+pub mod fm;
 pub mod fs;
+#[cfg(test)]
+mod golden;
 pub mod harmonic;
 pub mod heft;
 pub mod imprint;
@@ -24,13 +27,15 @@ pub mod strip;
 pub mod synth;
 #[cfg(feature = "test-plugins")]
 pub mod test_link;
+mod timed;
 pub mod utility;
 pub mod vault;
+pub mod wavetable;
 
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 42] = [
+const BUILTINS: [&PluginInfo; 44] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -73,6 +78,8 @@ const BUILTINS: [&PluginInfo; 42] = [
     &sampler::SAMPLER_INFO,
     &juke::JUKE_INFO,
     &multisampler::MULTISAMPLER_INFO,
+    &wavetable::WAVETABLE_INFO,
+    &fm::FM_INFO,
 ];
 
 /// Every built-in plugin, in menu order: [`BUILTINS`], then the FireStation engines by their
@@ -103,11 +110,29 @@ pub(crate) static TEST_REGISTRY: &[&PluginInfo] = &[&test_link::TEST_LINK_INFO, 
 pub(crate) static TEST_REGISTRY: &[&PluginInfo] = &[];
 
 /// Constructs an (unprepared) plugin by id. A stereo-only plugin comes wrapped so it processes
-/// every channel of a wider track ([`per_channel::PerChannel`]).
+/// every channel of a wider track ([`per_channel::PerChannel`]), and one that takes
+/// sample-accurate parameter changes so it runs in pieces split at them ([`timed::Timed`]).
 pub(crate) fn instantiate(id: &str) -> Option<Box<dyn Plugin>> {
     let p = instantiate_one(id)?;
-    Some(if per_channel::wraps(id) { Box::new(per_channel::PerChannel::new(p, instantiate_one)) } else { p })
+    let p: Box<dyn Plugin> = if per_channel::wraps(id) { Box::new(per_channel::PerChannel::new(p, instantiate_one)) } else { p };
+    Some(if timed::takes(id) { Box::new(timed::Timed::new(p)) } else { p })
 }
+
+/// `first` run multi-mono: one mono instance per channel of the track, each made by `make` from
+/// the first's id and taking its parameters and stored state (linked).
+pub fn multi_mono(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Box<dyn Plugin> {
+    Box::new(per_channel::PerChannel::mono(first, make))
+}
+
+/// `first` run multi-mono unlinked: one mono instance per channel, the first taking the plain
+/// parameter ids and channel n (1 or more) those named `c<n>:<id>`.
+pub fn multi_mono_unlinked(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Box<dyn Plugin> {
+    Box::new(per_channel::PerChannel::unlinked(first, make))
+}
+
+/// A multi-mono unlinked module's stored state holds every channel's ([`multi_mono_unlinked`]
+/// saves them packed); these read and write that form.
+pub use per_channel::{first_state as multi_mono_first_state, pack_states as multi_mono_pack_states, unpack_states as multi_mono_unpack_states};
 
 /// One instance of a plugin by id, never wrapped.
 fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
@@ -154,6 +179,8 @@ fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
         "sampler" => Box::new(sampler::Sampler::new()),
         "juke" => Box::new(juke::Juke::new()),
         "multisampler" => Box::new(multisampler::Multisampler::new()),
+        "wavetable_synth" => Box::new(wavetable::WavetableSynth::new()),
+        "fm_synth" => Box::new(fm::FmSynth::new()),
         #[cfg(feature = "test-plugins")]
         "test_link" => Box::new(test_link::TestLink::new()),
         #[cfg(feature = "test-plugins")]
@@ -209,6 +236,8 @@ mod tests {
         "sampler",
         "juke",
         "multisampler",
+        "wavetable_synth",
+        "fm_synth",
         "fs_sat",
         "fs_comp",
         "fs_tape",

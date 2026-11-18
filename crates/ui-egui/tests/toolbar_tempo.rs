@@ -103,3 +103,21 @@ fn the_toolbar_tempo_edits_the_tempo_change_in_effect_at_the_playhead() {
     r.type_into(field, "150");
     assert_eq!((r.bpm(0), r.bpm(bar5), r.app.engine.session().tempo.tempos().len()), (120.0, 150.0, 2));
 }
+
+#[test]
+fn tap_tempo_sets_the_tempo_as_one_undo_step() {
+    let mut r = Rig::new();
+    let steps = r.app.engine.undo_history().len();
+    for now in [10.0, 10.6, 11.2, 11.8] {
+        soundcraft_ui_egui::ops_windows::tap_tempo(&mut r.app, now);
+    }
+    assert_eq!(r.bpm(0), 100.0);
+    assert_eq!(r.app.engine.undo_history().len(), steps + 1, "one run of taps, one undo step");
+    // After a pause, a new run is a new step.
+    for now in [20.0, 20.4] {
+        soundcraft_ui_egui::ops_windows::tap_tempo(&mut r.app, now);
+    }
+    assert_eq!(r.bpm(0), 150.0);
+    assert_eq!(r.app.engine.undo_history().len(), steps + 2);
+    assert_eq!(r.app.ops.tempo_start, 150.0);
+}

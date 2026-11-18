@@ -21,7 +21,8 @@
 //!   held (channel, key) has had its note-off. Poly pressure, and through `IMidiMapping` MIDI
 //!   CC 7 on channel 1 and CC 11 on channel 6 (hidden parameter 1), set it to their value too.
 //!   Program change on channel 1 maps to hidden parameter 2 ("Program", 127 steps), which sets
-//!   it to its normalized value.
+//!   it to its normalized value. A SysEx data event sets it to the message's second byte (-1
+//!   for anything not `F0` … `F7`).
 //!
 //! The module checks the host's module lifecycle the way real plugins depend on it (see "module
 //! lifecycle" below) and aborts the process when it is broken.
@@ -172,12 +173,27 @@ impl IComponentTrait for GainProcessor {
     unsafe fn setIoMode(&self, _mode: IoMode) -> tresult {
         kResultOk
     }
-    unsafe fn getBusCount(&self, media: MediaType, _dir: BusDirection) -> i32 {
-        if media == MediaTypes_::kAudio as MediaType { 1 } else { 0 }
+    /// One main bus each way, and an auxiliary input: the sidechain, added to the output.
+    unsafe fn getBusCount(&self, media: MediaType, dir: BusDirection) -> i32 {
+        match (media == MediaTypes_::kAudio as MediaType, dir == BusDirections_::kInput as BusDirection) {
+            (true, true) => 2,
+            (true, false) => 1,
+            _ => 0,
+        }
     }
     unsafe fn getBusInfo(&self, media: MediaType, dir: BusDirection, index: i32, bus: *mut BusInfo) -> tresult {
-        if media != MediaTypes_::kAudio as MediaType || index != 0 {
+        if media != MediaTypes_::kAudio as MediaType || !(0..=1).contains(&index) {
             return kInvalidArgument;
+        }
+        if index == 1 {
+            if dir != BusDirections_::kInput as BusDirection {
+                return kInvalidArgument;
+            }
+            audio_bus(bus, dir, "Sidechain");
+            let b = unsafe { &mut *bus };
+            b.busType = BusTypes_::kAux as BusType;
+            b.flags = 0;
+            return kResultOk;
         }
         audio_bus(bus, dir, "Main");
         kResultOk
@@ -217,7 +233,7 @@ impl IComponentTrait for GainProcessor {
 
 impl IAudioProcessorTrait for GainProcessor {
     unsafe fn setBusArrangements(&self, inputs: *mut SpeakerArrangement, n_in: i32, outputs: *mut SpeakerArrangement, n_out: i32) -> tresult {
-        if n_in != 1 || n_out != 1 {
+        if !(1..=2).contains(&n_in) || n_out != 1 {
             return kResultFalse;
         }
         let (i, o) = unsafe { (*inputs, *outputs) };
@@ -227,8 +243,8 @@ impl IAudioProcessorTrait for GainProcessor {
         self.arrangement.store(i, Ordering::Relaxed);
         kResultTrue
     }
-    unsafe fn getBusArrangement(&self, _dir: BusDirection, index: i32, arr: *mut SpeakerArrangement) -> tresult {
-        if index != 0 {
+    unsafe fn getBusArrangement(&self, dir: BusDirection, index: i32, arr: *mut SpeakerArrangement) -> tresult {
+        if index != 0 && !(index == 1 && dir == BusDirections_::kInput as BusDirection) {
             return kInvalidArgument;
         }
         unsafe { *arr = self.arrangement.load(Ordering::Relaxed) };
@@ -269,15 +285,18 @@ impl IAudioProcessorTrait for GainProcessor {
                 }
             }
         }
-        if d.numInputs != 1 || d.numOutputs != 1 {
+        if !(1..=2).contains(&d.numInputs) || d.numOutputs != 1 {
             return kResultOk;
         }
         let frames = d.numSamples.max(0) as usize;
         let g = 2.0 * f64::from_bits(self.gain.load(Ordering::Relaxed)) as f32;
         let (ins, outs) = unsafe { (channels(&*d.inputs, frames), channels(&*d.outputs, frames)) };
-        for (i, o) in ins.iter().zip(outs) {
-            for (x, y) in i.iter().zip(o.iter_mut()) {
-                *y = g * x;
+        // The sidechain bus (when the host gave buffers for it) is added to the output.
+        let key = if d.numInputs == 2 { unsafe { channels(&*d.inputs.add(1), frames) } } else { Vec::new() };
+        for (c, (i, o)) in ins.iter().zip(outs).enumerate() {
+            let k = key.get(c);
+            for (n, (x, y)) in i.iter().zip(o.iter_mut()).enumerate() {
+                *y = g * x + k.and_then(|k| k.get(n)).copied().unwrap_or(0.0);
             }
         }
         kResultOk
@@ -586,7 +605,8 @@ impl IComponentTrait for Synth {
     unsafe fn getBusCount(&self, media: MediaType, dir: BusDirection) -> i32 {
         let out = dir == BusDirections_::kOutput as BusDirection;
         if media == MediaTypes_::kAudio as MediaType && out {
-            1
+            // The main output and "Aux" (half the level).
+            2
         } else if media == MediaTypes_::kEvent as MediaType && !out {
             1
         } else {
@@ -594,6 +614,13 @@ impl IComponentTrait for Synth {
         }
     }
     unsafe fn getBusInfo(&self, media: MediaType, dir: BusDirection, index: i32, bus: *mut BusInfo) -> tresult {
+        if index == 1 && media == MediaTypes_::kAudio as MediaType && dir == BusDirections_::kOutput as BusDirection {
+            audio_bus(bus, dir, "Aux");
+            let b = unsafe { &mut *bus };
+            b.busType = BusTypes_::kAux as BusType;
+            b.flags = 0;
+            return kResultOk;
+        }
         if index != 0 {
             return kInvalidArgument;
         }
@@ -632,10 +659,10 @@ impl IComponentTrait for Synth {
 
 impl IAudioProcessorTrait for Synth {
     unsafe fn setBusArrangements(&self, _i: *mut SpeakerArrangement, n_in: i32, outputs: *mut SpeakerArrangement, n_out: i32) -> tresult {
-        if n_in == 0 && n_out == 1 && unsafe { *outputs } == SpeakerArr::kStereo { kResultTrue } else { kResultFalse }
+        if n_in == 0 && n_out == 2 && unsafe { *outputs } == SpeakerArr::kStereo { kResultTrue } else { kResultFalse }
     }
     unsafe fn getBusArrangement(&self, dir: BusDirection, index: i32, arr: *mut SpeakerArrangement) -> tresult {
-        if dir != BusDirections_::kOutput as BusDirection || index != 0 {
+        if dir != BusDirections_::kOutput as BusDirection || !(0..=1).contains(&index) {
             return kInvalidArgument;
         }
         unsafe { *arr = SpeakerArr::kStereo };
@@ -655,7 +682,7 @@ impl IAudioProcessorTrait for Synth {
     }
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
         let d = unsafe { &*data };
-        if d.numOutputs != 1 {
+        if d.numOutputs != 2 {
             return kResultOk;
         }
         let frames = d.numSamples.max(0) as usize;
@@ -701,6 +728,12 @@ impl IAudioProcessorTrait for Synth {
                     }
                 } else if e.r#type == Event_::EventTypes_::kPolyPressureEvent as u16 {
                     level = unsafe { e.__field0.polyPressure.pressure };
+                } else if e.r#type == Event_::EventTypes_::kDataEvent as u16 {
+                    // A SysEx: its second byte (the maker's id), or -1 when not F0 … F7.
+                    let d = unsafe { e.__field0.data };
+                    let bytes = if d.bytes.is_null() { &[][..] } else { unsafe { std::slice::from_raw_parts(d.bytes, d.size as usize) } };
+                    let whole = d.r#type == DataEvent_::DataTypes_::kMidiSysEx as u32 && bytes.len() >= 3 && bytes[0] == 0xF0 && bytes[bytes.len() - 1] == 0xF7;
+                    level = if whole { f32::from(bytes[1]) } else { -1.0 };
                 }
             }
             if let Some((at, v)) = volume
@@ -713,6 +746,11 @@ impl IAudioProcessorTrait for Synth {
         self.level.store(level.to_bits(), Ordering::Relaxed);
         for ch in outs {
             ch.copy_from_slice(&out);
+        }
+        for ch in unsafe { channels(&*d.outputs.add(1), frames) } {
+            for (o, x) in ch.iter_mut().zip(&out) {
+                *o = 0.5 * x;
+            }
         }
         kResultOk
     }

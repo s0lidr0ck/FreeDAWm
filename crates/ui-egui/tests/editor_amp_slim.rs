@@ -1,4 +1,4 @@
-//! Amp's slim editor (View > Mix Window Views > Slim Plugin Editors): its width and header, a
+//! Amp's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width and header, a
 //! face dial as one undo step, the amp menu with the editor's Undo, each amp's own front panel,
 //! and More (cabinet, oversampling) per module.
 

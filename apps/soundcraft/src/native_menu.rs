@@ -35,6 +35,7 @@ impl NativeMenu {
         let mut native = Self { menu, entries: Vec::new(), events, last_sync: None };
         let app_menu = Submenu::new("FreeDAWm", true);
         native.add_item(app, &app_menu, "About FreeDAWm", "", Some("window.about".into()))?;
+        native.add_item(app, &app_menu, "Tour of FreeDAWm", "", Some("window.tour".into()))?;
         native.add_item(app, &app_menu, "Session Info", "", Some("window.session_info".into()))?;
         native.add_item(app, &app_menu, "Session Audio Health", "", Some("window.audio_health".into()))?;
         app_menu.append(&PredefinedMenuItem::separator())?;

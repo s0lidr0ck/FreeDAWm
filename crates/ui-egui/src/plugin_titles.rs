@@ -34,9 +34,12 @@ pub fn subtitle(id: &str) -> &'static str {
         "keel" => "Bass Amp",
         "heft" => "Bass Enhancer",
         "vault" => "Convolution Reverb",
+        "hw_insert" => "Outboard Gear in the Chain",
         "mend" => "Vocal Cleaner",
         "imprint" => "Impulse Response Capture",
         "subtractive_synth" => "Analog-Style Synth",
+        "wavetable_synth" => "Morphing Tables",
+        "fm_synth" => "Four-Operator Synth",
         "time_shift" => "Track Alignment",
         "trim" => "Input Level for Gain Staging",
         "gain" => "Clean Level Change",
@@ -49,6 +52,7 @@ pub fn subtitle(id: &str) -> &'static str {
         "invert" => "Polarity Flip",
         "dc_offset_removal" => "",
         "signal_generator" => "Test Tones & Noise",
+        "lofi" => "Bit & Sample-Rate Reducer",
         _ => "",
     }
 }

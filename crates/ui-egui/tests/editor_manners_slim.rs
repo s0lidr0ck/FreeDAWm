@@ -1,4 +1,4 @@
-//! Manners' slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its dials,
+//! Manners' slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its dials,
 //! the More section and the range edges, with the full editor's own gestures.
 
 mod editor_support;

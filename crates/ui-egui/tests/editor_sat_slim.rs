@@ -1,4 +1,4 @@
-//! Sat's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its header, a
+//! Sat's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its header, a
 //! dial drag, the circuit menu, the display toggle and More (per module), and the full editor.
 
 mod editor_support;

@@ -158,3 +158,36 @@ fn a_clap_sidechain_is_keyed_from_another_track() {
     e.execute("mix.module_sidechain", &json!({"track": main.0, "module": module, "source": null})).unwrap();
     assert!((mix(&e) - unkeyed).abs() < 1e-5);
 }
+
+/// A hosted instrument's second output port is listed once the mix has made it, and taken on a
+/// mixer channel of its own (`mix.new_output_track`) it is heard there: the fixture synth's
+/// "Aux" plays at half its level.
+#[test]
+fn a_clap_instruments_aux_output_plays_on_its_own_channel() {
+    install_fixture();
+    let mut e = Engine::default();
+    let t = soundcraft_model::TrackId(e.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap());
+    e.execute("mix.instrument", &json!({"track": t.0, "plugin": "clap:org.soundcraft.test.synth"})).unwrap();
+    let mut seq = soundcraft_midi::Sequence::default();
+    seq.notes.push(soundcraft_midi::Note {
+        probability: 100,
+        pitch: 60,
+        velocity: 127,
+        muted: false,
+        release_velocity: 64,
+        channel: 0,
+        start: 0,
+        length: 9600,
+    });
+    let id = e.session_mut().new_clip_id();
+    soundcraft_engine::edit::place_clip(e.session_mut(), t, Clip::midi(id, "n", 0, 48_000, seq));
+    let mix = |e: &Engine| soundcraft_mix::render_range(e.session(), Range::new(0, 4800), 512)[0][2000];
+    let alone = mix(&e);
+    assert!(alone.abs() > 0.01);
+    let names = soundcraft_engine::cmd::instrument::output_names(e.session().track(t).unwrap().instrument.as_ref().unwrap());
+    assert_eq!(names, vec!["Aux".to_string()], "the port the plug-in declared");
+    let r = e.execute("mix.new_output_track", &json!({"track": t.0, "output": 0})).unwrap();
+    assert!(r["aux"].as_u64().is_some(), "{r}");
+    let both = mix(&e);
+    assert!(((both - alone) - 0.5 * alone).abs() < 1e-3, "alone {alone}, with the aux channel {both}");
+}

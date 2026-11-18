@@ -47,6 +47,10 @@ pub struct ClapPlugin {
     /// For a plug-in that takes only CLAP notes: each channel's last value of each note
     /// expression its controllers set (NaN: none yet), sent again with every new note.
     expr: [[f64; EXPRESSIONS]; 16],
+    /// Each channel's bend range as RPN 0 last set it: the tuning a bend becomes.
+    rpn: BendRanges,
+    /// The id each sounding CLAP note was started with, so its expressions reach it by id.
+    note_ids: NoteIds,
     channels: usize,
     max_block: usize,
     latency: usize,
@@ -54,6 +58,13 @@ pub struct ClapPlugin {
     transport: Option<Transport>,
     /// Set for an offline render (`clap.render`) at the next `prepare`.
     offline: bool,
+    /// The auxiliary output ports an instrument offers a mixer channel: (port, name), the ports
+    /// with channels after the main one, as they were when it was made.
+    extra: Vec<(usize, String)>,
+    /// Which of `extra` the host takes (bit per entry).
+    taken: u32,
+    /// Each extra output's block (two channels), copied out after each `process` while taken.
+    extra_bufs: Vec<[Vec<f32>; 2]>,
 }
 
 impl ClapPlugin {
@@ -82,13 +93,40 @@ impl ClapPlugin {
             midi_in: false,
             held: [0; 128],
             expr: [[f64::NAN; EXPRESSIONS]; 16],
+            rpn: BendRanges::default(),
+            note_ids: NoteIds::default(),
             channels: 2,
             max_block: 0,
             latency: 0,
             steady: 0,
             transport: None,
             offline: false,
+            extra: Vec::new(),
+            taken: 0,
+            extra_bufs: Vec::new(),
         }
+        .with_extra_outputs()
+    }
+
+    /// Finds the auxiliary outputs an instrument declares (off the audio thread, when made).
+    fn with_extra_outputs(mut self) -> ClapPlugin {
+        if self.info.is_instrument
+            && let Ok(outs) = self.inst.audio_ports(false)
+        {
+            let names = self.inst.output_port_names();
+            let main = pick_main(&outs);
+            self.extra = outs
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| Some(*i) != main && p.channels > 0)
+                .take(32)
+                .map(|(i, _)| {
+                    let name = names.get(i).map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Out {}", i + 1));
+                    (i, name)
+                })
+                .collect();
+        }
+        self
     }
 
     /// Re-reads every parameter value from the plugin (after a state load).
@@ -123,12 +161,13 @@ impl ClapPlugin {
         let vel = velocity.min(127);
         match self.notes {
             NoteMode::Clap => {
-                self.push(Event::NoteOn { time, channel: ch, key: note, velocity: f64::from(vel) / 127.0 });
+                let id = self.note_ids.start(ch, note);
+                self.push(Event::NoteOn { time, id, channel: ch, key: note, velocity: f64::from(vel) / 127.0 });
                 // The channel's bend, pressure and controllers so far apply to the new note too.
                 let state = self.expr.get(usize::from(ch)).copied().unwrap_or([f64::NAN; EXPRESSIONS]);
                 for (expression, value) in (0i32..).zip(state) {
                     if value.is_finite() {
-                        self.push(Event::Expression { time, expression, channel: ch, key: i16::from(note), value });
+                        self.push(Event::Expression { time, id, expression, channel: ch, key: i16::from(note), value });
                     }
                 }
             }
@@ -148,7 +187,10 @@ impl ClapPlugin {
         let ch = ch & 0x0F;
         let time = u32::try_from(offset).unwrap_or(u32::MAX);
         match self.notes {
-            NoteMode::Clap => self.push(Event::NoteOff { time, channel: ch, key: note, velocity: f64::from(release.min(127)) / 127.0 }),
+            NoteMode::Clap => {
+                let id = self.note_ids.end(ch, note);
+                self.push(Event::NoteOff { time, id, channel: ch, key: note, velocity: f64::from(release.min(127)) / 127.0 });
+            }
             NoteMode::Midi => self.push(Event::Midi { time, data: [0x80 | ch, note, release & 0x7F] }),
             NoteMode::None => return,
         }
@@ -204,6 +246,21 @@ impl ClapPlugin {
             let r = self.inst.process(n, self.steady, &mut self.inputs, &mut self.outputs, events, offset, self.transport.as_ref());
             self.queue.drain(..k);
             self.steady = self.steady.saturating_add(i64::try_from(n).unwrap_or(0));
+            if r.is_ok() && self.taken != 0 {
+                // The taken auxiliary outputs, as they came (mono to both sides).
+                for (k, ((port, _), bufs)) in self.extra.iter().zip(self.extra_bufs.iter_mut()).enumerate() {
+                    if self.taken & (1 << k) == 0 {
+                        continue;
+                    }
+                    let oc = self.outputs.channels(*port);
+                    for (c, dst) in bufs.iter_mut().enumerate() {
+                        let src = self.outputs.channel(*port, c.min(oc.saturating_sub(1))).and_then(|s| s.get(..n));
+                        if let (Some(src), Some(dst)) = (src, dst.get_mut(start..start + n)) {
+                            dst.copy_from_slice(src);
+                        }
+                    }
+                }
+            }
             match (r, self.out_main) {
                 (Ok(_), Some(p)) => {
                     let oc = self.outputs.channels(p);
@@ -231,17 +288,107 @@ impl ClapPlugin {
 /// How many CLAP note expressions there are (`CLAP_NOTE_EXPRESSION_VOLUME` … `PRESSURE`).
 const EXPRESSIONS: usize = 7;
 
+/// The CLAP note id of each sounding note, by key and channel (-1: none), given out in turn.
+/// Nothing allocates: one fixed table.
+#[derive(Debug, Clone)]
+pub(crate) struct NoteIds {
+    id: [[i32; 16]; 128],
+    next: i32,
+}
+
+impl Default for NoteIds {
+    fn default() -> Self {
+        NoteIds { id: [[-1; 16]; 128], next: 0 }
+    }
+}
+
+impl NoteIds {
+    /// A new id for a note starting on `ch` at `key` (0 again after the largest).
+    pub(crate) fn start(&mut self, ch: u8, key: u8) -> i32 {
+        let id = self.next;
+        self.next = if self.next == i32::MAX { 0 } else { self.next + 1 };
+        if let Some(slot) = self.id.get_mut(usize::from(key)).and_then(|c| c.get_mut(usize::from(ch & 0x0F))) {
+            *slot = id;
+        }
+        id
+    }
+
+    /// The id of the note sounding on `ch` at `key` (-1: none).
+    pub(crate) fn of(&self, ch: u8, key: u8) -> i32 {
+        self.id.get(usize::from(key)).and_then(|c| c.get(usize::from(ch & 0x0F))).copied().unwrap_or(-1)
+    }
+
+    /// The note on `ch` at `key` ends: its id, now free.
+    pub(crate) fn end(&mut self, ch: u8, key: u8) -> i32 {
+        self.id.get_mut(usize::from(key)).and_then(|c| c.get_mut(usize::from(ch & 0x0F))).map_or(-1, |slot| std::mem::replace(slot, -1))
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.id = [[-1; 16]; 128];
+    }
+}
+
+/// Each channel's pitch-bend range as RPN 0 sets it (MSB semitones, LSB cents), for the tuning a
+/// bend becomes. Nothing allocates: two fixed arrays.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BendRanges {
+    /// Semitones (with cents) per channel.
+    range: [f32; 16],
+    /// The registered parameter selected per channel (MSB, LSB), 127/127 for none.
+    rpn: [(u8, u8); 16],
+}
+
+impl Default for BendRanges {
+    fn default() -> Self {
+        BendRanges { range: [2.0; 16], rpn: [(127, 127); 16] }
+    }
+}
+
+impl BendRanges {
+    /// Takes a controller: RPN selects (101, 100) and data entry (6, 38) on pitch-bend
+    /// sensitivity set the range.
+    pub(crate) fn hear(&mut self, msg: [u8; 3]) {
+        if msg[0] & 0xF0 != 0xB0 {
+            return;
+        }
+        let ch = usize::from(msg[0] & 0x0F);
+        let (Some(sel), Some(range)) = (self.rpn.get_mut(ch), self.range.get_mut(ch)) else { return };
+        let v = msg[2] & 0x7F;
+        match msg[1] {
+            101 => sel.0 = v,
+            100 => sel.1 = v,
+            // NRPN selects end an RPN selection.
+            99 | 98 => *sel = (127, 127),
+            6 if *sel == (0, 0) => *range = f32::from(v) + range.fract(),
+            38 if *sel == (0, 0) => *range = range.trunc() + f32::from(v.min(99)) / 100.0,
+            _ => {}
+        }
+    }
+
+    pub(crate) fn bend_range(&self, channel: u8) -> f64 {
+        f64::from(self.range.get(usize::from(channel & 0x0F)).copied().unwrap_or(2.0))
+    }
+}
+
 /// The CLAP note expression a MIDI channel message stands for, for a plug-in that takes only
 /// CLAP notes: (expression, key: -1 for every key on the channel, value). Pitch bend is tuning
 /// (± 2 semitones), channel and poly pressure are pressure, CC1 vibrato, CC7 volume (amplitude,
 /// the General MIDI curve), CC10 pan, CC11 expression, CC74 brightness. Anything else has none.
+#[cfg(test)]
 pub(crate) fn expression_of(msg: [u8; 3]) -> Option<(i32, i16, f64)> {
+    expression_in(msg, 2.0)
+}
+
+/// [`expression_of`] with the channel's bend range (semitones a full bend throws), as RPN 0
+/// sets it (an MPE zone's member channels: 48 by default).
+pub(crate) fn expression_in(msg: [u8; 3], bend_range: f64) -> Option<(i32, i16, f64)> {
     let [status, d1, d2] = msg;
     let unit = |v: u8| f64::from(v.min(127)) / 127.0;
+    let range = if bend_range.is_finite() { bend_range.clamp(0.0, 96.0) } else { 2.0 };
     match status & 0xF0 {
         0xE0 => {
             let bend = (i32::from(d1 & 0x7F) | (i32::from(d2 & 0x7F) << 7)) - 8192;
-            Some((CLAP_NOTE_EXPRESSION_TUNING, -1, f64::from(bend) / 8192.0 * 2.0))
+            Some((CLAP_NOTE_EXPRESSION_TUNING, -1, f64::from(bend) / 8192.0 * range))
         }
         0xD0 => Some((CLAP_NOTE_EXPRESSION_PRESSURE, -1, unit(d1))),
         0xA0 => Some((CLAP_NOTE_EXPRESSION_PRESSURE, i16::from(d1 & 0x7F), unit(d2))),
@@ -306,6 +453,7 @@ impl Plugin for ClapPlugin {
         };
         self.in_main = pick_main(&ins);
         self.out_main = pick_main(&outs);
+        self.extra_bufs = self.extra.iter().map(|_| [vec![0.0; mb], vec![0.0; mb]]).collect();
         self.in_key = key_port(&ins);
         self.inputs = PortBuffers::new(&ins.iter().map(|p| p.channels).collect::<Vec<_>>(), mb);
         self.outputs = PortBuffers::new(&outs.iter().map(|p| p.channels).collect::<Vec<_>>(), mb);
@@ -331,10 +479,33 @@ impl Plugin for ClapPlugin {
         self.queue.retain(|e| matches!(e, Event::Param { .. }));
         self.held = [0; 128];
         self.expr = [[f64::NAN; EXPRESSIONS]; 16];
+        self.note_ids.clear();
     }
 
     fn set_offline(&mut self, offline: bool) {
         self.offline = offline;
+    }
+
+    fn extra_outputs(&self) -> Vec<String> {
+        self.extra.iter().map(|(_, n)| n.clone()).collect()
+    }
+
+    fn set_outputs_taken(&mut self, mask: u32) {
+        self.taken = mask;
+    }
+
+    /// The auxiliary port's block of the last `process` (silence while it was not taken then).
+    fn read_output(&mut self, index: usize, out: &mut [Vec<f32>], frames: usize) -> bool {
+        let Some(src) = self.extra_bufs.get(index) else { return false };
+        if self.taken & (1 << index.min(31)) == 0 {
+            return false;
+        }
+        for (o, c) in out.iter_mut().zip(src.iter()) {
+            for (d, s) in o.iter_mut().zip(c.iter()).take(frames) {
+                *d = *s;
+            }
+        }
+        true
     }
 
     fn set_param(&mut self, id: &str, value: f32) -> bool {
@@ -356,6 +527,18 @@ impl Plugin for ClapPlugin {
     fn param(&self, id: &str) -> Option<f32> {
         let i = self.info.params.iter().position(|p| p.id == id)?;
         self.values.get(i).copied()
+    }
+
+    /// A timed parameter event in the next block's queue (dropped when the queue is full).
+    fn set_param_at(&mut self, offset: usize, id: &str, value: f32) -> bool {
+        let Some(i) = self.info.params.iter().position(|p| p.id == id) else { return false };
+        let (Some(pi), Some(&cid)) = (self.info.params.get(i), self.ids.get(i)) else { return false };
+        let v = pi.clamp(value);
+        if let Some(slot) = self.values.get_mut(i) {
+            *slot = v;
+        }
+        self.push(Event::Param { time: u32::try_from(offset).unwrap_or(u32::MAX), id: cid, value: f64::from(v) });
+        true
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -387,7 +570,10 @@ impl Plugin for ClapPlugin {
         if self.midi_in {
             self.push(Event::Midi { time, data: msg });
         } else if self.notes == NoteMode::Clap
-            && let Some((expression, key, value)) = expression_of(msg)
+            && let Some((expression, key, value)) = {
+                self.rpn.hear(msg);
+                expression_in(msg, self.rpn.bend_range(msg[0] & 0x0F))
+            }
         {
             // A plug-in without MIDI input hears controllers, bend and pressure as note
             // expressions on the sounding notes (and on the notes that follow).
@@ -397,7 +583,20 @@ impl Plugin for ClapPlugin {
             {
                 *slot = value;
             }
-            self.push(Event::Expression { time, expression, channel, key, value });
+            // Addressed by note id: each note sounding on the channel (one on an MPE member
+            // channel), or the one key of a poly pressure. With none sounding, by channel.
+            let mut sent = false;
+            for k in 0..128u8 {
+                let on = self.held.get(usize::from(k)).is_some_and(|m| m & (1 << channel) != 0);
+                if on && (key < 0 || key == i16::from(k)) {
+                    let id = self.note_ids.of(channel, k);
+                    self.push(Event::Expression { time, id, expression, channel, key: i16::from(k), value });
+                    sent = true;
+                }
+            }
+            if !sent {
+                self.push(Event::Expression { time, id: -1, expression, channel, key, value });
+            }
         }
     }
 
@@ -410,6 +609,18 @@ impl Plugin for ClapPlugin {
             0x90 => self.key_off(offset, ch, d1, 0),
             // Controllers, pitch bend, pressure and program change (`0xCn`) go as MIDI.
             _ => self.midi(offset, msg),
+        }
+    }
+
+    /// To a plug-in whose note port takes MIDI, as `clap_event_midi_sysex`; dropped when the
+    /// block's SysEx room is full.
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        if !self.midi_in {
+            return;
+        }
+        let fresh = !self.queue.iter().any(|e| matches!(e, Event::SysEx { .. }));
+        if let Some((at, len)) = self.inst.stage_sysex(data, fresh) {
+            self.push(Event::SysEx { time: u32::try_from(offset).unwrap_or(u32::MAX), at, len });
         }
     }
 
@@ -520,6 +731,48 @@ mod tests {
 
     /// Parity section 7, bug 24: controllers, bend and pressure become CLAP note expressions for
     /// a plug-in that takes only CLAP notes.
+    /// MPE: a member channel's bend range set by RPN 0 (as an MPE zone's setup sends it) scales
+    /// the tuning its bends become; other channels keep two semitones.
+    #[test]
+    fn a_channels_bend_range_scales_its_tuning() {
+        let mut r = BendRanges::default();
+        for m in [[0xB1, 101, 0], [0xB1, 100, 0], [0xB1, 6, 48], [0xB1, 38, 0]] {
+            r.hear(m);
+        }
+        assert_eq!(r.bend_range(1), 48.0);
+        assert_eq!(r.bend_range(0), 2.0);
+        let up = expression_in([0xE1, 0x7F, 0x7F], r.bend_range(1)).unwrap();
+        assert!((up.2 - 48.0 * 8191.0 / 8192.0).abs() < 1e-9);
+        // Another parameter selected: data entry leaves the range alone; cents add.
+        for m in [[0xB1, 101, 0], [0xB1, 100, 1], [0xB1, 6, 70]] {
+            r.hear(m);
+        }
+        assert_eq!(r.bend_range(1), 48.0);
+        for m in [[0xB2, 101, 0], [0xB2, 100, 0], [0xB2, 6, 12], [0xB2, 38, 50]] {
+            r.hear(m);
+        }
+        assert_eq!(r.bend_range(2), 12.5);
+    }
+
+    /// Note expressions go to a note by the id its note-on carried: each note its own id, freed
+    /// when it ends, and none for a key that is not sounding.
+    #[test]
+    fn each_note_has_its_own_id_until_it_ends() {
+        let mut ids = NoteIds::default();
+        let a = ids.start(1, 60);
+        let b = ids.start(2, 60);
+        assert_ne!(a, b);
+        assert_eq!((ids.of(1, 60), ids.of(2, 60), ids.of(3, 60)), (a, b, -1));
+        assert_eq!(ids.end(1, 60), a);
+        assert_eq!(ids.of(1, 60), -1);
+        assert_eq!(ids.end(1, 60), -1, "ended once");
+        ids.next = i32::MAX;
+        assert_eq!(ids.start(0, 0), i32::MAX);
+        assert_eq!(ids.start(0, 1), 0, "wraps to 0, never negative");
+        ids.clear();
+        assert_eq!(ids.of(2, 60), -1);
+    }
+
     #[test]
     fn channel_messages_become_note_expressions() {
         assert_eq!(expression_of([0xE3, 0, 0x40]), Some((CLAP_NOTE_EXPRESSION_TUNING, -1, 0.0)));

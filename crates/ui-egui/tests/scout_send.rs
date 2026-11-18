@@ -151,7 +151,7 @@ fn send_without_key_shows_the_settings_hint() {
     assert!(h.state().scout.settings_open);
     assert!(h.query_by_label_contains("No Anthropic API key").is_some(), "Scout ▸ Settings is open");
     assert_eq!(h.state().scout.question, "Too bright?", "the question is kept");
-    // Without a host network call (the web build) Send is refused too.
+    // Without a host network call (a bare app) Send is refused too.
     let mut h = harness(SoundApp::new(Engine::new(session()), None, Services::default()));
     h.state_mut().scout.question = "Too bright?".into();
     assert!(h.state_mut().run("ui.scout.send", json!({})).is_err());

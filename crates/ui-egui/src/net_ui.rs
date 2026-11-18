@@ -22,6 +22,7 @@ use soundcraft_net::discovery::Discovery;
 use soundcraft_net::follower::{FollowTarget, Follower, pair_confirm, pair_request};
 use soundcraft_net::glue::{BoothGlue, FinishedAudio, FinishedTake, FollowBadge, FollowerGlue, HostView, LiveAudio, RigHost};
 use soundcraft_net::hub::{Hub, HubRequest, TakeClock};
+use soundcraft_net::pairing::exchange::LinkKeys;
 use soundcraft_playback::TransportProbe;
 use soundcraft_time::Samples;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
@@ -459,7 +460,12 @@ impl RigHost for AppHost<'_> {
                 (id, input, path)
             })
             .collect();
-        Some(FinishedAudio { start: plan.start, latency: plan.latency, rate: if plan.rate > 0 { plan.rate } else { s.sample_rate.hz() }, takes })
+        Some(FinishedAudio {
+            start: plan.start,
+            latency: plan.latency.saturating_add(plan.pre),
+            rate: if plan.rate > 0 { plan.rate } else { s.sample_rate.hz() },
+            takes,
+        })
     }
     fn live_audio(&self, from: &[(TrackId, usize)]) -> Vec<LiveAudio> {
         let app = &*self.0;
@@ -590,8 +596,12 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
 /// window, under the switch that lets the network in.
 pub(crate) const LOCAL_LINK_NOTE: &str = "A paired device can do everything you can do here: run any command, click, take screenshots, \
 open and save sessions. The phone's page, and PCs on the plain link, use a link that is not encrypted: anyone else on the network can read \
-what passes over it. PCs pair over the encrypted local link when this PC offers it (below); connections over the internet are encrypted too. \
+what passes over it. PCs pair over the encrypted local link when this PC offers it (below): a PC never sends the code, it proves both PCs' \
+keys with it, so another computer cannot sit between the two; connections over the internet are encrypted too. \
 Pair only devices you trust, on a network you trust.";
+
+/// Under a PC's pairing code: what the code does there.
+pub(crate) const PC_CODE_NOTE: &str = "The code is never sent over the network: the two PCs prove it to each other, with their keys.";
 
 /// The same, short, under a pairing code.
 pub(crate) const PAIRING_NOTE: &str = "Pair only a device you trust: once paired it can do everything you can do here.";
@@ -611,6 +621,9 @@ pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.label("Type this code on it:");
                 ui.label(egui::RichText::new(&p.code).size(28.0).strong().monospace().color(t.text));
             });
+            if p.kind == "pc" {
+                ui.label(egui::RichText::new(PC_CODE_NOTE).small().color(t.text_dim));
+            }
             if ui.button("Deny").clicked() {
                 deny = Some(p.id.clone());
             }
@@ -887,13 +900,23 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
             ui.add(egui::TextEdit::singleline(&mut net.code_edit).desired_width(70.0).hint_text("0000"));
             if ui.button("Pair").clicked() {
                 let job = Arc::clone(&net.pair.result);
-                let (addr, code, c) = (net.pair.addr.clone(), net.code_edit.trim().to_string(), ctx.clone());
-                net.code_edit.clear();
-                std::thread::spawn(move || {
-                    let r = pair_confirm(&addr, &req, &code).map(|(token, pc)| json!({"token": token, "pc": pc}));
-                    *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
-                    c.request_repaint();
-                });
+                // The code is the exchange's password, over the booth's key this PC dialled and its
+                // own (none on the plain link); it is never sent, and wiped once used.
+                let (addr, code, c) = (net.pair.addr.clone(), std::mem::take(&mut net.code_edit), ctx.clone());
+                let keys = match net.pair_lan.clone() {
+                    Some((_, booth)) => net.lan_client().ok().map(|me| me.key_hex()).and_then(|me| LinkKeys::from_hex(&booth, &me)),
+                    None => Some(LinkKeys::PLAIN),
+                };
+                match keys {
+                    Some(keys) => {
+                        std::thread::spawn(move || {
+                            let r = pair_confirm(&addr, &req, code, keys).map(|(token, pc)| json!({"token": token, "pc": pc}));
+                            *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+                            c.request_repaint();
+                        });
+                    }
+                    None => net.pair_status = "The booth's key is damaged: pick the booth again and pair.".into(),
+                }
             }
         });
     }
@@ -1204,9 +1227,9 @@ pub fn follower_demo(app: &mut SoundApp, state: &str) -> Result<(), String> {
     for i in 0..30i64 {
         let at = 2 * sr + sr * 2 / 5 + i * sr * 2 / 5;
         let pitch = [60u8, 64, 67, 72, 65, 69, 72, 77][i as usize % 8].saturating_sub(if i % 16 < 8 { 0 } else { 5 });
-        app.midi_rec.push(RecordedMidi { at, port, msg: [0x90, pitch, 90], pass: 0 });
+        app.midi_rec.push(RecordedMidi { at, port, msg: [0x90, pitch, 90], pass: 0, sysex: None });
         if i < 29 {
-            app.midi_rec.push(RecordedMidi { at: at + sr / 3, port, msg: [0x80, pitch, 0], pass: 0 });
+            app.midi_rec.push(RecordedMidi { at: at + sr / 3, port, msg: [0x80, pitch, 0], pass: 0, sysex: None });
         }
     }
     Ok(())
@@ -1870,7 +1893,7 @@ mod tests {
         assert_eq!(h.state().ui.status, "Recording with Booth");
         let typing = soundcraft_playback::midi_in::TYPING_SLOT as u8;
         let at = h.state().position();
-        h.state_mut().midi_rec.push(soundcraft_playback::midi_in::RecordedMidi { at, port: typing, msg: [0x90, 60, 100], pass: 0 });
+        h.state_mut().midi_rec.push(soundcraft_playback::midi_in::RecordedMidi { at, port: typing, msg: [0x90, 60, 100], pass: 0, sysex: None });
         for _ in 0..10 {
             h.step();
         }
@@ -1886,7 +1909,7 @@ mod tests {
         let later = crate::live_midi::live_take(h.state(), &track).unwrap();
         assert!(later.end > first.end, "the take grows: {} then {}", first.end, later.end);
         let at = h.state().position();
-        h.state_mut().midi_rec.push(soundcraft_playback::midi_in::RecordedMidi { at, port: typing, msg: [0x80, 60, 0], pass: 0 });
+        h.state_mut().midi_rec.push(soundcraft_playback::midi_in::RecordedMidi { at, port: typing, msg: [0x80, 60, 0], pass: 0, sysex: None });
         // The booth stops (ten seconds in): the piano PC stops, keeps the take as a clip, and sends it.
         booth.view.position = 480_000;
         frames(&mut h, &mut booth, "one frame", &|_| true);

@@ -33,8 +33,14 @@ impl<'a> TimeCtx<'a> {
     }
 }
 
-/// Split `clip` at absolute position `at` (strictly inside). Returns (left, right) where right gets `new_id`.
-pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>) -> Option<(Clip, Clip)> {
+/// Edit-state flag: a split (and a cut or range edit, which splits) cuts a MIDI note sounding
+/// across the cut in two, its second part starting the right clip, instead of leaving the whole
+/// note in the left clip (ending there) and none in the right.
+pub const SPLIT_NOTES: &str = "midi.split_notes";
+
+/// Split `clip` at absolute position `at` (strictly inside). Returns (left, right) where right gets
+/// `new_id`. With `split_notes`, a note across the cut is cut in two (see [`SPLIT_NOTES`]).
+pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>, split_notes: bool) -> Option<(Clip, Clip)> {
     if at <= clip.start || at >= clip.end() {
         return None;
     }
@@ -47,9 +53,27 @@ pub fn split_clip(clip: &Clip, at: Samples, new_id: ClipId, t: TimeCtx<'_>) -> O
     right.fade_in = Fade::default();
     if let (ClipContent::Midi { sequence: ls }, ClipContent::Midi { sequence: rs }) = (&mut left.content, &mut right.content) {
         let boundary = t.ticks(at) - t.ticks(clip.start);
+        // Notes sounding across the cut (and not hidden before the clip's start): with
+        // `split_notes` the right clip starts with their rest and the left ones end at the cut.
+        let across: Vec<soundcraft_midi::Note> = if split_notes {
+            ls.notes.iter().filter(|n| n.start < boundary && n.end() > boundary && n.end() > 0).copied().collect()
+        } else {
+            Vec::new()
+        };
         ls.notes.retain(|n| n.start < boundary);
+        if split_notes {
+            for n in ls.notes.iter_mut().filter(|n| n.end() > boundary && n.end() > 0) {
+                n.length = (boundary - n.start).max(1);
+            }
+        }
         ls.ctrls.retain(|c| c.tick < boundary);
+        ls.sysex.retain(|x| x.tick < boundary);
+        rs.sysex.retain(|x| x.tick >= boundary);
         rs.notes.retain(|n| n.start >= boundary);
+        let rest = across.into_iter().map(|n| soundcraft_midi::Note { start: boundary, length: n.end() - boundary, ..n });
+        let mut notes: Vec<soundcraft_midi::Note> = rest.collect();
+        notes.append(&mut rs.notes);
+        rs.notes = notes;
         // The right part keeps the controller state from before the cut (the program, the pedal,
         // the bend in force there): the last value of each, hidden before its start, which sets
         // the state it starts in.
@@ -79,6 +103,9 @@ fn shift_sequence(seq: &mut soundcraft_midi::Sequence, delta: i64) {
     }
     for c in &mut seq.ctrls {
         c.tick = c.tick.saturating_sub(delta);
+    }
+    for x in &mut seq.sysex {
+        x.tick = x.tick.saturating_sub(delta);
     }
 }
 
@@ -130,6 +157,7 @@ fn crop_hidden_midi(clip: &mut Clip, t: TimeCtx<'_>) {
         }
         let mut k = keep.into_iter();
         sequence.ctrls.retain(|_| k.next().unwrap_or(true));
+        sequence.sysex.retain(|x| (0..len).contains(&x.tick));
     }
 }
 
@@ -138,6 +166,7 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
     let tc_tempo = s.tempo.clone();
     let sr = s.sample_rate;
     let t = TimeCtx { tempo: &tc_tempo, sr };
+    let split_notes = s.edit.flag(SPLIT_NOTES);
     let mut ids = Vec::new();
     let n_split = s.track(track).map_or(0, |tr| tr.clips().iter().filter(|c| at > c.start && at < c.end()).count());
     for _ in 0..n_split {
@@ -151,7 +180,7 @@ pub fn separate_at(s: &mut Session, track: TrackId, at: Samples) -> usize {
         if at > c.start
             && at < c.end()
             && let Some(id) = ids.pop()
-            && let Some((l, r)) = split_clip(&c, at, id, t)
+            && let Some((l, r)) = split_clip(&c, at, id, t, split_notes)
         {
             if matches!(c.content, ClipContent::Midi { .. }) {
                 halves.push((c.id, r.id, t.ticks(at) - t.ticks(c.start)));
@@ -286,6 +315,10 @@ pub fn consolidate_midi(s: &mut Session, track: TrackId, range: Range) -> bool {
                 c.tick = c.tick.max(0) + at;
                 merged.ctrls.push(c);
             }
+            for mut x in sequence.sysex.into_iter().filter(|x| (0..len).contains(&x.tick)) {
+                x.tick += at;
+                merged.sysex.push(x);
+            }
         }
     }
     merged.sort();
@@ -357,7 +390,7 @@ pub fn shift_from(s: &mut Session, track: TrackId, from: Samples, by: Samples) {
 }
 
 /// Commands an edit-locked clip never blocks: undo and redo, and the lock itself.
-const LOCK_EXEMPT: [&str; 3] = ["edit.undo", "edit.redo", "clip.edit_lock"];
+const LOCK_EXEMPT: [&str; 4] = ["edit.undo", "edit.redo", "clip.edit_lock", "track.lock"];
 
 /// Commands that move whole stretches of the timeline: an edit-locked clip may move with them, as
 /// long as nothing else about it changes.
@@ -386,13 +419,26 @@ pub fn locked_edit_refused(id: &str, before: &Session, after: &Session) -> Optio
         // A deleted track takes its clips with it; so does a deleted playlist.
         let Some(nt) = after.track(t.id) else { continue };
         let playlist_gone = nt.playlists.len() < t.playlists.len();
-        for old in t.playlists.iter().flat_map(|p| &p.clips).filter(|c| c.edit_locked) {
+        // A locked track (Track › Lock Track) locks every clip on it, and takes no new ones.
+        let track_locked = t.edit_locked && nt.edit_locked;
+        for old in t.playlists.iter().flat_map(|p| &p.clips).filter(|c| c.edit_locked || track_locked) {
             let refused = match nt.playlists.iter().flat_map(|p| &p.clips).find(|c| c.id == old.id) {
                 None => !playlist_gone,
-                Some(new) => new.edit_locked && (locked_material(new) != locked_material(old) || (!moves && new.start != old.start)),
+                Some(new) => {
+                    (new.edit_locked || track_locked) && (locked_material(new) != locked_material(old) || (!moves && new.start != old.start))
+                }
             };
+            if refused && !old.edit_locked {
+                return Some(format!("`{}` is locked; unlock the track to change its clips", t.name));
+            }
             if refused {
                 return Some(format!("clip `{}` on `{}` is edit-locked; unlock it to change it", old.name, t.name));
+            }
+        }
+        if track_locked {
+            let had = |id: ClipId| t.playlists.iter().flat_map(|p| &p.clips).any(|c| c.id == id);
+            if nt.playlists.iter().flat_map(|p| &p.clips).any(|c| !had(c.id)) || (nt.mixer.record_arm && !t.mixer.record_arm) {
+                return Some(format!("`{}` is locked; unlock the track to change its clips or record on it", t.name));
             }
         }
     }
@@ -574,13 +620,29 @@ pub fn trim_end_to(s: &mut Session, track: TrackId, at: Samples) -> usize {
     n
 }
 
-/// Heal separations inside `range`: merge neighbouring audio clips that continue the same file.
+/// Heal separations inside `range`: merge neighbouring audio clips that continue the same file,
+/// and neighbouring MIDI clips with the same settings ([`midi_heals`], [`join_midi`]).
 pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
+    let (tempo, sr) = (s.tempo.clone(), s.sample_rate);
+    // A clip with a stored original performance keeps it for itself (it is not joined).
+    let originals: HashSet<u64> = s.midi_originals.keys().copied().collect();
     let Some(pl) = s.track_mut(track).and_then(|t| t.playlist_mut()) else { return 0 };
     pl.sort();
     let mut out: Vec<Clip> = Vec::with_capacity(pl.clips.len());
     let mut healed = 0;
     for c in pl.clips.drain(..) {
+        if let Some(prev) = out.last_mut()
+            && prev.end() == c.start
+            && c.start >= range.start
+            && c.start <= range.end
+            && midi_heals(prev, &c)
+            && !originals.contains(&prev.id.0)
+            && !originals.contains(&c.id.0)
+        {
+            join_midi(prev, &c, &tempo, sr);
+            healed += 1;
+            continue;
+        }
         if let Some(prev) = out.last_mut()
             && prev.end() == c.start
             && c.start >= range.start
@@ -600,6 +662,52 @@ pub fn heal(s: &mut Session, track: TrackId, range: Range) -> usize {
     }
     pl.clips = out;
     healed
+}
+
+/// Whether two MIDI clips, `next` starting where `prev` ends, can be joined into one: every
+/// setting but their place, length, name, colour and notes the same, neither a pattern, a shared
+/// copy or under MIDI Cleanup.
+fn midi_heals(prev: &Clip, next: &Clip) -> bool {
+    let both_midi = matches!((&prev.content, &next.content), (ClipContent::Midi { .. }, ClipContent::Midi { .. }));
+    if !both_midi || [prev, next].iter().any(|c| c.shared.is_some() || c.pattern.is_some() || c.midi_cleanup.is_some()) {
+        return false;
+    }
+    let neutral = |c: &Clip| {
+        let mut c = c.clone();
+        c.id = ClipId(0);
+        c.name.clear();
+        c.start = 0;
+        c.length = 0;
+        c.content = ClipContent::Midi { sequence: soundcraft_midi::Sequence::default() };
+        c.midi_index = Default::default();
+        c.sync_point = 0;
+        c.rating = 0;
+        c.color = None;
+        c
+    };
+    neutral(prev) == neutral(next)
+}
+
+/// Joins `next` onto the end of `prev` (MIDI clips, see [`midi_heals`]): its notes and
+/// controllers move to their place in `prev`, which grows to cover both. What either clip hid
+/// (before `next`'s start, past `prev`'s end) is dropped, since it would sound in the joined clip;
+/// a note of `prev` running past its end plays on, as it did before a split.
+fn join_midi(prev: &mut Clip, next: &Clip, tempo: &TempoMap, sr: SampleRate) {
+    let base = tempo.samples_to_ticks(prev.start, sr);
+    let prev_len = tempo.samples_to_ticks(prev.end(), sr).saturating_sub(base);
+    let offset = tempo.samples_to_ticks(next.start, sr).saturating_sub(base);
+    if let (ClipContent::Midi { sequence: a }, ClipContent::Midi { sequence: b }) = (&mut prev.content, &next.content) {
+        a.notes.retain(|n| n.start < prev_len);
+        a.ctrls.retain(|c| c.tick < prev_len);
+        a.notes.extend(b.notes.iter().filter(|n| n.start >= 0).map(|n| soundcraft_midi::Note { start: n.start.saturating_add(offset), ..*n }));
+        a.ctrls.extend(b.ctrls.iter().filter(|c| c.tick >= 0).map(|c| soundcraft_midi::CtrlEvent { tick: c.tick.saturating_add(offset), ..*c }));
+        a.sysex.retain(|x| x.tick < prev_len);
+        a.sysex.extend(
+            b.sysex.iter().filter(|x| x.tick >= 0).map(|x| soundcraft_midi::SysEx { tick: x.tick.saturating_add(offset), data: x.data.clone() }),
+        );
+        a.sort();
+    }
+    prev.length = prev.length.saturating_add(next.length);
 }
 
 /// Whether `next`, starting where `prev` ends, is the rest of `prev` and sounds like it: the same
@@ -1198,12 +1306,50 @@ pub struct FadeSpec {
     pub out_shape: FadeShape,
     pub out_curvature: f32,
     pub batch: Option<Samples>,
+    /// Where a crossfade sits against the cut.
+    pub placement: XfadePlacement,
+}
+
+/// Where a crossfade sits against the cut it covers: as the selection lies over it (the
+/// default), or the selection's length wholly before the cut, centred on it, or wholly after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum XfadePlacement {
+    #[default]
+    Selection,
+    Before,
+    Centered,
+    After,
+}
+
+impl XfadePlacement {
+    pub fn from_id(id: &str) -> Option<XfadePlacement> {
+        Some(match id {
+            "selection" => XfadePlacement::Selection,
+            "before" | "pre" => XfadePlacement::Before,
+            "centered" | "centred" | "across" => XfadePlacement::Centered,
+            "after" | "post" => XfadePlacement::After,
+            _ => return None,
+        })
+    }
+
+    /// How far a crossfade over `range` reaches before and after the cut at `boundary` between
+    /// clips `a` and `b` (never past either clip's far edge).
+    fn sides(self, range: Range, boundary: Samples, a: &Clip, b: &Clip) -> (Samples, Samples) {
+        let len = range.len();
+        let (before, after) = match self {
+            XfadePlacement::Selection => (boundary - range.start, range.end - boundary),
+            XfadePlacement::Before => (len, 0),
+            XfadePlacement::Centered => (len / 2, len - len / 2),
+            XfadePlacement::After => (0, len),
+        };
+        (before.clamp(0, boundary - a.start), after.clamp(0, b.end() - boundary))
+    }
 }
 
 impl FadeSpec {
     /// One shape for every fade, unbent, no batch fades.
     pub fn of(shape: FadeShape) -> FadeSpec {
-        FadeSpec { in_shape: shape, in_curvature: 0.0, out_shape: shape, out_curvature: 0.0, batch: None }
+        FadeSpec { in_shape: shape, in_curvature: 0.0, out_shape: shape, out_curvature: 0.0, batch: None, placement: XfadePlacement::Selection }
     }
     fn fade_in(&self, len: Samples) -> Fade {
         Fade { len, shape: self.in_shape, curvature: self.in_curvature }
@@ -1214,6 +1360,29 @@ impl FadeSpec {
 }
 
 /// [`create_fades`] with a shape and bend for each side, and batch fades on clips inside the range.
+/// The crossfades a fade over `range` on `track` would make shorter on one side than the
+/// selection asks, for want of audio beyond the cut (a clip's handle): how many.
+pub fn short_crossfades(s: &Session, track: TrackId, range: Range, placement: XfadePlacement) -> usize {
+    let Some(tr) = s.track(track) else { return 0 };
+    // In time order, as create_fades pairs them.
+    let mut clips: Vec<&Clip> = tr.clips().iter().collect();
+    clips.sort_by_key(|c| c.start);
+    clips
+        .windows(2)
+        .filter(|w| {
+            let (Some(a), Some(b)) = (w.first(), w.get(1)) else { return false };
+            let boundary = a.end();
+            if b.start != boundary || range.start >= boundary || range.end <= boundary {
+                return false;
+            }
+            let (before, after) = placement.sides(range, boundary, a, b);
+            let a_handle = material_len(s, a).map_or(0, |n| a.timeline_span(n.saturating_sub(a.source_offset())).saturating_sub(a.length));
+            let b_handle = b.timeline_span(b.source_offset());
+            after > a_handle || before > b_handle
+        })
+        .count()
+}
+
 pub fn create_fades_with(s: &mut Session, track: TrackId, range: Range, spec: &FadeSpec) -> usize {
     if range.is_empty() {
         return 0;
@@ -1235,8 +1404,7 @@ pub fn create_fades_with(s: &mut Session, track: TrackId, range: Range, spec: &F
         let (Some(a), Some(b)) = (pl.clips.get(i).cloned(), pl.clips.get(i + 1).cloned()) else { continue };
         let boundary = a.end();
         if b.start == boundary && range.start < boundary && range.end > boundary {
-            let before = boundary - range.start.max(a.start);
-            let after = range.end.min(b.end()) - boundary;
+            let (before, after) = spec.placement.sides(range, boundary, &a, &b);
             let a_handle = handles.iter().find(|h| h.0 == a.id).map_or(0, |h| h.1);
             let b_handle = b.timeline_span(b.source_offset());
             // Extend each clip into the other's territory using its handles.
@@ -1352,12 +1520,42 @@ pub fn group_members(s: &Session, id: ClipId) -> Vec<ClipId> {
 pub const SNAP_TO_CLIPS: &str = "edit.snap_to_clips";
 /// Edit-state flag: edit points snap to markers near them (Options › Snap to Markers).
 pub const SNAP_TO_MARKERS: &str = "edit.snap_to_markers";
+/// Edit-state flag: the musical grid follows the zoom (Options › Snap › Adaptive Grid), its note
+/// value the one whose lines are nearest [`ADAPTIVE_GRID_PX`] apart on screen.
+pub const ADAPTIVE_GRID: &str = "edit.adaptive_grid";
+/// How far apart, in points, an adaptive grid's lines aim to be.
+pub const ADAPTIVE_GRID_PX: f64 = 16.0;
+
+/// The grid an adaptive grid ([`ADAPTIVE_GRID`]) takes at the current zoom: `None` when it is
+/// off or the grid is not musical (time, frame and sample grids stay as chosen). Plain note
+/// values only (no dotted or triplet), measured at the left edge of the view.
+pub fn adapted_grid(s: &Session) -> Option<soundcraft_time::GridValue> {
+    use soundcraft_time::{GridValue, NoteValue};
+    let spp = s.edit.zoom.samples_per_px;
+    if !s.edit.flag(ADAPTIVE_GRID) || !matches!(s.edit.grid, GridValue::Note { .. }) || !(spp.is_finite() && spp > 0.0) {
+        return None;
+    }
+    let ctx = s.grid_ctx();
+    let at = s.edit.zoom.scroll.max(0);
+    NoteValue::ALL
+        .into_iter()
+        .map(|value| GridValue::Note { value, dotted: false, triplet: false })
+        .map(|g| {
+            let px = g.step_samples(at, &ctx) as f64 / spp;
+            (g, (px.max(1e-9) / ADAPTIVE_GRID_PX).ln().abs())
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(g, _)| g)
+}
+
+/// Edit-state flag: edit points snap to the playhead near them (Options › Snap › Playhead).
+pub const SNAP_TO_CURSOR: &str = "edit.snap_to_cursor";
 /// Edit-state flag: a selection's edges and the insertion snap to the nearest zero crossing of
 /// the audio under them (Options › Snap to Zero Crossings).
 pub const SNAP_TO_ZERO: &str = "edit.snap_to_zero_crossings";
 
-/// The clip edge or marker nearest `at` within `reach`, as [`SNAP_TO_CLIPS`] and
-/// [`SNAP_TO_MARKERS`] ask. Clip edges count on every visible track's active playlist, clips in
+/// The clip edge, marker or playhead nearest `at` within `reach`, as [`SNAP_TO_CLIPS`],
+/// [`SNAP_TO_MARKERS`] and [`SNAP_TO_CURSOR`] ask. Clip edges count on every visible track's active playlist, clips in
 /// `skip` (the ones being dragged) left out; a marker counts by its start, a range by its end too.
 pub fn magnet_target(s: &Session, at: Samples, reach: Samples, skip: &[ClipId]) -> Option<Samples> {
     let reach = reach.max(0);
@@ -1375,6 +1573,9 @@ pub fn magnet_target(s: &Session, at: Samples, reach: Samples, skip: &[ClipId]) 
                 take(c.end());
             }
         }
+    }
+    if s.edit.flag(SNAP_TO_CURSOR) {
+        take(s.edit.playhead);
     }
     if s.edit.flag(SNAP_TO_MARKERS) {
         for m in &s.markers {

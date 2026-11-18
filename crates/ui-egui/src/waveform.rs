@@ -28,6 +28,66 @@ pub fn draw_mapped(
     body: Rect,
     wave: Color32,
 ) {
+    // A stretched clip is drawn as it plays: its file samples spread over the clip's length. It
+    // is drawn as an unstretched clip in a space `ratio` times finer (the same start, its
+    // lengths in file samples), so the waveform's file reads stay one sample per position.
+    let ratio = clip.stretch_ratio();
+    if (ratio - 1.0).abs() > 1e-9 && clip.is_audio() {
+        let (tl_x, scroll, spp) = map;
+        let start = clip.start as f64;
+        let fine = (tl_x, start - (start - scroll) / ratio, spp / ratio);
+        let span = |n: Samples| clip.source_span(n);
+        let mut c =
+            Clip { length: span(clip.length), stretch: 1.0, loop_len: span(clip.loop_len), loop_phase: span(clip.loop_phase), ..clip.clone() };
+        c.fade_in.len = span(c.fade_in.len);
+        c.fade_out.len = span(c.fade_out.len);
+        c.gain_env.iter_mut().for_each(|p| p.0 = span(p.0));
+        draw_mapped(painter, s, fine, &c, audio, channels, body, wave);
+        return;
+    }
+    // A looped clip (Loop in Place) is drawn one repeat at a time, each the loop's window as a
+    // clip of its own (reversed too when the clip is), with the whole clip's gain and fades.
+    if clip.loop_len > 0 && clip.is_audio() {
+        let (tl_x, scroll, spp) = map;
+        let x_of = |pos: Samples| tl_x + ((pos as f64 - scroll) / spp.max(0.01)) as f32;
+        let r = painter.clip_rect();
+        let first = clip.start.saturating_sub(clip.loop_phase.rem_euclid(clip.loop_len));
+        let mut at = first;
+        // Only the repeats on screen, and never more than a screenful of them.
+        let mut n = 0;
+        while at < clip.end() && n < 4096 {
+            let end = at.saturating_add(clip.loop_len);
+            let (x0, x1) = (x_of(at.max(clip.start)), x_of(end.min(clip.end())));
+            if x1 >= r.min.x && x0 <= r.max.x {
+                let seg = Clip { start: at, length: clip.loop_len, loop_len: 0, loop_phase: 0, ..clip.clone() };
+                let p = painter.with_clip_rect(r.intersect(Rect::from_x_y_ranges(x0..=x1, r.y_range())));
+                draw_one(&p, s, map, &seg, clip, audio, channels, body, wave);
+            }
+            if x0 > r.max.x {
+                break;
+            }
+            at = end;
+            n += 1;
+        }
+        return;
+    }
+    draw_one(painter, s, map, clip, clip, audio, channels, body, wave);
+}
+
+/// One clip's waveform: `clip` places the material, `gains` (the clip itself, or the looped clip
+/// a repeat belongs to) its gain and fades on the timeline.
+#[allow(clippy::too_many_arguments)]
+fn draw_one(
+    painter: &Painter,
+    s: &Session,
+    map: (f32, f64, f64),
+    clip: &Clip,
+    gains: &Clip,
+    audio: &SourceAudio,
+    channels: usize,
+    body: Rect,
+    wave: Color32,
+) {
     let alt: Option<Alt<'_>> = clip.clean_alt().filter(|k| k.wet() > 0.0).and_then(|k| s.pool.get(k.source).map(|a| (k.wet(), k.origin, &**a)));
     // A clip reversed in place (not looped) is drawn as it plays: its window mirrored end for
     // end. The waveform is worked out for the mirror image of what is visible, then flipped
@@ -43,9 +103,27 @@ pub fn draw_mapped(
         None => painter.clone(),
     };
     for (ch, band) in bands(body, channels.min(audio.peaks.len()).max(1)).enumerate() {
-        channel(&shown, painter, s, map, clip, audio, alt, ch, band, wave, flip);
+        channel(&shown, painter, s, map, (clip, gains), audio, alt, ch, band, wave, flip);
     }
 }
+
+/// The Pencil at sample level: the channel band of `body` (one band per channel, `channels` of
+/// them) that `y` is in, and the file sample value a point drawn there stands for at timeline
+/// `pos` (the inverse of the sample-level line: the clip's gain and the waveform zoom taken off).
+pub fn pencil_value(s: &Session, clip: &Clip, channels: usize, body: Rect, pos: Samples, y: f32) -> (usize, f32) {
+    let n = channels.max(1);
+    let h = body.height() / n as f32;
+    let ch = if h > 0.0 { (((y - body.min.y) / h).floor().max(0.0) as usize).min(n - 1) } else { 0 };
+    let band = bands(body, n).nth(ch).unwrap_or(body);
+    let half = band.height() * 0.46;
+    let shown = if half > 0.0 { ((band.center().y - y) / half).clamp(-1.0, 1.0) } else { 0.0 };
+    let gain = clip.gain_at(pos.saturating_sub(clip.start).clamp(0, clip.length)) * s.edit.zoom.waveform_zoom;
+    let v = if gain.abs() > 1e-6 { shown / gain } else { shown };
+    (ch, if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 })
+}
+
+/// Samples per point up to which the Pencil redraws an audio clip's samples.
+pub const PENCIL_SAMPLES_PER_POINT: f64 = 1.0;
 
 /// `(1 - w) * a + w * b` over two optional spans; the original alone where the cleaned audio has none.
 fn blend_span(a: Option<(f32, f32)>, b: Option<(f32, f32)>, w: f32) -> Option<(f32, f32)> {
@@ -67,7 +145,7 @@ fn channel(
     out: &Painter,
     s: &Session,
     map: (f32, f64, f64),
-    clip: &Clip,
+    (clip, gains): (&Clip, &Clip),
     audio: &SourceAudio,
     alt: Option<Alt<'_>>,
     ch: usize,
@@ -90,7 +168,7 @@ fn channel(
     let mirror = (clip.start + clip.end()) as f64;
     let gain = |pos: f64| {
         let at = if flip.is_some() { mirror - pos } else { pos };
-        clip.gain_at((at as Samples).saturating_sub(clip.start).min(clip.length).max(0)) * s.edit.zoom.waveform_zoom
+        gains.gain_at((at as Samples).saturating_sub(gains.start).min(gains.length).max(0)) * s.edit.zoom.waveform_zoom
     };
     // The samples shown (positions `first..last` of the source), read around what is visible: a
     // file played from disk is never read whole for its waveform.

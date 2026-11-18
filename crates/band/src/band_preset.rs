@@ -221,7 +221,6 @@ pub fn user_band_presets(dir: &Path) -> (Vec<BandPreset>, Vec<String>) {
     (r, skipped)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn is_factory_file(f: &Path) -> bool {
     use std::io::Read as _;
     let mut b = Vec::new();
@@ -230,7 +229,6 @@ fn is_factory_file(f: &Path) -> bool {
 }
 
 /// Writes beside, then moves (MS `writeBeside`).
-#[cfg(not(target_arch = "wasm32"))]
 fn write_beside(dest: &Path, text: &str) -> bool {
     if let Some(parent) = dest.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -250,7 +248,6 @@ fn write_beside(dest: &Path, text: &str) -> bool {
 
 /// MS `saveBandPreset` into `dir`: refuses to overwrite a factory preset; with `replace = false`, also refuses any
 /// existing file of that name. Saved as a user preset (never "factory"), written atomically.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn save_band_preset(dir: &Path, p: &BandPreset, replace: bool) -> Result<(), String> {
     if p.name.trim().is_empty() {
         return Err("Give the band a name.".into());

@@ -37,7 +37,6 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
                 counters(app, ui);
                 grid_nudge(app, ui);
                 transport(app, ui);
-                #[cfg(not(target_arch = "wasm32"))]
                 follow_badge(app, ui);
                 scout_button(app, ui);
                 tempo_meter(app, ui);
@@ -160,7 +159,8 @@ fn tools(app: &mut SoundApp, ui: &mut Ui) {
             ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
             let row = ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                if icon_button(ui, vec2(36.0, 26.0), "zoom_toggle", app.engine.session().edit.zoom_toggle.is_some(), "Zoom Toggle (E)").clicked() {
+                // Nine buttons share the row the original seven had: 30 wide, 32 apart.
+                if icon_button(ui, vec2(30.0, 26.0), "zoom_toggle", app.engine.session().edit.zoom_toggle.is_some(), "Zoom Toggle (E)").clicked() {
                     crate::edit_window::zoom_toggle(app);
                 }
                 for (tool, icon) in [
@@ -170,18 +170,43 @@ fn tools(app: &mut SoundApp, ui: &mut Ui) {
                     (Tool::Grabber, "grabber"),
                     (Tool::Scrubber, "scrubber"),
                     (Tool::Pencil, "pencil"),
+                    (Tool::Scissors, "scissors"),
+                    (Tool::Mute, "mute_tool"),
                 ] {
                     let smart_member = cur == Tool::Smart && matches!(tool, Tool::Trim | Tool::Selector | Tool::Grabber);
-                    let tip = format!("{}{}", tool.label(), tool.fkey().map(|k| format!(" ({k})")).unwrap_or_default());
-                    if icon_button(ui, vec2(36.0, 26.0), icon, cur == tool || smart_member, &tip).clicked() {
+                    let mut tip = format!("{}{}", tool.label(), tool.fkey().map(|k| format!(" ({k})")).unwrap_or_default());
+                    let shape = soundcraft_engine::cmd::current_pencil_shape(app.engine.session());
+                    if tool == Tool::Pencil {
+                        tip.push_str(&format!(" · automation shape: {} (right-click to change)", shape.id()));
+                    }
+                    let resp = icon_button(ui, vec2(30.0, 26.0), icon, cur == tool || smart_member, &tip);
+                    if resp.clicked() {
                         let _ = app.run("edit.tool", json!({"tool": tool.id()}));
+                    }
+                    if tool == Tool::Pencil {
+                        resp.context_menu(|ui| {
+                            ui.label("Pencil shape on automation");
+                            for s in soundcraft_model::PencilShape::ALL {
+                                let label = match s {
+                                    soundcraft_model::PencilShape::Free => "Free Hand",
+                                    soundcraft_model::PencilShape::Line => "Line",
+                                    soundcraft_model::PencilShape::Triangle => "Triangle",
+                                    soundcraft_model::PencilShape::Square => "Square",
+                                    soundcraft_model::PencilShape::Random => "Random",
+                                };
+                                if ui.radio(shape == s, label).clicked() {
+                                    let _ = app.run("automation.pencil_shape", json!({"shape": s.id()}));
+                                    ui.close();
+                                }
+                            }
+                        });
                     }
                 }
             });
             // Smart tool bracket above Trim/Selector/Grabber.
             let rr = row.response.rect;
-            let bx0 = rr.min.x + 76.0;
-            let bx1 = bx0 + 38.0 * 3.0 - 2.0;
+            let bx0 = rr.min.x + 64.0;
+            let bx1 = bx0 + 32.0 * 3.0 - 2.0;
             let bracket = Rect::from_min_max(pos2(bx0 - 2.0, r.min.y + 1.0), pos2(bx1 + 2.0, r.min.y + 5.0));
             let resp = ui.interact(bracket.expand2(vec2(0.0, 2.0)), ui.id().with("smart"), Sense::click());
             ui.painter().rect_filled(bracket, 1.0, if cur == Tool::Smart { t.accent } else { t.tool_bracket_off });
@@ -239,6 +264,9 @@ fn counters(app: &mut SoundApp, ui: &mut Ui) {
     let lp = app.engine.session().edit.loop_range.filter(|r| !r.is_empty());
     // Recording: `REC m:ss` (the take's length so far) in the record colour, and the booth when
     // this PC records with one.
+    if app.engine.transport.recording {
+        app.refresh_disk_free();
+    }
     let rec_line = (counting.is_none() && app.engine.transport.recording).then(|| record_line(app, pos));
     let main_y = if lp.is_some() || counting.is_some() || rec_line.is_some() { main_r.center().y - 4.0 } else { main_r.center().y };
     let main_col = if counting.is_some() { t.rec } else { t.counter_text };
@@ -311,6 +339,12 @@ fn counters(app: &mut SoundApp, ui: &mut Ui) {
         let y = r.min.y + 10.0 + i as f32 * 13.0;
         ui.painter().text(pos2(r.min.x + 214.0, y), Align2::RIGHT_CENTER, *label, regular(11.0), t.counter_label);
         ui.painter().text(pos2(r.max.x - 8.0, y), Align2::RIGHT_CENTER, val, mono(11.0), t.counter_text);
+        // A click types the value (edit.select's start, end or length).
+        let row = Rect::from_min_max(pos2(r.min.x + 160.0, y - 6.0), pos2(r.max.x - 4.0, y + 6.0));
+        let field = label.to_lowercase();
+        if ui.interact(row, ui.id().with(("sel_field", i)), Sense::click()).on_hover_text(format!("Type the selection's {field}")).clicked() {
+            app.dialogs.open_selection_field(&field, val);
+        }
     }
     // Sub counter row.
     let y = r.max.y - 11.0;
@@ -425,16 +459,18 @@ pub fn record_line(app: &SoundApp, pos: soundcraft_time::Samples) -> String {
     let t = secs as u64;
     let (h, m, s) = (t / 3600, (t / 60) % 60, t % 60);
     let clock = if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") };
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(soundcraft_net::glue::FollowBadge::Recording(booth)) = crate::net_ui::badge(app) {
         return format!("● REC with {booth} · {clock}");
     }
-    format!("● REC {clock}")
+    match app.record_time_left() {
+        // The remaining record time on the takes' disk, as Pro Tools and Cubase show it.
+        Some(left) => format!("● REC {clock} · {left} left"),
+        None => format!("● REC {clock}"),
+    }
 }
 
 /// While following a booth (Setup › Network): what this PC is doing for it, in the record colour
 /// while it records a take for the booth, amber while a take waits to be sent.
-#[cfg(not(target_arch = "wasm32"))]
 fn follow_badge(app: &mut SoundApp, ui: &mut Ui) {
     use soundcraft_net::glue::FollowBadge;
     let Some(badge) = crate::net_ui::badge(app) else { return };
@@ -511,8 +547,14 @@ fn transport(app: &mut SoundApp, ui: &mut Ui) {
                 key(ui.painter(), r, &resp, if recording { Color32::from_rgb(110, 30, 30) } else { key_fill(&resp) });
                 icons::draw(ui.painter(), r.shrink(5.0), "record", t.rec);
                 // The offset text is built only while the tooltip shows.
+                if resp.hovered() {
+                    app.refresh_disk_free();
+                }
                 let resp = resp.on_hover_ui(|ui| {
                     ui.label(format!("Record (Cmd+Space) · {}", app.record_offset_summary()));
+                    if let Some(left) = app.record_time_left() {
+                        ui.label(format!("Room on disk for {left} of the armed tracks"));
+                    }
                 });
                 if let Some(why) = app.record_hint() {
                     // Below the whole group, so the hint covers none of its buttons.
@@ -738,8 +780,14 @@ pub fn mix_bar(app: &mut SoundApp, ui: &mut Ui) {
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, recording, "Record"));
     key(ui.painter(), r, &resp, if recording { Color32::from_rgb(110, 30, 30) } else { key_fill(&resp) });
     icons::draw(ui.painter(), r.shrink(5.0), "record", t.rec);
+    if resp.hovered() {
+        app.refresh_disk_free();
+    }
     let resp = resp.on_hover_ui(|ui| {
         ui.label(format!("Record (Cmd+Space) · {}", app.record_offset_summary()));
+        if let Some(left) = app.record_time_left() {
+            ui.label(format!("Room on disk for {left} of the armed tracks"));
+        }
         if let Some(why) = app.record_hint() {
             ui.label(why);
         }
@@ -799,8 +847,12 @@ pub fn mix_bar(app: &mut SoundApp, ui: &mut Ui) {
     for (label, value) in fields {
         let lw = ui.painter().layout_no_wrap(label.to_string(), regular(10.0), t.counter_label).size().x;
         let vw = ui.painter().layout_no_wrap(value.clone(), mono(11.0), t.counter_text).size().x;
-        let (r, resp) = ui.allocate_exact_size(vec2(lw + vw + 18.0, 26.0), Sense::hover());
+        let (r, resp) = ui.allocate_exact_size(vec2(lw + vw + 18.0, 26.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Selection {label} {value}")));
+        // A click types the value (edit.select's start, end or length).
+        if resp.on_hover_text(format!("Type the selection's {}", label.to_lowercase())).clicked() {
+            app.dialogs.open_selection_field(&label.to_lowercase(), &value);
+        }
         ui.painter().rect(r, CornerRadius::same(3), t.counter_bg, Stroke::new(1.0, t.counter_border), StrokeKind::Inside);
         ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, label, regular(10.0), t.counter_label);
         ui.painter().text(pos2(r.max.x - 6.0, r.center().y), Align2::RIGHT_CENTER, value, mono(11.0), t.counter_text);

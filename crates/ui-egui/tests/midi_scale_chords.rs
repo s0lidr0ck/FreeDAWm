@@ -60,7 +60,7 @@ fn chords_scales_and_folding_helpers() {
     assert_eq!(p(stamp(Some(Chord::InKey), Some((0, 0)), n)), vec![62, 65, 69], "D minor in C major");
     assert_eq!(p(stamp(Some(Chord::InKey), Some((0, 0)), Note { pitch: 67, ..n })), vec![67, 71, 74], "G major in C major");
     assert_eq!(p(stamp(Some(Chord::Major), None, Note { pitch: 125, ..n })), vec![125], "notes off the keyboard are dropped");
-    let seq = soundcraft_midi::Sequence { notes: vec![Note { pitch: 66, ..n }], ctrls: Vec::new() };
+    let seq = soundcraft_midi::Sequence { notes: vec![Note { pitch: 66, ..n }], ctrls: Vec::new(), sysex: Vec::new() };
     let m = fold_mask(c_major, &seq);
     assert_eq!(m.count_ones(), 75 + 1, "C major's 75 keys and the F#");
 }

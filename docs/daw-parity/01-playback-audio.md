@@ -1,6 +1,6 @@
 # Four-DAW parity, section 1: playing audio
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (tier 2 work, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-18 · **Change:** minor (round three, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). They are named here only to compare features; FreeDAWm is not
@@ -50,7 +50,7 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 |---|:-:|:-:|:-:|:-:|---|
 | Play, stop, toggle on Space | ● | ● | ● | ● | **Works** |
 | Play the selection once | ● | ● | ● | ● | **Works**; with only an insertion point it plays on from there |
-| Pause (resume from where it stopped) | ◐ | ● | ● | ● | **Works**: Edit › Selection › Pause or Resume holds the playhead and the selection, and plays on from there with the same end and loop; while recording it is Stop |
+| Pause (resume from where it stopped) | ◐ | ● | ● | ● | **Works**: Transport › Pause or Resume holds the playhead and the selection, and plays on from there with the same end and loop; while recording it is Stop |
 | Return to zero, go to end | ● | ● | ● | ● | **Works**, seamless while playing |
 | Rewind / fast forward while held | ● | ● | ● | ● | **Works**: a click jumps 1 s; held, the keys wind from 2× doubling each second up to 32× (no audio while winding) |
 | Locate by clicking the ruler | ● | ● | ● | ● | **Works** |
@@ -58,24 +58,24 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Counter formats (bars, time, timecode, samples) | ● | ● | ● | ● | **Works**: five formats, main and sub counter |
 | Markers, recall while playing | ● | ● | ● | ● | **Works**, five marker rulers |
 | Pre-roll and post-roll on playback | ● | ● | ◐ | ● | **Works** (not when looping) |
-| Play start separate from the selection | ● | ● | ● | ● | **Flag only**: Dynamic Transport stores a flag; the timeline selection is never drawn or played |
+| Play start separate from the selection | ● | ● | ● | ● | **Works**: Transport › Dynamic Transport: Play starts at the play start marker (a green triangle on the main timebase ruler, moved by a click there or Transport › Set Play Start), whatever the edit selection; off, Play starts from the selection as before |
 | Return to start on stop, or stay | ● | ● | ● | ● | **Works** (Insertion Follows Playback) |
-| Audition around an edit (play up to / from the start or end) | ● | ◐ | ◐ | ● | **Missing** |
+| Audition around an edit (play up to / from the start or end) | ● | ◐ | ◐ | ● | **Works**: Transport › Play to Start, Play from Start, Play to End, Play from End: the pre-roll up to the edge or the post-roll after it (2 s where none is set), once, whatever Loop Playback says (`transport.play_to_start` …) |
 | Follow modes: none, page, continuous, centred | ● | ● | ● | ● | **Works**: five modes, pauses when you scroll by hand |
 | Keep playing while you edit | ● | ● | ● | ● | **Works**: a new session snapshot is swapped in without a gap |
 | Click during playback | ● | ● | ● | ● | **Works**: synthesized, accent on beat 1; no sample sounds, no separate click output |
-| Chase external timecode or clock | ● | ● | ● | ● | **Flag only** (belongs to the hardware sections) |
+| Chase external timecode or clock | ● | ● | ● | ● | **Not planned here**: following another machine's MTC, LTC or MIDI clock needs a second machine or hardware sending it, to develop and tune the lock against; MIDI clock and MTC go out (section 6) |
 
 ## B. Looping
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Gapless loop | ● | ● | ● | ● | **Works**: wraps inside the audio callback on the exact sample, disk cache pre-reads the loop start |
-| Loop range separate from the selection | ● | ● | ● | ● | **Partial**: a sticky loop range exists, used when the insertion point is inside it |
+| Loop range separate from the selection | ● | ● | ● | ● | **Works**: with Dynamic Transport a range selection no longer sets the loop; a drag along the main timebase ruler does, as do Transport › Set Loop to Selection and the loop strip's end drags, and Loop Playback loops it (from the play start marker when it is inside). Without it the sticky loop follows the selection as before |
 | Move or resize the loop while playing | ● | ● | ● | ● | **Works**: a new range selection or loop-end drag moves the loop under way, without a jump |
 | Turn looping on or off while playing | ● | ● | ● | ● | **Works**: off plays on; on loops the loop range (a loop behind the playhead waits for the next Play or locate); not while recording |
 | Loop follows the selection | ● | ● | ● | ● | **Works** (it is the default behaviour) |
-| Skip a range during playback | ○ | ○ | ● | ● | **Missing** |
+| Skip a range during playback | ○ | ○ | ● | ● | **Works**: Transport › Skip Range marks the selection (drawn red on the main timebase ruler; touching skips join) and playback jumps over it as a declicked locate; Clear Skip Ranges takes them off. A play started inside one plays it; recording plays through (`transport.skip_add`, `transport.skip_clear`) |
 | Smooth loop join (no click at the wrap) | ● | ● | ● | ● | **Works**: clips running across the loop's edges ramp out and back in over 1 ms (a short dip, no crossfade); plug-in tails run on |
 
 ## C. Speed, scrub and shuttle
@@ -83,10 +83,10 @@ follows the tempo in real time**, and **previewing a file or clip before using i
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Scrub audio by dragging | ● | ◐ | ● | ● | **Works**: the Scrubber plays the track it drags over (or the selected tracks), and a Scrubber drag along a timebase ruler every audible track, forwards and backwards at the drag's speed, through the track's strip: clips, the inserts when all are built in (started afresh each frame, so no tails carry), the fader and mute. Not while playing; a strip with a third-party insert scrubs its clips and fader only |
-| Shuttle / jog at variable speed | ● | ○ | ● | ● | **Works**: Options › More › Shuttle (Back, Stop, Forward; bind them to J, K and L in the key editor): forward plays at 1×, each press doubling to 4× (tape style, or with the pitch kept); back plays backwards from the playhead at 1× to 8×, heard frame by frame through the preview voice (the clips, as the Scrubber hears them); `transport.shuttle {speed}` sets a speed |
+| Shuttle / jog at variable speed | ● | ○ | ● | ● | **Works**: Transport › Shuttle (Back, Stop, Forward; bind them to J, K and L in the key editor): forward plays at 1×, each press doubling to 4× (tape style, or with the pitch kept); back plays backwards from the playhead at 1× to 8×, heard frame by frame through the preview voice (the clips, as the Scrubber hears them); `transport.shuttle {speed}` sets a speed |
 | Half-speed playback | ● | ○ | ● | ○ | **Works** (tape style, pitch drops) |
-| Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Works**: Options › More › Varispeed… plays at 0.1–4× until set back to 1 (not during a take); Varispeed Keeps Pitch shifts the output back by 1 ÷ the speed (a two-tap delay-line shifter on the device output, about 21 ms later), otherwise the pitch moves as tape does |
-| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Partial**: Shuttle Back plays the clips backwards (not through the mixer) |
+| Varispeed: any speed, with or without pitch change | ○ | ○ | ● | ○ | **Works**: Transport › Varispeed… plays at 0.1–4× until set back to 1 (not during a take); Varispeed Keeps Pitch shifts the output back by 1 ÷ the speed (a two-tap delay-line shifter on the device output, about 21 ms later), otherwise the pitch moves as tape does |
+| Reverse playback of the timeline | ◐ | ○ | ◐ | ◐ | **Works** (2026-11-17, 9133c7f, to the design below): Shuttle Back plays the session backwards through the whole mixer (`Player::set_reverse`, `MixEngine::reverse`): each block before the playhead is read forwards and turned round, so every strip, send, bus, the master and hosted plug-ins process the reversed audio forwards in time (a reverb on a send rings into the past, as tape reversed through a desk does); fader automation turns round with the audio; a loop being played wraps from its start to its end; it stops at the session start. Up to 4× (the 8× step plays at 4×). Not backwards: MIDI clips (silent), the click, and a take (refused while recording). Plug-in parameter automation is read once per block, and clip modules' latency is not taken off backwards. Without an audio device (the simulated transport) the old frame-by-frame preview voice still plays it |
 
 Studio Pro's Listen tool auditions a track from the pointer; it is not a true scrub. Logic's
 Varispeed is the only whole-project speed control among the four.
@@ -96,19 +96,19 @@ Varispeed is the only whole-project speed control among the four.
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Choose device, sample rate and buffer | ● | ● | ● | ● | **Works** (Playback Engine window) |
-| ASIO on Windows | ● | ● | n/a | ● | **Partial**: only in a personal build (`cargo xtask build-asio`) |
-| Aggregate or separate input and output devices | ● | ● | ● | ◐ | **Partial**: one output device; a different input device is drift-corrected |
-| Recover when the device disappears | ● | ● | ● | ● | **Partial**: detected and reported; reconnect is a manual button |
+| ASIO on Windows | ● | ● | n/a | ● | **Not planned here**: Steinberg's licensed SDK cannot be shipped; a personal build has it (`cargo xtask build-asio`) |
+| Aggregate or separate input and output devices | ● | ● | ● | ◐ | **Partial**: one output device; a different input device is drift-corrected. Left: several output devices at once, not planned here: it needs two output devices to develop and to tune the drift correction between them |
+| Recover when the device disappears | ● | ● | ● | ● | **Works**: when the output device goes away it is looked for every 2 s (on a worker thread) and the app reconnects by itself when it is back (`ui-egui/src/device_return.rs`); ASIO is never probed while a driver may be loaded, so it keeps the manual Reconnect button. Not tried with a real unplug |
 | Session rate differs from the device rate | n/a | ● | ● | n/a | **Works**: a 32-tap windowed-sinc resampler whose cut-off follows the speed (no files are converted) |
-| Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel; aux, folder and master strips are serial; worker threads have no realtime priority |
+| Multi-core rendering | ● | ● | ● | ● | **Partial**: tracks render in parallel by level on the worker pool, and (2026-11-17, 3f82ede, to the design below) so do aux and folder strips: the auxes (and tracks keyed from them) of one rank, which never feed or key one another, render together on the worker pool, then are summed into the busses and the main mix one by one in the old order, so every mix and bounce is bit for bit the same as before. The master strips stay serial (one after another by design). Realtime priority (2026-11-18, `thread-priority` 3.1, MIT, approved by the owner; nothing else new in the build): the audio device's thread asks for it once, at its first callback (SCHED_FIFO 45 on Linux and the BSDs, TimeCritical on Windows; a thread the audio system made realtime already, Core Audio's, JACK's or PipeWire's, is left alone), and the strips it renders in parallel go to a pool of realtime workers of their own (one fewer than the cores, made on the control thread when the device starts; each asks once as it starts). Offline renders (bounces, Process, freezes) keep the ordinary pool at ordinary priority. Refused priority (no rtprio limit, no rights) changes nothing and stops nothing: Window › System Usage says "Realtime priority: on / partly on / not granted" with what to do. Left: macOS workers get a fixed pthread priority, not Core Audio's time-constraint class (untested on a Mac); priority refused at start is not asked for again until FreeDAWm restarts |
 | Delay compensation | ● | ● | ● | ● | **Works**: inserts, pre-fader sends, aux returns, masters, sidechain keys, hardware outputs; up to about 22 s |
-| Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer |
+| Large-buffer playback path with a low-latency live path | ● | ● | ● | ● | **Partial**: Low Latency Monitoring bypasses latent inserts on live paths; no separate large playback buffer. Left: rendering the playback-only strips ahead at a larger buffer and adding them to the live strips each callback; designed below (Large playback buffer with a small live path; the same item as section 2's small-buffer row), not built: the largest engine item, 15–22 h. Round three (busses on the worker pool, 2026-11-17) did not build it: it needs plug-in instances handed between two threads and invalidation on every edit, which could not be made safe and tested in the time; it should be built behind an option, off by default, and compared sample for sample with the present render. Round four (2026-11-18) did not build it either. What was learned: the live set exists already as low-latency monitoring's scope (`llm_scope`: armed and monitoring strips and what they feed); the strips run on the worker pool (`run_strips`), but one `MixEngine` owns every strip, bus and the master and renders them in one pass at one block size, and delay compensation is worked out each block from the strips it rendered (`MixEngine::latency`). So the playback set needs a second engine of its own (strips, busses, delay lines) on a worker, a timestamped ring per bus input and main contribution, both engines agreeing on the compensation, and a strip's instances moved between the two engines when it is armed or disarmed; the only hand-over that exists moves a whole engine (`LiveInstances`). None of that could be built, made safe and compared sample for sample in the time; it stays Partial, to be built behind an option, off by default |
 | Stream audio from disk with a cache | ● | ● | ● | ● | **Works** for WAV at the session rate (cache of a quarter of RAM, 4 s read-ahead) |
-| Skip plug-ins on silent tracks | ● | ● | ● | ● | **Missing**: every active strip runs every block |
+| Skip plug-ins on silent tracks | ● | ● | ● | ● | **Works**: Setup › Preferences… › Mixing › Suspend Plug-ins on Silence (off by default, so sessions sound as they did): an insert whose input and output have both been below −100 dBFS for a second is not run while its input stays silent, and the first sound runs it again in the same block; keyed modules and modules that send MIDI always run, and the strip's delay compensation is unchanged. A suspended module's state (a compressor's release) holds where it was |
 | CPU meter and dropout counter | ● | ● | ● | ● | **Works**; no per-plug-in or per-core breakdown |
 | No click on stop, locate and start | ● | ● | ● | ● | **Works**: 3 ms output ramps on start, stop, locate, a Play while playing and a known end of play (not while recording, where the take's edges stay exact); plug-ins are still reset after the ramp, so reverb tails stop |
-| Realtime-safe audio thread | ● | ● | ● | ● | **Partial**: plug-ins (built-in and hosted) and Clip Effects modules are made on the UI thread and handed over with the session; a new track's own buffers and delay lines are still sized on the audio thread |
-| Change the session sample rate later | ◐ | ● | ● | ● | **Missing**: set at New Session only |
+| Realtime-safe audio thread | ● | ● | ● | ● | **Works**: plug-ins (built-in and hosted), Clip Effects modules and a new track's strip (its audio buffers, delay-compensation and key lines, MIDI rings) and a new bus's buffers are made on the UI thread by `BuiltinPrep` and handed over with the session; when the engine's tables of strips, meters and busses would grow, larger empty ones come along; a removed track's strip and outgrown tables go back to be freed off the audio thread (`RetiredStrips`). Fixed on the way: a strip's pre-fader and output buffers were made with only the last channel reserved, so the others grew while rendering. Lines are reserved for a mix delay up to a quarter second; a larger one still grows them in the render's sync, as before. The small lists `sync` rebuilds each time the session's structure changes are still made there |
+| Change the session sample rate later | ◐ | ● | ● | ● | **Works** (2026-11-17, to the design below): Setup › Session › Sample Rate › Convert (`session.set_sample_rate`) resamples every source to new audio (the old files stay for Undo) and moves every position stored in samples to the same time (`model::rate_change`), one undo step; the player rebuilds its engine at the new rate. A test fails on an integer field of the demo session that is neither scaled nor listed. Left: the conversion runs in the command (no progress window), and the completeness test sees only what the demo session holds |
 | Monitor section (dim, mono, cue mixes) | ◐ | ◐ | ◐ | ● | **Works**: Window › Control Room (section 3, E) |
 | Runs in a browser | ○ | ○ | ○ | ○ | **Works**, single-threaded |
 
@@ -119,7 +119,7 @@ Varispeed is the only whole-project speed control among the four.
 | WAV, BWF, RF64, AIFF | ● | ● | ● | ● | **Works** |
 | FLAC, MP3, AAC/M4A, Ogg, Opus, CAF | ◐ | ● | ● | ● | **Works** (more than Pro Tools reads) |
 | Files at another sample rate | ● | ● | ● | ● | **Works**: converted with a high-quality sinc at import or open |
-| Mixed rates without converting files | ○ | ● | ○ | ○ | **Missing** (converted copies only) |
+| Mixed rates without converting files | ○ | ● | ○ | ○ | **Not planned here** (converted copies only; the converted copy sounds the same): it would save disk space and import time only. Designed below (Mixed rates without converting): files kept at their own rate and read through the varispeed reader, positions staying in session samples; 8–12 h, not built: it saves disk space and import time only, so it waits for the owner's call |
 | Compressed and long files without filling memory | ● | ● | ● | ● | **Works** from the second open: a file that is not WAV at the session rate is decoded into memory once and kept as a float WAV in the project's `Decoded` folder, which later opens stream; a session never saved still decodes every time |
 | Waveform cache | ● | ● | ● | ● | **Works** |
 
@@ -130,11 +130,11 @@ Varispeed is the only whole-project speed control among the four.
 | Clip gain | ● | ● | ● | ● | **Works**, −144 to +36 dB |
 | Gain envelope inside the clip | ● | ● | ○ | ● | **Works**, with render and conversion to and from volume automation |
 | Fades drawn in real time, several shapes | ● | ● | ● | ● | **Works**: five shapes plus a continuous curve |
-| Crossfades | ● | ● | ● | ● | **Partial**: both sides always share one shape |
+| Crossfades | ● | ● | ● | ● | **Works**: Edit › Fades › Create… gives each side its own shape and bend (`b6812b6`, section 4, F) |
 | Automatic crossfade when clips overlap | ○ | ● | ◐ | ● | **Works**: Options › Overlap › Crossfade (section 4, D) |
-| Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Works**: 1 ms on edges without a fade that face silence (Options › Automatic Edge Fades, on by default, length by command); butted clips play straight through; edits take the material unfaded |
-| Per-clip effects | ● | ● | ○ | ● | **Partial**: a fixed EQ → compressor → gain chain; the others take any plug-in |
-| Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Missing**: Process writes a new file |
+| Automatic short fades at clip edges | ● | ◐ | ◐ | ● | **Works**: 1 ms on edges without a fade that face silence (Setup › Preferences… › Editing › Automatic Edge Fades, on by default, length by command); butted clips play straight through; edits take the material unfaded |
+| Per-clip effects | ● | ● | ○ | ● | **Partial** (2026-11-17, 24696c4; hosted plug-ins 2026-11-18): after the clip's EQ → compressor → gain, a chain of up to eight of any built-in effect or any scanned CLAP or VST3 effect (`Clip::modules`; Clip Effects window › Modules: Add… for the built-in ones, Plug-in… for hosted ones by vendor; bypass, reorder, remove, every parameter as a generic control; `clip.module_add`, `clip.module_set`, `clip.module_remove`). Instances per clip are made off the audio thread in `BuiltinPrep` (a hosted one on the host's control thread, never on the audio thread: one not handed over yet, or that failed to load, passes the clip through and the clip's other effects still play) and keep their state when the chain is reordered; the clip is read the chain's latency ahead so it is heard in place, and the chain's tail (a reverb's) rings on after the clip ends (at most 10 s); the offline clip render (Consolidate, Process, Render) and a bounce make their own from the session and hear the same. Saved per clip slot: each module's parameters and (2026-11-18) a hosted module's full state, read back from its running instance (`clip.module_state`, no undo step) before a save, autosave or bounce, when its editor closes and before it is taken off, and restored into every instance made for the slot (live, bounce and offline clip render alike); sessions saved before this (parameters only) open and sound as they did. A hosted module's own editor window opens from its row in Clip Effects › Modules (Editor…); the editor and state reader are taken on the control thread when the instance is made there and never travel to the audio thread; an edit in the window becomes the module's parameter (one undo step per gesture), and a slider moved in Clip Effects shows in the window. Copy/Paste/Clear Special › Clip Effects take the modules along. Left: Audio Units on a clip; a state is put into a running instance only when it is made (Undo of a state change, or a clip-wide Clip Effects bypass toggled without a save or editor close in between, plays the last stored state); a render through the live engine does not put the clip modules' state back afterwards as it does an insert's; a module's files (an amp's cabinet, Vault's impulse) are not loaded on a clip, so it uses its built-in one |
+| Non-destructive offline processing stack | ○ | ◐ | ○ | ● | **Works**: Process › Process History... keeps every Process on the clip and lets a step be bypassed, reordered or removed, the clip rebuilt from there (5d4ebe1, section 4). Left: a step cannot be changed while a later step changed the length |
 | Mute a clip | ● | ● | ● | ● | **Works** |
 | Reverse a clip without rewriting the file | ○ | ◐ | ● | ◐ | **Works**: Clip › Real-Time › Reverse in Place (section 4, E) |
 | Per-clip transpose and fine tune | ◐ | ● | ● | ● | **Works**: Clip › Real-Time › Transpose…, heard at once in real time, then (in the app) by a background Pitch Shift render (section 4, E) |
@@ -145,7 +145,7 @@ Varispeed is the only whole-project speed control among the four.
 | Split a stereo track into mono | ● | ● | ● | ● | **Works**: each new track plays its own channel |
 | Freeze, commit, render in place | ● | ● | ● | ● | **Works**: freeze up to a chosen module; third-party plug-ins stay loaded |
 | Built-in pitch correction heard live | ◐ | ● | ● | ● | **Works** (Tune Vocal), except on stretched clips |
-| ARA editors | ● | ● | ● | ● | **Missing** |
+| ARA editors | ● | ● | ● | ● | **Missing**, approved by the owner (2026-11-18) and next after this round: ARA 2 hosting through Rust bindings to the ARA C header, VST3 first (section 4, J) |
 
 ## G. Tempo and time-stretch
 
@@ -153,23 +153,23 @@ Varispeed is the only whole-project speed control among the four.
 |---|:-:|:-:|:-:|:-:|---|
 | Real-time, pitch-preserving stretch | ● | ● | ● | ● | **Works** in the app: a pitch-preserving stretch (Elastic Properties, Conform, TCE, a tempo edit on an Elastic tick track, a warp-marker move) is heard at once through a granular reader in the clip read (no latency) while the offline WSOLA render is made in the background, which then replaces it; grainier than the render on sustained notes. The CLI and scripts still render in place |
 | Audio follows tempo changes | ● | ● | ● | ● | **Works**: on a tick-timebase track a tempo edit moves clips to their bars and, on an Elastic track, gives them the new length, heard at once through the real-time stretcher until the render is in |
-| Choice of stretch algorithm | ● | ● | ● | ● | **Partial**: polyphonic, rhythmic, monophonic and X-Form each splice differently, in the offline render (no real-time stretch) |
+| Choice of stretch algorithm | ● | ● | ● | ● | **Works**: polyphonic, rhythmic, monophonic and X-Form each splice differently in the background render, which replaces the one real-time grain stretcher heard while it is made |
 | Warp markers you can drag | ● | ● | ● | ● | **Works** (offline render on release): the Warp track view; section 4, I |
-| Quantize audio to the grid | ● | ● | ● | ● | **Partial**: Straighten conforms whole tracks; clips can be moved to the grid |
-| Tempo detection | ● | ● | ● | ● | **Partial**: by command, not at import |
-| Conform a clip to the session tempo | ● | ● | ● | ● | **Partial**: once, as varispeed, so the pitch changes |
-| Loops that match tempo when dropped in | ● | ● | ● | ● | **Missing** |
-| Loops that match key | ○ | ◐ | ● | ◐ | **Missing** |
+| Quantize audio to the grid | ● | ● | ● | ● | **Works**: Clip › Quantize Audio… moves clips by their sync points with a strength and swing; Straighten conforms whole tracks (section 4, I) |
+| Tempo detection | ● | ● | ● | ● | **Works**: at import a loop's own tempo is read (its `acid` chunk or name), and a file of 30 s or less that says none has its tempo detected (70–180 bpm) and recorded on the clip for Conform to Tempo, never stretched on a guess (with Imported Loops Follow Tempo and Key on); longer audio is detected by command (Detect Tempo: constant, follow and smooth) |
+| Conform a clip to the session tempo | ● | ● | ● | ● | **Works**: varispeed on a Varispeed or plain track, a pitch-preserving stretch on an Elastic one (section 4, bug 12) |
+| Loops that match tempo when dropped in | ● | ● | ● | ● | **Works**: a file that says its tempo (a WAV `acid` chunk, or "120bpm" in its name; `audio-io/src/loop_info.rs`) is stretched to the session tempo with its pitch kept as it is imported (Setup › Preferences… › Editing › Imported Loops Follow Tempo and Key, on in new sessions; sessions saved before keep importing as they did). Its tempo is recorded on the clip either way, so Conform to Tempo uses it later. Nothing is guessed from audio that says no tempo |
+| Loops that match key | ○ | ◐ | ● | ◐ | **Works**: with the same option, a loop that says its key (the `acid` chunk's root note, or a key word such as "Am" beside a tempo in its name) is transposed in real time (Clip › Real-Time › Transpose) to the session's key at that point, by at most a tritone; a minor loop goes to the relative minor of a major key and the other way. Only when the session sets a key |
 
 ## H. Auditioning
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Preview a file before importing | ● | ● | ● | ● | **Works** in the Workspace window: a click plays the file (read on a worker thread), again stops it; not in the import dialog |
-| Preview in time with the session tempo | ● | ● | ● | ● | **Missing** |
-| Preview while the session plays, in sync | ● | ● | ● | ● | **Missing** |
+| Preview in time with the session tempo | ● | ● | ● | ● | **Works** for files that say their tempo: the Workspace's In tempo box (on by default) stretches the file, pitch kept, to the tempo at the playhead on the audition worker |
+| Preview while the session plays, in sync | ● | ● | ● | ● | **Works**: the Workspace's In sync box (on by default): while the session plays, a file repeats in time with it from the start of the bar the playhead was in, each output frame read from the playhead, so locates, loop wraps and speed changes keep it in step (`PreviewSync` in `playback`); stopped, it plays once from its start |
 | Audition a clip from the clip list or pool | ● | ● | ● | ● | **Works**: Alt-click or Audition in the Clip List, with its clip gain |
-| Preview volume and output | ● | ● | ● | ● | **Partial**: a preview level (Workspace window); always the first two outputs |
+| Preview volume and output | ● | ● | ● | ● | **Works**: a preview level and an output pair (Workspace window), used by file and Clip List auditions |
 
 The player already has a raw preview voice (`Player::preview`, used only by Juke's hit picker), so
 the engine side of H is partly there.
@@ -241,19 +241,99 @@ pitch-preserving stretch can instead reserve the render's source and record how 
 meanwhile (`Session::live_stretch`), the mixer reading the original through the stretcher until
 the render's audio is in (`engine::stretch_jobs`: the job, `install`, renders kept for undo and
 redo, a save renders what is still live). The app's worker (`ui-egui/src/stretch_worker.rs`) makes the render on a thread and swaps it in; the
-app turns deferral on (not the web build, which has no threads, nor the CLI). Left: grain
+app turns deferral on (not the CLI). Left: grain
 alignment (point 4); hearing a warp marker while it is dragged (it is heard from the release).
+
+**Changing the session rate: the design (round three, built 2026-11-17 but for the progress window).** A command
+(`session.set_sample_rate {rate}`, Setup › Session) converts the open session in one undo step.
+(1) *Sources*: every pool source is resampled with the import's high-quality sinc
+(`audio_io::Resampler`) on a worker with the open-progress window, written to the project's
+`Audio Files` as new files (the old ones stay for undo; Compact removes them later). (2)
+*Positions*: everything stored in samples is scaled by new ÷ old and rounded: clip start,
+length, source offset and fades, warp markers, gain envelopes, automation points, markers and
+memory locations, the selection, loop, skip ranges, pre/post-roll, the tempo map's origin and
+the stretch renders' keys (those renders are made again). Tick-timebase material keeps its ticks.
+(3) *Plug-ins* are prepared again at the new rate (the sync after the swap). (4) Tests: a session
+at 44.1 kHz converted to 48 kHz renders the same 10 s within −60 dB of the original resampled,
+and every stored position lands within one sample of its time. The risk is completeness: a
+position field missed plays in the wrong place, so the step that scales them must be one
+function over `Session` with a test that fails when a new `Samples` field is added without it.
+
+**Mixed rates without converting: the design (round three, not built).** Studio Pro alone
+plays files at their own rate in a session at another. (1) *Kept as is.* With "Keep files at
+their own rate" (Setup › Session, off by default) an import at another rate is stored as it is,
+with no converted copy; `SourceAudio::sample_rate` already records the file's rate. (2) *Positions
+stay in session samples.* A clip's start, length and source offset stay in samples at the session
+rate, so every edit, the waveform's horizontal scale and the Clip List are unchanged; only the
+reads convert. (3) *The read.* The clip reader turns a timeline sample into the file's frame by
+the ratio file ÷ session and reads through the band-limited varispeed reader the clips already
+use for real-time transpose and varispeed (fractional positions, a kernel whose cut-off follows
+the ratio), so a 44.1 kHz file in a 48 kHz session plays as varispeed at 0.91875 with no pitch
+change; the disk streamer reads ahead in file frames. (4) *What converts.* Everything that writes
+audio (Process, Consolidate, bounce, freeze) writes at the session rate, as now; the waveform
+overview is read at the file's rate and scaled. (5) *Tests.* A 44.1 kHz file played in a
+48 kHz session renders within −60 dB of the same file converted at import, and a clip edited
+(trimmed, split, moved) plays the same audio at the same times either way. (6) *Size and worth.*
+8–12 h; the converted copy sounds the same, so this saves disk space and import time only. Not
+built: the owner's call whether it is worth it.
+
+**Busses on the worker pool: the design (round three, built 2026-11-17: the auxes of one rank render together, the rank being the planner's, so (1) needed no new order).** Tracks already render in
+parallel by the planner's levels (`sidechain::resolve` gives every strip a level: a strip waits
+only for strips of lower levels: its key sources and the busses it reads). Aux, folder and master
+strips are run afterwards one by one because each reads a bus that the earlier strips summed into
+(`MixEngine::busses`, written by every source). (1) *Order.* The planner already knows which
+strips feed which bus; an aux's level becomes one more than the highest level of the strips that
+feed its input bus, so all strips of one level read only busses that are complete. (2) *Summing.*
+The worker pool (the rayon pool the tracks already use: no new dependency)
+renders a level's strips into their own buffers; the summing into busses and the main stays on
+the audio thread between levels, in strip order, so the sum (and every bounce) is bit-identical
+to the serial render. (3) *Tests.* A session of three nested aux levels renders sample-identical
+with one worker and with four; a counter shows aux strips of one level ran on more than one
+worker. (4) *Not in it.* Realtime priority for the workers: built later (2026-11-18) with the
+`thread-priority` crate once the owner approved it (see the row).
+
+**Reverse playback through the mixer: the design (round three, built 2026-11-17; automation is read per block, and the Scrubber's voice stays for the simulated transport without a device).** Shuttle Back plays
+each track's strip backwards on the UI side (the Scrubber's voice). To take sends, busses, the
+master and hosted inserts along, the audio thread's player renders the block backwards instead:
+(1) the clip read already takes a negative speed for varispeed; a block at speed −1 reads clips
+from `pos` down, reversed per block; (2) automation is read at the reversed positions (the
+lanes are read per position already); (3) the strips, busses and master process the reversed
+audio forwards in time (effects ring "into" the past, as tape reversed through a desk does,
+which is what Pro Tools and Logic do); (4) the transport moves backwards, and Stop, loop and
+locate treat the block's end as its start. The Scrubber's own reverse voice is removed then.
+Tests: a reversed render of a dry impulse track is the forward render reversed sample for
+sample; a reverb send's tail comes before the impulse. About 8–12 h.
+
+**Large playback buffer with a small live path: the design (round three, not built; shared with
+section 2's "small buffer for live tracks, large for playback").** (1) *Split.* Each block, the
+planner marks the strips that hear live input (record-armed, input monitoring, live MIDI, a
+track whose key comes from one of those) and everything they feed, down to the master: the
+*live* set; the rest is *playback*. (2) *Ahead.* A worker renders the playback set ahead of the
+transport, `N` device blocks at a time (a "playback buffer" setting, 1024–8192 frames), into a
+ring per bus input and per main contribution, timestamped; it takes session updates as the audio
+thread does now and drops what it rendered ahead when a locate, an edit to a playback strip or a
+loop wrap invalidates it (the ring is refilled from the new position: an edit is heard after one
+large buffer, as in Pro Tools' and Cubase's large-buffer modes). (3) *Each callback.* The audio
+thread renders only the live set at the device's small block and adds the playback set's samples
+for the same timeline position from the rings, at the busses and the main. Delay compensation is
+unchanged: both sets use the same per-strip latencies. (4) *Plug-ins.* A strip moving between
+sets (armed, disarmed) is rendered by one side only from a block boundary, with its instances
+handed over (they are never run by two threads). (5) *Tests.* Playback with the split on is
+sample-identical to the serial render for a session without live input; with one armed track,
+its input reaches the output within the small block while the rest of the session is rendered
+ahead. (6) *Risk.* It is the largest engine item (15–22 h): instance hand-over between threads
+and invalidation on edits are where it can go wrong, so it should be built behind an option,
+off by default, and compared sample for sample with the present render in the tests.
 
 **3. What most have (≈ 45–75 h).** Varispeed in the interface with a pitch-preserving option
 (Logic) and shuttle (Pro Tools, Logic, Cubase), 6–10 (**done** 2026-11-16: varispeed, tape style or
 keeping the pitch; shuttle forwards through the mixer and backwards through the preview voice); per-clip transpose and non-destructive
 reverse, 8–12; clip effects that take any module, 8–12; automatic crossfades on overlap and layered
-editing, 8–12; skipping plug-ins on silent tracks, 5–8; realtime safety (plug-ins and Clip Effects are made off the audio thread now; build strips off the audio
-thread) and worker thread priority, 8–14; automatic device recovery, 3–6.
+editing, 8–12; skipping plug-ins on silent tracks, 5–8; realtime safety (plug-ins, Clip Effects and new strips are made off the audio thread now) and worker thread priority, 8–14; automatic device recovery, 3–6.
 
 **Where FreeDAWm is already level or ahead:** gapless looping, uninterrupted playback while
 editing, the breadth of delay compensation, formats read, clip gain envelopes with conversion to
-automation, freeze up to a chosen module, built-in vocal tuning heard live, and the browser build.
+automation, freeze up to a chosen module, and built-in vocal tuning heard live.
 
 ## Sources
 
@@ -269,6 +349,22 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |
+| 2026-11-18 | minor | a hosted Clip Effects module's own editor window and its full state per clip slot |
+| 2026-11-18 | minor | realtime priority for the audio thread and its workers, shown in System Usage |
+| 2026-11-18 | minor | large playback buffer with a small live path: not built in round four, what is needed noted |
+| 2026-11-18 | minor | hosted CLAP and VST3 effects on a clip (parameters; no editor window yet) |
+| 2026-11-17 | minor | Round three: busses render in parallel on the worker pool |
+| 2026-11-17 | minor | Round three: reverse playback through sends, busses and the master |
+| 2026-11-17 | minor | Round three: Clip Effects take any built-in effect as a chain of modules per clip |
+| 2026-11-17 | minor | Round three: the session's sample rate can be changed later |
+| 2026-11-17 | minor | Round three: a design for playing files at their own rate (mixed rates) |
+| 2026-11-17 | minor | Round three: designs for busses on the worker pool, reverse playback through the mixer and the large playback buffer; the processing stack row points at section 4 |
+| 2026-11-17 | minor | Round three: a new track's strip and a new bus's buffers are made off the audio thread |
+| 2026-11-17 | minor | Round three: a short import's tempo is detected and recorded |
+| 2026-11-17 | minor | Round three: skip ranges; the open rows say what is left and why; a design for changing the session rate |
+| 2026-11-17 | minor | Round three: audition around an edit, Dynamic Transport's play start and separate loop, automatic device return, suspend plug-ins on silence, loops that follow tempo and key at import, preview in tempo, in sync and on a chosen output |
+| 2026-11-17 | minor | Round three reconciliation: crossfade shapes, audio quantize, conform and the stretch algorithms were already built; ASIO and ARA not planned here |
 | 2026-11-16 | minor | clip transpose: a background high-quality render replaces the live shifter |
 | 2026-11-16 | minor | the real-time stretch is heard at once in the app; a background worker swaps in the render |
 | 2026-11-16 | minor | the real-time stretcher in the clip read, behind the Elastic and warp paths |

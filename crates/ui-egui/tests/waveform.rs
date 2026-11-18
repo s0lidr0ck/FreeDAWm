@@ -48,6 +48,22 @@ fn at_the_sample_level_the_waveform_is_a_line_through_the_samples() {
     }
 }
 
+/// A clip stretched to twice its length draws its material spread over that length: a spike
+/// at file sample 1,600 sits at timeline sample 3,200.
+#[test]
+fn a_stretched_clip_is_drawn_stretched() {
+    let mut x = vec![0.0f32; 4800];
+    x[1600] = 1.0;
+    let mut clip = Clip::audio(ClipId(1), "c", SourceId(1), 0, 0, 9600);
+    clip.stretch = 2.0;
+    let audio = SourceAudio::new(AudioBuffer { sample_rate: 48_000, channels: vec![x] });
+    let shapes = paint(16.0, |p, s, band| waveform::draw(p, s, band, &clip, &audio, 1, band, WAVE));
+    let [Shape::Mesh(mesh)] = shapes.as_slice() else { panic!("{shapes:?}") };
+    let tall: Vec<f32> = mesh.vertices.iter().filter(|v| v.pos.y < 40.0).map(|v| v.pos.x).collect();
+    let left = tall.iter().fold(f32::MAX, |a, &x| a.min(x));
+    assert!((199.0..=201.0).contains(&left), "spike drawn at {left}, not at 100 as unstretched");
+}
+
 #[test]
 fn zoomed_out_a_one_sample_spike_stays_a_point_wide() {
     let mut x = vec![0.0f32; 4800];

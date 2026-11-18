@@ -50,11 +50,16 @@ fn opus_head(channels: usize, input_rate: u32) -> Vec<u8> {
     h
 }
 
-fn opus_tags() -> Vec<u8> {
+/// The `OpusTags` header packet: the vendor and `comments` (`KEY=value`).
+fn opus_tags(comments: &[String]) -> Vec<u8> {
     let mut t = b"OpusTags".to_vec();
     t.extend_from_slice(&(VENDOR.len() as u32).to_le_bytes());
     t.extend_from_slice(VENDOR.as_bytes());
-    t.extend_from_slice(&0u32.to_le_bytes());
+    t.extend_from_slice(&u32::try_from(comments.len()).unwrap_or(0).to_le_bytes());
+    for c in comments {
+        t.extend_from_slice(&u32::try_from(c.len()).unwrap_or(0).to_le_bytes());
+        t.extend_from_slice(c.as_bytes());
+    }
     t
 }
 
@@ -75,7 +80,7 @@ pub(crate) struct Writer<W> {
 }
 
 impl<W: Write + Seek> Writer<W> {
-    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, kbps: u32) -> Result<Self> {
+    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, kbps: u32, comments: &[String]) -> Result<Self> {
         check(channels)?;
         if sample_rate == 0 {
             return Err(AudioError::Encode("an Opus file needs a sample rate".into()));
@@ -96,7 +101,7 @@ impl<W: Write + Seek> Writer<W> {
         enc.signal_type = Some(rusty_opus::SignalType::Music);
         let mut pages = PageWriter::new(SERIAL);
         pages.header_packet(&mut out, &opus_head(channels, sample_rate))?;
-        pages.header_packet(&mut out, &opus_tags())?;
+        pages.header_packet(&mut out, &opus_tags(comments))?;
         Ok(Writer {
             out,
             channels,

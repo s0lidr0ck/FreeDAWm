@@ -3,7 +3,9 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_model::{AutoParam, AutomationMode, InputMonitor, MAX_MODULES, ModuleId, SEND_SLOTS, SendSlot, Session, Track, TrackId};
+use soundcraft_model::{
+    AutoParam, AutomationLane, AutomationMode, InputMonitor, MAX_MODULES, ModuleId, SEND_SLOTS, SendSlot, Session, Track, TrackId,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -54,11 +56,34 @@ pub fn specs() -> Vec<CommandSpec> {
             e,
             p,
             "mix.record_arm",
-            |s, t, v| set_grouped(s, t, "record", |tr| if tr.kind.has_playlist() {
+            // A record-safe track is never armed (it can still be disarmed).
+            |s, t, v| set_grouped(s, t, "record", |tr| if tr.kind.has_playlist() && !(v && tr.mixer.record_safe) {
                 tr.mixer.record_arm = v
             }),
             |tr| tr.mixer.record_arm
         )),
+        cmd!(
+            "mix.record_safe",
+            "Record Safe",
+            [],
+            None,
+            "{tracks?, value?: bool} — a record-safe track cannot be armed; making one safe disarms it",
+            has_selection,
+            |e, p| toggle(
+                e,
+                p,
+                "mix.record_safe",
+                |s, t, v| {
+                    if let Some(tr) = s.track_mut(t).filter(|tr| tr.kind.has_playlist()) {
+                        tr.mixer.record_safe = v;
+                        if v {
+                            tr.mixer.record_arm = false;
+                        }
+                    }
+                },
+                |tr| tr.mixer.record_safe
+            )
+        ),
         cmd!(
             "mix.input_monitor",
             "Input Monitoring",
@@ -68,17 +93,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             input_monitor
         ),
-        cmd!("mix.phase_invert", "Phase Invert", [], None, "{tracks?, value?: bool}", has_selection, |e, p| toggle(
-            e,
-            p,
+        cmd!(
             "mix.phase_invert",
-            |s, t, v| {
-                if let Some(tr) = s.track_mut(t) {
-                    tr.mixer.phase_invert = v
-                }
-            },
-            |tr| tr.mixer.phase_invert
-        )),
+            "Phase Invert",
+            [],
+            None,
+            "{tracks?, value?: bool, channel?: 0-based channel (that channel alone; omitted: every channel)}",
+            has_selection,
+            phase_invert
+        ),
         cmd!("mix.trim", "Input Trim", [], None, "{tracks?, db}", has_selection, |e, p| {
             let tracks = tracks_required(e, "mix.trim", p)?;
             let db = (p.get("db").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad("mix.trim", "`db` (number) required"))? as f32)
@@ -143,7 +166,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assign Send",
             [],
             None,
-            "{track?, slot?: 0..9|a..j, bus: name | output: hardware output name | to_track: track (its input becomes a bus the send feeds), level_db?: 0 (kept when re-targeting), pre_fader?: false, pan_follows_main?: bool}",
+            "{track?, slot?: 0..9|a..j, bus: name | output: hardware output name | to_track: track (its input becomes a bus the send feeds), level_db?: 0 (kept when re-targeting), pre_fader?: false, pan_follows_main?: bool, as_output?: bool (an additional output: a post-fader copy of the main output at the fader's level and the main pan)}",
             has_selection,
             send
         ),
@@ -244,7 +267,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy to Send...",
             ["Edit", "Automation"],
             Some("Cmd+Alt+H"),
-            "{tracks?, send: slot}",
+            "{tracks?, send?: slot (default A), what?: [volume, pan, mute] (default volume)} — over the edit selection when there is one (replacing what was there), else the whole lane; with no automation the value itself",
             has_selection,
             copy_to_send
         ),
@@ -277,6 +300,31 @@ pub(super) fn grouped_ids(s: &Session, t: TrackId, attr: &str) -> Vec<TrackId> {
 }
 
 /// Apply a change to `t` and its active mix-group siblings.
+/// The flag of Options › Recording › Arm Follows Selection.
+pub const ARM_FOLLOWS_SELECTION: &str = "options.arm_follows_selection";
+
+/// Arm Follows Selection: when a command changes which tracks are selected, the selected tracks
+/// that can record (and are not record safe) are armed and every other track is disarmed, as in
+/// Studio One and Logic. Not while a take records (the recorded set stays as Record made it), and
+/// not when nothing is selected any more (clicking off a track keeps the arm where it was).
+pub(crate) fn arm_follows_selection(e: &mut Engine, before: &Session) {
+    if e.transport.recording || !e.session().edit.flag(ARM_FOLLOWS_SELECTION) {
+        return;
+    }
+    let sel = &e.session().edit.selected_tracks;
+    if sel.is_empty() || *sel == before.edit.selected_tracks {
+        return;
+    }
+    let sel = sel.clone();
+    let wants = |t: &soundcraft_model::Track| t.kind.has_playlist() && !t.mixer.record_safe && !t.inactive && sel.contains(&t.id);
+    if e.session().tracks.iter().all(|t| t.mixer.record_arm == wants(t)) {
+        return;
+    }
+    for t in &mut e.session_mut().tracks {
+        t.mixer.record_arm = wants(t);
+    }
+}
+
 fn set_grouped(s: &mut Session, t: TrackId, attr: &str, f: impl Fn(&mut soundcraft_model::Track)) {
     for id in grouped_ids(s, t, attr) {
         if let Some(tr) = s.track_mut(id) {
@@ -357,6 +405,7 @@ fn pan(e: &mut Engine, p: &Value) -> Result<Value> {
     let s = e.session_mut();
     // A group linking pan moves its members by as much, keeping their offsets.
     let mut moved: Vec<TrackId> = Vec::new();
+    let mut linked: Vec<TrackId> = Vec::new();
     for t in &tracks {
         if moved.contains(t) {
             continue;
@@ -370,12 +419,26 @@ fn pan(e: &mut Engine, p: &Value) -> Result<Value> {
             if let Some(tr) = s.track_mut(id)
                 && let Some(slot) = tr.mixer.pan.get_mut(idx)
             {
+                let old = *slot;
                 *slot = if id == *t { v } else { (*slot + d).clamp(-1.0, 1.0) };
+                let step = *slot - old;
+                // A stereo track's linked pans: the other one follows.
+                let link = tr.mixer.pan_link;
+                if !link.is_off()
+                    && tr.mixer.pan.len() == 2
+                    && let Some(other) = tr.mixer.pan.get_mut(1 - idx)
+                {
+                    *other = link.follow(*other, step);
+                    linked.push(id);
+                }
             }
         }
     }
     for t in &moved {
         e.automation_changed(*t, AutoParam::Pan(idx as u8));
+    }
+    for t in &linked {
+        e.automation_changed(*t, AutoParam::Pan(1 - idx as u8));
     }
     Ok(json!({"pan": v}))
 }
@@ -539,6 +602,7 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
     sl.level_db = f32_or(p, "level_db", sl.level_db).clamp(-144.0, 12.0);
     sl.pre_fader = bool_or(p, "pre_fader", sl.pre_fader);
     sl.pan_follows_main = bool_or(p, "pan_follows_main", sl.pan_follows_main);
+    as_output(&mut sl, p);
     if let Some(x) = tr.mixer.sends.get_mut(slot) {
         *x = Some(sl);
     }
@@ -551,6 +615,18 @@ fn send(e: &mut Engine, p: &Value) -> Result<Value> {
         aux
     });
     Ok(json!({"slot": slot, "bus": bid, "return": ret}))
+}
+
+/// `as_output: true` makes the send an additional output (`SendSlot::output`): post-fader, at
+/// unity, with the main pan; false makes it an ordinary send again; absent keeps what it was.
+fn as_output(sl: &mut SendSlot, p: &Value) {
+    sl.output = bool_or(p, "as_output", sl.output);
+    if sl.output {
+        sl.level_db = 0.0;
+        sl.pre_fader = false;
+        sl.mute = false;
+        sl.pan_follows_main = true;
+    }
 }
 
 /// A send straight to a hardware output (a cue mix, an outboard effect): by the output's name.
@@ -569,6 +645,7 @@ fn send_to_output(e: &mut Engine, p: &Value, t: TrackId, explicit: Option<usize>
     sl.level_db = f32_or(p, "level_db", sl.level_db).clamp(-144.0, 12.0);
     sl.pre_fader = bool_or(p, "pre_fader", sl.pre_fader);
     sl.pan_follows_main = bool_or(p, "pan_follows_main", sl.pan_follows_main);
+    as_output(&mut sl, p);
     if let Some(x) = tr.mixer.sends.get_mut(slot) {
         *x = Some(sl);
     }
@@ -675,8 +752,9 @@ fn send_level(e: &mut Engine, p: &Value) -> Result<Value> {
 
 /// Parses an automation param id against a track. Accepts everything `AutoParam::parse` does,
 /// plus the legacy `plugin:<letter|index>:<p>` whose letter/index is a chain position, resolved to
-/// the module id at that position. A module id that is not in the track's chain resolves to
-/// nothing: its lane or view would be an orphan.
+/// the module id at that position, and `plugin:instrument:<p>` for the track's instrument. A
+/// module id that is not in the track's chain (or the instrument's) resolves to nothing: its lane
+/// or view would be an orphan.
 ///
 /// A plugin parameter is the module's own id ([`canonical_param`]: "outgain" is CleanQ's
 /// `outGain`); one the plugin does not have resolves to nothing, as a missing module does, so no
@@ -688,14 +766,18 @@ pub(crate) fn resolve_auto_param(track: &Track, s: &str) -> Option<AutoParam> {
             // As `AutoParam::parse`: the prefix and position in any case, the parameter id as written.
             let rest = s.trim();
             let (pos, param) = rest.get(..7).filter(|p| p.eq_ignore_ascii_case("plugin:")).and(rest.get(7..))?.split_once(':')?;
-            let pos = soundcraft_model::letter_slot(pos)?;
-            let module = track.mixer.inserts.get(usize::from(pos))?.id;
+            // `plugin:instrument:<p>` names the track's instrument.
+            let module = if pos.eq_ignore_ascii_case("instrument") {
+                soundcraft_model::INSTRUMENT_MODULE
+            } else {
+                track.mixer.inserts.get(usize::from(soundcraft_model::letter_slot(pos)?))?.id
+            };
             AutoParam::Plugin { module, param: param.to_string() }
         }
     };
     match parsed {
         AutoParam::Plugin { module, param } => {
-            let ins = track.mixer.module(module)?;
+            let ins = track.module_or_instrument(module)?;
             Some(AutoParam::Plugin { module, param: canonical_param(&ins.plugin, &param)? })
         }
         // A send lane past the last slot (`send_k_level`) would never play.
@@ -709,6 +791,14 @@ pub(crate) fn resolve_auto_param(track: &Track, s: &str) -> Option<AutoParam> {
 /// `None` when the plugin is known and has no such parameter (or two that differ only in case);
 /// `param` as given when the plugin is not known here (a hosted plugin not installed).
 pub(crate) fn canonical_param(plugin: &str, param: &str) -> Option<String> {
+    // The mixer's own lanes on a module (bypass, wet/dry mix) are no plugin's parameter.
+    if param == soundcraft_model::BYPASS_PARAM || param == soundcraft_model::MIX_PARAM {
+        return Some(param.to_string());
+    }
+    // A multi-mono unlinked channel's own value (`c1:gain`): the plugin's id after the channel.
+    if let Some((n, own)) = soundcraft_model::split_channel_param(param) {
+        return canonical_param(plugin, own).map(|id| soundcraft_model::channel_param_id(n, &id));
+    }
     let Some(info) = crate::cmd::clap::plugin_info(plugin) else { return Some(param.to_string()) };
     if info.param(param).is_some() {
         return Some(param.to_string());
@@ -726,7 +816,7 @@ pub(crate) fn canonical_param(plugin: &str, param: &str) -> Option<String> {
 /// is, and so is a lane whose canonical twin already exists.
 pub(crate) fn restore_plugin_param_ids(s: &mut Session) {
     for t in &mut s.tracks {
-        let plugin_of = |m: ModuleId| t.mixer.module(m).map(|i| i.plugin.clone());
+        let plugin_of = |m: ModuleId| t.module_or_instrument(m).map(|i| i.plugin.clone());
         let mut renames: Vec<(usize, String)> = Vec::new();
         for (i, l) in t.automation.iter().enumerate() {
             if let AutoParam::Plugin { module, param } = &l.param
@@ -826,7 +916,12 @@ pub(crate) fn current_value(tr: &soundcraft_model::Track, param: &AutoParam) -> 
         AutoParam::Trim => 0.0,
         AutoParam::Width => tr.mixer.width,
         AutoParam::Balance => tr.mixer.balance,
-        AutoParam::Plugin { module, param } => tr.mixer.module(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
+        AutoParam::Surround(i) => tr.mixer.surround.unwrap_or_default().axis(*i),
+        AutoParam::Plugin { module, param } if param == soundcraft_model::BYPASS_PARAM => {
+            tr.module_or_instrument(*module).map_or(0.0, |i| f32::from(u8::from(i.bypass)))
+        }
+        AutoParam::Plugin { module, param } if param == soundcraft_model::MIX_PARAM => tr.module_or_instrument(*module).map_or(1.0, |i| i.mix),
+        AutoParam::Plugin { module, param } => tr.module_or_instrument(*module).and_then(|i| i.params.get(param).copied()).unwrap_or(0.0),
     }
 }
 
@@ -1023,34 +1118,155 @@ fn clip_gain_to_vol(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({}))
 }
 
+/// `mix.phase_invert`: every channel's polarity, or with `channel` that channel's alone (a track
+/// whose every channel was inverted keeps the others inverted).
+fn phase_invert(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "mix.phase_invert";
+    let Some(ch) = p.get("channel").filter(|v| !v.is_null()) else {
+        return toggle(
+            e,
+            p,
+            id,
+            |s, t, v| {
+                if let Some(tr) = s.track_mut(t) {
+                    tr.mixer.phase_invert = v;
+                    tr.mixer.phase_invert_channels = 0;
+                }
+            },
+            |tr| tr.mixer.phase_invert,
+        );
+    };
+    let ch = ch.as_u64().and_then(|c| usize::try_from(c).ok()).ok_or_else(|| bad(id, "`channel` must be a channel number from 0"))?;
+    let tracks = tracks_required(e, id, p)?;
+    let s = e.session_mut();
+    let mut now = None;
+    for t in tracks {
+        let Some(tr) = s.track_mut(t) else { continue };
+        let n = tr.channels().min(16);
+        if ch >= n {
+            return Err(bad(id, format!("`{}` has {n} channel(s); `channel` is 0..{}", tr.name, n.saturating_sub(1))));
+        }
+        let v = match p.get("value").and_then(Value::as_bool) {
+            Some(v) => v,
+            None => *now.get_or_insert(!tr.mixer.inverts(ch)),
+        };
+        let mut mask = if tr.mixer.phase_invert { ((1u32 << n) - 1) as u16 } else { tr.mixer.phase_invert_channels };
+        if v {
+            mask |= 1 << ch;
+        } else {
+            mask &= !(1 << ch);
+        }
+        tr.mixer.phase_invert = false;
+        tr.mixer.phase_invert_channels = mask;
+        now = Some(v);
+    }
+    Ok(json!({"value": now, "channel": ch}))
+}
+
+/// What Copy to Send copies (`what`), with the send lane each one lands in.
+const COPY_TO_SEND: [&str; 3] = ["volume", "pan", "mute"];
+
+/// `automation.copy_to_send`: the track's volume (and, when asked, pan and mute), as automation
+/// where it has a lane and as the send's own value where it has none, into one send. Over the
+/// edit selection when there is one (what was there is replaced, the curve either side kept),
+/// else the whole lane.
 fn copy_to_send(e: &mut Engine, p: &Value) -> Result<Value> {
-    let tracks = tracks_required(e, "automation.copy_to_send", p)?;
+    const C: &str = "automation.copy_to_send";
+    let tracks = tracks_required(e, C, p)?;
     // No `send` means Send A (the menu item passes none); a given one must be valid.
     let slot = match p.get("send") {
         None | Some(Value::Null) => 0,
-        Some(_) => slot_of(p, "send", SEND_SLOTS).ok_or_else(|| {
-            bad("automation.copy_to_send", format!("`send` must be 0..{} or a..{}", SEND_SLOTS - 1, (b'a' + SEND_SLOTS as u8 - 1) as char))
-        })?,
+        Some(_) => slot_of(p, "send", SEND_SLOTS)
+            .ok_or_else(|| bad(C, format!("`send` must be 0..{} or a..{}", SEND_SLOTS - 1, (b'a' + SEND_SLOTS as u8 - 1) as char)))?,
     } as u8;
+    let what: Vec<String> = match p.get("what") {
+        None | Some(Value::Null) => vec!["volume".into()],
+        Some(Value::String(w)) => vec![w.clone()],
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        Some(_) => return Err(bad(C, "`what` is a list of volume, pan, mute")),
+    };
+    if let Some(w) = what.iter().find(|w| !COPY_TO_SEND.contains(&w.as_str())) {
+        return Err(bad(C, format!("cannot copy `{w}` (volume, pan or mute)")));
+    }
     let s = e.session_mut();
+    let sel = s.edit.selection;
+    let range = (!sel.is_empty()).then_some((sel.start.max(0), sel.end));
+    let mut copied = 0usize;
     for t in &tracks {
-        if let Some(tr) = s.track_mut(*t) {
-            let pts = tr.lane(&AutoParam::Volume).map(|l| l.points.clone()).unwrap_or_default();
-            let v = tr.mixer.volume_db;
-            let lane = tr.lane_mut(&AutoParam::SendLevel(slot));
-            if pts.is_empty() {
-                lane.set_point(0, v);
+        let Some(tr) = s.track_mut(*t) else { continue };
+        if tr.mixer.sends.get(usize::from(slot)).is_none_or(Option::is_none) {
+            continue;
+        }
+        for w in &what {
+            // The source as a lane (points, possibly none) and its static value.
+            let (src, value, dst) = match w.as_str() {
+                "volume" => (
+                    tr.lane(&AutoParam::Volume).cloned().unwrap_or_else(|| AutomationLane::new(AutoParam::Volume)),
+                    tr.mixer.volume_db,
+                    AutoParam::SendLevel(slot),
+                ),
+                "mute" => (
+                    tr.lane(&AutoParam::Mute).cloned().unwrap_or_else(|| AutomationLane::new(AutoParam::Mute)),
+                    if tr.mixer.mute { 1.0 } else { 0.0 },
+                    AutoParam::SendMute(slot),
+                ),
+                _ => {
+                    // A stereo track's two pans meet in the middle for a send's one.
+                    let n = tr.mixer.pan.len().clamp(1, 2);
+                    let lanes: Vec<_> = (0..n)
+                        .map(|i| tr.lane(&AutoParam::Pan(i as u8)).cloned().unwrap_or_else(|| AutomationLane::new(AutoParam::Pan(i as u8))))
+                        .collect();
+                    let stat: Vec<f32> = (0..n).map(|i| tr.mixer.pan.get(i).copied().unwrap_or(0.0)).collect();
+                    let mut lane = AutomationLane::new(AutoParam::SendPan(slot));
+                    let mut at: Vec<i64> = lanes.iter().flat_map(|l| l.points.iter().map(|p| p.at)).collect();
+                    at.sort_unstable();
+                    at.dedup();
+                    for a in at {
+                        let v = lanes.iter().zip(&stat).map(|(l, d)| l.value_at(a, *d)).sum::<f32>() / n as f32;
+                        lane.set_point(a, v);
+                    }
+                    (lane, stat.iter().sum::<f32>() / n as f32, AutoParam::SendPan(slot))
+                }
+            };
+            if let Some(Some(send)) = tr.mixer.sends.get_mut(usize::from(slot))
+                && range.is_none()
+            {
+                match dst {
+                    AutoParam::SendLevel(_) => send.level_db = value,
+                    AutoParam::SendMute(_) => send.mute = value >= 0.5,
+                    _ => send.pan = value,
+                }
             }
-            for pt in pts {
-                lane.set_point(pt.at, pt.value);
+            let lane = tr.lane_mut(&dst);
+            match range {
+                Some((a, b)) if src.points.is_empty() => lane.write_range(a, b, value, value),
+                Some((a, b)) => lane.paste_slice(a, b - a, &src.slice(a, b)),
+                None => lane.points = src.points.clone(),
             }
+            copied += 1;
         }
     }
-    Ok(json!({}))
+    if copied == 0 {
+        return Err(bad(C, format!("no selected track has a send {}", (b'A' + slot) as char)));
+    }
+    Ok(json!({"send": slot, "copied": copied}))
 }
 
 #[cfg(test)]
 mod tests {
+    /// `mix.send` `as_output`: an additional output, post-fader at unity with the main pan.
+    #[test]
+    fn a_send_made_an_additional_output() {
+        let mut e = crate::Engine::default();
+        e.execute("track.new", &serde_json::json!({"count": 1, "name": "A"})).unwrap();
+        e.execute("mix.send", &serde_json::json!({"track": "A", "bus": "Out 2", "level_db": -10.0, "pre_fader": true, "as_output": true})).unwrap();
+        let snd = e.session().tracks[0].mixer.sends[0].clone().unwrap();
+        assert!(snd.output && snd.pan_follows_main && !snd.pre_fader && !snd.mute);
+        assert_eq!(snd.level_db, 0.0);
+        e.execute("mix.send", &serde_json::json!({"track": "A", "slot": 0, "bus": "Out 2", "as_output": false})).unwrap();
+        assert!(!e.session().tracks[0].mixer.sends[0].clone().unwrap().output);
+    }
+
     use super::*;
     use soundcraft_audio_io::AudioBuffer;
     use soundcraft_model::{ChannelFormat, Clip, SourceAudio, SourceId, TrackKind};
@@ -1214,6 +1430,8 @@ mod tests {
     #[test]
     fn copy_to_send_rejects_an_invalid_send_slot() {
         let mut e = crate::demo::demo_engine();
+        // Copy to Send needs the send.
+        e.execute("mix.send", &json!({"track": "Kick", "slot": 0, "bus": "Verb"})).unwrap();
         let history = e.undo_history().len();
         let lanes = |e: &Engine| e.session().tracks.iter().filter(|t| t.lane(&AutoParam::SendLevel(0)).is_some_and(|l| !l.points.is_empty())).count();
         let before = lanes(&e);
@@ -1223,12 +1441,58 @@ mod tests {
             assert_eq!(e.undo_history().len(), history, "{bad_params} pushed an undo step");
             assert_eq!(lanes(&e), before, "{bad_params} edited Send A");
         }
-        // No `send` (the menu item's call) still means Send A.
+        // No `send` (the menu item's call) still means Send A: the Kick has no volume lane, so
+        // its fader level becomes the send's.
+        e.session_mut().tracks.iter_mut().find(|t| t.name == "Kick").unwrap().mixer.volume_db = -7.0;
         e.execute("automation.copy_to_send", &json!({"track": "Kick"})).unwrap();
-        assert_eq!(lanes(&e), before + 1);
+        let send_db = |e: &Engine| e.session().tracks.iter().find(|t| t.name == "Kick").unwrap().mixer.sends[0].as_ref().unwrap().level_db;
+        assert_eq!(send_db(&e), -7.0);
+        assert_eq!(lanes(&e), before);
         // A valid slot still copies.
+        e.session_mut().tracks.iter_mut().find(|t| t.name == "Kick").unwrap().mixer.volume_db = -5.0;
         e.execute("automation.copy_to_send", &json!({"track": "Kick", "send": "a"})).unwrap();
-        assert_eq!(lanes(&e), before + 1);
+        assert_eq!(send_db(&e), -5.0);
+    }
+
+    /// Copy to Send copies over the selection only (the send's curve either side kept), pan and
+    /// mute too when asked, and the values themselves where there is no automation.
+    #[test]
+    fn copy_to_send_takes_the_selection_and_pan_and_mute() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 1, "name": "Gtr", "format": "mono"})).unwrap();
+        e.execute("mix.send", &json!({"track": "Gtr", "slot": 0, "bus": "Verb", "level_db": -9.0})).unwrap();
+        let t = e.session().tracks[0].id;
+        {
+            let tr = e.session_mut().track_mut(t).unwrap();
+            tr.mixer.pan = vec![0.5];
+            tr.mixer.mute = true;
+            let v = tr.lane_mut(&AutoParam::Volume);
+            v.set_point(0, -20.0);
+            v.set_point(10_000, 0.0);
+        }
+        // The whole lane without a selection; pan and mute as values (no lanes).
+        e.execute("automation.copy_to_send", &json!({"track": "Gtr", "send": 0, "what": ["volume", "pan", "mute"]})).unwrap();
+        let tr = e.session().track(t).unwrap();
+        let send = tr.mixer.sends[0].as_ref().unwrap();
+        assert_eq!((send.level_db, send.pan, send.mute), (tr.mixer.volume_db, 0.5, true));
+        let lane = tr.lane(&AutoParam::SendLevel(0)).unwrap();
+        assert_eq!(lane.points.iter().map(|p| (p.at, p.value)).collect::<Vec<_>>(), vec![(0, -20.0), (10_000, 0.0)]);
+        // Over a selection: replaced inside it, the send's own curve kept outside.
+        {
+            let s = e.session_mut().track_mut(t).unwrap().lane_mut(&AutoParam::SendLevel(0));
+            s.points.clear();
+            s.set_point(0, -6.0);
+            s.set_point(20_000, -6.0);
+        }
+        e.session_mut().edit.selection = soundcraft_time::Range::new(2_000, 6_000);
+        e.execute("automation.copy_to_send", &json!({"track": "Gtr", "send": "a"})).unwrap();
+        let lane = e.session().track(t).unwrap().lane(&AutoParam::SendLevel(0)).unwrap().clone();
+        assert_eq!(lane.value_at(1_000, 0.0), -6.0, "before the selection");
+        assert_eq!(lane.value_at(15_000, 0.0), -6.0, "after the selection");
+        let v = e.session().track(t).unwrap().lane(&AutoParam::Volume).unwrap().value_at(4_000, 0.0);
+        assert!((lane.value_at(4_000, 0.0) - v).abs() < 0.01, "inside: {} vs {v}", lane.value_at(4_000, 0.0));
+        // A track without that send is refused.
+        assert!(e.execute("automation.copy_to_send", &json!({"track": "Gtr", "send": "b"})).is_err());
     }
 
     #[test]
@@ -1444,6 +1708,22 @@ mod tests {
         assert_eq!(r["slot"], 0);
     }
 
+    /// Parity section 7: the instrument's parameters take automation lanes.
+    #[test]
+    fn the_instrument_takes_automation_lanes() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"kind": "instrument"})).unwrap();
+        let t = e.session().tracks.last().unwrap().id.0;
+        e.execute("automation.set_point", &json!({"track": t, "param": "plugin:instrument:level", "at": 0, "value": -20.0})).unwrap();
+        let key = AutoParam::Plugin { module: soundcraft_model::INSTRUMENT_MODULE, param: "level".into() };
+        let tr = e.session().track(TrackId(t)).unwrap();
+        assert_eq!(tr.lane(&key).map(|l| l.points.len()), Some(1));
+        // By its id too, and shown as a lane; a parameter the instrument does not have is refused.
+        e.execute("track.auto_lane", &json!({"track": t, "param": key.id(), "show": true})).unwrap();
+        assert!(e.session().track(TrackId(t)).unwrap().auto_lanes.contains(&key.id()));
+        assert!(e.execute("automation.set_point", &json!({"track": t, "param": "plugin:instrument:nonsense", "at": 0, "value": 1.0})).is_err());
+    }
+
     #[test]
     fn legacy_letter_param_resolves_to_the_module_id_after_migration() {
         // v1 chain: slot 0 empty, a compressor at slot 1. Migration makes it chain position 0.
@@ -1521,5 +1801,52 @@ mod tests {
         assert!(!params.iter().any(|p| matches!(p, AutoParam::Plugin { param, .. } if param == "ceilon" || param == "outgain")));
         assert_eq!(tr.view, format!("plugin:m{}:outGain", m.0));
         assert_eq!(tr.lane(&AutoParam::Plugin { module: m, param: "outGain".into() }).map(|l| l.value_at(0, 0.5)), Some(0.25));
+    }
+
+    /// Record safe: a safe track is disarmed and cannot be armed, alone or with others, until
+    /// the safe is turned off; it is saved with the session.
+    #[test]
+    fn a_record_safe_track_cannot_be_armed() {
+        let mut s = Session::default();
+        let a = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("A"));
+        let b = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("B"));
+        let mut e = Engine::new(s);
+        e.execute("mix.record_arm", &json!({"tracks": [a.0], "value": true})).unwrap();
+        e.execute("mix.record_safe", &json!({"tracks": [a.0], "value": true})).unwrap();
+        assert!(!e.session().track(a).unwrap().mixer.record_arm, "making it safe disarms it");
+        e.execute("mix.record_arm", &json!({"tracks": [a.0, b.0], "value": true})).unwrap();
+        assert!(!e.session().track(a).unwrap().mixer.record_arm);
+        assert!(e.session().track(b).unwrap().mixer.record_arm, "the other track arms");
+        let saved = serde_json::to_string(e.session()).unwrap();
+        let back: Session = serde_json::from_str(&saved).unwrap();
+        assert!(back.track(a).unwrap().mixer.record_safe && !back.track(b).unwrap().mixer.record_safe);
+        e.execute("mix.record_safe", &json!({"tracks": [a.0], "value": false})).unwrap();
+        e.execute("mix.record_arm", &json!({"tracks": [a.0], "value": true})).unwrap();
+        assert!(e.session().track(a).unwrap().mixer.record_arm);
+    }
+
+    /// Options › Recording › Arm Follows Selection: selecting a track arms it and disarms the
+    /// others (not a record-safe one); with the option off, selection leaves the arms alone.
+    #[test]
+    fn arm_follows_the_selected_track() {
+        let mut s = Session::default();
+        let a = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("A"));
+        let b = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("B"));
+        let c = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("C"));
+        let mut e = Engine::new(s);
+        let armed = |e: &Engine| e.session().tracks.iter().filter(|t| t.mixer.record_arm).map(|t| t.id).collect::<Vec<_>>();
+        e.execute("track.scroll_to", &json!({"track": a.0})).unwrap();
+        assert!(armed(&e).is_empty(), "off by default");
+        e.execute("options.arm_follows_selection", &json!({"value": true})).unwrap();
+        e.execute("track.scroll_to", &json!({"track": b.0})).unwrap();
+        assert_eq!(armed(&e), vec![b]);
+        e.execute("mix.record_safe", &json!({"tracks": [c.0], "value": true})).unwrap();
+        e.execute("track.scroll_to", &json!({"track": c.0})).unwrap();
+        assert!(armed(&e).is_empty(), "a record-safe track is not armed; B is disarmed");
+        e.execute("track.scroll_to", &json!({"track": a.0})).unwrap();
+        assert_eq!(armed(&e), vec![a]);
+        e.execute("options.arm_follows_selection", &json!({"value": false})).unwrap();
+        e.execute("track.scroll_to", &json!({"track": b.0})).unwrap();
+        assert_eq!(armed(&e), vec![a], "off again: the arm stays");
     }
 }

@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use soundcraft_midi::Sequence;
 use soundcraft_midi::pattern::{Expand, expand};
-use soundcraft_model::{Clip, ClipContent, ClipId, PatternClip, Session};
+use soundcraft_model::{AutoParam, AutomationLane, AutomationPoint, Clip, ClipContent, ClipId, PatternClip, Session};
 
 /// Most notes one pattern clip expands to.
 pub const MAX_PATTERN_NOTES: usize = 200_000;
@@ -43,6 +43,19 @@ pub fn fingerprint(seq: &Sequence) -> u64 {
         eat(u64::from(n.pitch) | u64::from(n.velocity) << 8 | u64::from(n.release_velocity) << 16 | u64::from(n.channel) << 24);
     }
     eat(seq.ctrls.len() as u64);
+    // Controllers (a pattern's value rows) count only when there are any, so the fingerprints of
+    // pattern clips saved before rows existed stay as they were.
+    for c in &seq.ctrls {
+        let kind = match c.kind {
+            soundcraft_midi::CtrlKind::Cc(n) => u64::from(n),
+            soundcraft_midi::CtrlKind::PitchBend => 0x100,
+            soundcraft_midi::CtrlKind::ChannelPressure => 0x200,
+            soundcraft_midi::CtrlKind::PolyPressure(n) => 0x300 | u64::from(n),
+            soundcraft_midi::CtrlKind::Program => 0x400,
+        };
+        eat(c.tick as u64);
+        eat(kind | u64::from(c.channel) << 16 | u64::from(c.value as u32) << 32);
+    }
     h
 }
 
@@ -67,16 +80,128 @@ pub fn phase_for(s: &Session, clip: &Clip, pc: &PatternClip) -> i64 {
     pc.phase.saturating_add(delta)
 }
 
+/// Recording over a pattern clip with MIDI Merge on: the take's notes become steps of the clip's
+/// pattern instead of replacing the clip. A pattern clip (not muted) on `track` must cover the
+/// whole of `range`. Each note-on lands on the nearest step of the pattern's grid (its phase
+/// kept), on the lane that plays its note (a new lane, as long as the longest, when none does and
+/// there is room), at its velocity; a step already on stays as it was (overdub). A lane loops over
+/// its own length at its own rate and in its own direction, so a note lands on the step the lane
+/// plays where it was played (a Random lane: the step at that position going forward). Returns the clip, `None` when
+/// there is no such clip (the take is merged as usual). The clip's notes are expanded again by
+/// [`refresh`] with the undo step.
+pub fn record_into(s: &mut Session, track: soundcraft_model::TrackId, range: soundcraft_time::Range, take: &Sequence) -> Option<ClipId> {
+    use soundcraft_midi::pattern::{Lane, MAX_LANES, Step};
+    let clip = s.track(track)?.clips().iter().find(|c| !c.muted && c.pattern.is_some() && c.start <= range.start && c.end() >= range.end)?.clone();
+    let pc = clip.pattern.as_ref()?;
+    let phase = phase_for(s, &clip, pc);
+    let (clip_tick, _, ticks_per_bar) = clip_ticks(s, clip.start, clip.end());
+    let grid = ticks_per_bar as f64 / f64::from(pc.pattern.steps_per_bar.max(1));
+    if !(grid.is_finite() && grid > 0.0) {
+        return None;
+    }
+    let take_tick = s.tempo.samples_to_ticks(range.start, s.sample_rate);
+    let mut pattern = pc.pattern.clone();
+    for n in take.notes.iter().filter(|n| n.start >= 0 && !n.muted) {
+        let at = take_tick.saturating_add(n.start).saturating_sub(clip_tick).saturating_add(phase);
+        // Into the variation the bar the note lands in plays.
+        let v = pattern.variation_at_bar(at.div_euclid(ticks_per_bar.max(1)));
+        let Some(lanes) = pattern.lanes_of_mut(v) else { continue };
+        let width = lanes.iter().map(|l| l.steps.len()).max().unwrap_or(16);
+        let lane = match lanes.iter().position(|l| l.note == n.pitch) {
+            Some(i) => i,
+            None if lanes.len() < MAX_LANES => {
+                lanes.push(Lane::new(n.pitch, width));
+                lanes.len() - 1
+            }
+            None => continue,
+        };
+        let Some(l) = lanes.get_mut(lane) else { continue };
+        // The nearest step on the lane's own grid (half or double rate), and the step that plays
+        // there (a reversed or ping-pong lane plays its steps in another order).
+        let k = (at as f64 / soundcraft_midi::pattern::step_ticks(l, grid)).round() as i64;
+        let i = soundcraft_midi::pattern::step_at(l, k);
+        if let Some(step) = l.steps.get_mut(i)
+            && !step.on
+        {
+            *step = Step::hit(n.velocity.clamp(1, 127));
+        }
+    }
+    let c = s.find_clip_mut(clip.id)?;
+    if let Some(pc) = c.pattern.as_mut() {
+        pc.pattern = pattern;
+    }
+    Some(clip.id)
+}
+
 /// The notes `pc` expands to in `clip` at `phase`.
 pub fn expansion(s: &Session, clip: &Clip, pc: &PatternClip, phase: i64) -> Sequence {
     let (_, length, ticks_per_bar) = clip_ticks(s, clip.start, clip.end());
     expand(&pc.pattern, &Expand { ticks_per_bar, length, phase, max_notes: MAX_PATTERN_NOTES })
 }
 
+/// The clip automation lanes `pc`'s parameter rows write in `clip` at `phase` (points in samples
+/// from the clip's start; each value held until the next, stepping over one sample), and the ids
+/// of every parameter they name.
+pub fn row_lanes(s: &Session, clip: &Clip, pc: &PatternClip, phase: i64) -> (Vec<AutomationLane>, Vec<String>) {
+    use soundcraft_midi::pattern::RowTarget;
+    let (clip_tick, length, ticks_per_bar) = clip_ticks(s, clip.start, clip.end());
+    let at = Expand { ticks_per_bar, length, phase, max_notes: MAX_PATTERN_NOTES };
+    let mut pattern = pc.pattern.clone();
+    pattern.sanitize();
+    let mut lanes: Vec<AutomationLane> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    for row in &pattern.rows {
+        let RowTarget::Param(id) = &row.target else { continue };
+        let Some(param) = AutoParam::parse(id) else { continue };
+        let key = param.id();
+        if ids.contains(&key) {
+            // A second row for the same parameter: the first one plays.
+            continue;
+        }
+        ids.push(key);
+        let (lo, hi, _) = param.range();
+        let mut lane = AutomationLane::new(param);
+        let mut prev: Option<f32> = None;
+        for (tick, v) in soundcraft_midi::pattern::row_values(&pattern, row, &at) {
+            let v = v.clamp(lo, hi);
+            let t = s.tempo.tick_to_samples(clip_tick.saturating_add(tick), s.sample_rate).saturating_sub(clip.start).clamp(0, clip.length.max(0));
+            if let Some(p) = prev
+                && t > 0
+            {
+                lane.points.push(AutomationPoint::new(t - 1, p));
+            }
+            lane.points.push(AutomationPoint::new(t, v));
+            prev = Some(v);
+        }
+        lane.points.sort_by_key(|q| q.at);
+        lane.points.dedup_by_key(|q| q.at);
+        if !lane.points.is_empty() {
+            lanes.push(lane);
+        }
+    }
+    (lanes, ids)
+}
+
+/// `clip`'s automation with the lanes `pc` owned replaced by `lanes` (`None`: no change).
+fn with_row_lanes(clip: &Clip, pc: &PatternClip, lanes: &[AutomationLane], ids: &[String]) -> Option<Vec<AutomationLane>> {
+    if pc.owned.is_empty() && lanes.is_empty() {
+        return None;
+    }
+    let ours = |l: &AutomationLane| {
+        let id = l.param.id();
+        pc.owned.contains(&id) || ids.contains(&id)
+    };
+    let mut next: Vec<AutomationLane> = clip.automation.iter().filter(|l| !ours(l)).cloned().collect();
+    next.extend(lanes.iter().cloned());
+    let same = next.len() == clip.automation.len() && next.iter().all(|l| clip.automation.contains(l));
+    if same && pc.owned.as_slice() == ids { None } else { Some(next) }
+}
+
 /// What a pattern clip needs.
 enum Fix {
-    /// New notes, the phase they were expanded at and their fingerprint.
-    Expand(Sequence, i64, u64),
+    /// New notes, the phase they were expanded at and their fingerprint, and the clip's new
+    /// automation with the ids its rows own (`None`: unchanged).
+    Expand(Sequence, i64, u64, Option<(Vec<AutomationLane>, Vec<String>)>),
     /// Its notes were edited by hand: it becomes a plain MIDI clip.
     Detach,
 }
@@ -95,8 +220,14 @@ fn stale(s: &Session) -> Vec<(ClipId, Fix)> {
         let phase = phase_for(s, clip, pc);
         let seq = expansion(s, clip, pc, phase);
         let new_fp = fingerprint(&seq);
-        if new_fp != fp || phase != pc.phase || pc.seen != Some((clip.start, clip.end())) {
-            out.push((clip.id, Fix::Expand(seq, phase, new_fp)));
+        let auto = if pc.owned.is_empty() && !pc.pattern.rows.iter().any(|r| matches!(r.target, soundcraft_midi::pattern::RowTarget::Param(_))) {
+            None
+        } else {
+            let (lanes, ids) = row_lanes(s, clip, pc, phase);
+            with_row_lanes(clip, pc, &lanes, &ids).map(|a| (a, ids))
+        };
+        if new_fp != fp || phase != pc.phase || pc.seen != Some((clip.start, clip.end())) || auto.is_some() {
+            out.push((clip.id, Fix::Expand(seq, phase, new_fp, auto)));
         }
     }
     out
@@ -104,18 +235,31 @@ fn stale(s: &Session) -> Vec<(ClipId, Fix)> {
 
 fn apply(s: &mut Session, fixes: Vec<(ClipId, Fix)>) {
     for (id, fix) in fixes {
-        let Some(clip) = s.find_clip_mut(id) else { continue };
+        let Some(track) = s.tracks.iter_mut().find(|t| t.clips().iter().any(|c| c.id == id)) else { continue };
+        let Some(clip) = track.playlist_mut().and_then(|p| p.clip_mut(id)) else { continue };
         let (start, end) = (clip.start, clip.end());
+        let mut automated = false;
         match fix {
             Fix::Detach => clip.pattern = None,
-            Fix::Expand(seq, phase, fp) => {
+            Fix::Expand(seq, phase, fp, auto) => {
                 clip.content = ClipContent::Midi { sequence: seq };
+                if let Some((lanes, ids)) = auto {
+                    clip.automation = lanes;
+                    automated = true;
+                    if let Some(pc) = clip.pattern.as_mut() {
+                        pc.owned = ids;
+                    }
+                }
                 if let Some(pc) = clip.pattern.as_mut() {
                     pc.phase = phase;
                     pc.seen = Some((start, end));
                     pc.expanded = fp;
                 }
             }
+        }
+        // The rows' lanes are heard as the clip's own automation is: laid over the track's.
+        if automated {
+            track.refresh_played();
         }
     }
 }

@@ -27,6 +27,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             recall
         ),
+        cmd!(
+            "mix.copy_strip",
+            "Copy Strip Settings",
+            [],
+            None,
+            "{from: track, tracks?: the tracks to copy onto (default: the selected ones but `from`), sections?: [faders|pan|mutes|sends|inserts|delay] (default: inserts and sends)} — one undo step → {copied: track count}",
+            has_tracks,
+            copy_strip
+        ),
         cmd!("mix.snapshot_delete", "Delete Mix Snapshot", [], None, "{snapshot: index|name}", always, |e, p| {
             let i = snapshot_index(e, "mix.snapshot_delete", p.get("snapshot"))?;
             let gone = e.session_mut().mix_snapshots.remove(i);
@@ -90,6 +99,59 @@ fn store(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"index": index, "name": name}))
 }
 
+/// `mix.copy_strip`: the chosen sections of one strip onto others, as a snapshot of it recalled
+/// onto each (so the same rules apply: a pan of another width is left alone). Routing is not
+/// copied: an output or input taken from another track could feed a track into itself.
+fn copy_strip(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.copy_strip";
+    let from = track_param(e, C, p, "from")?.ok_or_else(|| bad(C, "`from` (the track to copy) required"))?;
+    let sections: Vec<&str> = match p.get("sections") {
+        None | Some(Value::Null) => vec!["inserts", "sends"],
+        Some(Value::Array(a)) => {
+            let mut out = Vec::new();
+            for v in a {
+                let id = v
+                    .as_str()
+                    .and_then(|x| SNAPSHOT_SECTIONS.iter().find(|(id, _)| id.eq_ignore_ascii_case(x) && *id != "routing"))
+                    .map(|(id, _)| *id);
+                out.push(id.ok_or_else(|| bad(C, format!("cannot copy {v} (faders, pan, mutes, sends, inserts or delay)")))?);
+            }
+            out
+        }
+        Some(_) => return Err(bad(C, "`sections` is a list")),
+    };
+    let targets: Vec<TrackId> = if p.get("tracks").is_some() || p.get("track").is_some() { tracks_required(e, C, p)? } else { e.target_tracks() }
+        .into_iter()
+        .filter(|t| *t != from)
+        .collect();
+    if targets.is_empty() {
+        return Err(bad(C, "no tracks to copy onto: select them, or pass `tracks`"));
+    }
+    let Some(src) = e.session().track(from).map(|t| t.mixer.clone()) else { return Err(bad(C, "unknown `from` track")) };
+    let mut n = 0usize;
+    for t in &targets {
+        let snap = MixSnapshot { name: String::new(), strips: vec![soundcraft_model::SnapshotStrip { track: *t, mixer: src.clone() }] };
+        if let Some(tr) = e.session_mut().track_mut(*t)
+            && matches!(
+                tr.kind,
+                soundcraft_model::TrackKind::Audio
+                    | soundcraft_model::TrackKind::Instrument
+                    | soundcraft_model::TrackKind::Midi
+                    | soundcraft_model::TrackKind::Aux
+            )
+            && snap.recall_onto(tr, &sections)
+        {
+            n += 1;
+        }
+    }
+    // The copied modules are new to the engine: their instances follow.
+    e.session_mut().sanitize();
+    for t in targets {
+        e.automation_changed(t, soundcraft_model::AutoParam::Volume);
+    }
+    Ok(json!({"copied": n}))
+}
+
 fn recall(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "mix.snapshot_recall";
     let i = snapshot_index(e, C, p.get("snapshot"))?;
@@ -130,6 +192,34 @@ fn recall(e: &mut Engine, p: &Value) -> Result<Value> {
 mod tests {
     use super::*;
     use soundcraft_model::{ChannelFormat, TrackKind};
+
+    /// Copy Strip Settings: one strip's inserts and sends onto the selected tracks, one undo step;
+    /// the fader stays unless asked; routing is never copied.
+    #[test]
+    fn a_strips_settings_are_copied_onto_others() {
+        let mut e = Engine::default();
+        let a = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some("A"));
+        let b = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some("B"));
+        let c = e.session_mut().add_track(TrackKind::Audio, ChannelFormat::Mono, Some("C"));
+        e.execute("mix.module_add", &json!({"track": "A", "plugin": "gain"})).unwrap();
+        e.execute("mix.send", &json!({"track": "A", "slot": 1, "bus": "Verb", "level_db": -12.0})).unwrap();
+        e.execute("mix.volume", &json!({"track": a.0, "db": -9.0})).unwrap();
+        e.session_mut().edit.selected_tracks = vec![a, b, c];
+        let r = e.execute("mix.copy_strip", &json!({"from": "A"})).unwrap();
+        assert_eq!(r["copied"], 2);
+        for t in [b, c] {
+            let m = &e.session().track(t).unwrap().mixer;
+            assert_eq!(m.inserts.len(), 1);
+            assert_eq!(m.sends[1].as_ref().map(|s| s.level_db), Some(-12.0));
+            assert_eq!(m.volume_db, 0.0, "the fader is not copied unless asked");
+        }
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(e.session().track(b).unwrap().mixer.inserts.is_empty(), "one undo step");
+        e.execute("mix.copy_strip", &json!({"from": "A", "tracks": [b.0], "sections": ["faders"]})).unwrap();
+        assert_eq!(e.session().track(b).unwrap().mixer.volume_db, -9.0);
+        assert!(e.execute("mix.copy_strip", &json!({"from": "A", "tracks": [b.0], "sections": ["routing"]})).is_err());
+        assert!(e.execute("mix.copy_strip", &json!({"from": "A", "tracks": [a.0]})).is_err(), "nothing but itself");
+    }
 
     #[test]
     fn a_snapshot_stores_and_recalls_by_section_and_track() {

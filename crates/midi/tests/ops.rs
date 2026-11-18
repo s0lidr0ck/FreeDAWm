@@ -162,6 +162,26 @@ fn transpose_within_keeps_the_shape() {
 }
 
 #[test]
+fn compress_moves_velocities_towards_or_away_from_the_centre() {
+    let mut v = vec![n(60, 0, 1), n(62, 10, 1), n(64, 20, 1)];
+    for (x, vel) in v.iter_mut().zip([40, 80, 120]) {
+        x.velocity = vel;
+    }
+    let vels = |v: &[Note]| v.iter().map(|n| n.velocity).collect::<Vec<_>>();
+    let mut a = v.clone();
+    // Halfway to their average (80).
+    change_velocity(&mut a, VelocityOp::Compress { center: None, factor: 0.5 });
+    assert_eq!(vels(&a), vec![60, 80, 100]);
+    // Around a given centre, expanded and clamped.
+    let mut b = v.clone();
+    change_velocity(&mut b, VelocityOp::Compress { center: Some(100), factor: 2.0 });
+    assert_eq!(vels(&b), vec![1, 60, 127]);
+    let mut c = v.clone();
+    change_velocity(&mut c, VelocityOp::Compress { center: None, factor: f32::NAN });
+    assert_eq!(vels(&c), vec![40, 80, 120]);
+}
+
+#[test]
 fn velocity_ops() {
     let base = vec![n(60, 0, 1), n(60, 100, 1), n(60, 200, 1)];
     let vels = |v: &[Note]| v.iter().map(|n| n.velocity).collect::<Vec<_>>();
@@ -246,6 +266,7 @@ fn sequence_helpers() {
             CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(1), value: 3, shape: Default::default() },
             CtrlEvent { tick: 500, channel: 0, kind: CtrlKind::Cc(2), value: 4, shape: Default::default() },
         ],
+        sysex: Vec::new(),
     };
     assert_eq!(seq.end_tick(), 500);
     seq.sort();
@@ -269,6 +290,7 @@ fn sequence_serde_round_trip() {
     let seq = Sequence {
         notes: vec![n(60, 0, 1)],
         ctrls: vec![CtrlEvent { tick: 1, channel: 0, kind: CtrlKind::PolyPressure(60), value: 9, shape: Default::default() }],
+        sysex: Vec::new(),
     };
     let json = serde_json::to_string(&seq).unwrap();
     assert_eq!(serde_json::from_str::<Sequence>(&json).unwrap(), seq);

@@ -220,6 +220,11 @@ pub const HIDDEN_STOCK: &[Category] =
 /// the bass amp, is offered beside Amp, and Heft, the bass enhancer.
 pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend", "keel", "heft"];
 
+/// Stock plugins in a [`HIDDEN_STOCK`] category that the lists offer all the same, under
+/// Utilities (not with the engines): Lo-Fi, the only bit-depth and sample-rate reducer (Vint's
+/// Sampler circuit is a fixed 12-bit model).
+pub const LISTED_UTILITIES: &[&str] = &["lofi"];
+
 /// The meter plug-ins (Spectrum, Loudness Meter, Phase Meter, Tuner): utilities with an editor of
 /// their own, listed under Utilities (the owner's call), not with the engines.
 pub const METER_PLUGINS: &[&str] = &["spectrum", "loudness", "phase_meter", "tuner"];
@@ -231,9 +236,10 @@ pub const HIDDEN_PLUGINS: &[&str] = &["drum_synth"];
 
 impl PluginInfo {
     /// Whether the plugin lists show this plugin: not one of the [`HIDDEN_STOCK`] categories
-    /// (or one of [`LISTED_STOCK`]), and not one of [`HIDDEN_PLUGINS`].
+    /// (or one of [`LISTED_STOCK`] or [`LISTED_UTILITIES`]), and not one of [`HIDDEN_PLUGINS`].
     pub fn listed(&self) -> bool {
-        (!HIDDEN_STOCK.contains(&self.category) || LISTED_STOCK.contains(&self.id)) && !HIDDEN_PLUGINS.contains(&self.id)
+        (!HIDDEN_STOCK.contains(&self.category) || LISTED_STOCK.contains(&self.id) || LISTED_UTILITIES.contains(&self.id))
+            && !HIDDEN_PLUGINS.contains(&self.id)
     }
 
     /// Whether the lists offer this plugin among the FireStation engines (the picker's first
@@ -365,6 +371,15 @@ pub trait Plugin: Send {
     /// Sets a parameter (clamped into range; NaN becomes the default). `false` if `id` is unknown.
     fn set_param(&mut self, id: &str, value: f32) -> bool;
     fn param(&self, id: &str) -> Option<f32>;
+    /// A parameter change `offset` frames into the next [`Plugin::process`] (sample-accurate
+    /// automation inside a block), after the [`Plugin::set_param`] values of its start. A plugin
+    /// that takes timed changes returns true (the hosted CLAP and VST3 ones queue them as
+    /// events); the default returns false and the host changes the value once per block, as it
+    /// always has. Same contract as `process`: never allocates or panics.
+    fn set_param_at(&mut self, offset: usize, id: &str, value: f32) -> bool {
+        let _ = (offset, id, value);
+        false
+    }
     /// In-place processing of `channels` planar buffers each `frames` long.
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize);
     /// [`Plugin::process`] with a sidechain key, for plugins whose [`PluginInfo::sidechain`] is
@@ -419,6 +434,22 @@ pub trait Plugin: Send {
     /// `set_param`). A plugin that derives parameters itself (FireStation Dist's Link) leaves a
     /// laned one alone: the lane wins. Must not allocate.
     fn set_param_automated(&mut self, _id: &str, _automated: bool) {}
+    /// Instruments: the names of the stereo outputs it has besides its main one (Juke's
+    /// "Out 2" to "Out 8", a hosted plug-in's auxiliary output ports), each one a mixer channel
+    /// can take (`Track::instrument_outs`). Empty by default. Read off the audio thread.
+    fn extra_outputs(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// Which of [`Plugin::extra_outputs`] the host takes (bit `n`: output `n`). A plugin sends
+    /// to an output only while it is taken, and to its main output otherwise, so nothing goes
+    /// silent for want of a channel. Must not allocate. The default ignores it.
+    fn set_outputs_taken(&mut self, _mask: u32) {}
+    /// After `process`: extra output `index` of the block just rendered into `out` (its first
+    /// two channels, `frames` long); `false` (and `out` untouched) when the plugin has no such
+    /// output. Must not allocate.
+    fn read_output(&mut self, _index: usize, _out: &mut [Vec<f32>], _frames: usize) -> bool {
+        false
+    }
     /// Instruments: note events at sample offsets within the next block.
     fn note_on(&mut self, _offset: usize, _note: u8, _velocity: u8) {}
     fn note_off(&mut self, _offset: usize, _note: u8) {}
@@ -439,6 +470,10 @@ pub trait Plugin: Send {
             _ => self.midi(offset, msg),
         }
     }
+    /// Instruments: a System Exclusive message (`F0` first, `F7` last) at a sample offset
+    /// within the next block. Hosts that can pass one on (External MIDI, CLAP) do; the default
+    /// ignores it. Audio thread: must not allocate (copy it into storage made beforehand).
+    fn sysex(&mut self, _offset: usize, _data: &[u8]) {}
     fn all_notes_off(&mut self) {}
     /// The MIDI the module emitted while processing the block just run (a drum gate's note per
     /// hit): called by the host right after `process` for every chain module whose
@@ -598,6 +633,12 @@ pub trait PluginStateReader: Send {
     /// provider names it (CLAP `preset-load`: location kind 0 a file, 1 the plugin; the file and
     /// the key within it). `false` when unsupported, gone or refused. Main thread.
     fn load_preset(&mut self, _kind: u32, _location: Option<&str>, _load_key: Option<&str>) -> bool {
+        false
+    }
+    /// The instance is gone though its slot is still filled: a plug-in run in its own process
+    /// whose process crashed or hung (it is silenced; an effect passes its input through).
+    /// Restarting it makes it again. False by default.
+    fn crashed(&self) -> bool {
         false
     }
 }
@@ -763,7 +804,10 @@ mod trait_default_tests {
         );
         assert_eq!(listed("drum_synth"), Some(false));
         assert!(create("drum_synth").is_some() && HIDDEN_PLUGINS.iter().all(|id| plugin_info(id).is_some()));
-        assert!(listed_plugins().all(|p| !HIDDEN_STOCK.contains(&p.category) || LISTED_STOCK.contains(&p.id)));
+        assert!(listed_plugins().all(|p| !HIDDEN_STOCK.contains(&p.category) || LISTED_STOCK.contains(&p.id) || LISTED_UTILITIES.contains(&p.id)));
+        // Lo-Fi, the bit and sample-rate reducer, is offered under Utilities.
+        assert_eq!(listed("lofi"), Some(true));
+        assert!(plugin_info("lofi").is_some_and(|p| !p.with_engines()));
         // Rez is a stock dynamics plugin no engine covers: listed, with the engines.
         assert_eq!(listed("rez"), Some(true));
         assert!(plugin_info("rez").is_some_and(|p| p.with_engines() && HIDDEN_STOCK.contains(&p.category)));

@@ -86,7 +86,7 @@ pub fn bar(app: &mut SoundApp, ui: &mut Ui) {
     for (size, label, tip) in [
         (StripSize::Slim, "Slim", "Slim channels"),
         (StripSize::Wide, "Wide", "Wide channels"),
-        (StripSize::Auto, "Auto", "Follow View › Narrow Mix"),
+        (StripSize::Auto, "Auto", "Follow View › Channel Width › Narrow Mix"),
     ] {
         let on = current == Some(size);
         if segment(&mut c, label, on, t.accent).on_hover_text(tip).clicked() {

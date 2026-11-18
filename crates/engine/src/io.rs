@@ -161,6 +161,24 @@ pub(crate) fn list_dir(dir: impl AsRef<Path>) -> Vec<PathBuf> {
     std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default()
 }
 
+/// Whether `dir` is a folder that may be read (false outside the automation read root).
+pub(crate) fn is_readable_dir(dir: impl AsRef<Path>) -> bool {
+    let dir = dir.as_ref();
+    crate::file_access::check_read(dir).is_ok() && dir.is_dir()
+}
+
+/// Whether `a` and `b` name the same file: equal paths, or the same file once resolved (only
+/// for paths that may be read).
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    if crate::file_access::check_read(a).is_err() || crate::file_access::check_read(b).is_err() {
+        return false;
+    }
+    matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
 /// Deletes the file at `path`, inside the automation write root when there is one.
 pub(crate) fn remove_path(path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
@@ -259,7 +277,7 @@ pub(crate) fn insert_source(s: &mut Session, name: &str, audio: Arc<SourceAudio>
 }
 
 /// A BWF time stamp (samples at the file's rate) at the session's rate, as the audio is resampled.
-fn stamp_at_rate(stamp: u64, file_rate: u32, session_rate: u32) -> u64 {
+pub(crate) fn stamp_at_rate(stamp: u64, file_rate: u32, session_rate: u32) -> u64 {
     if file_rate == 0 || file_rate == session_rate {
         return stamp;
     }
@@ -277,6 +295,11 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
         return Err(EngineError::Io(format!("{name}: no audio")));
     }
     let channels = buf.num_channels();
+    let said = soundcraft_audio_io::loop_info::loop_info(bytes, name);
+    // A short file that does not say its tempo has it detected (recorded on the clip for Conform
+    // to Tempo, never stretched on a guess).
+    let short = buf.frames() as f64 <= DETECT_MAX_SECS * f64::from(e.session().sample_rate.hz());
+    let mono = (said.bpm.is_none() && short && e.session().edit.flag(LOOPS_FOLLOW)).then(|| soundcraft_dsp::beat::downmix(&buf.channels));
     let file_rate = info.sample_rate;
     let copy = e.copy_imported_audio;
     let s = e.session_mut();
@@ -294,6 +317,12 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
     if let (Some(bwf), Some(sx)) = (info.bwf.as_ref(), s.sources.last_mut()) {
         sx.time_reference = stamp_at_rate(bwf.time_reference, file_rate, session_rate);
     }
+    // A field recorder's iXML (scene, take, tape, channel names), kept with the session.
+    if info.format == FileFormat::Wav
+        && let Some(x) = soundcraft_audio_io::ixml::ixml_of_bytes(bytes)
+    {
+        s.field_info.insert(src.0, x);
+    }
     let frames = s.source(src).map_or(0, |x| i64::try_from(x.frames).unwrap_or(0));
     let track = match target {
         Some(t) => t,
@@ -305,25 +334,77 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
     let cid = s.new_clip_id();
     let stem = s.source(src).map(|x| x.name.clone()).unwrap_or_default();
     crate::edit::place_clip(s, track, Clip::audio(cid, stem, src, 0, at, frames));
-    Ok(json!({"track": track, "clip": cid, "source": src, "frames": frames, "channels": channels}))
+    let mut matched = match_loop(e, cid, &said)?;
+    if let Some(mono) = mono {
+        let d = crate::tempo_detect::detect(e.session(), &mono, 0, (70.0, 180.0));
+        if d.bpm.is_finite() && d.bpm > 0.0 && d.beats.len() >= 8 {
+            let bpm = (d.bpm * 10.0).round() / 10.0;
+            e.session_mut().edit.values.insert(format!("clip.bpm.{}", cid.0), bpm);
+            matched = json!({"detected_bpm": bpm});
+        }
+    }
+    Ok(json!({"track": track, "clip": cid, "source": src, "frames": frames, "channels": channels, "loop": matched}))
+}
+
+/// The longest file whose tempo is detected at import, in seconds (a loop, not a song: longer
+/// ones would hold up the import; Detect Tempo does them).
+pub const DETECT_MAX_SECS: f64 = 30.0;
+
+/// Setup › Preferences… › Editing › Imported Loops Follow Tempo and Key (`import.loops_follow`, on in new
+/// sessions): a file that says its tempo (an `acid` chunk, "120bpm" in its name) is stretched to
+/// the session tempo with its pitch kept, and one that says its key is transposed (by at most a
+/// tritone) to the session's key when the session sets one. The tempo is recorded on the clip
+/// either way, so Conform to Tempo knows it later.
+pub const LOOPS_FOLLOW: &str = "import.loops_follow";
+
+/// What [`LOOPS_FOLLOW`] did to imported clip `cid`: `{bpm?, stretch?, semitones?}`, or null
+/// when the file said nothing.
+fn match_loop(e: &mut Engine, cid: soundcraft_model::ClipId, info: &soundcraft_audio_io::loop_info::LoopInfo) -> Result<Value> {
+    if info.bpm.is_none() && info.root.is_none() {
+        return Ok(Value::Null);
+    }
+    let mut out = serde_json::Map::new();
+    let on = e.session().edit.flag(LOOPS_FOLLOW);
+    let Some(start) = e.session().find_clip(cid).map(|(_, c)| c.start) else { return Ok(Value::Null) };
+    if let Some(bpm) = info.bpm {
+        out.insert("bpm".into(), json!(bpm));
+        let s = e.session_mut();
+        s.edit.values.insert(format!("clip.bpm.{}", cid.0), bpm);
+        let now = s.tempo.tempo_at_tick(s.tempo.samples_to_ticks(start, s.sample_rate));
+        if on && (bpm - now).abs() > 0.01 {
+            crate::cmd::clip_more::conform(e, &json!({"clips": [cid.0], "source_bpm": bpm, "keep_pitch": true}))?;
+            out.insert("stretch".into(), json!(bpm / now));
+        }
+    }
+    if let Some(root) = info.root.filter(|_| on && crate::vocal::has_key(e.session())) {
+        let (tonic, scale) = crate::vocal::key_pc_at(e.session(), start);
+        // A minor loop goes to the session key's relative minor in a major key, and the other way.
+        let target = match (info.minor, scale) {
+            (Some(true), 0) => tonic + 9,
+            (Some(false), 1) => tonic + 3,
+            _ => tonic,
+        };
+        let mut shift = (i32::from(target) - i32::from(root)).rem_euclid(12);
+        if shift > 6 {
+            shift -= 12;
+        }
+        if shift != 0
+            && let Some(c) = e.session_mut().find_clip_mut(cid)
+        {
+            c.transpose_cents = shift * 100;
+            out.insert("semitones".into(), json!(shift));
+        }
+    }
+    Ok(Value::Object(out))
 }
 
 /// Loads an audio file's bytes into an instrument track's Sampler as one undo step ("Load
-/// Sampler Sample"): for files that have no path, such as one dropped into the browser. The same
-/// checks as `mix.sampler_load`; not journaled, since the bytes can be large.
+/// Sampler Sample"), for audio that has no path. The same checks as `mix.sampler_load`; not
+/// journaled, since the bytes can be large.
 pub fn load_sampler_bytes(e: &mut Engine, track: TrackId, name: &str, bytes: &[u8]) -> Result<Value> {
     let before = e.session_arc();
     let r = crate::cmd::sampler::attach(e, track, name, bytes, None, Vec::new())?;
     e.push_undo("Load Sampler Sample", before);
-    Ok(r)
-}
-
-/// Loads a dropped file's bytes into slot `(pad, layer, robin)` (each from 0) of `track`'s Juke,
-/// as one undo step.
-pub fn load_kit_bytes(e: &mut Engine, track: TrackId, slot: (usize, usize, usize), name: &str, bytes: &[u8]) -> Result<Value> {
-    let before = e.session_arc();
-    let r = crate::cmd::juke::attach_sample(e, track, slot, name, bytes, None)?;
-    e.push_undo("Load Pad Sample", before);
     Ok(r)
 }
 
@@ -427,9 +508,40 @@ pub fn relink_videos(s: &mut Session, session: &Path) -> Vec<String> {
 /// Most meter changes a MIDI file may bring into the tempo map; scores have a handful.
 const MAX_MIDI_METERS: usize = 10_000;
 
-/// Import a Standard MIDI File as MIDI tracks (one per SMF track).
+/// A format-0 file's one track, when it plays on several channels, as one track per channel
+/// (named after the channel, the source's name kept in front), each with that channel's notes and
+/// controllers; its lyrics go with the first. Other files are left as they are.
+fn split_format0(smf: &mut soundcraft_midi::Smf) {
+    if smf.format != 0 || smf.tracks.len() != 1 {
+        return;
+    }
+    let Some(tr) = smf.tracks.pop() else { return };
+    let mut chans: Vec<u8> = tr.sequence.notes.iter().map(|n| n.channel & 0x0F).chain(tr.sequence.ctrls.iter().map(|c| c.channel & 0x0F)).collect();
+    chans.sort_unstable();
+    chans.dedup();
+    if chans.len() < 2 {
+        smf.tracks.push(tr);
+        return;
+    }
+    // SysEx has no channel: it goes with the first.
+    let mut sysex = tr.sequence.sysex.clone();
+    for ch in chans {
+        let mut sequence = soundcraft_midi::Sequence::default();
+        sequence.notes = tr.sequence.notes.iter().filter(|n| n.channel & 0x0F == ch).copied().collect();
+        sequence.ctrls = tr.sequence.ctrls.iter().filter(|c| c.channel & 0x0F == ch).cloned().collect();
+        sequence.sysex = std::mem::take(&mut sysex);
+        let label = if ch == 9 { "Drums (Ch 10)".to_string() } else { format!("Ch {}", ch + 1) };
+        let name = if tr.name.trim().is_empty() { label } else { format!("{} {label}", tr.name.trim()) };
+        smf.tracks.push(soundcraft_midi::SmfTrack { name, sequence });
+    }
+}
+
+/// Import a Standard MIDI File as MIDI tracks (one per SMF track; a format-0 file's one track
+/// split by channel). With `tempo_map`, its tempo and meter changes go into the session's map and
+/// its markers become markers, where they fall.
 pub fn import_midi_bytes(e: &mut Engine, bytes: &[u8], at: Samples, tempo_map: bool) -> Result<Vec<TrackId>> {
-    let smf = soundcraft_midi::read_smf(bytes).map_err(|err| EngineError::Io(err.to_string()))?;
+    let mut smf = soundcraft_midi::read_smf(bytes).map_err(|err| EngineError::Io(err.to_string()))?;
+    split_format0(&mut smf);
     let s = e.session_mut();
     // Where the file's tick 0 lands: the file's tempo and meter changes go in from there, with
     // its notes (a tempo set there leaves the time before it, so this tick stays put).
@@ -444,6 +556,19 @@ pub fn import_midi_bytes(e: &mut Engine, bytes: &[u8], at: Samples, tempo_map: b
         }
         for (tick, n, d) in &smf.meters {
             let _ = s.tempo.set_meter(base_tick.saturating_add(*tick), u32::from(*n), u32::from(*d));
+        }
+        // Its markers, where they fall in the map just set (one already there by that name and
+        // position is not added again).
+        for (tick, text) in smf.markers.iter().take(MAX_MIDI_METERS) {
+            let mut name = text.trim().to_string();
+            if name.is_empty() {
+                continue;
+            }
+            soundcraft_model::truncate_chars(&mut name, soundcraft_model::MAX_NAME_CHARS);
+            let pos = s.tempo.tick_to_samples(base_tick.saturating_add((*tick).max(0)), s.sample_rate);
+            if !s.markers.iter().any(|m| m.start == pos && m.name == name) {
+                s.add_marker(&name, soundcraft_model::MarkerKind::Marker, pos, pos);
+            }
         }
     }
     let mut out = Vec::new();
@@ -689,7 +814,8 @@ fn smf_of(s: &Session, only: Option<&[TrackId]>) -> Result<soundcraft_midi::Smf>
                         soundcraft_mix::quantize_note(s, base, q, &mut n);
                     }
                     n.velocity = (i64::from(n.velocity) + dv).clamp(1, 127) as u8;
-                    n.pitch = (i64::from(n.pitch) + dp).clamp(0, 127) as u8;
+                    let global = s.global_transpose(t, s.tempo.tick_to_samples(base.saturating_add(n.start), sr).max(c.start));
+                    n.pitch = (i64::from(n.pitch) + dp + global).clamp(0, 127) as u8;
                     let played = n.start;
                     let start = played.saturating_add(delay);
                     let end = start.saturating_add(((n.length as f64 * dur) as i64).max(1)).min(len);
@@ -715,6 +841,13 @@ fn smf_of(s: &Session, only: Option<&[TrackId]>) -> Result<soundcraft_midi::Smf>
                     ev.tick = file_tick(moved(tick.saturating_add(base)));
                     seq.ctrls.push(ev);
                 }
+                // SysEx where it plays (none a start trim hid).
+                for x in sequence.sysex.iter().filter(|x| x.tick >= 0) {
+                    let tick = x.tick.saturating_add(delay);
+                    if tick < len {
+                        seq.sysex.push(soundcraft_midi::SysEx { tick: file_tick(moved(tick.saturating_add(base))), data: x.data.clone() });
+                    }
+                }
             }
         }
         seq.sort();
@@ -738,10 +871,10 @@ fn smf_of(s: &Session, only: Option<&[TrackId]>) -> Result<soundcraft_midi::Smf>
 /// plugins' stored state, when the first block is rendered.
 pub struct Bounce {
     session: Arc<Session>,
+    /// The main file (the first of `outs`).
     path: PathBuf,
-    part: PathBuf,
     range: Range,
-    bus: Option<BusId>,
+    bus: soundcraft_mix::Tap,
     fold: Option<ChannelFormat>,
     normalize: Normalize,
     /// Measuring the peak (or loudness) to normalize to, the first of two passes.
@@ -757,10 +890,99 @@ pub struct Bounce {
     gain: f32,
     peak: f32,
     meter: soundcraft_dsp::meter::LoudnessMeter,
-    enc: Option<soundcraft_audio_io::FileEncoder<Out>>,
+    /// The files written, each from its part file (see [`Export`]).
+    outs: Vec<BounceFile>,
+    /// Summed to one channel before writing ([`FileLayout::Mono`]).
+    mono: bool,
+    /// Converting to the export rate before writing, and what it gave back.
+    resampler: Option<soundcraft_audio_io::Resampler>,
+    mono_buf: Vec<Vec<f32>>,
+    rs_out: Vec<Vec<f32>>,
+    scratch: Vec<f32>,
+    /// Text appended to a WAV as a `LIST`/`INFO` chunk once its audio is written.
+    tags: Option<soundcraft_audio_io::export::Tags>,
+    /// Whether the host adds the finished files to the session ([`Export::import`]).
+    import: bool,
     /// What the first pass measured, and whether the true-peak ceiling held the gain back.
     measured: Option<Measured>,
+    /// The audio a real-time bounce printed, written in place of a render ([`Bounce::printed`]).
+    printed: Option<Printed>,
 }
+
+/// A real-time bounce's print, read a block at a time as a render would be.
+struct Printed {
+    audio: Vec<Vec<f32>>,
+    at: usize,
+    block: Vec<Vec<f32>>,
+}
+
+impl Printed {
+    const BLOCK: usize = 1024;
+
+    fn next_block(&mut self) -> Option<(&[Vec<f32>], usize)> {
+        let len = self.audio.iter().map(Vec::len).max().unwrap_or(0);
+        let n = len.saturating_sub(self.at).min(Printed::BLOCK);
+        if n == 0 {
+            return None;
+        }
+        self.block.resize_with(self.audio.len(), Vec::new);
+        for (b, a) in self.block.iter_mut().zip(&self.audio) {
+            b.clear();
+            b.extend((self.at..self.at + n).map(|i| a.get(i).copied().unwrap_or(0.0)));
+        }
+        self.at += n;
+        Some((&self.block, n))
+    }
+}
+
+/// One file a bounce writes: its part file until it is complete, and which channel it takes.
+struct BounceFile {
+    path: PathBuf,
+    part: PathBuf,
+    format: FileFormat,
+    enc: Option<soundcraft_audio_io::FileEncoder<Out>>,
+    /// The one channel this file holds (a split bounce), else every channel.
+    channel: Option<usize>,
+    /// Noise-shaped dither to this file's depth, one per channel it holds (empty: none).
+    shapers: Vec<soundcraft_audio_io::export::NoiseShaper>,
+}
+
+/// How a bounce's files are laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileLayout {
+    /// One file holding every channel of the source.
+    #[default]
+    AsMixed,
+    /// One mono file: the channels averaged (a centred mono source keeps its level).
+    Mono,
+    /// One mono file per channel, named after it (`Mix.L.wav`, `Mix.R.wav`).
+    Split,
+}
+
+/// What Bounce Mix does beyond the format: the rate, dither shaping, channel layout, more
+/// formats in the same pass and the text in the files. The default is a plain bounce.
+#[derive(Debug, Clone, Default)]
+pub struct Export {
+    /// Convert to this rate (Hz) as the blocks are written; none keeps the session's.
+    pub sample_rate: Option<u32>,
+    /// Noise-shaped TPDF dither for 16- and 24-bit files instead of the encoder's plain TPDF.
+    pub noise_shaping: bool,
+    pub layout: FileLayout,
+    /// More formats written in the same pass, each beside the main file with its own extension.
+    pub also: Vec<EncodeOptions>,
+    /// A BWF `bext` chunk in a WAV: FreeDAWm as originator, now, and the range's start as its
+    /// time reference.
+    pub bwf: bool,
+    /// Title, artist and so on: ID3v2 in an MP3, `LIST`/`INFO` in a WAV, the description of the
+    /// `bext`.
+    pub tags: Option<soundcraft_audio_io::export::Tags>,
+    /// Add the finished main file (each file of a split bounce) to the session on new tracks
+    /// at the range's start; the host does it ([`Bounce::imports`]).
+    pub import: bool,
+}
+
+/// The highest rate a bounce converts to.
+pub const MAX_EXPORT_RATE: u32 = 384_000;
 
 /// How a bounce sets its level.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -814,10 +1036,13 @@ pub struct Measured {
     pub held_by_ceiling: bool,
 }
 
-/// A finished bounce: the size of its file and its levels.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A finished bounce: the size of its files and its levels.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Bounced {
+    /// Every file's size, together.
     pub bytes: u64,
+    /// Every file written, the main one first.
+    pub files: Vec<PathBuf>,
     pub peak_db: f32,
     pub lufs: f32,
     pub true_peak_db: f32,
@@ -834,19 +1059,38 @@ impl Bounce {
         path: &Path,
         r: Range,
         opts: &EncodeOptions,
-        bus: Option<BusId>,
+        bus: impl Into<soundcraft_mix::Tap>,
         normalize: impl Into<Normalize>,
         fold_stereo: bool,
     ) -> Result<Bounce> {
+        Bounce::export(s, path, r, opts, bus, normalize, fold_stereo, &Export::default())
+    }
+
+    /// [`Bounce::new`] with `export`'s rate, dither shaping, layout, extra formats and text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export(
+        s: Arc<Session>,
+        path: &Path,
+        r: Range,
+        opts: &EncodeOptions,
+        bus: impl Into<soundcraft_mix::Tap>,
+        normalize: impl Into<Normalize>,
+        fold_stereo: bool,
+        export: &Export,
+    ) -> Result<Bounce> {
+        const C: &str = "file.bounce_mix";
         let normalize = normalize.into();
+        let bus = bus.into();
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
-            return Err(EngineError::BadParams("file.bounce_mix".into(), "bounces are limited to 4 hours".into()));
+            return Err(EngineError::BadParams(C.into(), "bounces are limited to 4 hours".into()));
         }
         let (fmt, channels, fold) = bounce_layout(&s, bus, fold_stereo);
-        let name = path.file_name().map_or_else(|| "bounce".into(), |n| n.to_string_lossy().into_owned());
-        let part = path.with_file_name(format!("{name}.part"));
-        crate::file_access::check_write(path).map_err(EngineError::Io)?;
-        crate::file_access::check_write(&part).map_err(EngineError::Io)?;
+        let from = s.sample_rate.hz();
+        let rate = export.sample_rate.unwrap_or(from);
+        if !(8_000..=MAX_EXPORT_RATE).contains(&rate) {
+            return Err(EngineError::BadParams(C.into(), format!("`sample_rate` is 8000 to {MAX_EXPORT_RATE} Hz")));
+        }
+        let file_channels = if export.layout == FileLayout::AsMixed { channels } else { 1 };
         // A bounce into the project's `Bounced Files`, not made yet, makes it (any other missing
         // folder is an error: a mistyped destination is not created).
         if let Some(dir) =
@@ -854,15 +1098,84 @@ impl Bounce {
         {
             make_dir(dir)?;
         }
-        let enc = (|| -> std::result::Result<_, soundcraft_audio_io::AudioError> {
-            let enc = soundcraft_audio_io::FileEncoder::new(Out::create(&part)?, opts, channels, s.sample_rate.hz(), Some(fmt.channel_mask()))?;
-            enc.check_room(u64::try_from(r.len()).unwrap_or(0))?;
-            Ok(enc)
-        })()
-        .map_err(|err| {
-            let _ = std::fs::remove_file(&part);
-            EngineError::Io(format!("{}: {err}", path.display()))
-        })?;
+        // Every file: the main format at `path`, each extra one beside it; a split bounce one
+        // per channel of each.
+        let mut plan: Vec<(PathBuf, EncodeOptions, Option<usize>)> = Vec::new();
+        let label_fmt = if fold.is_some() { ChannelFormat::Stereo } else { fmt };
+        for (i, o) in std::iter::once(opts).chain(export.also.iter()).enumerate() {
+            let p = if i == 0 { path.to_path_buf() } else { path.with_extension(soundcraft_audio_io::encode_extension(o.format)) };
+            if i > 0 && plan.iter().any(|(q, ..)| q.extension() == p.extension()) {
+                continue;
+            }
+            if soundcraft_audio_io::is_lossy(o.format) && file_channels > 2 {
+                return Err(EngineError::BadParams(C.into(), "MP3 and Opus hold mono or stereo: fold the bounce down or split it".into()));
+            }
+            let mut o = o.clone();
+            if export.bwf && o.format == FileFormat::Wav {
+                let (date, time) = utc_now();
+                let tags = export.tags.clone().unwrap_or_default();
+                let description = [tags.title.trim(), tags.comment.trim()].iter().filter(|t| !t.is_empty()).copied().collect::<Vec<_>>().join(" - ");
+                o.bwf = Some(soundcraft_audio_io::BwfInfo {
+                    description: if description.is_empty() { s.name.clone() } else { description }.chars().take(256).collect(),
+                    originator: "FreeDAWm".into(),
+                    originator_reference: format!("FreeDAWm {}", env!("CARGO_PKG_VERSION")),
+                    origination_date: date,
+                    origination_time: time,
+                    time_reference: u64::try_from(r.start).unwrap_or(0),
+                });
+            }
+            match export.layout {
+                FileLayout::Split => {
+                    for c in 0..channels {
+                        let stem = p.file_stem().map_or_else(|| "bounce".into(), |n| n.to_string_lossy().into_owned());
+                        let ext = p.extension().map_or_else(String::new, |x| format!(".{}", x.to_string_lossy()));
+                        plan.push((p.with_file_name(format!("{stem}.{}{ext}", label_fmt.channel_label(c))), o.clone(), Some(c)));
+                    }
+                }
+                _ => plan.push((p, o, None)),
+            }
+        }
+        let frames = u64::try_from(r.len()).unwrap_or(0).saturating_mul(u64::from(rate)) / u64::from(from.max(1));
+        let mut outs: Vec<BounceFile> = Vec::new();
+        for (p, o, channel) in plan {
+            let name = p.file_name().map_or_else(|| "bounce".into(), |n| n.to_string_lossy().into_owned());
+            let part = p.with_file_name(format!("{name}.part"));
+            let checked = crate::file_access::check_write(&p).and_then(|()| crate::file_access::check_write(&part));
+            let made = checked.map_err(EngineError::Io).and_then(|()| {
+                (|| -> std::result::Result<_, soundcraft_audio_io::AudioError> {
+                    let mut out = Out::create(&part)?;
+                    if o.format == FileFormat::Mp3
+                        && let Some(t) = &export.tags
+                    {
+                        std::io::Write::write_all(&mut out, &t.id3v2())?;
+                    }
+                    let mask = (export.layout == FileLayout::AsMixed).then(|| label_fmt.channel_mask());
+                    // FLAC, AIFF and Opus carry the tags in the stream (WAV and MP3 above and below).
+                    let tags = export.tags.as_ref().filter(|t| !t.is_empty());
+                    let enc =
+                        soundcraft_audio_io::FileEncoder::with_tags(out, &shaped_options(&o, export.noise_shaping), file_channels, rate, mask, tags)?;
+                    enc.check_room(frames)?;
+                    Ok(enc)
+                })()
+                .map_err(|err| EngineError::Io(format!("{}: {err}", p.display())))
+            });
+            match made {
+                Ok(enc) => {
+                    let shapers = match (export.noise_shaping, shaped_bits(&o)) {
+                        (true, Some(bits)) => (0..file_channels).map(|c| soundcraft_audio_io::export::NoiseShaper::new(bits, c)).collect(),
+                        _ => Vec::new(),
+                    };
+                    outs.push(BounceFile { path: p, part, format: o.format, enc: Some(enc), channel, shapers });
+                }
+                Err(err) => {
+                    let _ = std::fs::remove_file(&part);
+                    for o in &outs {
+                        let _ = std::fs::remove_file(&o.part);
+                    }
+                    return Err(err);
+                }
+            }
+        }
         let mut meter = soundcraft_dsp::meter::LoudnessMeter::new(s.sample_rate.as_f64() as f32, channels);
         // Weighted by where each channel plays, not guessed from the channel count.
         if fmt.channels() == channels {
@@ -870,10 +1183,10 @@ impl Bounce {
                 meter.set_channel_weight(c, w);
             }
         }
+        let resampler = (rate != from).then(|| soundcraft_audio_io::Resampler::new(from, rate, file_channels));
         Ok(Bounce {
             session: s,
             path: path.to_path_buf(),
-            part,
             range: r,
             bus,
             fold,
@@ -887,9 +1200,47 @@ impl Bounce {
             gain: 1.0,
             peak: 0.0,
             meter,
-            enc: Some(enc),
+            outs,
+            mono: export.layout == FileLayout::Mono,
+            resampler,
+            mono_buf: vec![Vec::new()],
+            rs_out: vec![Vec::new(); file_channels],
+            scratch: Vec::new(),
+            tags: export.tags.clone().filter(|t| !t.is_empty()),
+            import: export.import,
             measured: None,
+            printed: None,
         })
+    }
+
+    /// Whether the finished files go into the session ([`Export::import`]).
+    pub fn imports(&self) -> bool {
+        self.import
+    }
+
+    /// Every file the bounce writes, the main one first.
+    pub fn files(&self) -> Vec<&Path> {
+        self.outs.iter().map(|o| o.path.as_path()).collect()
+    }
+
+    /// Writes the first `n` frames of the block: summed to mono, converted to the export rate
+    /// and dithered as asked, into every file.
+    fn emit(&mut self, n: usize) -> Result<()> {
+        if self.mono {
+            mono_sum(&self.block, n, &mut self.mono_buf);
+        }
+        let src = if self.mono { &self.mono_buf } else { &self.block };
+        match &mut self.resampler {
+            Some(rs) => {
+                for c in &mut self.rs_out {
+                    c.clear();
+                }
+                rs.process(src, n, &mut self.rs_out);
+                let frames = self.rs_out.first().map_or(0, Vec::len);
+                write_files(&mut self.outs, &self.rs_out, frames, &mut self.scratch)
+            }
+            None => write_files(&mut self.outs, src, n, &mut self.scratch),
+        }
     }
 
     /// The session's band plays into the bounce (tracks whose input is a musician), from `lib`.
@@ -909,6 +1260,22 @@ impl Bounce {
             self.live = Some(live);
         }
         self
+    }
+
+    /// Writes `audio` instead of rendering: the source's channels over the range as a real-time
+    /// bounce printed them while the live player played the range (hardware inserts and outboard
+    /// gear included). Every option of the bounce (rate, dither, formats, tags, normalize, fold
+    /// down, layout) applies unchanged. A print shorter than the range ends the file early; the
+    /// host checks it is whole first.
+    pub fn printed(mut self, audio: Vec<Vec<f32>>) -> Bounce {
+        self.live = None;
+        self.printed = Some(Printed { audio, at: 0, block: Vec::new() });
+        self
+    }
+
+    /// Whether the bounce writes a real-time print ([`Bounce::printed`]).
+    pub fn is_printed(&self) -> bool {
+        self.printed.is_some()
     }
 
     /// Whether the bounce renders through the host's live instances.
@@ -939,6 +1306,16 @@ impl Bounce {
         self.range
     }
 
+    /// The bus bounced, or `None` for the main mix or a hardware output.
+    pub fn bus(&self) -> Option<BusId> {
+        self.bus.bus()
+    }
+
+    /// What is bounced: the main mix, a bus or a hardware output.
+    pub fn tap(&self) -> soundcraft_mix::Tap {
+        self.bus
+    }
+
     /// How far along the bounce is, from 0 to 1.
     pub fn progress(&self) -> f32 {
         let pass = (self.done as f64 / self.range.len().max(1) as f64).min(1.0) as f32;
@@ -953,18 +1330,22 @@ impl Bounce {
     /// bounce once its file is complete.
     pub fn step(&mut self, mut more: impl FnMut() -> bool) -> Result<Option<Bounced>> {
         loop {
-            self.render();
-            let Some(render) = self.render.as_mut() else { return Ok(None) };
-            match render.next_block(&self.session) {
+            let next = match &mut self.printed {
+                Some(p) => p.next_block(),
+                None => {
+                    self.render();
+                    let Some(render) = self.render.as_mut() else { return Ok(None) };
+                    render.next_block(&self.session)
+                }
+            };
+            match next {
                 Some((chunk, n)) => {
                     fill(&mut self.block, chunk, n, self.fold, self.gain);
                     self.done += n;
                     self.peak = self.peak.max(soundcraft_dsp::offline::peak(&self.block));
                     self.meter.process(&self.block, n);
-                    if !self.measuring
-                        && let Some(enc) = &mut self.enc
-                    {
-                        enc.write(&self.block, n).map_err(|err| EngineError::Io(format!("{}: {err}", self.path.display())))?;
+                    if !self.measuring {
+                        self.emit(n)?;
                     }
                 }
                 None if self.measuring => {
@@ -978,6 +1359,9 @@ impl Bounce {
                     self.measuring = false;
                     // The second pass renders again from the start, through the same instances.
                     self.live = self.render.take().and_then(soundcraft_mix::RangeRender::into_live);
+                    if let Some(p) = &mut self.printed {
+                        p.at = 0;
+                    }
                 }
                 None => return self.finish().map(Some),
             }
@@ -997,12 +1381,31 @@ impl Bounce {
     }
 
     fn finish(&mut self) -> Result<Bounced> {
-        let bytes = match self.enc.take() {
-            Some(enc) => enc.finish().map_err(|err| EngineError::Io(format!("{}: {err}", self.path.display())))?.complete(&self.part, &self.path)?,
-            None => 0,
-        };
+        // What the converter still holds (the input ends in silence).
+        if let Some(rs) = &mut self.resampler {
+            for c in &mut self.rs_out {
+                c.clear();
+            }
+            rs.finish(&mut self.rs_out);
+            let frames = self.rs_out.first().map_or(0, Vec::len);
+            write_files(&mut self.outs, &self.rs_out, frames, &mut self.scratch)?;
+        }
+        let info = self.tags.as_ref().map(soundcraft_audio_io::export::Tags::wav_info).unwrap_or_default();
+        let mut bytes = 0u64;
+        let mut files = Vec::new();
+        for o in &mut self.outs {
+            let Some(enc) = o.enc.take() else { continue };
+            let io_err = |err: String| EngineError::Io(format!("{}: {err}", o.path.display()));
+            let mut out = enc.finish().map_err(|err| io_err(err.to_string()))?;
+            if o.format == FileFormat::Wav && !info.is_empty() {
+                append_wav_chunk(&mut out, &info).map_err(|err| io_err(err.to_string()))?;
+            }
+            bytes += out.complete(&o.part, &o.path)?;
+            files.push(o.path.clone());
+        }
         Ok(Bounced {
             bytes,
+            files,
             peak_db: soundcraft_dsp::gain_to_db(self.peak),
             lufs: self.meter.integrated_lufs(),
             true_peak_db: self.meter.true_peak_db(),
@@ -1012,29 +1415,112 @@ impl Bounce {
 }
 
 impl Drop for Bounce {
-    /// Removes the part file unless the bounce completed (which renamed it).
+    /// Removes the part files unless the bounce completed (which renamed them).
     fn drop(&mut self) {
-        drop(self.enc.take());
-        let _ = std::fs::remove_file(&self.part);
+        for o in &mut self.outs {
+            drop(o.enc.take());
+            let _ = std::fs::remove_file(&o.part);
+        }
     }
 }
 
-/// Where a bounce is written: its part file, or memory in the browser, which has no file system.
+/// `opts` as the encoder takes it when the bounce shapes its own dither: the encoder adds none.
+fn shaped_options(opts: &EncodeOptions, shaping: bool) -> EncodeOptions {
+    let mut o = opts.clone();
+    if shaping && shaped_bits(opts).is_some() {
+        o.dither = false;
+    }
+    o
+}
+
+/// The integer depth a lossless file is shaped to (none for float and the lossy formats).
+fn shaped_bits(opts: &EncodeOptions) -> Option<u32> {
+    if soundcraft_audio_io::is_lossy(opts.format) {
+        return None;
+    }
+    match opts.bit_depth {
+        soundcraft_audio_io::BitDepth::Int16 => Some(16),
+        soundcraft_audio_io::BitDepth::Int24 => Some(24),
+        _ => None,
+    }
+}
+
+/// The first `n` frames of `block` averaged into one channel (`out[0]`).
+fn mono_sum(block: &[Vec<f32>], n: usize, out: &mut [Vec<f32>]) {
+    let Some(o) = out.first_mut() else { return };
+    o.clear();
+    o.resize(n, 0.0);
+    let k = 1.0 / block.len().max(1) as f32;
+    for ch in block {
+        for (d, x) in o.iter_mut().zip(ch.iter()) {
+            *d += x * k;
+        }
+    }
+}
+
+/// Writes `frames` frames of `src` into every file: all of it, or the one channel a split file
+/// holds, through its dither shapers when it has them.
+fn write_files(outs: &mut [BounceFile], src: &[Vec<f32>], frames: usize, scratch: &mut Vec<f32>) -> Result<()> {
+    if frames == 0 {
+        return Ok(());
+    }
+    for o in outs {
+        let Some(enc) = o.enc.as_mut() else { continue };
+        let chans: &[Vec<f32>] = match o.channel {
+            Some(c) => src.get(c..c + 1).unwrap_or_default(),
+            None => src,
+        };
+        let r = if o.shapers.is_empty() {
+            enc.write(chans, frames)
+        } else {
+            let mut shaped: Vec<Vec<f32>> = Vec::with_capacity(chans.len());
+            for (ch, sh) in chans.iter().zip(o.shapers.iter_mut()) {
+                scratch.clear();
+                scratch.extend(ch.iter().take(frames));
+                scratch.resize(frames, 0.0);
+                sh.process(scratch);
+                shaped.push(scratch.clone());
+            }
+            enc.write(&shaped, frames)
+        };
+        r.map_err(|err| EngineError::Io(format!("{}: {err}", o.path.display())))?;
+    }
+    Ok(())
+}
+
+/// Appends a chunk to a finished RIFF WAV at the end of `out` (word-aligned) and grows the RIFF
+/// size to hold it. An RF64 file (past 4 GiB) is left as it is.
+fn append_wav_chunk(out: &mut Out, chunk: &[u8]) -> std::io::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut end = out.seek(SeekFrom::End(0))?;
+    let grown = end.saturating_add(chunk.len() as u64 + 1);
+    if grown >= u64::from(u32::MAX) {
+        return Ok(());
+    }
+    if end % 2 == 1 {
+        out.write_all(&[0])?;
+        end += 1;
+    }
+    out.write_all(chunk)?;
+    let riff = u32::try_from(end + chunk.len() as u64 - 8).unwrap_or(u32::MAX);
+    out.seek(SeekFrom::Start(4))?;
+    out.write_all(&riff.to_le_bytes())?;
+    out.seek(SeekFrom::End(0))?;
+    Ok(())
+}
+
+/// Where a bounce is written: its part file.
 enum Out {
     File(std::io::BufWriter<std::fs::File>),
-    Memory(std::io::Cursor<Vec<u8>>),
 }
 
 impl Out {
     fn create(part: &Path) -> std::io::Result<Out> {
-        if cfg!(target_arch = "wasm32") {
-            return Ok(Out::Memory(std::io::Cursor::new(Vec::new())));
-        }
         Ok(Out::File(std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(part)?)))
     }
 
     /// Puts the finished file at `path` and returns its size: the part file is synced and renamed
-    /// over it; in the browser the bytes are delivered ([`write_file`]).
+    /// over it.
     fn complete(self, part: &Path, path: &Path) -> Result<u64> {
         match self {
             Out::File(out) => {
@@ -1046,11 +1532,6 @@ impl Out {
                 });
                 replace_with(part, path, synced).map(|()| len)
             }
-            Out::Memory(m) => {
-                let bytes = m.into_inner();
-                write_file(&path.to_string_lossy(), &bytes)?;
-                Ok(bytes.len() as u64)
-            }
         }
     }
 }
@@ -1059,20 +1540,12 @@ impl std::io::Write for Out {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Out::File(f) => f.write(buf),
-            Out::Memory(m) => {
-                // A long bounce may not fit in the browser's memory: fail instead of aborting.
-                let end = usize::try_from(m.position()).unwrap_or(usize::MAX).saturating_add(buf.len());
-                let v = m.get_mut();
-                v.try_reserve(end.saturating_sub(v.len())).map_err(|_| std::io::ErrorKind::OutOfMemory)?;
-                m.write(buf)
-            }
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Out::File(f) => f.flush(),
-            Out::Memory(_) => Ok(()),
         }
     }
 }
@@ -1081,7 +1554,6 @@ impl std::io::Seek for Out {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         match self {
             Out::File(f) => f.seek(pos),
-            Out::Memory(m) => m.seek(pos),
         }
     }
 }
@@ -1091,12 +1563,14 @@ const MAX_BOUNCE_SECS: f64 = 4.0 * 3600.0;
 /// The format, channel count and fold-down source of a bounce of the main mix or `bus`: every
 /// channel (a mono or stereo main mix as stereo), or an ITU stereo fold-down of a surround source
 /// when `fold_stereo`.
-fn bounce_layout(s: &Session, bus: Option<BusId>, fold_stereo: bool) -> (ChannelFormat, usize, Option<ChannelFormat>) {
+fn bounce_layout(s: &Session, bus: soundcraft_mix::Tap, fold_stereo: bool) -> (ChannelFormat, usize, Option<ChannelFormat>) {
+    use soundcraft_mix::Tap;
     let nch = soundcraft_mix::source_channels(s, bus);
     let fmt = match bus {
-        Some(id) => s.bus(id).map_or(ChannelFormat::Stereo, |b| b.format),
-        None if nch <= 2 => ChannelFormat::Stereo,
-        None => s.main_format(),
+        Tap::Bus(id) => s.bus(id).map_or(ChannelFormat::Stereo, |b| b.format),
+        Tap::Output(i) if i > 0 => s.outputs.get(i).map_or(ChannelFormat::Stereo, |o| o.format),
+        _ if nch <= 2 => ChannelFormat::Stereo,
+        _ => s.main_format(),
     };
     if fold_stereo && nch > 2 { (ChannelFormat::Stereo, 2, Some(fmt)) } else { (fmt, nch, None) }
 }
@@ -1128,8 +1602,9 @@ pub fn bounce_stems_with(e: &Engine, dir: &str, r: Range, opts: &EncodeOptions, 
 /// being written is left unfinished as its `.part`). One file per unmuted audio, instrument or
 /// MIDI track, each its track soloed through the master.
 pub struct StemsJob {
-    /// The stems still to render: the file and the session with its track soloed.
-    todo: std::collections::VecDeque<(PathBuf, Arc<Session>)>,
+    /// The stems still to render: the file, the session (with its track soloed) and the bus a
+    /// bus stem renders.
+    todo: std::collections::VecDeque<(PathBuf, Arc<Session>, Option<BusId>)>,
     total: usize,
     current: Option<Bounce>,
     done: Vec<String>,
@@ -1142,16 +1617,34 @@ pub struct StemsJob {
 impl StemsJob {
     /// Checks the range and makes the folder; renders nothing yet.
     pub fn new(e: &Engine, dir: &str, r: Range, opts: &EncodeOptions, fold_stereo: bool) -> Result<StemsJob> {
+        StemsJob::choose(e, dir, r, opts, fold_stereo, None, &[])
+    }
+
+    /// [`StemsJob::new`] for the tracks `tracks` (none: every unmuted audio, instrument or MIDI
+    /// track) and a stem for each bus of `busses` (the bus as it is summed, no solo).
+    pub fn choose(
+        e: &Engine,
+        dir: &str,
+        r: Range,
+        opts: &EncodeOptions,
+        fold_stereo: bool,
+        tracks: Option<&[TrackId]>,
+        busses: &[BusId],
+    ) -> Result<StemsJob> {
         let s = e.session();
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
             return Err(EngineError::BadParams("file.bounce_stems".into(), "bounces are limited to 4 hours".into()));
         }
         make_dir(dir)?;
         let ext = soundcraft_audio_io::encode_extension(opts.format);
-        let todo: std::collections::VecDeque<(PathBuf, Arc<Session>)> = s
+        let chosen = |t: &soundcraft_model::Track| match tracks {
+            Some(ids) => ids.contains(&t.id) && t.kind != TrackKind::Master,
+            None => matches!(t.kind, TrackKind::Audio | TrackKind::Instrument | TrackKind::Midi) && !t.inactive && !t.mixer.mute,
+        };
+        let mut todo: std::collections::VecDeque<(PathBuf, Arc<Session>, Option<BusId>)> = s
             .tracks
             .iter()
-            .filter(|t| matches!(t.kind, TrackKind::Audio | TrackKind::Instrument | TrackKind::Midi) && !t.inactive && !t.mixer.mute)
+            .filter(|t| chosen(t))
             .map(|t| {
                 let mut solo = s.clone();
                 for x in &mut solo.tracks {
@@ -1161,9 +1654,22 @@ impl StemsJob {
                 // session is only a listen, which a bounce ignores, and must not turn this one
                 // into a listen that leaves the whole mix playing.
                 solo.edit.solo_mode = "sip".into();
-                (Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&t.name))), Arc::new(solo))
+                (Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&t.name))), Arc::new(solo), None)
             })
             .collect();
+        // A bus stem plays the bus as the mix sums it: nothing soloed, an AFL or PFL listen
+        // ignored as a bounce ignores it.
+        let mut plain = s.clone();
+        plain.edit.solo_mode = "sip".into();
+        let plain = Arc::new(plain);
+        for b in busses {
+            let Some(bus) = s.bus(*b) else { continue };
+            todo.push_back((
+                Path::new(dir).join(format!("{} - {}.{ext}", sanitize_name(&s.name), sanitize_name(&bus.name))),
+                Arc::clone(&plain),
+                Some(*b),
+            ));
+        }
         Ok(StemsJob {
             total: todo.len(),
             todo,
@@ -1196,9 +1702,9 @@ impl StemsJob {
     pub fn step(&mut self, mut more: impl FnMut() -> bool) -> Result<Option<Vec<String>>> {
         loop {
             if self.current.is_none() {
-                let Some((path, session)) = self.todo.pop_front() else { return Ok(Some(std::mem::take(&mut self.done))) };
+                let Some((path, session, bus)) = self.todo.pop_front() else { return Ok(Some(std::mem::take(&mut self.done))) };
                 self.current =
-                    Some(Bounce::new(session, &path, self.range, &self.opts, None, Normalize::Off, self.fold)?.with_band(Arc::clone(&self.band)));
+                    Some(Bounce::new(session, &path, self.range, &self.opts, bus, Normalize::Off, self.fold)?.with_band(Arc::clone(&self.band)));
             }
             let Some(b) = self.current.as_mut() else { continue };
             let finished = b.step(&mut more)?.is_some();
@@ -1281,6 +1787,13 @@ pub fn strip_silence(s: &mut Session, t: TrackId, r: Range, thr: f32, min_len: S
     Ok(keep.len())
 }
 
+/// What Strip Silence would keep of `t` in `r` with these settings, changing nothing (its
+/// preview): the clip spans that stay, in time order.
+pub fn strip_preview(s: &Session, t: TrackId, r: Range, thr: f32, min_len: Samples, pre: Samples, post: Samples) -> Result<Vec<(Samples, Samples)>> {
+    let r = bounded_to_track(s, t, r);
+    non_silent(s, t, r, thr, min_len, pre, post)
+}
+
 /// Most samples (over all channels) Strip Silence renders at once.
 const STRIP_WINDOW_SAMPLES: usize = 1 << 24;
 
@@ -1334,7 +1847,8 @@ pub fn consolidate(e: &mut Engine, cmd: &str, t: TrackId, r: Range) -> Result<bo
         return Err(crate::cmd::bad(cmd, format!("selection is too long to consolidate on `{}` (at most {secs:.0} s)", tr.name)));
     }
     let r = Range::new(start, start + len);
-    let audio = soundcraft_mix::render_clips(s, t, r);
+    // As playback hears it: the automatic edge fades where a clip starts or ends inside the range.
+    let audio = soundcraft_mix::render_clips_as_heard(s, t, r);
     if audio.iter().any(|ch| ch.len() as i64 != len) {
         return Err(EngineError::Internal(cmd.to_string(), "consolidate rendered the wrong length".into()));
     }
@@ -1606,13 +2120,7 @@ pub fn sanitize_name(n: &str) -> String {
 
 /// Save the session to `path` (a `.fdawm` file, or the `.scraft` it was opened from). Audio that only exists in memory is written
 /// as 32-bit float WAV into `Audio Files/` next to it. Returns how many audio files were written.
-///
-/// In the browser there are no folders: the session and all its audio go out as one bundle file
-/// (`<name>.fdawmz`, see [`session_bundle`]) through the host's delivery hook ([`set_deliver`]).
 pub fn save_session(e: &mut Engine, path: &str) -> Result<usize> {
-    if cfg!(target_arch = "wasm32") {
-        return save_session_bundle(e, path);
-    }
     let (fresh, written, p) = write_session(e.session(), path, false, e.copy_imported_audio)?;
     // Keep the in-memory document in sync (paths, unsaved flags) without an undo step.
     *e.session_mut() = fresh;
@@ -1749,6 +2257,7 @@ fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool
     };
     // Files written for audio during this save: sources playing the same audio share one.
     let mut files: HashMap<*const SourceAudio, String> = HashMap::new();
+    let allocated = allocated_folders(&s);
     for (i, src) in s.sources.iter_mut().enumerate() {
         if !same_dir
             && s.pool.get(src.id).is_none()
@@ -1758,6 +2267,10 @@ fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool
             src.path = f.join(&src.path).to_string_lossy().into_owned();
         }
         if !copy_refs && !src.unsaved && Path::new(&src.path).is_absolute() && Path::new(&src.path).is_file() {
+            continue;
+        }
+        // A take recorded to a folder Setup › Disk Allocation chose stays on that disk.
+        if !src.unsaved && Path::new(&src.path).is_file() && allocated.iter().any(|a| Path::new(&src.path).starts_with(a)) {
             continue;
         }
         let exists_rel = same_dir && !Path::new(&src.path).is_absolute() && dir.join(&src.path).exists();
@@ -1861,7 +2374,7 @@ fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool
 /// referred to where it is.
 fn copy_module_files(s: &mut Session, dir: &Path, audio_dir: &Path, from: Option<&Path>, same_dir: bool) {
     let rate = s.sample_rate.hz();
-    let mut renamed: Vec<(String, String, String)> = Vec::new();
+    let mut renamed: Vec<(String, String, String, String)> = Vec::new();
     let mut copied: std::collections::HashMap<PathBuf, String> = std::collections::HashMap::new();
     for t in &mut s.tracks {
         for ins in &mut t.mixer.inserts {
@@ -1895,14 +2408,14 @@ fn copy_module_files(s: &mut Session, dir: &Path, audio_dir: &Path, from: Option
                         }
                     },
                 };
-                renamed.push((key.clone(), r.clone(), stored.clone()));
+                renamed.push((key.clone(), r.clone(), stored.clone(), ins.space_edit.clone()));
                 *r = stored;
             }
         }
     }
-    for (key, old, new) in renamed {
-        if let Some(data) = s.assets.get_for(&key, &old, rate).cloned() {
-            s.assets.insert_for(&key, &new, rate, data);
+    for (key, old, new, edit) in renamed {
+        if let Some(data) = s.assets.get_edited(&key, &old, &edit, rate).cloned() {
+            s.assets.insert_edited(&key, &new, &edit, rate, data);
         }
     }
 }
@@ -2322,7 +2835,7 @@ fn file_name_of(path: &str) -> String {
 }
 
 /// Decode one audio file's bytes at the session rate (no waveforms yet).
-fn decode_buffer(bytes: &[u8], ext: Option<&str>, rate: u32) -> std::result::Result<AudioBuffer, String> {
+pub(crate) fn decode_buffer(bytes: &[u8], ext: Option<&str>, rate: u32) -> std::result::Result<AudioBuffer, String> {
     let (_, buf) = soundcraft_audio_io::decode(bytes, ext).map_err(|err| err.to_string())?;
     at_rate(buf, rate, MAX_IMPORT_SAMPLES).ok_or_else(|| "too large to load".to_string())
 }
@@ -2354,11 +2867,10 @@ pub(crate) fn decode_file(files: &mut DecodedFiles, p: &Path, rate: u32) -> std:
         .clone()
 }
 
-// ─── Hosts without a filesystem (the browser) ─────────────────────────────────────────────────
+// ─── Session bundles ─────────────────────────────────────────────────────────────────────────
 
 /// Extension of a session bundle: one zip file holding the `.fdawm` session and its
-/// `Audio Files/`, the same layout as a saved session folder. The browser has no folders, so it
-/// saves and opens sessions as bundles.
+/// `Audio Files/`, the same layout as a saved session folder.
 pub const BUNDLE_EXTENSION: &str = "fdawmz";
 /// The bundle extension before the FreeDAWm rename: such bundles still open (holding a
 /// `.scraft`), and one opened keeps its name.
@@ -2370,25 +2882,8 @@ pub const BUNDLE_EXTENSIONS: [&str; 2] = [BUNDLE_EXTENSION, LEGACY_BUNDLE_EXTENS
 const MAX_BUNDLE_ENTRIES: usize = 10_000;
 const MAX_BUNDLE_BYTES: u64 = 1 << 30;
 
-/// Hands a finished file (name, bytes) to the person on a host without a filesystem: the web app
-/// installs one that starts a download. Native builds write files and never install it.
-pub type DeliverHook = fn(&str, &[u8]) -> std::result::Result<(), String>;
-
-static DELIVER: std::sync::OnceLock<DeliverHook> = std::sync::OnceLock::new();
-
-/// Install the delivery hook (once, at start-up of the web app).
-pub fn set_deliver(h: DeliverHook) {
-    let _ = DELIVER.set(h);
-}
-
-/// Write one output file: to `path` natively; in the browser, delivered under its file name.
-/// Without this, every export on the web failed with «operation not supported on this platform».
+/// Write one output file to `path`.
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
-    if cfg!(target_arch = "wasm32") {
-        let deliver = DELIVER.get().ok_or_else(|| EngineError::Io("saving files is not available in this build".into()))?;
-        let name = Path::new(path).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or("Untitled");
-        return deliver(name, bytes).map_err(EngineError::Io);
-    }
     crate::file_access::check_write(path).map_err(EngineError::Io)?;
     std::fs::write(path, bytes).map_err(|err| EngineError::Io(format!("{path}: {err}")))
 }
@@ -2439,24 +2934,7 @@ pub fn bundle_extension_for(name: &str) -> &'static str {
     if legacy { LEGACY_BUNDLE_EXTENSION } else { BUNDLE_EXTENSION }
 }
 
-/// Save as a bundle named after `path`'s file name, delivered through the host ([`write_file`]).
-fn save_session_bundle(e: &mut Engine, path: &str) -> Result<usize> {
-    let stem = Path::new(path).file_stem().and_then(|x| x.to_str()).filter(|x| !x.is_empty()).map(str::to_string);
-    let mut s = e.session().clone();
-    if let Some(stem) = stem {
-        s.name = stem;
-    }
-    let (bytes, fresh) = session_bundle(&s)?;
-    let file = format!("{}.{}", sanitize_name(&fresh.name), bundle_extension_for(path));
-    write_file(&file, &bytes)?;
-    let written = fresh.sources.iter().filter(|x| fresh.pool.get(x.id).is_some()).count();
-    *e.session_mut() = fresh;
-    e.path = Some(file);
-    e.mark_clean();
-    Ok(written)
-}
-
-/// Open a session from bytes (the browser has no paths): a bundle ([`session_bundle`]) or a bare
+/// Open a session from bytes: a bundle ([`session_bundle`]) or a bare
 /// `.fdawm` (or `.scraft`), whose audio is then reported missing. A `.scraftz` bundle keeps its
 /// extension, so it saves back under the same name. Returns the missing media, like
 /// [`open_session`].
@@ -2469,72 +2947,8 @@ pub fn open_session_bytes(e: &mut Engine, name: &str, bytes: &[u8]) -> Result<Ve
     open_session_parts(e, name, &text, files)
 }
 
-/// What a session kept in the browser's storage is made of ([`session_store_parts`]): the
-/// session's JSON, its audio files not stored yet (path, WAV bytes), and every audio file it
-/// uses (so the store can drop the others).
-#[derive(Debug, Clone, Default)]
-pub struct StoreParts {
-    pub json: String,
-    pub new_files: Vec<(String, Vec<u8>)>,
-    pub used: Vec<String>,
-}
-
-/// The session as files for the browser's own storage, kept between visits: each source's audio
-/// as a 32-bit float WAV under `Audio Files/`, named by its id and a fingerprint of its audio (so
-/// a file once stored never changes and is written once), and the session's JSON pointing at
-/// them. Only files not in `stored` are encoded. Opened again by [`open_session_parts`].
-pub fn session_store_parts(session: &Session, stored: &std::collections::BTreeSet<String>) -> Result<StoreParts> {
-    let mut s = session.clone();
-    let mut out = StoreParts::default();
-    for src in &mut s.sources {
-        let Some(audio) = s.pool.get(src.id) else { continue };
-        let buf = audio.buffer();
-        let target = format!("Audio Files/{}-{:016x}.wav", src.id.0, audio_fingerprint(&buf));
-        if !stored.contains(&target) && !out.new_files.iter().any(|(p, _)| *p == target) {
-            let opts = EncodeOptions {
-                format: FileFormat::Wav,
-                bit_depth: soundcraft_audio_io::BitDepth::Float32,
-                dither: false,
-                bwf: None,
-                bitrate_kbps: 0,
-            };
-            let bytes = soundcraft_audio_io::encode(&buf, &opts).map_err(|err| EngineError::Io(err.to_string()))?;
-            out.new_files.push((target.clone(), bytes));
-        }
-        if !out.used.contains(&target) {
-            out.used.push(target.clone());
-        }
-        src.path = target;
-        src.unsaved = false;
-        src.format = FileFormat::Wav;
-    }
-    out.json = s.to_json().map_err(|err| EngineError::Io(err.to_string()))?;
-    Ok(out)
-}
-
-/// A cheap fingerprint of some audio: its shape and every 97th sample of each channel (FNV-1a).
-fn audio_fingerprint(b: &AudioBuffer) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut put = |bytes: &[u8]| {
-        for x in bytes {
-            h ^= u64::from(*x);
-            h = h.wrapping_mul(0x0100_0000_01b3);
-        }
-    };
-    put(&b.sample_rate.to_le_bytes());
-    put(&(b.channels.len() as u64).to_le_bytes());
-    for c in &b.channels {
-        put(&(c.len() as u64).to_le_bytes());
-        for v in c.iter().step_by(97) {
-            put(&v.to_bits().to_le_bytes());
-        }
-    }
-    h
-}
-
 /// Opens a session from its JSON `text` and the files beside it (relative path → bytes): a
-/// bundle's insides, or what the browser kept ([`session_store_parts`]). Returns the media that
-/// could not be found or read.
+/// bundle's insides. Returns the media that could not be found or read.
 pub fn open_session_parts(e: &mut Engine, name: &str, text: &str, mut files: std::collections::HashMap<String, Vec<u8>>) -> Result<Vec<String>> {
     let mut s = Session::from_json(text).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;
     let mut missing = Vec::new();
@@ -2582,13 +2996,37 @@ pub fn open_session_parts(e: &mut Engine, name: &str, text: &str, mut files: std
 /// Unpack a bundle: the one session (`.fdawm`, or `.scraft` in an older bundle) at its top level
 /// and the files beside it, by relative path.
 fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String, Vec<u8>>)> {
+    let (mut text, mut files) = (None, std::collections::HashMap::new());
+    bundle_entries(std::io::Cursor::new(bytes), |rel, r| {
+        let mut data = Vec::new();
+        r.read_to_end(&mut data).map_err(|err| EngineError::Io(format!("bundle: {rel}: {err}")))?;
+        if is_bundle_session(rel) && text.is_none() {
+            text = Some(String::from_utf8(data).map_err(|_| EngineError::Io(format!("bundle: {rel} is not text")))?);
+        } else {
+            files.insert(rel.to_string(), data);
+        }
+        Ok(())
+    })?;
+    let text = text.ok_or_else(|| EngineError::Io("bundle: no .fdawm session inside".into()))?;
+    Ok((text, files))
+}
+
+/// Whether `rel` (a path inside a bundle) is a session file at its top level.
+fn is_bundle_session(rel: &str) -> bool {
+    !rel.contains('/') && soundcraft_model::is_session_path(rel)
+}
+
+/// Each file of a bundle (folders are skipped) with its relative path and a reader of its bytes,
+/// within the limits every bundle reader keeps: at most [`MAX_BUNDLE_ENTRIES`] entries and
+/// [`MAX_BUNDLE_BYTES`] in all, and never a byte past a file's declared size (it is hostile too).
+fn bundle_entries<R: std::io::Read + std::io::Seek>(reader: R, mut each: impl FnMut(&str, &mut dyn std::io::Read) -> Result<()>) -> Result<()> {
     use std::io::Read as _;
     let zerr = |err: zip::result::ZipError| EngineError::Io(format!("bundle: {err}"));
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(zerr)?;
+    let mut z = zip::ZipArchive::new(reader).map_err(zerr)?;
     if z.len() > MAX_BUNDLE_ENTRIES {
         return Err(EngineError::Io("bundle: too many files".into()));
     }
-    let (mut text, mut files, mut total) = (None, std::collections::HashMap::new(), 0u64);
+    let mut total = 0u64;
     for i in 0..z.len() {
         let mut f = z.by_index(i).map_err(zerr)?;
         if f.is_dir() {
@@ -2600,18 +3038,118 @@ fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String
         if total > MAX_BUNDLE_BYTES {
             return Err(EngineError::Io("bundle: too large".into()));
         }
-        let mut data = Vec::new();
-        // The declared size is hostile too: never read past it.
-        f.by_ref().take(size).read_to_end(&mut data).map_err(|err| EngineError::Io(format!("bundle: {rel}: {err}")))?;
-        let is_session = !rel.contains('/') && soundcraft_model::is_session_path(&rel);
-        if is_session && text.is_none() {
-            text = Some(String::from_utf8(data).map_err(|_| EngineError::Io(format!("bundle: {rel} is not text")))?);
-        } else {
-            files.insert(rel, data);
+        each(&rel, &mut f.by_ref().take(size))?;
+    }
+    Ok(())
+}
+
+/// The bytes of the bundle at `path`, for [`open_session_bytes`]; a file larger than any bundle
+/// may unpack to (with room for the zip's own records) is refused unread.
+pub fn read_bundle_file(path: &str) -> Result<Vec<u8>> {
+    read_file_max(path, MAX_BUNDLE_BYTES.saturating_add(64 << 20))
+}
+
+/// Whether `path` names a session bundle (`.fdawmz`, or `.scraftz` from before the rename).
+pub fn is_bundle_path(path: impl AsRef<Path>) -> bool {
+    path.as_ref().extension().and_then(|x| x.to_str()).is_some_and(|x| BUNDLE_EXTENSIONS.iter().any(|b| x.eq_ignore_ascii_case(b)))
+}
+
+/// Whether the file at `path` is a session bundle: by its extension, else by the zip signature
+/// at its start (a bundle renamed to `.fdawm`).
+pub fn is_bundle_file(path: &str) -> bool {
+    use std::io::Read as _;
+    if is_bundle_path(path) {
+        return true;
+    }
+    let mut head = [0u8; 4];
+    open_read(path).is_ok_and(|mut f| f.read_exact(&mut head).is_ok()) && head == *b"PK\x03\x04"
+}
+
+/// A bundle unpacked by [`unpack_bundle`]: the session file and the folder holding it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unpacked {
+    pub session: String,
+    pub folder: String,
+}
+
+/// Unpacks the bundle at `path` into a new folder beside it, named after it (`Song.fdawmz` →
+/// `Song/`, or `Song 2/` and so on when that exists: an existing folder is never written into),
+/// as a saved session folder: `<name>.fdawm` and its `Audio Files/`. Desktop sessions live in
+/// folders, so a bundle opens from there and saves there. A damaged bundle, one past the limits
+/// of [`bundle_entries`], or one naming a file outside its own folder (`..`, an absolute path)
+/// is refused, and the new folder is removed again.
+pub fn unpack_bundle(path: &str) -> Result<Unpacked> {
+    let p = Path::new(path);
+    let file = open_read(p)?;
+    let stem = sanitize_name(p.file_stem().and_then(|x| x.to_str()).unwrap_or("Untitled"));
+    let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let folder = new_folder_beside(parent, &stem)?;
+    let unpacked = unpack_into(std::io::BufReader::new(file), &folder, &stem);
+    match unpacked {
+        Ok(session) => Ok(Unpacked { session: session.to_string_lossy().into_owned(), folder: folder.to_string_lossy().into_owned() }),
+        Err(err) => {
+            let _ = std::fs::remove_dir_all(&folder);
+            Err(err)
         }
     }
-    let text = text.ok_or_else(|| EngineError::Io("bundle: no .fdawm session inside".into()))?;
-    Ok((text, files))
+}
+
+/// A new, empty folder `parent/name` (or `name 2`, `name 3`…, the first that does not exist).
+fn new_folder_beside(parent: &Path, name: &str) -> Result<PathBuf> {
+    for k in 1..=999 {
+        let dir = parent.join(if k == 1 { name.to_string() } else { format!("{name} {k}") });
+        crate::file_access::check_write(&dir).map_err(EngineError::Io)?;
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(EngineError::Io(format!("{}: {err}", dir.display()))),
+        }
+    }
+    Err(EngineError::Io(format!("{}: no free folder name for “{name}”", parent.display())))
+}
+
+/// Writes the bundle's files into `folder` (which is new and empty), the session as
+/// `<stem>.fdawm`. Returns the session file.
+fn unpack_into<R: std::io::Read + std::io::Seek>(reader: R, folder: &Path, stem: &str) -> Result<PathBuf> {
+    let mut session = None;
+    bundle_entries(reader, |rel, r| {
+        let target = if is_bundle_session(rel) && session.is_none() {
+            let t = folder.join(format!("{stem}.{}", soundcraft_model::SESSION_EXTENSION));
+            session = Some(t.clone());
+            t
+        } else {
+            folder.join(bundle_rel_path(rel)?)
+        };
+        let ioerr = |err: std::io::Error| EngineError::Io(format!("bundle: {rel}: {err}"));
+        if let Some(dir) = target.parent() {
+            std::fs::create_dir_all(dir).map_err(ioerr)?;
+        }
+        let mut out = std::fs::File::create_new(&target).map_err(ioerr)?;
+        std::io::copy(r, &mut out).map_err(ioerr)?;
+        Ok(())
+    })?;
+    session.ok_or_else(|| EngineError::Io("bundle: no .fdawm session inside".into()))
+}
+
+/// A path inside a bundle as a relative path that stays inside the folder it is unpacked into:
+/// plain names joined by `/`; anything else (`..`, `.`, an absolute path, a drive, a backslash)
+/// is refused.
+fn bundle_rel_path(rel: &str) -> Result<PathBuf> {
+    let refuse = || EngineError::Io(format!("bundle: refused the file name “{rel}”"));
+    if rel.is_empty() || rel.contains(['\\', ':', '\0']) {
+        return Err(refuse());
+    }
+    let mut out = PathBuf::new();
+    for part in rel.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(refuse());
+        }
+        out.push(part);
+    }
+    if !out.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+        return Err(refuse());
+    }
+    Ok(out)
 }
 
 /// The record-enabled audio tracks, each with the device input channels it records (resolved by
@@ -2656,6 +3194,10 @@ impl TakePlan {
     }
 }
 
+/// A take channel no frame holds: the writer records silence there (a track wider than its
+/// input, see [`soundcraft_model::track_input_channel`]).
+pub const SILENT_CHANNEL: usize = usize::MAX;
+
 /// [`plan_takes`] with the bus-input tracks too: an armed audio track whose input is a bus
 /// records that bus as the mix renders it (no input device needed), its channels after the
 /// device's `input_channels` in each frame. With no input device (`input_channels` 0) only those
@@ -2681,7 +3223,7 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
                     soundcraft_model::Route::Hardware(name) => {
                         let refuse = || format!("{}: input “{name}” is not available on this device ({input_channels} inputs)", t.name);
                         let (first, width) = s.input_channels(name).ok_or_else(refuse)?;
-                        if (0..t.channels()).any(|k| soundcraft_model::track_input_channel(k, first, width) >= input_channels) {
+                        if (0..t.channels()).filter_map(|k| soundcraft_model::track_input_channel(k, first, width)).any(|c| c >= input_channels) {
                             return Err(refuse());
                         }
                     }
@@ -2703,21 +3245,24 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
             soundcraft_model::Route::Hardware(name) => {
                 let refuse = || format!("{}: input “{name}” is not available on this device ({input_channels} inputs)", t.name);
                 let (first, width) = s.input_channels(name).ok_or_else(refuse)?;
-                let chans: Vec<usize> = (0..t.channels()).map(|k| soundcraft_model::track_input_channel(k, first, width)).collect();
-                if chans.iter().any(|c| *c >= input_channels) {
+                let chans: Vec<Option<usize>> = (0..t.channels()).map(|k| soundcraft_model::track_input_channel(k, first, width)).collect();
+                if chans.iter().flatten().any(|c| *c >= input_channels) {
                     return Err(refuse());
                 }
-                chans
+                chans.into_iter().map(|c| c.unwrap_or(SILENT_CHANNEL)).collect()
             }
             // No hardware input: the channels the track monitors (`default_input_channel`).
-            _ => (0..t.channels()).map(|k| soundcraft_model::default_input_channel(k, t.channels(), input_channels)).collect(),
+            _ => (0..t.channels())
+                .map(|k| soundcraft_model::default_input_channel(k, t.channels(), input_channels).unwrap_or(SILENT_CHANNEL))
+                .collect(),
         };
         let stem = sanitize_name(&t.name);
         let ext = match s.record_file_type {
             soundcraft_model::RecordFileType::Wav => "wav",
             soundcraft_model::RecordFileType::Aiff => "aif",
         };
-        let file = |n: usize| dir.join("Audio Files").join(format!("{stem}_{n:02}.{ext}"));
+        let folder = take_folder(s, dir, t.id);
+        let file = |n: usize| folder.join(format!("{stem}_{n:02}.{ext}"));
         // Numbered per track: one past the track's highest take in the session, skipping files
         // already there (and another armed track's of the same name).
         let take_no = s.sources.iter().filter_map(|x| take_number(&x.name, &stem)).max().map_or(1, |n| n.saturating_add(1));
@@ -2728,6 +3273,82 @@ pub fn plan_recording(e: &Engine, unsaved_dir: &Path, input_channels: usize) -> 
         plan.push((t.id, inputs, path));
     }
     Ok(TakePlan { takes: plan, taps, from_device })
+}
+
+/// Bytes a second the armed audio tracks' takes add to the disk: their channels at the session's
+/// bit depth and rate (a remote recorder's takes land later and are not counted).
+pub fn record_bytes_per_second(s: &Session) -> u64 {
+    let bytes: u64 = match s.bit_depth {
+        soundcraft_model::BitDepthSetting::Int16 => 2,
+        soundcraft_model::BitDepthSetting::Int24 => 3,
+        soundcraft_model::BitDepthSetting::Float32 => 4,
+    };
+    let channels: u64 = s
+        .tracks
+        .iter()
+        .filter(|t| t.mixer.record_arm && t.kind == TrackKind::Audio && !t.inactive)
+        .filter(|t| !matches!(&t.mixer.input, soundcraft_model::Route::Hardware(n) if is_remote_input(n)))
+        .map(|t| u64::try_from(t.channels()).unwrap_or(0))
+        .sum();
+    channels.saturating_mul(bytes).saturating_mul(u64::from(s.sample_rate.hz()))
+}
+
+/// How long the armed tracks can record into `free` bytes, in seconds; `None` when nothing is
+/// armed to record audio.
+pub fn record_seconds_left(s: &Session, free: u64) -> Option<u64> {
+    let bps = record_bytes_per_second(s);
+    (bps > 0).then(|| free / bps)
+}
+
+/// The folder a session's takes go into: Setup › Disk Allocation's folder for the session, else
+/// `Audio Files` beside the session file (in `unsaved_dir` for a session never saved).
+pub fn record_dir(e: &Engine, unsaved_dir: &Path) -> PathBuf {
+    let dir = e.path.as_deref().and_then(|p| Path::new(p).parent()).unwrap_or(unsaved_dir);
+    allocated(e.session(), None).map_or_else(|| dir.join("Audio Files"), |f| dir.join(f))
+}
+
+/// The folder `track`'s takes go into: Setup › Disk Allocation's folder for the track, else the
+/// session's, else `Audio Files`. A relative folder is inside the session's folder `dir`.
+pub fn take_folder(s: &Session, dir: &Path, track: TrackId) -> PathBuf {
+    allocated(s, Some(track)).or_else(|| allocated(s, None)).map_or_else(|| dir.join("Audio Files"), |f| dir.join(f))
+}
+
+/// The folder Setup › Disk Allocation sets for `track`, or for the session (`None`).
+fn allocated(s: &Session, track: Option<TrackId>) -> Option<String> {
+    let key = match track {
+        Some(t) => format!("disk.track.{}=", t.0),
+        None => "disk.root=".to_string(),
+    };
+    s.edit.flags.iter().find_map(|f| f.strip_prefix(key.as_str())).map(str::to_string)
+}
+
+/// The absolute folders Setup › Disk Allocation records into: takes there stay there when the
+/// session is saved (they are not copied into its `Audio Files`).
+fn allocated_folders(s: &Session) -> Vec<PathBuf> {
+    s.edit
+        .flags
+        .iter()
+        .filter(|f| f.starts_with("disk.root=") || f.starts_with("disk.track."))
+        .filter_map(|f| f.split_once('=').map(|(_, v)| PathBuf::from(v)))
+        .filter(|p| p.is_absolute())
+        .collect()
+}
+
+/// Bytes free on the disk that holds `dir` (or, before it exists, its nearest existing parent).
+pub fn disk_free(dir: &Path) -> Option<u64> {
+    dir.ancestors().find(|p| p.is_dir()).and_then(soundcraft_sysmem::free_disk_space)
+}
+
+/// A length of time for the remaining-record-time display: `2 h 05 min`, `12 min`, `40 s`.
+pub fn time_left_text(secs: u64) -> String {
+    let (h, m) = (secs / 3600, (secs / 60) % 60);
+    if h > 0 {
+        format!("{h} h {m:02} min")
+    } else if m > 0 {
+        format!("{m} min")
+    } else {
+        format!("{secs} s")
+    }
 }
 
 /// Tracks that can record busses at once (the player's limit, `soundcraft_playback::record::MAX_TAPS`).
@@ -2838,6 +3459,10 @@ pub struct Recording {
     /// the takes are kept to them instead of `punch`, with crossfades at each punch point.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub punches: Vec<Range>,
+    /// Pre-record: frames of input from before Record was pressed at the front of every take
+    /// file. They become the clip's handle: the clip still starts at the record point.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pre: Samples,
 }
 
 /// QuickPunch: Record pressed at `at` while a take that started at `start` records. Punched in
@@ -2974,6 +3599,50 @@ pub struct Take {
     /// saved before it existed): a plain 32-bit float WAV.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<TakeFile>,
+    /// Armed during the take (Arm or disarm during a take): its first frame is this many frames
+    /// after the take's first, and it holds none of the pre-recorded input. `None`: armed at
+    /// Record (and plans saved before it existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late: Option<Samples>,
+    /// TrackPunch: this track's own punches, made by disarming and arming it again while the
+    /// take records ([`toggle_punch`]), in order; the last may be open. When there are any, the
+    /// take is kept to them (and to the recording's QuickPunch punches, where both exist) with
+    /// crossfades at each punch point. Empty (and plans saved before it existed): the whole take.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub punches: Vec<Range>,
+}
+
+/// Where both punch lists keep audio: `own` (a track's TrackPunch punches) within `all` (the
+/// recording's punches); an empty list keeps everything.
+pub fn punch_overlap(all: &[Range], own: &[Range]) -> Vec<Range> {
+    if own.is_empty() {
+        return all.to_vec();
+    }
+    if all.is_empty() {
+        return own.to_vec();
+    }
+    let mut out: Vec<Range> = all.iter().flat_map(|a| own.iter().filter_map(|o| a.intersect(o))).filter(|r| !r.is_empty()).collect();
+    out.sort_by_key(|r| r.start);
+    out
+}
+
+/// A track armed while a take records (not by loop recording, whose passes are fixed at Record):
+/// its channels of the recording frame and its take file, as [`plan_recording`] plans them. A
+/// track recording a bus or through its inserts is refused (those channels join the frame only
+/// at Record). `None` for a track no take is planned for (not armed, or recorded elsewhere: a
+/// remote recorder's input).
+pub fn plan_late_take(
+    e: &Engine,
+    unsaved_dir: &Path,
+    input_channels: usize,
+    track: TrackId,
+) -> std::result::Result<Option<(Vec<usize>, PathBuf)>, String> {
+    let plan = plan_recording(e, unsaved_dir, input_channels)?;
+    if plan.is_tap(track) {
+        let name = e.session().track(track).map_or_else(String::new, |t| t.name.clone());
+        return Err(format!("{name} records a bus or through its inserts: arm it before Record"));
+    }
+    Ok(plan.takes.into_iter().find(|(t, ..)| *t == track).map(|(_, inputs, path)| (inputs, path)))
 }
 
 /// A take file's type and bit depth, and whether it has a `bext` chunk.
@@ -2986,17 +3655,6 @@ pub struct TakeFile {
 
 /// Place recorded take files as `plan` says, as one undo step ("Record").
 pub fn place_recording(e: &mut Engine, plan: &Recording, takes: Vec<(TrackId, PathBuf)>) -> Vec<soundcraft_model::ClipId> {
-    place_recording_with(e, plan, takes, &mut |_| None)
-}
-
-/// [`place_recording`] where `memory` gives the bytes of takes recorded in memory (the browser
-/// build has no files), by path: each becomes a new source of its own, saved with the session.
-pub fn place_recording_with(
-    e: &mut Engine,
-    plan: &Recording,
-    takes: Vec<(TrackId, PathBuf)>,
-    memory: &mut dyn FnMut(&Path) -> Option<Vec<u8>>,
-) -> Vec<soundcraft_model::ClipId> {
     let (start, latency) = plan.placement();
     let takes = takes
         .into_iter()
@@ -3005,7 +3663,12 @@ pub fn place_recording_with(
                 Some(x) => plan.placement_for(x.tap_latency.saturating_add(if x.from_device { plan.latency } else { 0 })).1,
                 None => latency,
             };
-            (t, p, l)
+            // Armed during the take: it starts that much later (a negative offset places a take
+            // later), without the pre-recorded input.
+            match plan.takes.iter().find(|x| x.path == p).and_then(|x| x.late) {
+                Some(late) => (t, p, l.saturating_sub(late.max(0))),
+                None => (t, p, l.saturating_add(plan.pre.max(0))),
+            }
         })
         .collect::<Vec<_>>();
     // Each take's BWF time reference: where its first frame belongs, from the timecode start.
@@ -3014,7 +3677,22 @@ pub fn place_recording_with(
         stamp_time_reference(p, start.saturating_sub(*l).saturating_add(tc));
     }
     let punches: Vec<Range> = if plan.punches.is_empty() { plan.punch.into_iter().collect() } else { plan.punches.clone() };
-    add_recording_from(e, start, takes, plan.pass, &punches, memory)
+    // TrackPunch: a take with punches of its own is placed alone, kept to them.
+    let (own, rest): (Vec<_>, Vec<_>) = takes.into_iter().partition(|(_, p, _)| plan.takes.iter().any(|x| x.path == *p && !x.punches.is_empty()));
+    let before = e.session_arc();
+    let mut out = place_takes(e, start, rest, plan.pass, &punches);
+    for (t, p, l) in own {
+        let mine = plan.takes.iter().find(|x| x.path == p).map(|x| punch_overlap(&punches, &x.punches)).unwrap_or_default();
+        // Punched out before it ever punched in (or outside every QuickPunch punch): nothing kept.
+        if mine.is_empty() {
+            continue;
+        }
+        out.extend(place_takes(e, start, vec![(t, p, l)], plan.pass, &mine));
+    }
+    if !out.is_empty() {
+        e.push_undo("Record", before);
+    }
+    out
 }
 
 /// Turn recorded take files into clips at `start`, as one undo step ("Record"); each file is the
@@ -3037,32 +3715,25 @@ fn add_recording_in(
     pass: Option<Samples>,
     punches: &[Range],
 ) -> Vec<soundcraft_model::ClipId> {
-    add_recording_from(e, start, takes, pass, punches, &mut |_| None)
+    let before = e.session_arc();
+    let out = place_takes(e, start, takes, pass, punches);
+    if !out.is_empty() {
+        e.push_undo("Record", before);
+    }
+    out
 }
 
-/// [`add_recording_in`] with takes recorded in memory (see [`place_recording_with`]).
-fn add_recording_from(
+/// [`add_recording_in`] without its undo step.
+fn place_takes(
     e: &mut Engine,
     start: Samples,
     takes: Vec<(TrackId, PathBuf, Samples)>,
     pass: Option<Samples>,
     punches: &[Range],
-    memory: &mut dyn FnMut(&Path) -> Option<Vec<u8>>,
 ) -> Vec<soundcraft_model::ClipId> {
-    let before = e.session_arc();
     let mut out = Vec::new();
     for (tid, path, latency) in takes {
         let name = path.file_stem().and_then(|x| x.to_str()).unwrap_or("Take");
-        if let Some(bytes) = memory(&path) {
-            let decoded = soundcraft_audio_io::decode(&bytes, None).map_err(|err| format!("{name}: {err}"));
-            let Ok((_, buf)) = decoded.inspect_err(|err| e.message(err.clone())) else { continue };
-            if e.session().track(tid).is_some_and(|t| t.frozen_audio().is_none()) {
-                let s = e.session_mut();
-                let src = add_source(s, name, buf, None, FileFormat::Wav);
-                place_take(s, tid, src, name, start, pass, punches, latency, &mut out);
-            }
-            continue;
-        }
         // A take in a project's (or autosave's) `Audio Files`: deleted when nothing names it any
         // more (undone, or its track deleted while it recorded).
         if path.parent().and_then(Path::file_name).is_some_and(|n| n == "Audio Files") && !e.recorded_takes.contains(&path) {
@@ -3093,9 +3764,6 @@ fn add_recording_from(
             x.unsaved = resampled;
         }
         place_take(s, tid, src, name, start, pass, punches, latency, &mut out);
-    }
-    if !out.is_empty() {
-        e.push_undo("Record", before);
     }
     out
 }
@@ -3420,10 +4088,21 @@ mod record_tests {
             pass: None,
             punch: Some(Range::new(1_400, 1_600)),
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: take.clone(),
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+                punches: Vec::new(),
+            }],
             latency: 0,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         place_recording(&mut e, &plan, vec![(vox, take)]);
         let clips: Vec<_> = e.session().track(vox).unwrap().clips().iter().map(|c| (c.start, c.length, c.source_offset())).collect();
@@ -3438,11 +4117,38 @@ mod record_tests {
             pass: rs.pass,
             punch: rs.punch,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.to_path_buf(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: take.to_path_buf(),
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+                punches: Vec::new(),
+            }],
             latency: 0,
             loop_from: rs.loop_from,
             punches: Vec::new(),
+            pre: 0,
         }
+    }
+
+    #[test]
+    fn pre_recorded_frames_become_the_clips_handle() {
+        let dir = test_dir("pre-record");
+        let take = dir.join("Audio Files/Vox_01.wav");
+        write_take(&take, 1_500);
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let mut plan = plan_of(2_000, &record_start(&e.session().edit, Some((2_000, None))), &take, vox);
+        (plan.pre, plan.latency) = (500, 20);
+        place_recording(&mut e, &plan, vec![(vox, take.clone())]);
+        // The clip starts at the record point; the 500 frames from before Record (and the
+        // latency) lie before it in the file, a handle to trim out over.
+        assert_eq!(clip_rows(&e, vox), vec![(2_000, 980, 520)]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3583,12 +4289,33 @@ mod record_tests {
             punch: None,
             rate: 48_000,
             takes: vec![
-                Take { track: vox, path: hw.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None },
-                Take { track: print, path: bus.clone(), channels: 1, internal: true, from_device: false, tap_latency: 20, file: None },
+                Take {
+                    track: vox,
+                    path: hw.clone(),
+                    channels: 1,
+                    internal: false,
+                    from_device: false,
+                    tap_latency: 0,
+                    file: None,
+                    late: None,
+                    punches: Vec::new(),
+                },
+                Take {
+                    track: print,
+                    path: bus.clone(),
+                    channels: 1,
+                    internal: true,
+                    from_device: false,
+                    tap_latency: 20,
+                    file: None,
+                    late: None,
+                    punches: Vec::new(),
+                },
             ],
             latency: 300,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         place_recording(&mut e, &rec, vec![(vox, hw), (print, bus)]);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 700, 300)]);
@@ -3618,10 +4345,21 @@ mod record_tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: true, from_device: true, tap_latency: 64, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: take.clone(),
+                channels: 1,
+                internal: true,
+                from_device: true,
+                tap_latency: 64,
+                file: None,
+                late: None,
+                punches: Vec::new(),
+            }],
             latency: 300,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         place_recording(&mut e, &rec, vec![(vox, take)]);
         assert_eq!(clip_rows(&e, vox), vec![(1_000, 636, 364)]);
@@ -3662,10 +4400,21 @@ mod record_tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: path.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: path.clone(),
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+                punches: Vec::new(),
+            }],
             latency: 100,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         };
         place_recording(&mut e, &rec, vec![(vox, path.clone())]);
         let info = soundcraft_audio_io::probe(&std::fs::read(&path).unwrap(), None).unwrap();
@@ -3695,10 +4444,21 @@ mod record_tests {
             pass: None,
             punch: None,
             rate: 48_000,
-            takes: vec![Take { track: vox, path: take.clone(), channels: 1, internal: false, from_device: false, tap_latency: 0, file: None }],
+            takes: vec![Take {
+                track: vox,
+                path: take.clone(),
+                channels: 1,
+                internal: false,
+                from_device: false,
+                tap_latency: 0,
+                file: None,
+                late: None,
+                punches: Vec::new(),
+            }],
             latency: 0,
             loop_from: None,
             punches,
+            pre: 0,
         };
         let ids = place_recording(&mut e, &rec, vec![(vox, take)]);
         assert_eq!(ids.len(), 3, "a clip per punch");
@@ -3713,6 +4473,123 @@ mod record_tests {
         // The old audio stays between the punches and fades across them.
         let old: Vec<_> = t.clips().iter().filter(|c| !ids.contains(&c.id)).map(|c| (c.start, c.end())).collect();
         assert_eq!(old, [(0, 1_000 + h), (3_000 - h, 5_000 + h), (6_000 - h, 8_000 + h), (9_000, 10_000)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// TrackPunch: a track disarmed and armed again while the take records keeps its take to its
+    /// own punches (inside the recording's QuickPunch punches, where there are any); a track
+    /// never punched keeps the whole take; all of it is one undo step. A plan saved before the
+    /// field existed reads with no punches of its own.
+    #[test]
+    fn trackpunch_keeps_each_take_to_its_own_punches() {
+        let dir = test_dir("trackpunch");
+        let (vox_take, gtr_take, bass_take) =
+            (dir.join("Audio Files/Vox_01.wav"), dir.join("Audio Files/Gtr_01.wav"), dir.join("Audio Files/Bass_01.wav"));
+        for p in [&vox_take, &gtr_take, &bass_take] {
+            write_take(p, 8_000);
+        }
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let gtr = armed(&mut e, "Gtr", "mono", "In 1");
+        let bass = armed(&mut e, "Bass", "mono", "In 1");
+        let undo_before = e.undo_history().len();
+        // Gtr disarmed at 3000, armed again at 5000; Bass disarmed at 2000 and never again.
+        let mut gtr_p = Vec::new();
+        assert!(!toggle_punch(&mut gtr_p, 1_000, 3_000));
+        assert!(toggle_punch(&mut gtr_p, 1_000, 5_000));
+        let mut bass_p = Vec::new();
+        assert!(!toggle_punch(&mut bass_p, 1_000, 2_000));
+        let take = |track, path: &PathBuf, punches| Take {
+            track,
+            path: path.clone(),
+            channels: 1,
+            internal: false,
+            from_device: false,
+            tap_latency: 0,
+            file: None,
+            late: None,
+            punches,
+        };
+        let rec = Recording {
+            start: 1_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: vec![take(vox, &vox_take, Vec::new()), take(gtr, &gtr_take, gtr_p), take(bass, &bass_take, bass_p)],
+            latency: 0,
+            loop_from: None,
+            punches: Vec::new(),
+            pre: 0,
+        };
+        let ids = place_recording(&mut e, &rec, vec![(vox, vox_take), (gtr, gtr_take), (bass, bass_take)]);
+        let spans = |t| -> Vec<(Samples, Samples)> {
+            e.session().track(t).unwrap().clips().iter().filter(|c| ids.contains(&c.id)).map(|c| (c.start, c.end())).collect()
+        };
+        assert_eq!(spans(vox), [(1_000, 9_000)], "never punched: the whole take");
+        let gs = spans(gtr);
+        assert_eq!(gs.len(), 2, "{gs:?}");
+        assert_eq!((gs[0].0, gs[1].1), (1_000, 9_000));
+        assert!(gs[0].1 <= 3_000 + punch_crossfade(e.session()) && gs[1].0 >= 5_000 - punch_crossfade(e.session()), "{gs:?}");
+        assert_eq!(spans(bass), [(1_000, 2_000)]);
+        assert_eq!(e.undo_history().len(), undo_before + 1, "one undo step");
+        // Within QuickPunch punches: only where both keep audio.
+        assert_eq!(punch_overlap(&[Range::new(0, 4_000)], &[Range::new(2_000, Samples::MAX)]), [Range::new(2_000, 4_000)]);
+        assert_eq!(punch_overlap(&[], &[Range::new(2_000, 3_000)]), [Range::new(2_000, 3_000)]);
+        assert_eq!(punch_overlap(&[Range::new(2_000, 3_000)], &[]), [Range::new(2_000, 3_000)]);
+        let old: Take = serde_json::from_value(json!({"track": vox.0, "path": "x.wav", "channels": 1})).unwrap();
+        assert!(old.punches.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Arm during a take: a take armed 3000 frames into the recording is placed from there (less
+    /// the round trip, as every take), without the pre-recorded input the others lead with; the
+    /// late take a plan names is planned like any other but refused for a track recording a bus.
+    #[test]
+    fn a_take_armed_during_the_recording_starts_where_it_was_armed() {
+        let dir = test_dir("late-arm");
+        let (vox_take, gtr_take) = (dir.join("Audio Files/Vox_01.wav"), dir.join("Audio Files/Gtr_01.wav"));
+        write_take(&vox_take, 10_000);
+        write_take(&gtr_take, 4_000);
+        let mut e = Engine::default();
+        let vox = armed(&mut e, "Vox", "mono", "In 1");
+        let gtr = armed(&mut e, "Gtr", "mono", "In 1");
+        let take = |track, path: &PathBuf, late| Take {
+            track,
+            path: path.clone(),
+            channels: 1,
+            internal: false,
+            from_device: false,
+            tap_latency: 0,
+            file: None,
+            late,
+            punches: Vec::new(),
+        };
+        let rec = Recording {
+            start: 1_000,
+            pass: None,
+            punch: None,
+            rate: 48_000,
+            takes: vec![take(vox, &vox_take, None), take(gtr, &gtr_take, Some(3_000))],
+            latency: 100,
+            loop_from: None,
+            punches: Vec::new(),
+            pre: 500,
+        };
+        let ids = place_recording(&mut e, &rec, vec![(vox, vox_take), (gtr, gtr_take)]);
+        assert_eq!(ids.len(), 2);
+        let clip = |t| {
+            let c = e.session().track(t).unwrap().clips().iter().find(|c| ids.contains(&c.id)).unwrap().clone();
+            (c.start, c.source_offset(), c.length)
+        };
+        // Vox: file frame 600 (pre 500 + round trip 100) at 1000.
+        assert_eq!(clip(vox), (1_000, 600, 10_000 - 600));
+        // Gtr: its first frame is take frame 3000 (at 4000), less the round trip: at 3900.
+        assert_eq!(clip(gtr), (3_900, 0, 4_000));
+        let (inputs, path) = plan_late_take(&e, &dir, 2, gtr).unwrap().unwrap();
+        assert_eq!(inputs, vec![0]);
+        assert!(path.to_string_lossy().contains("Gtr_"), "{path:?}");
+        e.execute("mix.record_arm", &json!({"tracks": [gtr.0], "value": false})).unwrap();
+        assert_eq!(plan_late_take(&e, &dir, 2, gtr), Ok(None), "not armed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3793,6 +4670,16 @@ mod record_tests {
         armed(&mut e, "Pad", "stereo", "none");
         assert_eq!(plan_takes(&e, &test_dir("mono-twice"), 8).unwrap()[0].1, vec![0, 1]);
         assert_eq!(plan_takes(&e, &test_dir("mono-twice"), 1).unwrap()[0].1, vec![0, 0]);
+    }
+
+    /// A track wider than its input records the input's channels and silence on the rest
+    /// (bug 10 of the recording section): never the input's last channel repeated.
+    #[test]
+    fn a_track_wider_than_its_input_records_silence_past_it() {
+        let mut e = Engine::default();
+        e.execute("setup.io", &json!({"action": "create_input", "name": "Room", "format": "stereo", "first_channel": 2})).unwrap();
+        armed(&mut e, "Amb", "quad", "Room");
+        assert_eq!(plan_takes(&e, &test_dir("wider"), 8).unwrap()[0].1, vec![2, 3, SILENT_CHANNEL, SILENT_CHANNEL]);
     }
 
     #[test]
@@ -3884,36 +4771,6 @@ mod record_tests {
         assert_eq!(live_span(1_000, None, None, 500, -100), Some((1_100, Range::new(1_100, 1_600))));
         let punch = Some(Range::new(1_200, 1_400));
         assert_eq!(live_span(1_000, None, punch, 500, 100), Some((900, Range::new(1_200, 1_400))));
-    }
-
-    #[test]
-    fn a_take_recorded_in_memory_lands_as_a_source_the_browser_keeps() {
-        // The browser build: the take's bytes, no file. It is placed as a file's would be (the
-        // round trip off its start), as a new source of the session, which the browser's store
-        // then keeps like any other.
-        let mut e = Engine::default();
-        let vox = armed(&mut e, "Vox", "mono", "In 1");
-        let path = PathBuf::from("Audio Files/Vox_01.wav");
-        let mut bytes = soundcraft_audio_io::wav_float_header(1, 48_000, 4_800).unwrap();
-        bytes.extend((0..4_800).flat_map(|i| (i as f32 / 4_800.0).to_le_bytes()));
-        let plan =
-            Recording { start: 1_000, pass: None, punch: None, rate: 48_000, takes: Vec::new(), latency: 100, loop_from: None, punches: Vec::new() };
-        let mut handed = 0;
-        let mut memory = |p: &Path| {
-            handed += 1;
-            (p == path).then(|| bytes.clone())
-        };
-        let clips = place_recording_with(&mut e, &plan, vec![(vox, path.clone())], &mut memory);
-        assert_eq!((clips.len(), handed), (1, 1));
-        let s = e.session();
-        let clip = s.track(vox).unwrap().clips()[0].clone();
-        assert_eq!((clip.start, clip.length), (1_000, 4_700), "the round trip comes off its start");
-        let src = s.sources.iter().find(|x| x.name == "Vox_01").unwrap();
-        assert!(src.unsaved && s.pool.get(src.id).is_some(), "a source of the session, saved with it");
-        assert!(e.recorded_takes.is_empty(), "no file to clean up after");
-        let parts = session_store_parts(s, &Default::default()).unwrap();
-        assert_eq!(parts.new_files.len(), 1, "the browser's store keeps it");
-        assert_eq!(e.undo_label(), Some("Record"));
     }
 }
 
@@ -4012,6 +4869,57 @@ mod save_tests {
         assert!(dir.join("New").join("Audio Files").join("Pad.wav").is_file());
         assert!(dir.join("New").join("Waveforms").join("Pad.wav.peaks").is_file());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Setup › Disk Allocation: each track's takes go to its folder (an absolute one elsewhere,
+    /// or one inside the session's folder), the others to the session's folder; a take on an
+    /// allocated disk stays there when the session is saved.
+    #[test]
+    fn takes_record_into_the_allocated_folders_and_stay_there() {
+        let dir = std::env::temp_dir().join(format!("soundcraft-disk-alloc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let other = dir.join("Other Disk");
+        let mut e = Engine::default();
+        let mk = |e: &mut Engine, name: &str| -> u64 {
+            let id = e.execute("track.new", &json!({"name": name, "format": "mono"})).unwrap()["tracks"][0].as_u64().unwrap();
+            e.execute("mix.record_arm", &json!({"tracks": [id], "value": true})).unwrap();
+            id
+        };
+        let (a, b, c) = (mk(&mut e, "Vox"), mk(&mut e, "Kick"), mk(&mut e, "Bass"));
+        e.execute("setup.disk_allocation", &json!({"path": other.to_string_lossy()})).unwrap();
+        e.execute("setup.disk_allocation", &json!({"track": b, "path": "Drums"})).unwrap();
+        let session = dir.join("Song");
+        let plan = plan_takes(&e, &session, 2).unwrap();
+        let folder = |t: u64| plan.iter().find(|x| x.0 == TrackId(t)).and_then(|x| x.2.parent().map(Path::to_path_buf)).unwrap();
+        assert_eq!(folder(a), other, "the session's folder");
+        assert_eq!(folder(b), session.join("Drums"), "the track's own, inside the session folder");
+        assert_eq!(folder(c), other);
+        assert_eq!(record_dir(&e, &session), other);
+        e.execute("setup.disk_allocation", &json!({"path": ""})).unwrap();
+        assert_eq!(folder_of(&e, &session, c), session.join("Audio Files"), "cleared: Audio Files again");
+
+        // A take on the other disk is not copied into the project when it is saved.
+        e.execute("setup.disk_allocation", &json!({"path": other.to_string_lossy()})).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let take = other.join("Vox_01.wav");
+        let opts =
+            EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
+        std::fs::write(&take, soundcraft_audio_io::encode(&AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 480]] }, &opts).unwrap())
+            .unwrap();
+        // As `add_recording_in` registers a take: its file, saved.
+        let s = e.session_mut();
+        add_source(s, "Vox_01", AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; 480]] }, Some(&take.to_string_lossy()), FileFormat::Wav);
+        if let Some(x) = s.sources.last_mut() {
+            x.unsaved = false;
+        }
+        save_session(&mut e, &session.join("Song.fdawm").to_string_lossy()).unwrap();
+        assert_eq!(Path::new(&e.session().sources[0].path), take.as_path(), "stays on its disk");
+        assert!(!session.join("Audio Files").join("Vox_01.wav").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn folder_of(e: &Engine, session: &Path, t: u64) -> PathBuf {
+        take_folder(e.session(), session, TrackId(t))
     }
 
     #[test]
@@ -4223,6 +5131,31 @@ mod save_tests {
 }
 
 #[cfg(test)]
+mod time_left_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The remaining record time: the armed tracks' channels at the session's bit depth and rate.
+    #[test]
+    fn remaining_record_time_follows_the_armed_channels_and_bit_depth() {
+        let mut e = Engine::default();
+        assert_eq!(record_seconds_left(e.session(), 1 << 30), None, "nothing armed");
+        let mono = e.execute("track.new", &json!({"name": "Vox", "format": "mono"})).unwrap()["tracks"][0].as_u64().unwrap();
+        let stereo = e.execute("track.new", &json!({"name": "Keys", "format": "stereo"})).unwrap()["tracks"][0].as_u64().unwrap();
+        e.execute("mix.record_arm", &json!({"tracks": [mono, stereo], "value": true})).unwrap();
+        e.session_mut().bit_depth = soundcraft_model::BitDepthSetting::Int24;
+        let rate = u64::from(e.session().sample_rate.hz());
+        assert_eq!(record_bytes_per_second(e.session()), 3 * 3 * rate);
+        assert_eq!(record_seconds_left(e.session(), 3 * 3 * rate * 3600), Some(3600));
+        e.session_mut().bit_depth = soundcraft_model::BitDepthSetting::Float32;
+        assert_eq!(record_bytes_per_second(e.session()), 3 * 4 * rate);
+        assert_eq!(time_left_text(7500), "2 h 05 min");
+        assert_eq!(time_left_text(720), "12 min");
+        assert_eq!(time_left_text(40), "40 s");
+    }
+}
+
+#[cfg(test)]
 mod rate_tests {
     use super::*;
 
@@ -4341,6 +5274,41 @@ mod open_tests {
 #[cfg(test)]
 mod name_tests {
     use super::*;
+
+    /// A format-0 file on two channels comes in as two tracks, its marker as a marker.
+    #[test]
+    fn a_format_0_file_is_split_by_channel_and_its_markers_placed() {
+        let mut body: Vec<u8> = Vec::new();
+        body.extend([0x00, 0xFF, 0x03, 4]);
+        body.extend(b"Song");
+        body.extend([0x00, 0xFF, 0x06, 5]);
+        body.extend(b"Verse");
+        body.extend([0x00, 0x90, 60, 100, 0x00, 0x99, 36, 100]);
+        // A quarter later (960 ticks: 0x87 0x40), both end; a marker there.
+        body.extend([0x87, 0x40, 0x80, 60, 64, 0x00, 0x89, 36, 64]);
+        body.extend([0x00, 0xFF, 0x06, 6]);
+        body.extend(b"Chorus");
+        body.extend([0x00, 0xFF, 0x2F, 0x00]);
+        let mut file: Vec<u8> = b"MThd".to_vec();
+        file.extend([0, 0, 0, 6, 0, 0, 0, 1, 0x03, 0xC0]);
+        file.extend(b"MTrk");
+        file.extend(u32::try_from(body.len()).unwrap().to_be_bytes());
+        file.extend(&body);
+        let mut e = Engine::default();
+        let ids = import_midi_bytes(&mut e, &file, 0, true).unwrap();
+        let s = e.session();
+        let names: Vec<&str> = ids.iter().map(|t| s.track(*t).unwrap().name.as_str()).collect();
+        assert_eq!(names, vec!["Song Ch 1", "Song Drums (Ch 10)"]);
+        let drums = s.track(ids[1]).unwrap();
+        assert_eq!(drums.instrument.as_ref().unwrap().plugin, "drum_synth");
+        assert_eq!(drums.clips()[0].midi_playing().unwrap().notes[0].pitch, 36);
+        let marks: Vec<(&str, Samples)> = s.markers.iter().map(|m| (m.name.as_str(), m.start)).collect();
+        assert_eq!(marks, vec![("Verse", 0), ("Chorus", 24_000)]);
+        // Without the tempo map (a loop dropped in), no markers.
+        let mut e = Engine::default();
+        assert_eq!(import_midi_bytes(&mut e, &file, 0, false).unwrap().len(), 2);
+        assert!(e.session().markers.is_empty());
+    }
 
     #[test]
     fn a_midi_track_name_is_cut_to_a_length_that_can_be_drawn() {
@@ -4566,6 +5534,68 @@ mod strip_tests {
         assert!(e.session().track(t).unwrap().clips().iter().any(|c| c.start >= far));
     }
 
+    /// Relink: a file the session lost is read from where it is now, and its clips play again.
+    #[test]
+    fn a_missing_file_is_relinked_and_its_clips_play() {
+        let dir = std::env::temp_dir().join(format!("soundcraft-relink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let frames = 4_800usize;
+        let mut bytes = soundcraft_audio_io::wav_float_header(1, 48_000, frames as u64).unwrap();
+        bytes.extend((0..frames).flat_map(|_| 0.25f32.to_le_bytes()));
+        let file = dir.join("found.wav");
+        std::fs::write(&file, bytes).unwrap();
+        let (mut e, t) = tones(&[0], 4_800);
+        let src = e.session().track(t).unwrap().clips()[0].source().unwrap();
+        // Lost: the pool has no audio for it.
+        let mut pool = soundcraft_model::SourcePool::default();
+        std::mem::swap(&mut e.session_mut().pool, &mut pool);
+        assert!(soundcraft_mix::render_clips(e.session(), t, Range::new(0, 4_800))[0].iter().all(|x| *x == 0.0));
+        let v = e.execute("file.relink_audio", &json!({"source": src.0, "path": file.to_string_lossy()})).unwrap();
+        assert!(v["warning"].as_str().is_some_and(|w| w.contains("1 channels")), "a stereo file relinked to a mono one warns: {v}");
+        let out = soundcraft_mix::render_clips(e.session(), t, Range::new(0, 4_800));
+        assert!(out[0][100] > 0.1, "plays the found file: {}", out[0][100]);
+        assert!(e.session().source(src).unwrap().path.ends_with("found.wav"));
+        assert!(e.execute("file.relink_audio", &json!({"source": src.0, "path": dir.join("nope.wav").to_string_lossy()})).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Strip Silence's preview says what would stay, changing nothing; stripping keeps just that.
+    #[test]
+    fn strip_silence_preview_matches_what_strip_keeps() {
+        let (mut e, t) = tones(&[0, 96_000], 48_000);
+        let p = json!({"tracks": [t.0], "start": 0, "end": 144_000, "pad_before_ms": 0, "pad_after_ms": 0});
+        let before = e.session().clone();
+        let steps = e.undo_history().len();
+        let v = e.execute("edit.strip_silence_preview", &p).unwrap();
+        assert_eq!(e.undo_history().len(), steps, "a preview is no step");
+        assert!(*e.session() == before, "and changes nothing");
+        let keep: Vec<(i64, i64)> =
+            v["tracks"][0]["keep"].as_array().unwrap().iter().map(|k| (k[0].as_i64().unwrap(), k[1].as_i64().unwrap())).collect();
+        assert_eq!(keep.len(), 2, "{keep:?}");
+        e.execute("edit.strip_silence", &p).unwrap();
+        let clips: Vec<(i64, i64)> = e.session().track(t).unwrap().clips().iter().map(|c| (c.start, c.end())).collect();
+        assert_eq!(clips, keep);
+    }
+
+    /// Consolidate renders the clips as playback hears them: the automatic edge fades ramp a clip
+    /// that starts or ends inside the range.
+    #[test]
+    fn consolidate_keeps_the_automatic_edge_fades() {
+        let (mut e, t) = tones(&[1000], 4000);
+        e.execute("options.auto_fades", &json!({"ms": 1.0})).unwrap();
+        e.execute("edit.consolidate", &json!({"tracks": [t.0], "start": 0, "end": 6000})).unwrap();
+        let s = e.session();
+        let c = &s.track(t).unwrap().clips()[0];
+        let out = soundcraft_mix::render_clips(s, t, c.range());
+        let ch = &out[0];
+        assert_eq!(ch[999], 0.0);
+        assert!(ch[1000] < 0.05, "ramps up from the clip's start: {}", ch[1000]);
+        assert!((ch[1100] - 0.5).abs() < 1e-6, "after a 1 ms ramp, the tone");
+        assert!(ch[4999] < 0.05, "ramps down to the clip's end: {}", ch[4999]);
+        assert_eq!(ch[5000], 0.0);
+    }
+
     /// Parity bug 11: a muted clip is not silence to strip.
     #[test]
     fn muted_clips_are_left_whole() {
@@ -4662,43 +5692,6 @@ mod strip_tests {
 #[cfg(test)]
 mod bundle_tests {
     use super::*;
-
-    #[test]
-    fn a_session_kept_in_parts_writes_each_audio_file_once_and_opens_again() {
-        let mut e = crate::demo::demo_engine();
-        let none = std::collections::BTreeSet::new();
-        let first = session_store_parts(e.session(), &none).unwrap();
-        assert!(!first.new_files.is_empty());
-        assert_eq!(first.new_files.len(), first.used.len(), "every source's audio, once");
-        assert!(first.used.iter().all(|p| p.starts_with("Audio Files/") && p.ends_with(".wav")));
-        // Kept: an edit that adds no audio writes no audio again.
-        let stored: std::collections::BTreeSet<String> = first.new_files.iter().map(|(p, _)| p.clone()).collect();
-        e.execute("mix.volume", &serde_json::json!({"track": "Kick", "db": -7.0})).unwrap();
-        let second = session_store_parts(e.session(), &stored).unwrap();
-        assert!(second.new_files.is_empty(), "{:?}", second.new_files.iter().map(|f| &f.0).collect::<Vec<_>>());
-        assert_eq!(second.used, first.used);
-        // Opened again from the parts, as the next visit does.
-        let files: std::collections::HashMap<String, Vec<u8>> = first.new_files.into_iter().collect();
-        let mut r = Engine::default();
-        let missing = open_session_parts(&mut r, "Midnight Groove.fdawmz", &second.json, files).unwrap();
-        assert!(missing.is_empty(), "{missing:?}");
-        assert_eq!(r.session().track_by_name("Kick").unwrap().mixer.volume_db, -7.0);
-        for src in &e.session().sources {
-            let (a, b) = (e.session().pool.get(src.id).unwrap(), r.session().pool.get(src.id).unwrap());
-            assert_eq!(a.buffer().channels, b.buffer().channels, "{}", src.name);
-        }
-        // Audio that changes gets a new file name (the old one is no longer used).
-        let src = e.session().sources[0].id;
-        let mut buf = e.session().pool.get(src).unwrap().buffer().into_owned();
-        if let Some(x) = buf.channels.get_mut(0).and_then(|c| c.get_mut(0)) {
-            *x += 0.25;
-        }
-        let mut changed = e.session().clone();
-        changed.pool.insert(src, std::sync::Arc::new(SourceAudio::new(buf)));
-        let third = session_store_parts(&changed, &stored).unwrap();
-        assert_eq!(third.new_files.len(), 1);
-        assert!(!stored.contains(&third.new_files[0].0));
-    }
 
     #[test]
     fn bundle_round_trips_session_and_audio() {
@@ -4820,11 +5813,15 @@ mod smf_tempo_tests {
         let t = s.add_track(TrackKind::Midi, ChannelFormat::Stereo, Some("Keys"));
         let note = |pitch, start| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 240 };
         // A muted note (pitch 64) is left out too.
-        let seq = Sequence { notes: vec![note(50, -480), note(60, 0), note(62, 4_000), Note { muted: true, ..note(64, 4_000) }], ctrls: Vec::new() };
+        let seq = Sequence {
+            notes: vec![note(50, -480), note(60, 0), note(62, 4_000), Note { muted: true, ..note(64, 4_000) }],
+            ctrls: Vec::new(),
+            sysex: Vec::new(),
+        };
         let a = s.new_clip_id();
         crate::edit::place_clip(&mut s, t, Clip::midi(a, "a", 0, 96_000, seq));
         let b = s.new_clip_id();
-        let mut muted = Clip::midi(b, "b", 96_000, 96_000, Sequence { notes: vec![note(70, 0)], ctrls: Vec::new() });
+        let mut muted = Clip::midi(b, "b", 96_000, 96_000, Sequence { notes: vec![note(70, 0)], ctrls: Vec::new(), sysex: Vec::new() });
         muted.muted = true;
         crate::edit::place_clip(&mut s, t, muted);
         s.edit.values.insert(format!("rtp.{}.transpose", t.0), 2.0);
@@ -4855,7 +5852,7 @@ mod smf_tempo_tests {
             })
             .collect();
         let cid = s.new_clip_id();
-        crate::edit::place_clip(&mut s, t, Clip::midi(cid, "keys", 0, 12 * 24_000, Sequence { notes, ctrls: Vec::new() }));
+        crate::edit::place_clip(&mut s, t, Clip::midi(cid, "keys", 0, 12 * 24_000, Sequence { notes, ctrls: Vec::new(), sysex: Vec::new() }));
         let e = Engine::new(s);
         let smf = soundcraft_midi::read_smf(&export_midi(&e, None).unwrap()).unwrap();
         assert!(smf.tempos.len() > 8, "the ramp in steps: {:?}", smf.tempos);
@@ -4870,5 +5867,165 @@ mod smf_tempo_tests {
         assert_eq!((pickup, d), (0, 4));
         assert_eq!(smf.meters[1].0, i64::from(n) * 960);
         assert!((file_secs(&smf.tempos, smf.meters[1].0) - 1.5).abs() < 1e-3);
+    }
+
+    /// A field recording's iXML (scene, take, channel names) is kept with the session when the
+    /// file is imported, and saved with it.
+    #[test]
+    fn an_imported_field_recording_keeps_its_ixml() {
+        let mut e = Engine::default();
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.25; 480], vec![0.5; 480]] };
+        let mut bytes = soundcraft_audio_io::encode(&buf, &EncodeOptions::default()).unwrap();
+        let xml = "<BWFXML><SCENE>14</SCENE><TAKE>2</TAKE><TRACK_LIST><TRACK><CHANNEL_INDEX>1</CHANNEL_INDEX><NAME>Boom</NAME></TRACK><TRACK><CHANNEL_INDEX>2</CHANNEL_INDEX><NAME>Lav</NAME></TRACK></TRACK_LIST></BWFXML>";
+        bytes.extend_from_slice(b"iXML");
+        bytes.extend_from_slice(&(xml.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(xml.as_bytes());
+        let riff = (bytes.len() - 8) as u32;
+        bytes[4..8].copy_from_slice(&riff.to_le_bytes());
+        import_audio_bytes(&mut e, "sc14.wav", &bytes, None, None, 0).unwrap();
+        let src = e.session().sources.last().unwrap().id;
+        let f = e.session().field_info.get(&src.0).expect("kept").clone();
+        assert_eq!((f.scene.as_str(), f.take.as_str(), f.label().as_str()), ("14", "2", "Scene 14 Take 2"));
+        assert_eq!(f.channels, vec!["Boom".to_string(), "Lav".to_string()]);
+        let back: Session = serde_json::from_str(&serde_json::to_string(e.session()).unwrap()).unwrap();
+        assert_eq!(back.field_info.get(&src.0), Some(&f));
+    }
+}
+
+#[cfg(test)]
+mod unpack_tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write as _;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("soundcraft-unpack-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A bundle of the demo session with `extra` files (name, bytes) beside it.
+    fn bundle_with(extra: &[(&str, &[u8])]) -> Vec<u8> {
+        let e = crate::demo::demo_engine();
+        let (bytes, _) = session_bundle(e.session()).unwrap();
+        let (text, files) = read_bundle(&bytes).unwrap();
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, data) in files.iter().map(|(n, d)| (n.as_str(), d.as_slice())).chain(extra.iter().copied()) {
+            w.start_file(name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.start_file("Song.fdawm", opts).unwrap();
+        w.write_all(text.as_bytes()).unwrap();
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn session_open_unpacks_a_bundle_into_a_new_folder_beside_it() {
+        let dir = scratch("open");
+        let mut e = crate::demo::demo_engine();
+        e.execute("mix.volume", &json!({"track": "Kick", "db": -7.0})).unwrap();
+        let (bytes, _) = session_bundle(e.session()).unwrap();
+        let path = dir.join("Midnight Groove.fdawmz");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut r = Engine::default();
+        let v = r.execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap();
+        let folder = dir.join("Midnight Groove");
+        assert_eq!(v["unpacked"].as_str(), Some(folder.to_string_lossy().as_ref()));
+        assert_eq!(v["missing"].as_array().map(Vec::len), Some(0), "{v}");
+        let session = folder.join("Midnight Groove.fdawm");
+        assert_eq!(r.path.as_deref(), Some(session.to_string_lossy().as_ref()), "it saves into the folder, not the bundle");
+        assert!(folder.join("Audio Files").is_dir());
+        assert_eq!(r.session().track_by_name("Kick").unwrap().mixer.volume_db, -7.0);
+        for src in &e.session().sources {
+            let (a, b) = (e.session().pool.get(src.id).unwrap(), r.session().pool.get(src.id).unwrap());
+            assert_eq!(a.buffer().channels, b.buffer().channels, "{}", src.name);
+        }
+        // It saves where it was unpacked, and opens from there again.
+        r.execute("mix.volume", &json!({"track": "Kick", "db": -3.0})).unwrap();
+        r.execute("session.save", &json!({})).unwrap();
+        let mut again = Engine::default();
+        again.execute("session.open", &json!({"path": session.to_string_lossy()})).unwrap();
+        assert_eq!(again.session().track_by_name("Kick").unwrap().mixer.volume_db, -3.0);
+        // Opened again, the bundle never writes into the folder it made before.
+        let v = Engine::default().execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(v["unpacked"].as_str(), Some(dir.join("Midnight Groove 2").to_string_lossy().as_ref()));
+        let mut kept = Engine::default();
+        let v = kept.execute("session.open", &json!({"path": session.to_string_lossy()})).unwrap();
+        assert!(v.get("unpacked").is_none(), "a session file opens as itself");
+        assert_eq!(kept.session().track_by_name("Kick").unwrap().mixer.volume_db, -3.0, "the first folder is untouched");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_bundle_and_a_renamed_one_open_too() {
+        let dir = scratch("old");
+        let bytes = bundle_with(&[]);
+        for name in ["Old.SCRAFTZ", "Renamed.fdawm"] {
+            std::fs::write(dir.join(name), &bytes).unwrap();
+            let mut r = Engine::default();
+            let v = r.execute("session.open", &json!({"path": dir.join(name).to_string_lossy()})).unwrap();
+            let stem = Path::new(name).file_stem().unwrap().to_string_lossy().into_owned();
+            assert_eq!(v["unpacked"].as_str(), Some(dir.join(&stem).to_string_lossy().as_ref()), "{name}");
+            assert!(dir.join(&stem).join(format!("{stem}.fdawm")).is_file(), "{name}");
+            assert!(!r.session().tracks.is_empty());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_bundle_is_refused_and_leaves_nothing_behind() {
+        let dir = scratch("damaged");
+        let good = bundle_with(&[]);
+        let cut = &good[..good.len() / 2];
+        let no_session = {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            w.start_file("Audio Files/a.wav", zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(b"RIFF").unwrap();
+            w.finish().unwrap().into_inner()
+        };
+        for (i, bytes) in [&b"PK\x03\x04 not really a zip"[..], b"", cut, &no_session].into_iter().enumerate() {
+            let path = dir.join(format!("Bad{i}.fdawmz"));
+            std::fs::write(&path, bytes).unwrap();
+            let mut r = crate::demo::demo_engine();
+            assert!(r.execute("session.open", &json!({"path": path.to_string_lossy()})).is_err(), "case {i}");
+            assert!(!dir.join(format!("Bad{i}")).exists(), "case {i}: the new folder is removed");
+            assert!(r.session().track_by_name("Kick").is_some(), "case {i}: the open session stays");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bundle_naming_a_file_outside_its_folder_is_refused() {
+        let dir = scratch("escape");
+        let outside = dir.join("evil.txt");
+        for (i, name) in
+            ["../evil.txt", "Audio Files/../../evil.txt", "/tmp/evil.txt", "C:/evil.txt", "..\\evil.txt", "./x.wav"].into_iter().enumerate()
+        {
+            let path = dir.join(format!("Trick{i}.fdawmz"));
+            std::fs::write(&path, bundle_with(&[(name, b"gotcha")])).unwrap();
+            let err = Engine::default().execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap_err();
+            assert!(err.to_string().contains("refused"), "{name}: {err}");
+            assert!(!outside.exists(), "{name}");
+            assert!(!dir.join(format!("Trick{i}")).exists(), "{name}: the new folder is removed");
+        }
+        assert!(bundle_rel_path("Audio Files/Kick.wav").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bundle_past_the_limits_is_refused() {
+        let dir = scratch("limits");
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for k in 0..=MAX_BUNDLE_ENTRIES {
+            w.start_file(format!("f{k}"), zip::write::SimpleFileOptions::default()).unwrap();
+        }
+        let path = dir.join("Many.fdawmz");
+        std::fs::write(&path, w.finish().unwrap().into_inner()).unwrap();
+        let err = Engine::default().execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap_err();
+        assert!(err.to_string().contains("too many files"), "{err}");
+        assert!(!dir.join("Many").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -766,26 +766,19 @@ fn deliver_foot(app: &mut SoundApp, ui: &mut Ui, host: &Host, preview_r: Rect, d
 }
 
 /// `filesDropped`: an audio file onto a reference row loads that slot; anywhere else the first
-/// empty slot, then the selected one; then the Reference tab shows. (No file drop on the web.)
+/// empty slot, then the selected one; then the Reference tab shows.
 fn file_drop(app: &mut SoundApp, ui: &Ui, host: &Host, st: &mut Editor, ed: Rect, rows: [Rect; 4]) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let (files, at) = ui.input(|i| (i.raw.dropped_files.clone(), i.pointer.hover_pos()));
-        let Some(at) = at.filter(|p| ed.contains(*p)) else { return };
-        let audio = |p: &std::path::Path| {
-            p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["wav", "aif", "aiff", "flac", "mp3"].contains(&e.to_ascii_lowercase().as_str()))
-        };
-        let Some(path) = files.iter().map(|f| f.path().to_path_buf()).find(|p| audio(p)) else { return };
-        let mut slot = if st.tab == 1 { rows.iter().position(|r| r.contains(at)) } else { None };
-        if slot.is_none() {
-            slot = (0..4).find(|s| ref_info(host, *s).name.is_empty());
-        }
-        let slot = slot.unwrap_or_else(|| idx(host, "refSlot").min(3));
-        load_reference(app, host, slot, &path.display().to_string());
-        st.tab = 1;
+    let (files, at) = ui.input(|i| (i.raw.dropped_files.clone(), i.pointer.hover_pos()));
+    let Some(at) = at.filter(|p| ed.contains(*p)) else { return };
+    let audio = |p: &std::path::Path| {
+        p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["wav", "aif", "aiff", "flac", "mp3"].contains(&e.to_ascii_lowercase().as_str()))
+    };
+    let Some(path) = files.iter().map(|f| f.path().to_path_buf()).find(|p| audio(p)) else { return };
+    let mut slot = if st.tab == 1 { rows.iter().position(|r| r.contains(at)) } else { None };
+    if slot.is_none() {
+        slot = (0..4).find(|s| ref_info(host, *s).name.is_empty());
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (app, ui, host, st, ed, rows);
-    }
+    let slot = slot.unwrap_or_else(|| idx(host, "refSlot").min(3));
+    load_reference(app, host, slot, &path.display().to_string());
+    st.tab = 1;
 }

@@ -4,6 +4,7 @@
 //!
 //! `cargo run -p soundcraft-ui-egui --example plugin_thumb -- <out dir> [plugin id…]`
 //! `cargo run -p soundcraft-ui-egui --example plugin_thumb -- --list-presets`
+//! With `PLUGIN_THUMB_FULL=1` each picture is the whole editor, uncut and unscaled.
 //!
 //! Each plugin is opened the way the owner sees it, dark theme: a FireStation engine's wide
 //! (VST-faithful) editor, a built-in effect's drawer, an instrument's parameter window. It is
@@ -370,7 +371,11 @@ fn thumb(info: &'static soundcraft_dsp::PluginInfo, dir: &Path) -> Result<PathBu
         })
         .collect();
     let w = crops.iter().map(|c| c.width()).min().ok_or("nothing to crop")?;
-    let hgt = (crops.iter().map(|c| c.height()).sum::<u32>()).min((w as f32 * MAX_ASPECT) as u32);
+    // `PLUGIN_THUMB_FULL=1` keeps the whole editor at the size it was drawn: a picture to look
+    // the panel over, not a card.
+    let full = std::env::var_os("PLUGIN_THUMB_FULL").is_some();
+    let all: u32 = crops.iter().map(|c| c.height()).sum();
+    let hgt = if full { all } else { all.min((w as f32 * MAX_ASPECT) as u32) };
     let mut crop = image::RgbaImage::new(w, hgt);
     let mut y = 0;
     for c in &crops {
@@ -380,7 +385,7 @@ fn thumb(info: &'static soundcraft_dsp::PluginInfo, dir: &Path) -> Result<PathBu
             break;
         }
     }
-    let (tw, th) = if w > MAX_WIDTH { (MAX_WIDTH, (hgt as f32 * MAX_WIDTH as f32 / w as f32).round() as u32) } else { (w, hgt) };
+    let (tw, th) = if w > MAX_WIDTH && !full { (MAX_WIDTH, (hgt as f32 * MAX_WIDTH as f32 / w as f32).round() as u32) } else { (w, hgt) };
     let small = image::imageops::resize(&crop, tw, th, image::imageops::FilterType::Lanczos3);
     let rgb = image::DynamicImage::ImageRgba8(small).to_rgb8();
     let path = dir.join(format!("{}.png", info.id));

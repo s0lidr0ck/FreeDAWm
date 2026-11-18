@@ -164,12 +164,12 @@ fn push_chunk(out: &mut Vec<u8>, id: &[u8; 4], body: &[u8]) {
 pub(crate) fn encode(buf: &AudioBuffer, depth: BitDepth, dither: bool) -> Result<Vec<u8>> {
     validate_buffer(buf)?;
     let frames = buf.frames();
-    let head_len = header(buf.channels.len(), buf.sample_rate, depth, frames as u64)?.len();
+    let head_len = header(buf.channels.len(), buf.sample_rate, depth, frames as u64, 0)?.len();
     let data_len = usize::from(sample_format(depth).0 / 8).saturating_mul(buf.channels.len()).saturating_mul(frames);
     let total = head_len.saturating_add(data_len).saturating_add(1);
     let mut out = Vec::new();
     out.try_reserve_exact(total).map_err(|_| AudioError::TooLarge(format!("cannot allocate {total} bytes for AIFF output")))?;
-    let mut w = Writer::new(Cursor::new(out), buf.channels.len(), buf.sample_rate, depth, dither)?;
+    let mut w = Writer::new(Cursor::new(out), buf.channels.len(), buf.sample_rate, depth, dither, Vec::new())?;
     w.write(&buf.channels, frames)?;
     Ok(w.finish()?.into_inner())
 }
@@ -188,21 +188,24 @@ pub(crate) struct Writer<W> {
     /// Set when a block write has failed: the sink may hold a prefix of that block while
     /// `frames` does not count it, so the writer refuses every later call.
     failed: bool,
+    /// Whole chunks written after the sound data (text tags).
+    chunks: Vec<u8>,
 }
 
 impl<W: Write + Seek> Writer<W> {
-    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, depth: BitDepth, dither: bool) -> Result<Self> {
+    /// `chunks`: whole chunks (text tags) to put after the sound data; may be empty.
+    pub(crate) fn new(mut out: W, channels: usize, sample_rate: u32, depth: BitDepth, dither: bool, chunks: Vec<u8>) -> Result<Self> {
         validate_layout(channels, sample_rate)?;
         let start = out.stream_position()?;
-        out.write_all(&header(channels, sample_rate, depth, 0)?)?;
+        out.write_all(&header(channels, sample_rate, depth, 0, chunks.len() as u64)?)?;
         let quantizers = Quantizer::per_channel(u32::from(sample_format(depth).0), dither, channels);
-        Ok(Writer { out, start, channels, sample_rate, depth, quantizers, frames: 0, bytes: Vec::new(), failed: false })
+        Ok(Writer { out, start, channels, sample_rate, depth, quantizers, frames: 0, bytes: Vec::new(), failed: false, chunks })
     }
 
     /// The frame count after `frames` more, or an error when AIFF can't hold that many (4 GiB).
     pub(crate) fn check_room(&self, frames: u64) -> Result<u64> {
         let total = self.frames.saturating_add(frames);
-        header(self.channels, self.sample_rate, self.depth, total)?;
+        header(self.channels, self.sample_rate, self.depth, total, self.chunks.len() as u64)?;
         Ok(total)
     }
 
@@ -229,7 +232,8 @@ impl<W: Write + Seek> Writer<W> {
         if data_len % 2 == 1 {
             self.out.write_all(&[0])?;
         }
-        let head = header(self.channels, self.sample_rate, self.depth, self.frames)?;
+        self.out.write_all(&self.chunks)?;
+        let head = header(self.channels, self.sample_rate, self.depth, self.frames, self.chunks.len() as u64)?;
         self.out.seek(SeekFrom::Start(self.start))?;
         self.out.write_all(&head)?;
         self.out.seek(SeekFrom::End(0))?;
@@ -240,12 +244,12 @@ impl<W: Write + Seek> Writer<W> {
 
 /// [`header`] for a take recorded block by block ([`crate::take_header`]).
 pub(crate) fn take_header(channels: usize, sample_rate: u32, depth: BitDepth, frames: u64) -> Result<Vec<u8>> {
-    header(channels, sample_rate, depth, frames)
+    header(channels, sample_rate, depth, frames, 0)
 }
 
-/// Everything before the sample data of an AIFF holding `frames` frames; its length doesn't
-/// depend on `frames`.
-fn header(channels: usize, sample_rate: u32, depth: BitDepth, frames: u64) -> Result<Vec<u8>> {
+/// Everything before the sample data of an AIFF holding `frames` frames and `extra` bytes of
+/// chunks after the data; its length doesn't depend on either.
+fn header(channels: usize, sample_rate: u32, depth: BitDepth, frames: u64, extra: u64) -> Result<Vec<u8>> {
     let channels_i16 = i16::try_from(channels).map_err(|_| AudioError::Encode("too many channels for AIFF".into()))?;
     let frames_u32 = u32::try_from(frames).map_err(|_| AudioError::TooLarge("too many frames for AIFF".into()))?;
     let (bits, is_float) = sample_format(depth);
@@ -279,7 +283,7 @@ fn header(channels: usize, sample_rate: u32, depth: BitDepth, frames: u64) -> Re
     head.extend_from_slice(&ssnd_len.to_be_bytes());
     head.extend_from_slice(&[0u8; 8]); // offset, blockSize
 
-    let total = (head.len() as u64).saturating_add(data_len).saturating_add(data_len & 1);
+    let total = (head.len() as u64).saturating_add(data_len).saturating_add(data_len & 1).saturating_add(extra);
     let form_len = u32::try_from(total - 8).map_err(|_| AudioError::TooLarge("AIFF file exceeds 4 GiB".into()))?;
     if let Some(slot) = head.get_mut(4..8) {
         slot.copy_from_slice(&form_len.to_be_bytes());

@@ -150,6 +150,158 @@ fn clap_fixture() -> &'static Path {
 }
 
 #[test]
+fn a_clap_plug_in_is_described_in_a_helper_and_a_crash_there_is_only_the_helpers() {
+    use soundcraft_plugin_bridge::{DescribeError, describe_with};
+    const GAIN: &str = "clap:org.soundcraft.test.gain";
+    let info = describe_with(exe(), GAIN, Some(clap_fixture()), &[]).unwrap();
+    assert_eq!(info.name, "Fixture Gain");
+    assert_eq!(info.params.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["7", "3"]);
+    assert!(!info.instrument);
+    // The plug-in aborts its process as it is made: this test process goes on and is told so.
+    let started = Instant::now();
+    let crashed = describe_with(exe(), GAIN, Some(clap_fixture()), &[("SOUNDCRAFT_CLAP_FIXTURE_ABORT", "org.soundcraft.test.gain")]);
+    assert_eq!(crashed.err(), Some(DescribeError::Crashed));
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    // One the helper cannot make is refused with the reason, not reported as a crash.
+    let refused = describe_with(exe(), "clap:org.soundcraft.test.none", Some(clap_fixture()), &[]);
+    assert!(matches!(refused, Err(DescribeError::Refused(_))), "{refused:?}");
+    let missing = describe_with(Path::new("/no/such/helper"), GAIN, None, &[]);
+    assert!(matches!(missing, Err(DescribeError::Start(_))), "{missing:?}");
+}
+
+#[test]
+fn a_crashed_plug_in_keeps_its_last_state_and_a_restart_brings_it_back() {
+    const GAIN: &str = "clap:org.soundcraft.test.gain";
+    let mut p = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    p.prepare(48_000.0, 128, 2);
+    // Gain 2 lives in the plug-in's own state (the fixture saves gain and mode).
+    let mut gain2 = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    assert!(gain2.set_param("7", 2.0));
+    gain2.prepare(48_000.0, 128, 2);
+    play(&mut gain2, 0, 4);
+    let state = gain2.save_state().expect("the fixture keeps a state");
+    drop(gain2);
+    assert!(p.load_state(&state));
+    let mut reader = p.state_reader().unwrap();
+    assert!(!reader.crashed());
+    p.kill_helper();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !reader.crashed() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(reader.crashed(), "the app is told, so it offers Restart");
+    // Gone, it still answers the state it last had: what Restart makes it again from.
+    assert_eq!(reader.save_state(), Some(state.clone()));
+    assert_eq!(p.save_state(), Some(state.clone()));
+    let mut again = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    assert!(again.load_state(&state));
+    assert_eq!(again.param("7"), Some(2.0), "the host's copy follows the state, and is not sent back over it");
+    again.prepare(48_000.0, 128, 2);
+    let (sent, heard) = play(&mut again, 0, 30);
+    if again.overruns() == 0 {
+        for b in 2..30 {
+            assert!(heard[b].iter().zip(&sent[b - 1]).all(|(h, s)| (h - s * 2.0).abs() < 1e-6), "block {b}: gain 2 again");
+        }
+    }
+    assert!(!again.crashed());
+}
+
+/// The VST3 test plug-in of `soundcraft-vst3-host` (`tests/fixture`), built once and installed
+/// as a bundle (`<dir>/vendor/Fixture.vst3`) in a folder of its own.
+fn vst3_fixture() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vst3-host/tests/fixture/Cargo.toml");
+        let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("vst3-fixture-target");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let st = Command::new(cargo)
+            .args(["build", "--quiet", "--manifest-path"])
+            .arg(&manifest)
+            .arg("--target-dir")
+            .arg(&target)
+            .env_remove("RUSTFLAGS")
+            .status()
+            .unwrap();
+        assert!(st.success(), "building the VST3 fixture failed");
+        let (lib, folder, exe) = if cfg!(target_os = "macos") {
+            ("libvst3_fixture.dylib", "MacOS", "Fixture")
+        } else if cfg!(windows) {
+            ("vst3_fixture.dll", "x86_64-win", "Fixture.vst3")
+        } else {
+            ("libvst3_fixture.so", if cfg!(target_arch = "aarch64") { "aarch64-linux" } else { "x86_64-linux" }, "Fixture.so")
+        };
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("bridge-vst3-fixture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin = dir.join("vendor/Fixture.vst3/Contents").join(folder);
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::copy(target.join("debug").join(lib), bin.join(exe)).unwrap();
+        dir
+    })
+}
+
+#[test]
+fn a_vst3_plug_in_runs_in_its_own_process_too() {
+    // `uid()` lays out the first 8 bytes differently on Windows (COM GUID order).
+    let id = if cfg!(windows) { "vst3:001D0A5C111122223333444455556666" } else { "vst3:5C0A1D00111122223333444455556666" };
+    assert!(soundcraft_plugin_bridge::bridgeable(id));
+    // Described in a helper: this process never loads the plug-in's binary.
+    let info = soundcraft_plugin_bridge::describe_with(exe(), id, Some(vst3_fixture()), &[]).unwrap();
+    assert_eq!(info.name, "Fixture Gain");
+    assert_eq!(info.params.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["7", "3", "12", "13", "14"]);
+    let mut p = BridgedPlugin::spawn_with(exe(), id, Some(vst3_fixture())).unwrap();
+    p.prepare(48_000.0, 128, 2);
+    assert_eq!(p.latency(), 3 + 128, "its own latency and the bridge's block");
+    // The fixture starts at gain 0.5 (its component state), one block late.
+    let (sent, heard) = play(&mut p, 0, 30);
+    eprintln!("blocks not back in time: {}", p.overruns());
+    if p.overruns() == 0 {
+        for b in 2..30 {
+            assert!(heard[b].iter().zip(&sent[b - 1]).all(|(h, s)| (h - s * 0.5).abs() < 1e-6), "block {b}");
+        }
+    }
+    // Its state crosses the pipe, and a crash only silences it.
+    let state = p.save_state().expect("every VST3 component has a state");
+    assert!(p.load_state(&state));
+    p.kill_helper();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !p.crashed() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(p.crashed());
+    assert_eq!(p.save_state(), Some(state), "the state it last had, for Restart");
+}
+
+#[test]
+fn a_clap_plug_ins_own_presets_are_listed_and_loaded_through_its_process() {
+    use soundcraft_plugin_bridge::{preset_state_with, presets_with};
+    const GAIN: &str = "clap:org.soundcraft.test.gain";
+    let bundle = clap_fixture().join("Fixture.clap");
+    // Listed by a helper: this process never loads the binary.
+    let listed = presets_with(exe(), GAIN, &bundle).unwrap();
+    let mut keys: Vec<&str> = listed.iter().filter_map(|p| p.load_key.as_deref()).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["loud", "quiet", "shared"], "{listed:?}");
+    assert!(presets_with(exe(), "clap:org.soundcraft.test.none", &bundle).is_err());
+    let loud = listed.iter().find(|p| p.load_key.as_deref() == Some("loud")).unwrap().clone();
+    // A module that starts with the preset: its state, made in a helper.
+    let state = preset_state_with(exe(), GAIN, Some(clap_fixture()), &loud).unwrap();
+    let mut fresh = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    assert!(fresh.load_state(&state));
+    assert_eq!(fresh.param("7"), Some(2.0), "loud is gain 2");
+    // Loaded into a running instance, in place (the app's preset browser does this).
+    let mut p = BridgedPlugin::spawn_with(exe(), GAIN, Some(clap_fixture())).unwrap();
+    let mut reader = p.state_reader().unwrap();
+    let quiet = listed.iter().find(|p| p.load_key.as_deref() == Some("quiet")).unwrap();
+    assert!(reader.load_preset(quiet.kind(), quiet.location.as_deref(), quiet.load_key.as_deref()));
+    let after = reader.save_state().unwrap();
+    assert!(fresh.load_state(&after));
+    assert_eq!(fresh.param("7"), Some(0.5), "quiet is gain 0.5");
+    assert!(!reader.load_preset(1, None, Some("no-such-preset")));
+    assert!(!p.crashed());
+    drop(p);
+}
+
+#[test]
 fn a_clap_plug_in_runs_in_its_own_process() {
     // Loaded only in the helper: this process never loads the plug-in's binary.
     let mut p = BridgedPlugin::spawn_with(exe(), "clap:org.soundcraft.test.gain", Some(clap_fixture())).unwrap();

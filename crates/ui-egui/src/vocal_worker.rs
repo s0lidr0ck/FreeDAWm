@@ -1,5 +1,5 @@
 //! Vocal tuning's background host: runs the engine's vocal jobs (analyses, then tuned renders)
-//! one at a time, off the UI thread on desktop and inline between frames on wasm32 (no threads).
+//! one at a time, off the UI thread.
 //!
 //! - `poll` once per frame: picks up a finished job and installs it, cancels a running render
 //!   whose clip's tuning changed since it started (the next poll renders the newer edit), and
@@ -14,11 +14,9 @@ use soundcraft_model::{AnalysisKey, ClipId, Session};
 use soundcraft_time::Samples;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::Ordering;
 
 /// What a job is, for the status bar and for cancelling a superseded render.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 struct Info {
     /// "Analysing Lead Vox…" / "Tuning Lead Vox…".
     label: String,
@@ -32,7 +30,6 @@ struct Info {
     loads: u64,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct Running {
     info: Info,
     cancel: Arc<AtomicBool>,
@@ -42,7 +39,6 @@ struct Running {
 /// See the module docs.
 #[derive(Default)]
 pub struct VocalWorker {
-    #[cfg(not(target_arch = "wasm32"))]
     running: Option<Running>,
     /// The last failure worth telling (a render refused), until something installs.
     message: Option<String>,
@@ -91,7 +87,6 @@ impl VocalWorker {
     /// Status-bar text: the job running ("Analysing Lead Vox…"), else the last failure worth
     /// telling, else `None`.
     pub fn busy(&self) -> Option<String> {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(r) = &self.running {
             return Some(r.info.label.clone());
         }
@@ -117,36 +112,19 @@ impl VocalWorker {
 
     /// Whether a job is in flight (the host keeps polling while it is).
     pub fn running(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.running.is_some()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        self.running.is_some()
     }
 
     /// One frame's worth of work (see the module docs). `focus`: the clip open in the Vocal
     /// Editor, done first. Returns true when it installed something (repaint).
     pub fn poll(&mut self, engine: &mut Engine, focus: Option<ClipId>, playhead: Samples) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
+        let installed = self.collect(engine);
+        if self.running.is_none()
+            && let Some(job) = self.next(engine, focus, playhead)
         {
-            let installed = self.collect(engine);
-            if self.running.is_none()
-                && let Some(job) = self.next(engine, focus, playhead)
-            {
-                self.start(engine, job);
-            }
-            installed
+            self.start(engine, job);
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let Some(job) = self.next(engine, focus, playhead) else { return false };
-            let info = info_of(engine, &job);
-            let result = job.run(&AtomicBool::new(false));
-            self.finish(engine, &info, result)
-        }
+        installed
     }
 
     /// Installs or records a finished job's result.
@@ -177,7 +155,6 @@ impl VocalWorker {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn collect(&mut self, engine: &mut Engine) -> bool {
         use std::sync::mpsc::TryRecvError;
         let Some(r) = &self.running else { return false };
@@ -200,7 +177,6 @@ impl VocalWorker {
         self.finish(engine, &r.info, result)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn start(&mut self, engine: &mut Engine, job: VocalJob) {
         let info = info_of(engine, &job);
         let cancel = Arc::new(AtomicBool::new(false));

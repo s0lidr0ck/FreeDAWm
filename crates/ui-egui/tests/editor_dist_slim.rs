@@ -1,4 +1,4 @@
-//! DistEngine's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its
+//! DistEngine's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its
 //! header, the Circuit menu, the dials, Link and the calibration wizard, and the switch rows in
 //! More.
 

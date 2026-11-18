@@ -265,7 +265,6 @@ fn load_amorph(app: &mut SoundApp, cx: &Cx, st: &mut Editor, text: &str) -> Resu
 }
 
 // ============================================================================ file drop
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn file_drop(app: &mut SoundApp, ui: &mut Ui, cx: &Cx, st: &mut Editor, ed: Rect) {
     let (hovering, dropped, pointer) = ui.input(|i| {
         (
@@ -292,10 +291,4 @@ pub(super) fn file_drop(app: &mut SoundApp, ui: &mut Ui, cx: &Cx, st: &mut Edito
         }
         return;
     }
-}
-
-/// No file system on the web: nothing to drop.
-#[cfg(target_arch = "wasm32")]
-pub(super) fn file_drop(_app: &mut SoundApp, _ui: &mut Ui, _cx: &Cx, st: &mut Editor, _ed: Rect) {
-    st.file_hover = false;
 }

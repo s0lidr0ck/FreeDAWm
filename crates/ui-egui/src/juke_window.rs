@@ -176,7 +176,6 @@ struct Out {
     /// Import the selected range of an audio track into this pad.
     from_selection: Option<usize>,
     /// Build the kit from a folder the user picks.
-    #[cfg(not(target_arch = "wasm32"))]
     import_folder: bool,
     /// A kit effect whose editor to open.
     open_fx: Option<soundcraft_model::ModuleId>,
@@ -189,21 +188,15 @@ struct Out {
     /// Copy this pattern clip right after itself (`edit.duplicate`) and show the copy.
     duplicate_pattern: Option<ClipId>,
     /// Recorded kits: fetch the release's list, download one, cancel the download.
-    #[cfg(not(target_arch = "wasm32"))]
     fetch_kits: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     download_kit: Option<soundcraft_engine::ml::kits::KitEntry>,
-    #[cfg(not(target_arch = "wasm32"))]
     cancel_kit: bool,
     /// Save the kit as a preset in the presets folder.
-    #[cfg(not(target_arch = "wasm32"))]
     save_preset: bool,
     /// Write the kit to a folder the user picks.
-    #[cfg(not(target_arch = "wasm32"))]
     export_kit: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// What the Kits menu shows of the recorded kits.
 struct KitsView {
     /// (name, folder) of each installed kit.
@@ -220,7 +213,6 @@ struct KitsView {
     note: String,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn kits_view(app: &mut SoundApp) -> KitsView {
     use crate::juke_kits_ui::ListState;
     app.juke_kits.step();
@@ -269,14 +261,10 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, tid: TrackId, ins: &Insert, frozen:
     }
     view.pad = view.pad.min(PADS - 1);
     let (levels, bus_levels) = pad_levels(app, &ctx, tid);
-    #[cfg(not(target_arch = "wasm32"))]
     let kits = kits_view(app);
-    #[cfg(not(target_arch = "wasm32"))]
     if kits.active.is_some() || kits.available.as_ref().is_err_and(|e| e.starts_with("Checking")) {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
-    #[cfg(target_arch = "wasm32")]
-    let kits = ();
     let mut out = Out { has_selection: !app.engine.session().edit.selection.is_empty(), ..Out::default() };
     let full = ui.available_rect_before_wrap();
     let full = Rect::from_min_size(full.min, vec2(full.width().max(760.0), full.height().max(520.0)));
@@ -415,7 +403,6 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, mut out: Out) {
     {
         crate::hit_picker::open(app, tid, pad, json!({"paths": [path]}));
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if out.import_folder
         && let Some(pick) = &app.services.pick_folder
         && let Some(dir) = pick("mix.kit_import")
@@ -486,36 +473,33 @@ fn apply(app: &mut SoundApp, tid: TrackId, view: &mut View, mut out: Out) {
     if let Some(c) = out.duplicate_pattern {
         duplicate_pattern(app, tid, c);
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    if out.fetch_kits {
+        app.juke_kits.load_list();
+    }
+    if let Some(k) = &out.download_kit {
+        app.juke_kits.download(k);
+    }
+    if out.cancel_kit {
+        app.juke_kits.cancel();
+    }
+    if out.save_preset {
+        save_preset(app, tid);
+    }
+    if out.export_kit
+        && let Some(pick) = &app.services.pick_folder
+        && let Some(dir) = pick("mix.kit_save")
     {
-        if out.fetch_kits {
-            app.juke_kits.load_list();
-        }
-        if let Some(k) = &out.download_kit {
-            app.juke_kits.download(k);
-        }
-        if out.cancel_kit {
-            app.juke_kits.cancel();
-        }
-        if out.save_preset {
-            save_preset(app, tid);
-        }
-        if out.export_kit
-            && let Some(pick) = &app.services.pick_folder
-            && let Some(dir) = pick("mix.kit_save")
-        {
-            let name = app
-                .engine
-                .session()
-                .track(tid)
-                .and_then(|t| t.instrument.as_ref())
-                .and_then(|i| i.kit.as_ref())
-                .map_or_else(|| "My Kit".to_string(), |k| k.name.clone());
-            let path = std::path::Path::new(&dir).join(saved_kit_id(&name).trim_start_matches("my_"));
-            match app.run("mix.kit_save", json!({"track": tid.0, "path": path.to_string_lossy()})) {
-                Ok(_) => app.ui.status = format!("Exported {name} to {}", path.display()),
-                Err(e) => app.ui.status = e,
-            }
+        let name = app
+            .engine
+            .session()
+            .track(tid)
+            .and_then(|t| t.instrument.as_ref())
+            .and_then(|i| i.kit.as_ref())
+            .map_or_else(|| "My Kit".to_string(), |k| k.name.clone());
+        let path = std::path::Path::new(&dir).join(saved_kit_id(&name).trim_start_matches("my_"));
+        match app.run("mix.kit_save", json!({"track": tid.0, "path": path.to_string_lossy()})) {
+            Ok(_) => app.ui.status = format!("Exported {name} to {}", path.display()),
+            Err(e) => app.ui.status = e,
         }
     }
     if let Some(t) = out.tab {
@@ -582,7 +566,6 @@ pub fn saved_kit_id(name: &str) -> String {
 }
 
 /// Saves track `tid`'s kit as a preset in the presets folder, where the Presets menu lists it.
-#[cfg(not(target_arch = "wasm32"))]
 fn save_preset(app: &mut SoundApp, tid: TrackId) {
     let name = app
         .engine
@@ -791,10 +774,7 @@ fn knob_at(ui: &mut Ui, r: Rect, ins: &Insert, id: &str, size: f32, style: KnobS
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 type Recorded = KitsView;
-#[cfg(target_arch = "wasm32")]
-type Recorded = ();
 
 #[allow(clippy::too_many_arguments)]
 fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, tab: Tab, steps_clip: Option<ClipId>, recorded: &Recorded, out: &mut Out) {
@@ -860,10 +840,7 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, tab: T
                 item(ui, k);
             }
         });
-        #[cfg(not(target_arch = "wasm32"))]
         recorded_menu(ui, tid, &kit, recorded, out);
-        #[cfg(target_arch = "wasm32")]
-        let _ = recorded;
     });
     // Presets: whole kit sounds (samples, tuning, envelopes, effects), by category.
     let presets = Rect::from_min_size(pos2(menu.max.x + 4.0, field.min.y), vec2(62.0, field.height()));
@@ -939,15 +916,12 @@ fn top_bar(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, view: &View, tab: T
         }
         out.cmds.push(("mix.kit_randomize", p));
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let save = Rect::from_min_size(pos2(rnd.max.x + 4.0, field.min.y), vec2(80.0, field.height()));
-        let resp = ui
-            .put(save, egui::Button::new(egui::RichText::new("Save preset").font(regular(11.0))))
-            .on_hover_text("Save the whole kit sound (samples, every setting, bus effects) as a preset under its name: Presets › My Presets");
-        if resp.clicked() {
-            out.save_preset = true;
-        }
+    let save = Rect::from_min_size(pos2(rnd.max.x + 4.0, field.min.y), vec2(80.0, field.height()));
+    let resp = ui
+        .put(save, egui::Button::new(egui::RichText::new("Save preset").font(regular(11.0))))
+        .on_hover_text("Save the whole kit sound (samples, every setting, bus effects) as a preset under its name: Presets › My Presets");
+    if resp.clicked() {
+        out.save_preset = true;
     }
     // Humanize, kit-wide.
     if let Some(info) = info("humanize") {
@@ -1154,13 +1128,7 @@ fn presets_menu(ui: &mut Ui, tid: TrackId, current: &str, recorded: &Recorded, o
             cats.push(&q.category);
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
     let (ids, kits_dir) = (recorded.ids.clone(), recorded.kits_dir.to_string_lossy().to_string());
-    #[cfg(target_arch = "wasm32")]
-    let (ids, kits_dir): (Vec<String>, String) = {
-        let _ = recorded;
-        (Vec::new(), String::new())
-    };
     for cat in cats {
         ui.menu_button(cat, |ui| {
             for q in lib.iter().filter(|q| q.category == cat) {
@@ -1178,25 +1146,21 @@ fn presets_menu(ui: &mut Ui, tid: TrackId, current: &str, recorded: &Recorded, o
             }
         });
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        ui.separator();
-        ui.menu_button("My Presets", |ui| {
-            let mine = crate::juke_kits_ui::read_presets_in(&recorded.presets_dirs);
-            if mine.is_empty() {
-                ui.label(egui::RichText::new("None yet: Save preset adds the kit here").weak());
+    ui.separator();
+    ui.menu_button("My Presets", |ui| {
+        let mine = crate::juke_kits_ui::read_presets_in(&recorded.presets_dirs);
+        if mine.is_empty() {
+            ui.label(egui::RichText::new("None yet: Save preset adds the kit here").weak());
+        }
+        for (name, path) in mine {
+            if ui.selectable_label(current == name, &name).clicked() {
+                out.cmds.push(("mix.kit_preset", json!({"track": tid.0, "path": path.to_string_lossy(), "kits_dir": kits_dir})));
+                ui.close();
             }
-            for (name, path) in mine {
-                if ui.selectable_label(current == name, &name).clicked() {
-                    out.cmds.push(("mix.kit_preset", json!({"track": tid.0, "path": path.to_string_lossy(), "kits_dir": kits_dir})));
-                    ui.close();
-                }
-            }
-        });
-    }
+        }
+    });
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn recorded_menu(ui: &mut Ui, tid: TrackId, current: &str, v: &KitsView, out: &mut Out) {
     ui.separator();
     ui.label(egui::RichText::new("Recorded & saved").strong());
@@ -2019,8 +1983,22 @@ fn side_column(ui: &mut Ui, r: Rect, tid: TrackId, ins: &Insert, pad: usize, col
             break;
         }
         text(&p, pos2(r.min.x, y + 11.0), Align2::LEFT_CENTER, label, regular(10.5), LABEL);
-        let end = if ms.is_some() { r.max.x - 64.0 } else { r.max.x };
+        // The choke group shares its row with the pad's output (Main, or Out 2-8 on a mixer
+        // channel of its own: the track's output menu › Instrument Outputs).
+        let end = if ms.is_some() { r.max.x - 64.0 } else { r.center().x - 4.0 };
         choice_combo(ui, Rect::from_min_max(pos2(r.min.x + 56.0, y), pos2(end, y + 22.0)), tid, pad, ins, &pad_param(pad, name), out);
+        if ms.is_none() {
+            text(&p, pos2(r.center().x, y + 11.0), Align2::LEFT_CENTER, "Out", regular(10.5), LABEL);
+            choice_combo(
+                ui,
+                Rect::from_min_max(pos2(r.center().x + 28.0, y), pos2(r.max.x, y + 22.0)),
+                tid,
+                pad,
+                ins,
+                &pad_param(pad, "output"),
+                out,
+            );
+        }
         if let Some(ms) = ms {
             let id = pad_param(pad, ms);
             let mut v = value(ins, &id);

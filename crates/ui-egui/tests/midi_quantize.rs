@@ -43,7 +43,7 @@ fn invert_and_same_pitch_selections() {
     use soundcraft_midi::{Note, Sequence};
     use soundcraft_ui_egui::midi_edit_tools::{inverted_selection, same_pitch_selection};
     let n = |pitch, start| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length: 10 };
-    let seq = Sequence { notes: vec![n(60, -100), n(60, 0), n(62, 10), n(60, 20), n(64, 30)], ctrls: Vec::new() };
+    let seq = Sequence { notes: vec![n(60, -100), n(60, 0), n(62, 10), n(60, 20), n(64, 30)], ctrls: Vec::new(), sysex: Vec::new() };
     assert_eq!(inverted_selection(&seq, &[1, 4]), vec![2, 3]);
     assert_eq!(same_pitch_selection(&seq, &[1], None), vec![1, 3]);
     assert_eq!(same_pitch_selection(&seq, &[], Some(62)), vec![2]);

@@ -11,7 +11,6 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-#[cfg(not(target_arch = "wasm32"))]
 mod claude;
 mod config;
 mod control_server;
@@ -549,7 +548,7 @@ impl eframe::App for Host {
 
 fn open_path(app: &mut SoundApp, p: &str) {
     let lower = p.to_ascii_lowercase();
-    let r = if soundcraft_engine::model::is_session_path(&lower) {
+    let r = if soundcraft_engine::model::is_session_path(&lower) || soundcraft_engine::io::is_bundle_path(&lower) {
         dialogs::run_or_ask(app, "session.open", serde_json::json!({"path": p}))
     } else if soundcraft_ui_egui::windows::is_midi_file(p) {
         // At the insertion point, as audio is.
@@ -609,7 +608,12 @@ fn services() -> Services {
         pick_open: Some(Box::new(|purpose: &str, exts: &[&str]| {
             let d = rfd::FileDialog::new();
             let d = match purpose {
-                "session.open" => d.add_filter("FreeDAWm Session", &soundcraft_engine::model::SESSION_EXTENSIONS),
+                // Sessions, and bundles (unpacked beside themselves when opened).
+                "session.open" => {
+                    let exts: Vec<&str> =
+                        soundcraft_engine::model::SESSION_EXTENSIONS.iter().chain(&soundcraft_engine::io::BUNDLE_EXTENSIONS).copied().collect();
+                    d.add_filter("FreeDAWm Session", &exts)
+                }
                 "file.import_midi" => d.add_filter("MIDI", &["mid", "midi", "smf"]),
                 "file.import_dawproject" => d.add_filter("DAWproject", &["dawproject"]),
                 "scout.profile_import" => d.add_filter("Sound Profile", &["json"]),
@@ -718,6 +722,8 @@ fn main() -> eframe::Result {
     // No settings saved yet: the first start, which opens the tour once.
     let first_run = prefs_enabled() && prefs_path().is_some_and(|p| !p.exists());
     let mut prefs = load_prefs().unwrap_or_default();
+    // Before any session's plug-ins are made: where hosted CLAP plug-ins run (Preferences › Mixing).
+    soundcraft_engine::set_plugin_process(prefs.plugin_process);
     if first_run {
         prefs.tour_step = Some(0);
     }
@@ -731,8 +737,9 @@ fn main() -> eframe::Result {
     // With the splash, the root window opens as the splash (borderless, the film's size) and
     // `App::end_splash` turns it into the main window; see `splash`.
     let viewport = if show_splash { splash::viewport() } else { main_viewport(window) };
-    let (sessions, others): (Vec<String>, Vec<String>) =
-        files.into_iter().partition(|f| soundcraft_engine::model::is_session_path(f.to_ascii_lowercase()));
+    let (sessions, others): (Vec<String>, Vec<String>) = files
+        .into_iter()
+        .partition(|f| soundcraft_engine::model::is_session_path(f.to_ascii_lowercase()) || soundcraft_engine::io::is_bundle_path(f));
     let audio_first = audio_before_engine(&sessions);
     let launch_rate = sessions.last().cloned();
     let load_progress = std::sync::Arc::new(std::sync::Mutex::new(soundcraft_engine::open_job::OpenProgress::default()));

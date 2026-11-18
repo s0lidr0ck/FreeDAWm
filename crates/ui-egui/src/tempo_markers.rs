@@ -1,7 +1,9 @@
 //! The Tempo ruler: each tempo change is a marker showing its BPM. Drag it left/right to move it
 //! (the grid snaps), up/down to change its BPM (Shift: fine); double-click it to type the BPM;
 //! right-click › Delete / Ramp to Next / Edit Tempo…; double-click empty ruler space to add a
-//! change there at the tempo in effect. Each gesture is one command, so one undo step.
+//! change there at the tempo in effect. Time Warp: drag a bar line (anywhere else on the ruler,
+//! within a few points of the line) to where that bar should be: the tempo before it changes so
+//! it lands there (`event.time_warp`). Each gesture is one command, so one undo step.
 
 use crate::SoundApp;
 use crate::edit_window::{sample_at, snap, x_of};
@@ -42,6 +44,26 @@ pub fn dragged_bpm(bpm: f64, dy: f32, fine: bool) -> f64 {
 pub fn label(ev: &TempoEvent) -> String {
     let bpm = (ev.bpm * 100.0).round() / 100.0;
     if ev.ramp { format!("{bpm} ramp") } else { format!("{bpm}") }
+}
+
+/// A bar line being dragged for Time Warp (kept in egui's memory between frames).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WarpDrag {
+    tick: i64,
+}
+
+/// The bar line within a few points of `x` (not bar 1), as a tick.
+fn bar_line_near(s: &Session, tl: Rect, x: f32) -> Option<i64> {
+    let sr = s.sample_rate;
+    let bar = s.tempo.bar_beat_at(sample_at(s, tl, x).max(0), sr).bar;
+    [bar, bar + 1]
+        .into_iter()
+        .map(|b| s.tempo.bar_start_tick(b))
+        .filter(|t| *t > 0)
+        .map(|t| (t, (x_of(s, tl, s.tempo.tick_to_samples(t, sr)) - x).abs()))
+        .filter(|(_, d)| *d <= 6.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(t, _)| t)
 }
 
 /// The marker under `x`: its flag or its label.
@@ -102,6 +124,46 @@ pub fn tempo_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &egui::Painter, s: 
         && let Some(ev) = hit(&spots, p.x)
     {
         ui.data_mut(|d| d.insert_temp(drag_id, Drag { tick: ev.tick, bpm: ev.bpm, from: p, axis: None }));
+    }
+    // Time Warp: a press near a bar line (off the markers) drags the line.
+    let warp_id = ui.id().with("tempo_warp_drag");
+    if resp.drag_started()
+        && let Some(p) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+        && hit(&spots, p.x).is_none()
+        && let Some(tick) = bar_line_near(s, tl, p.x)
+    {
+        ui.data_mut(|d| d.insert_temp(warp_id, WarpDrag { tick }));
+    }
+    if resp.hovered()
+        && let Some(p) = resp.hover_pos()
+        && hit(&spots, p.x).is_none()
+        && bar_line_near(s, tl, p.x).is_some()
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    let warp: Option<WarpDrag> = ui.data(|d| d.get_temp(warp_id));
+    if let Some(w) = warp {
+        let p = ui.input(|i| i.pointer.interact_pos());
+        let at = p.map(|p| sample_at(s, tl, p.x).max(0));
+        if let Some(x) = at.map(|a| x_of(s, tl, a)) {
+            painter.vline(x, row.y_range(), Stroke::new(2.0, Color32::from_rgb(255, 120, 90)));
+            painter.text(
+                pos2(x + 4.0, row.min.y + 1.0),
+                Align2::LEFT_TOP,
+                format!("bar {}", s.tempo.bar_beat_at_tick(w.tick).bar),
+                bold(9.0),
+                Color32::WHITE,
+            );
+        }
+        if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+            ui.data_mut(|m| m.remove::<WarpDrag>(warp_id));
+            if let Some(to) = at
+                && to != s.tempo.tick_to_samples(w.tick, sr)
+                && let Err(e) = app.run("event.time_warp", json!({"tick": w.tick, "to": to}))
+            {
+                app.ui.status = e;
+            }
+        }
     }
     if let Some(mut d) = drag {
         let p = ui.input(|i| i.pointer.interact_pos()).unwrap_or(d.from);

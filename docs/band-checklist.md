@@ -144,15 +144,6 @@ matches. When it doesn't, write what you saw under the line: the status bar text
   Pianoteq, one more), buffer **64** samples (Setup › Playback Engine), Natural feel, Energy 4 on
   all, play the whole song. Expected: no dropouts; the status bar's underrun count stays 0.
 
-## 11. The web build
-
-- [ ] `trunk serve` in `apps\soundcraft-web`, open the page. Window › Studio › Song: lay the
-  factory song **12-bar Blues**; give a track the bassist; play. Expected: the song lays (the
-  embedded Library: no user folder on the web, so Save as… is refused and Import MIDI chords is
-  unsupported) and the built-in instrument plays the bass part.
-- [ ] Open a band project saved by the desktop app (File › Open Session…, or drop the file on the
-  page). Expected: it opens with its band and lanes.
-
 ## Not in this round
 
 Live mode (playing chords on a MIDI keyboard; needs MIDI input, gap G-02), kept takes, audition

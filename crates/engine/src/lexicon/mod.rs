@@ -104,7 +104,7 @@ pub fn get() -> Option<&'static Lexicon> {
         let spawned = std::thread::Builder::new().name("lexicon-load".into()).spawn(|| {
             LEXICON.get_or_init(Lexicon::load_bundled);
         });
-        // No threads (the web build): load here, once.
+        // No thread could be started: load here, once.
         if spawned.is_err() {
             return Some(LEXICON.get_or_init(Lexicon::load_bundled));
         }

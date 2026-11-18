@@ -44,7 +44,7 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("Options > Solo Mode > PFL (Pre Fader Listen)", "options.solo_mode"),
     ("Options > Solo Mode > X-OR (Cancels Previous Solo)", "options.solo_mode"),
     ("Options > Solo Mode > Latch", "options.solo_mode"),
-    ("Options > Solo Mode > Momentary", "options.solo_mode"),
+    ("Options > Solo Mode > Momentary", "options.momentary_solo"),
     ("Options > Edit Window Scrolling > No Scrolling", "options.scrolling"),
     ("Options > Edit Window Scrolling > After Playback", "options.scrolling"),
     ("Options > Edit Window Scrolling > Page", "options.scrolling"),

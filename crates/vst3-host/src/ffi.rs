@@ -25,11 +25,19 @@ use std::time::Duration;
 use vst3::Steinberg::Vst::{self as sv};
 use vst3::Steinberg::Vst::{
     IAttributeListTrait, IAudioProcessorTrait, IComponentHandlerTrait, IComponentTrait, IConnectionPointTrait, IEditControllerTrait, IEventListTrait,
-    IHostApplicationTrait, IMessageTrait, IMidiMappingTrait, IParamValueQueueTrait, IParameterChangesTrait, IUnitInfoTrait,
+    IHostApplicationTrait, IMessageTrait, IMidiMappingTrait, INoteExpressionControllerTrait, IParamValueQueueTrait, IParameterChangesTrait,
+    IUnitInfoTrait,
 };
 use vst3::Steinberg::{self as sb};
 use vst3::Steinberg::{FUnknown, IBStreamTrait, IPlugFrameTrait, IPlugViewTrait, IPluginBaseTrait, IPluginFactory2Trait, IPluginFactoryTrait};
 use vst3::{Class, ComPtr, ComWrapper, Interface};
+
+/// Most note expressions one channel may report (hostile-input cap).
+const MAX_NOTE_EXPRESSIONS: i32 = 256;
+
+/// The last standard note expression type (`kBrightnessTypeID`); the host sends volume, pan,
+/// tuning, vibrato, expression and brightness.
+pub(crate) const MAX_STANDARD_EXPRESSION: u32 = sv::NoteExpressionTypeIDs_::kBrightnessTypeID;
 
 /// Most classes one factory may report (hostile-input cap).
 const MAX_CLASSES: i32 = 1024;
@@ -1320,46 +1328,102 @@ impl IBStreamTrait for MemoryStream {
 /// the MIDI channel, 0–15.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum NoteEvent {
-    On { time: u32, channel: u8, key: u8, velocity: f32 },
-    Off { time: u32, channel: u8, key: u8 },
-    Pressure { time: u32, channel: u8, key: u8, pressure: f32 },
+    /// `id`: the host's note id (`noteId`), so note expressions reach this note alone.
+    On {
+        time: u32,
+        id: i32,
+        channel: u8,
+        key: u8,
+        velocity: f32,
+    },
+    /// `velocity`: the release velocity, 0–1 (0 when the message had none).
+    Off {
+        time: u32,
+        id: i32,
+        channel: u8,
+        key: u8,
+        velocity: f32,
+    },
+    Pressure {
+        time: u32,
+        id: i32,
+        channel: u8,
+        key: u8,
+        pressure: f32,
+    },
+    /// A note expression (`kNoteExpressionValueEvent`) of standard type `type_id` (volume, pan,
+    /// tuning, vibrato, expression, brightness) for the note with id `id`; `value` normalized.
+    Expression {
+        time: u32,
+        id: i32,
+        type_id: u32,
+        value: f64,
+    },
+    /// A System Exclusive message (`F0` … `F7`): `len` bytes at `at` of the block's SysEx
+    /// arena, passed to `process` (a `kDataEvent` of type `kMidiSysEx` points into it).
+    SysEx {
+        time: u32,
+        at: u32,
+        len: u32,
+    },
 }
 
 impl NoteEvent {
     pub fn time(&self) -> u32 {
         match *self {
-            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } => time,
+            NoteEvent::On { time, .. }
+            | NoteEvent::Off { time, .. }
+            | NoteEvent::Pressure { time, .. }
+            | NoteEvent::Expression { time, .. }
+            | NoteEvent::SysEx { time, .. } => time,
         }
     }
     pub fn set_time(&mut self, t: u32) {
         match self {
-            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } => *time = t,
+            NoteEvent::On { time, .. }
+            | NoteEvent::Off { time, .. }
+            | NoteEvent::Pressure { time, .. }
+            | NoteEvent::Expression { time, .. }
+            | NoteEvent::SysEx { time, .. } => *time = t,
         }
     }
 
-    fn to_raw(self, offset: u32) -> sv::Event {
+    /// The event as VST3 has it, its time made relative to `offset`. A SysEx points into
+    /// `sysex` (which must outlive the `process` call it is read in); `None` when its bytes are
+    /// not there.
+    fn to_raw(self, offset: u32, sysex: &[u8]) -> Option<sv::Event> {
         // SAFETY: `Event` is plain data (numbers and a union of plain structs); all-zero is valid.
         let mut e: sv::Event = unsafe { std::mem::zeroed() };
         e.busIndex = 0;
         e.sampleOffset = i32::try_from(self.time().saturating_sub(offset)).unwrap_or(0);
         e.flags = sv::Event_::EventFlags_::kIsLive as u16;
         match self {
-            NoteEvent::On { channel, key, velocity, .. } => {
+            NoteEvent::On { id, channel, key, velocity, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kNoteOnEvent as u16;
                 e.__field0.noteOn =
-                    sv::NoteOnEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), tuning: 0.0, velocity, length: 0, noteId: -1 };
+                    sv::NoteOnEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), tuning: 0.0, velocity, length: 0, noteId: id };
             }
-            NoteEvent::Off { channel, key, .. } => {
+            NoteEvent::Off { id, channel, key, velocity, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kNoteOffEvent as u16;
                 e.__field0.noteOff =
-                    sv::NoteOffEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), velocity: 0.0, noteId: -1, tuning: 0.0 };
+                    sv::NoteOffEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), velocity, noteId: id, tuning: 0.0 };
             }
-            NoteEvent::Pressure { channel, key, pressure, .. } => {
+            NoteEvent::Pressure { id, channel, key, pressure, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kPolyPressureEvent as u16;
-                e.__field0.polyPressure = sv::PolyPressureEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), pressure, noteId: -1 };
+                e.__field0.polyPressure = sv::PolyPressureEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), pressure, noteId: id };
+            }
+            NoteEvent::Expression { id, type_id, value, .. } => {
+                e.r#type = sv::Event_::EventTypes_::kNoteExpressionValueEvent as u16;
+                e.__field0.noteExpressionValue = sv::NoteExpressionValueEvent { typeId: type_id, noteId: id, value };
+            }
+            NoteEvent::SysEx { at, len, .. } => {
+                let start = usize::try_from(at).ok()?;
+                let bytes = sysex.get(start..start.checked_add(usize::try_from(len).ok()?)?).filter(|b| !b.is_empty())?;
+                e.r#type = sv::Event_::EventTypes_::kDataEvent as u16;
+                e.__field0.data = sv::DataEvent { size: len, r#type: sv::DataEvent_::DataTypes_::kMidiSysEx as u32, bytes: bytes.as_ptr() };
             }
         }
-        e
+        Some(e)
     }
 }
 
@@ -1449,6 +1513,9 @@ pub(crate) struct Layout {
     pub inputs: Vec<u32>,
     pub outputs: Vec<u32>,
     pub event_input: bool,
+    /// The input bus the sidechain key goes to: the first auxiliary audio input with channels,
+    /// activated beside the main buses (see [`Instance::key_bus`]).
+    pub key_bus: Option<usize>,
 }
 
 fn apply_transport(c: &mut sv::ProcessContext, t: &Transport) {
@@ -1649,6 +1716,27 @@ impl Instance {
             .collect()
     }
 
+    /// The standard note expressions the controller declares (`INoteExpressionController` on the
+    /// event bus, any channel): a bit per type id, volume (0) to brightness (5). 0 without the
+    /// interface. Main thread only.
+    pub fn note_expression_types(&self) -> u8 {
+        let Some(n) = self.controller.as_ref().and_then(|c| c.cast::<sv::INoteExpressionController>()) else { return 0 };
+        let mut mask = 0u8;
+        for ch in 0..16i16 {
+            // SAFETY: valid note-expression interface of the controller, main thread.
+            let count = unsafe { n.getNoteExpressionCount(0, ch) }.clamp(0, MAX_NOTE_EXPRESSIONS);
+            for i in 0..count {
+                // SAFETY: `NoteExpressionTypeInfo` is plain data; all-zero is valid.
+                let mut info: sv::NoteExpressionTypeInfo = unsafe { std::mem::zeroed() };
+                // SAFETY: index below the count; `info` is writable.
+                if ok(unsafe { n.getNoteExpressionInfo(0, ch, i, &mut info) }) && info.typeId <= MAX_STANDARD_EXPRESSION {
+                    mask |= 1 << info.typeId;
+                }
+            }
+        }
+        mask
+    }
+
     /// The program names (`IUnitInfo` program list) of unit `unit`'s list, else of the first list
     /// the controller has: the plugin's built-in programs, which its program-change parameter
     /// selects. Empty without `IUnitInfo` or program lists. Main thread only.
@@ -1730,6 +1818,46 @@ impl Instance {
         ok(unsafe { p.getBusArrangement(dir as sv::BusDirection, index, &mut arr) }).then_some(arr)
     }
 
+    /// The first auxiliary audio input bus with channels (after the main one): where a plugin
+    /// declares its sidechain input. None when it has none.
+    pub fn key_bus(&self) -> Option<usize> {
+        let din = sv::BusDirections_::kInput;
+        let n = self.bus_count(sv::MediaTypes_::kAudio, din);
+        (1..n).find_map(|i| {
+            // SAFETY: plain data; all-zero is valid.
+            let mut info: sv::BusInfo = unsafe { std::mem::zeroed() };
+            // SAFETY: valid component; index below the bus count; `info` is writable.
+            let got = ok(unsafe { self.component.getBusInfo(sv::MediaTypes_::kAudio as sv::MediaType, din as sv::BusDirection, i, &mut info) });
+            (got && info.busType == sv::BusTypes_::kAux as sv::BusType && info.channelCount > 0).then(|| usize::try_from(i).ok()).flatten()
+        })
+    }
+
+    /// The auxiliary audio output buses an instrument (a plugin with an event input) offers a
+    /// mixer channel: (bus index, name), every one after the main bus with channels. Empty for an
+    /// effect.
+    pub fn aux_outputs(&self) -> Vec<(usize, String)> {
+        let (dout, din) = (sv::BusDirections_::kOutput, sv::BusDirections_::kInput);
+        if self.bus_count(sv::MediaTypes_::kEvent, din) == 0 {
+            return Vec::new();
+        }
+        let n = self.bus_count(sv::MediaTypes_::kAudio, dout);
+        (1..n)
+            .filter_map(|i| {
+                // SAFETY: plain data; all-zero is valid.
+                let mut info: sv::BusInfo = unsafe { std::mem::zeroed() };
+                // SAFETY: valid component; index below the bus count; `info` is writable.
+                let got = ok(unsafe { self.component.getBusInfo(sv::MediaTypes_::kAudio as sv::MediaType, dout as sv::BusDirection, i, &mut info) });
+                if !got || info.channelCount <= 0 {
+                    return None;
+                }
+                let name = read_c16(&info.name);
+                let name = if name.is_empty() { format!("Out {}", i + 1) } else { name };
+                Some((usize::try_from(i).ok()?, name))
+            })
+            .take(32)
+            .collect()
+    }
+
     fn bus_channels(&self, dir: sv::BusDirections, index: i32) -> u32 {
         if let Some(arr) = self.arrangement(dir, index) {
             return arr.count_ones().min(MAX_BUS_CHANNELS);
@@ -1786,16 +1914,24 @@ impl Instance {
         if !tried_ok {
             log::debug!("vst3: plugin refused mono/stereo bus arrangements; using its own");
         }
+        let key_bus = self.key_bus();
+        // An instrument's auxiliary outputs are on, so a mixer channel can take them.
+        let aux_out: Vec<usize> = self.aux_outputs().into_iter().map(|(i, _)| i).collect();
         let layout = Layout {
             inputs: (0..nin).map(|i| self.bus_channels(din, i)).collect(),
             outputs: (0..nout).map(|i| self.bus_channels(dout, i)).collect(),
             event_input: self.bus_count(event, din) > 0,
+            key_bus,
         };
-        // Main buses on, aux buses off (VST3 still gets buffers for every bus).
+        // Main buses on, and the sidechain input; other aux buses off (VST3 still gets buffers
+        // for every bus).
         for (dir, n) in [(din, nin), (dout, nout)] {
             for i in 0..n {
+                let on = i == 0
+                    || (dir == din && usize::try_from(i).ok() == key_bus)
+                    || (dir == dout && usize::try_from(i).is_ok_and(|i| aux_out.contains(&i)));
                 // SAFETY: valid component; index below the bus count.
-                unsafe { self.component.activateBus(audio as sv::MediaType, dir as sv::BusDirection, i, u8::from(i == 0)) };
+                unsafe { self.component.activateBus(audio as sv::MediaType, dir as sv::BusDirection, i, u8::from(on)) };
             }
         }
         if layout.event_input {
@@ -1863,7 +1999,7 @@ impl Instance {
     /// Runs one `process` call over `frames` frames: `params` become one point each at offset 0,
     /// `controls` (time, id, value) one point at their time when it falls in this call (the last
     /// one wins per parameter), and `notes` (sorted by time) have their times made relative to
-    /// `offset`.
+    /// `offset`; a SysEx among them points into `sysex`.
     pub fn process(
         &mut self,
         frames: usize,
@@ -1872,6 +2008,7 @@ impl Instance {
         params: &[(u32, f64)],
         controls: &[(u32, u32, f64)],
         notes: &[NoteEvent],
+        sysex: &[u8],
         offset: u32,
         project_time: i64,
         transport: Option<&Transport>,
@@ -1903,9 +2040,7 @@ impl Instance {
         self.in_events.with(|v| {
             v.clear();
             if event_in {
-                for n in notes.iter().take(EVENT_CAP) {
-                    v.push(n.to_raw(offset));
-                }
+                v.extend(notes.iter().take(EVENT_CAP).filter_map(|n| n.to_raw(offset, sysex)));
             }
         });
         self.out_events.with(Vec::clear);
@@ -3139,15 +3274,32 @@ mod tests {
 
     #[test]
     fn note_events_carry_their_channel() {
-        let on = NoteEvent::On { time: 0, channel: 9, key: 36, velocity: 1.0 }.to_raw(0);
-        let off = NoteEvent::Off { time: 0, channel: 15, key: 36 }.to_raw(0);
-        let pressure = NoteEvent::Pressure { time: 0, channel: 3, key: 36, pressure: 0.5 }.to_raw(0);
+        let on = NoteEvent::On { time: 0, id: 4, channel: 9, key: 36, velocity: 1.0 }.to_raw(0, &[]).unwrap();
+        let off = NoteEvent::Off { time: 0, id: 4, channel: 15, key: 36, velocity: 0.5 }.to_raw(0, &[]).unwrap();
+        let pressure = NoteEvent::Pressure { time: 0, id: 4, channel: 3, key: 36, pressure: 0.5 }.to_raw(0, &[]).unwrap();
+        let expr = NoteEvent::Expression { time: 0, id: 4, type_id: sv::NoteExpressionTypeIDs_::kTuningTypeID, value: 0.6 }.to_raw(0, &[]).unwrap();
         // SAFETY: each union field read is the one its event type wrote.
         unsafe {
-            assert_eq!((on.__field0.noteOn.channel, on.__field0.noteOn.pitch), (9, 36));
-            assert_eq!(off.__field0.noteOff.channel, 15);
-            assert_eq!(pressure.__field0.polyPressure.channel, 3);
+            assert_eq!((on.__field0.noteOn.channel, on.__field0.noteOn.pitch, on.__field0.noteOn.noteId), (9, 36, 4));
+            assert_eq!((off.__field0.noteOff.channel, off.__field0.noteOff.noteId), (15, 4));
+            assert_eq!(off.__field0.noteOff.velocity, 0.5, "the release velocity");
+            assert_eq!((pressure.__field0.polyPressure.channel, pressure.__field0.polyPressure.noteId), (3, 4));
+            assert_eq!(expr.r#type, sv::Event_::EventTypes_::kNoteExpressionValueEvent as u16);
+            let x = expr.__field0.noteExpressionValue;
+            assert_eq!((x.typeId, x.noteId, x.value), (sv::NoteExpressionTypeIDs_::kTuningTypeID, 4, 0.6));
         }
+        // A SysEx is a data event pointing at its bytes in the arena; out of it, none.
+        let arena = [0u8, 0xF0, 0x43, 0xF7];
+        let x = NoteEvent::SysEx { time: 7, at: 1, len: 3 }.to_raw(2, &arena).unwrap();
+        assert_eq!((x.r#type, x.sampleOffset), (sv::Event_::EventTypes_::kDataEvent as u16, 5));
+        // SAFETY: the union field read is the one its event type wrote; `bytes` points into `arena`.
+        unsafe {
+            let d = x.__field0.data;
+            assert_eq!((d.size, d.r#type), (3, sv::DataEvent_::DataTypes_::kMidiSysEx as u32));
+            assert_eq!(std::slice::from_raw_parts(d.bytes, 3), &[0xF0, 0x43, 0xF7]);
+        }
+        assert!(NoteEvent::SysEx { time: 0, at: 2, len: 3 }.to_raw(0, &arena).is_none());
+        assert!(NoteEvent::SysEx { time: 0, at: 0, len: 0 }.to_raw(0, &arena).is_none());
     }
 
     #[test]
@@ -3182,7 +3334,7 @@ mod tests {
             assert_ne!(q.getPoint(0, std::ptr::null_mut(), &mut v), sb::kResultOk);
         }
         let el = EventList::new(1);
-        let mut e = NoteEvent::On { time: 5, channel: 0, key: 60, velocity: 1.0 }.to_raw(2);
+        let mut e = NoteEvent::On { time: 5, id: 0, channel: 0, key: 60, velocity: 1.0 }.to_raw(2, &[]).unwrap();
         // SAFETY: as above.
         unsafe {
             assert_eq!(el.addEvent(&mut e), sb::kResultOk);

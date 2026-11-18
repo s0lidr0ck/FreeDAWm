@@ -126,6 +126,27 @@ fn gain_processes_audio_and_follows_params() {
     p.process(&mut io, 8);
 }
 
+/// A plugin's auxiliary input is its sidechain: the info says it takes a key, the key reaches that
+/// bus (the fixture adds it to its output), a mono key feeds both of its channels, and no key
+/// leaves it silent.
+#[test]
+fn the_aux_input_takes_the_key() {
+    let mut p = soundcraft_vst3_host::create(&id_of("Fixture Gain")).unwrap();
+    assert!(p.info().sidechain, "an aux input bus offers a key");
+    p.prepare(44_100.0, 256, 2);
+    let mut io = vec![vec![0.5f32; 256], vec![-0.25f32; 256]];
+    let key = vec![vec![0.125f32; 256], vec![0.0625f32; 256]];
+    p.process_with_sidechain(&mut io, 256, Some(&key));
+    assert!(io[0].iter().all(|&x| (x - 0.375).abs() < 1e-6), "{:?}", &io[0][..4]);
+    assert!(io[1].iter().all(|&x| (x + 0.0625).abs() < 1e-6), "{:?}", &io[1][..4]);
+    let mut io = vec![vec![0.5f32; 256], vec![-0.25f32; 256]];
+    p.process_with_sidechain(&mut io, 256, Some(&key[..1]));
+    assert!(io[1].iter().all(|&x| (x - 0.0).abs() < 1e-6), "a mono key on both sides: {:?}", &io[1][..4]);
+    let mut io = vec![vec![0.5f32; 256], vec![-0.25f32; 256]];
+    p.process(&mut io, 256);
+    assert!(io[0].iter().all(|&x| (x - 0.25).abs() < 1e-6), "no key, no key left over: {:?}", &io[0][..4]);
+}
+
 #[test]
 fn synth_plays_notes_at_their_offsets() {
     let id = id_of("Fixture Synth");
@@ -161,6 +182,17 @@ fn synth_plays_notes_at_their_offsets() {
     assert!((io[0][20] - 64.0 / 127.0).abs() < 1e-6 && (io[0][63] - 64.0 / 127.0).abs() < 1e-6);
     p.midi(0, [0xB0, 7, 0]);
     p.process(&mut io, 64);
+    // A SysEx reaches it whole at its offset, as a data event, before a note at the same offset.
+    p.sysex(5, &[0xF0, 0x43, 0x10, 0x4C, 0xF7]);
+    p.sysex(20, &[0xF0, 0x41, 0xF7]);
+    p.process(&mut io, 64);
+    assert!(io[0][4].abs() < 1e-6 && (io[0][5] - 67.0).abs() < 1e-6 && (io[0][19] - 67.0).abs() < 1e-6 && (io[0][20] - 65.0).abs() < 1e-6);
+    p.sysex(3, &[0xF0, 0x7E, 0xF7]);
+    p.note_on(3, 60, 127);
+    p.process(&mut io, 64);
+    assert!((io[0][3] - 1.0).abs() < 1e-6, "the note after the SysEx: {}", io[0][3]);
+    p.all_notes_off();
+    p.process(&mut io, 64);
     // Notes in a later sub-block of a chunked call land at the right frame.
     p.prepare(48_000.0, 32, 2);
     let mut io = vec![vec![0.0f32; 96], vec![0.0f32; 96]];
@@ -172,6 +204,27 @@ fn synth_plays_notes_at_their_offsets() {
     let mut mono = vec![vec![0.0f32; 64]];
     p.process(&mut mono, 64);
     assert!(mono[0].iter().all(|&x| (x - 1.0).abs() < 1e-6), "the note is still held");
+}
+
+/// The synth's auxiliary output bus ("Aux", half its level) is an extra output a mixer channel
+/// can take: active, read after `process` while taken, nothing while not.
+#[test]
+fn synth_aux_output_bus_is_read_when_taken() {
+    let id = id_of("Fixture Synth");
+    let mut p = soundcraft_vst3_host::create(&id).unwrap();
+    assert_eq!(p.extra_outputs(), vec!["Aux".to_string()]);
+    p.prepare(48_000.0, 64, 2);
+    let mut io = vec![vec![0.0f32; 64], vec![0.0f32; 64]];
+    let mut aux = vec![vec![9.0f32; 64], vec![9.0f32; 64]];
+    p.note_on(0, 60, 127);
+    p.process(&mut io, 64);
+    assert!(!p.read_output(0, &mut aux, 64), "not taken: not read");
+    p.set_outputs_taken(1);
+    p.process(&mut io, 64);
+    assert!(p.read_output(0, &mut aux, 64));
+    assert!(aux.iter().flatten().all(|x| (x - 0.5).abs() < 1e-6), "{:?}", &aux[0][..4]);
+    assert!(io[0].iter().all(|x| (x - 1.0).abs() < 1e-6), "the main output as before");
+    assert!(soundcraft_vst3_host::create(&id_of("Fixture Gain")).unwrap().extra_outputs().is_empty(), "an effect offers none");
 }
 
 #[test]

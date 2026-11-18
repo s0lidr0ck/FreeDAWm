@@ -512,6 +512,7 @@ fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, head
     let chan_text = model::channel_mode_name(chan);
     let chan_r = place_right(&mut row, small_w(ui, chan_text).max(74.0));
     let listen_r = place_right(&mut row, small_w(ui, "Listen"));
+    let ahead_r = place_right(&mut row, small_w(ui, "Ahead 10 ms"));
     let wide = host.session.track(host.track).is_some_and(|t| t.channels() > 2);
     let link_r = wide.then(|| place_right(&mut row, small_w(ui, "Link all")));
 
@@ -538,6 +539,7 @@ fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, head
         name: name_r,
         listen: Some(listen_r),
         sur_link: link_r,
+        lookahead: Some(ahead_r),
     };
     header_controls(st, app, ui, host, &rects);
 }
@@ -556,6 +558,18 @@ pub(super) struct HeaderRects {
     pub listen: Option<Rect>,
     /// Link all channels; only on a track wider than stereo.
     pub sur_link: Option<Rect>,
+    /// Look-ahead, stepped by clicks (Off, 1, 2, 5, 10 ms); `None` where the layout has no room.
+    pub lookahead: Option<Rect>,
+}
+
+/// The look-ahead steps the header's pill goes through (the knob's value; 1.0 is 10 ms).
+const LOOKAHEAD_STEPS: [f32; 5] = [0.0, 0.1, 0.2, 0.5, 1.0];
+
+/// The pill's text and the next step for look-ahead knob value `v`.
+fn lookahead_pill(v: f32) -> (String, f32) {
+    let text = if v <= 0.0 { "Ahead Off".to_string() } else { format!("Ahead {} ms", (v * 10.0 * 10.0).round() / 10.0) };
+    let next = LOOKAHEAD_STEPS.iter().copied().find(|s| *s > v + 1e-4).unwrap_or(0.0);
+    (text, next)
 }
 
 /// The header's controls and their gestures: Bypass, the 1 / 2 slots, Undo, Channels and the
@@ -599,6 +613,14 @@ fn header_controls(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host
         let tip = if host.ins.sidechain.is_some() { "Hear the key through the SC HPF" } else { "Hear the input through the SC HPF" };
         if resp.on_hover_text(tip).clicked() {
             set_params(app, host, &[("listen", if on { 0.0 } else { 1.0 })]);
+        }
+    }
+    if let Some(r) = h.lookahead {
+        let v = param(host, "lookahead");
+        let (text, next) = lookahead_pill(v);
+        let resp = small_pill(ui, r, "lookahead", &text, v > 0.0, false, None);
+        if resp.on_hover_text("Look-ahead: the detector hears what is coming; the track is delayed by as much").clicked() {
+            set_params(app, host, &[("lookahead", next)]);
         }
     }
     if let Some(r) = h.sur_link {

@@ -7,6 +7,26 @@
 
 use super::*;
 
+thread_local! {
+    /// Show Only Takes Matching Selection, as this frame draws it: the selection and the tracks
+    /// it is on ([`refresh_matching`]). The layout functions take only the track, so it is kept here.
+    static MATCHING: std::cell::RefCell<Option<(Range, Vec<TrackId>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Read Show Only Takes Matching Selection and the selection for this frame's layout.
+pub fn refresh_matching(s: &Session) {
+    let e = &s.edit;
+    let on = e.flag(soundcraft_engine::cmd::MATCHING_TAKES) && !e.selection.is_empty();
+    MATCHING.with(|m| *m.borrow_mut() = on.then(|| (e.selection, e.selected_tracks.clone())));
+}
+
+/// The take layers the track shows, in order: every one, or with Show Only Takes Matching
+/// Selection and a selection on the track, those with audio inside it.
+pub fn shown_layers(t: &Track) -> Vec<usize> {
+    let filter = MATCHING.with(|m| m.borrow().as_ref().filter(|(_, ts)| ts.is_empty() || ts.contains(&t.id)).map(|(r, _)| *r));
+    t.layers().map(|(i, _)| i).filter(|i| filter.is_none_or(|r| soundcraft_engine::cmd::comp::layer_has_audio(t, *i, r))).collect()
+}
+
 /// The height of one take layer (and of the "+ New Layer" row).
 pub const LAYER_H: f32 = 38.0;
 
@@ -29,7 +49,7 @@ pub fn shows_layers(t: &Track) -> bool {
 
 /// The height the open layers add under the track (each layer and the "+ New Layer" row).
 pub fn layers_height(t: &Track) -> f32 {
-    if shows_layers(t) { (t.layers().count() as f32 + 1.0) * LAYER_H } else { 0.0 }
+    if shows_layers(t) { (shown_layers(t).len() as f32 + 1.0) * LAYER_H } else { 0.0 }
 }
 
 /// The colour of take layer `layer`.
@@ -60,7 +80,7 @@ pub fn used_ranges(t: &Track, layer: usize) -> Vec<Range> {
 pub fn layer_rows(t: &Track, row: Rect, top: f32, tl: Rect) -> Vec<(Option<usize>, Rect, Rect)> {
     let mut y = top;
     let mut out = Vec::new();
-    for l in t.layers().map(|(i, _)| Some(i)).chain([None]) {
+    for l in shown_layers(t).into_iter().map(Some).chain([None]) {
         let head = Rect::from_min_max(pos2(row.min.x + STRIP_W, y), pos2(tl.min.x, y + LAYER_H));
         let lane = Rect::from_min_max(pos2(tl.min.x, y), pos2(tl.max.x, y + LAYER_H));
         out.push((l, head, lane));
@@ -117,6 +137,16 @@ pub(super) fn layer_lanes(app: &mut SoundApp, ui: &mut Ui, track: &Track, row: R
         let hresp = ui.interact(head, ui.id().with(("layer-head", track.id.0, l)), Sense::click());
         hresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("{} layer {}", track.name, pl.name)));
         hresp.context_menu(|ui| layer_menu(app, ui, track, l));
+        // Solo Take: this take heard in place of the comp until the S is let go.
+        let solo = Rect::from_center_size(pos2(head.max.x - 26.0, head.center().y), vec2(16.0, 14.0));
+        let on = track.audition_layer == Some(l);
+        let sresp = ui.interact(solo, ui.id().with(("layer-solo", track.id.0, l)), Sense::click());
+        sresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, format!("Solo take {}", pl.name)));
+        painter.rect_filled(solo, 2.0, if on { Color32::from_rgb(226, 190, 60) } else { shade(t.panel_bg, 0.12) });
+        painter.text(solo.center(), Align2::CENTER_CENTER, "S", bold(10.0), if on { Color32::BLACK } else { t.text });
+        if sresp.on_hover_text("Solo Take: hear this take in place of the comp").clicked() {
+            let _ = app.run("comp.audition", json!({"track": track.id.0, "layer": l}));
+        }
         let lp = ui.painter().with_clip_rect(lane.intersect(ui.clip_rect()));
         draw_layer(&lp, &s, track, l, tl, lane, color);
         if let Some(resp) = swipe(app, ui, track, l, &pl.name, tl, lane) {
@@ -351,8 +381,23 @@ pub fn layer_menu(app: &mut SoundApp, ui: &mut Ui, track: &Track, layer: usize) 
     } else if ui.button("Delete Take").clicked() {
         let _ = app.run("comp.layer_delete", json!({"track": id, "layer": layer}));
     }
+    let matching = app.engine.session().edit.flag(soundcraft_engine::cmd::MATCHING_TAKES);
+    if ui
+        .add(egui::Button::new("Show Only Takes Matching Selection").selected(matching))
+        .on_hover_text("With a selection made, hide the take layers with no audio inside it")
+        .clicked()
+    {
+        let _ = app.run("comp.matching_takes", json!({}));
+    }
+    let soloed = track.audition_layer == Some(layer);
+    if ui.add(egui::Button::new("Solo Take").selected(soloed)).on_hover_text("Hear this take in place of the comp").clicked() {
+        let _ = app.run("comp.audition", json!({"track": id, "layer": layer}));
+    }
     if ui.button("Make Comp from This Take").clicked() {
         let _ = app.run("comp.layer_make_comp", json!({"track": id, "layer": layer}));
+    }
+    if ui.button("Flatten Comp").on_hover_text("Keep the comp as plain clips and delete every take layer").clicked() {
+        let _ = app.run("comp.flatten", json!({"track": id}));
     }
     let target = track.record_layer == Some(layer);
     if ui.add(egui::Button::new("Record Into This Layer").selected(target)).clicked() {

@@ -202,6 +202,19 @@ fn every_gesture_is_one_undo_step() {
 }
 
 #[test]
+fn the_note_bar_edits_the_release_velocity() {
+    let mut h = harness();
+    let r = ui_cmd(&mut h, json!({"select": [0, 1]}));
+    assert_eq!(r["note_bar"]["release"], "64");
+    let steps = undo_len(&h);
+    ui_cmd(&mut h, json!({"set": {"release": "20"}}));
+    let v: Vec<u8> = notes(&h).iter().map(|n| n.release_velocity).collect();
+    assert_eq!(&v[..2], &[20, 20]);
+    assert!(v[2..].iter().all(|r| *r == 64), "only the selected notes: {v:?}");
+    assert_eq!(undo_len(&h), steps + 1);
+}
+
+#[test]
 fn the_note_bar_shows_a_range_and_edits_pitch_and_start_relatively() {
     let mut h = harness();
     let r = ui_cmd(&mut h, json!({"select": [0, 1]}));
@@ -535,6 +548,7 @@ fn another_clip_on_the_same_track_shows_as_ghosts_and_a_muted_clip_does_not() {
         sequence: soundcraft_midi::Sequence {
             notes: vec![Note { probability: 100, pitch: 50, velocity: 90, muted: false, release_velocity: 64, channel: 0, start: 480, length: 480 }],
             ctrls: Vec::new(),
+            sysex: Vec::new(),
         },
     };
     let mut muted = other.clone();

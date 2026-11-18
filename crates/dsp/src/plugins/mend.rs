@@ -5,8 +5,8 @@
 //!   it, and far too much arithmetic for the audio thread. Mend sends its input to a worker
 //!   through a [`link::Link`], the worker runs the model a block at a time and sends the cleaned
 //!   sound back, and Mend plays it against the input delayed by the same amount. The worker
-//!   belongs to the desktop app (`soundcraft_ml::live`); a build without it (the browser's)
-//!   plays the input through.
+//!   belongs to the desktop app (`soundcraft_ml::live`); without a worker, Mend plays the
+//!   input through.
 //! - **Studio** (the default) is that model. **Latency: about 2.9 s** ([`link::Plan::latency`]):
 //!   one block, the model's look-ahead, and one more block for the model to answer in. Delay
 //!   compensation hides it on playback. It is no use while recording.
@@ -279,8 +279,7 @@ impl Mend {
                 let end = taken + l.answers() as u64;
                 end.saturating_sub((from + want).max(taken)).min(usize::MAX as u64) as usize
             };
-            // (The browser build has no worker and no clock to wait by.)
-            if self.offline && cfg!(not(target_arch = "wasm32")) {
+            if self.offline {
                 Self::wait_for(&link, stream, need, ahead);
             }
             let (s, from) = link.answer_from();

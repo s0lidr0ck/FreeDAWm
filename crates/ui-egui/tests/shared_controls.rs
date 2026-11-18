@@ -117,12 +117,13 @@ fn toolbar_keyboard_activation_changes_tools_without_transport_or_marker_actions
     h.run_steps(3);
     assert_eq!(h.state().engine.session().edit.tool, soundcraft_model::Tool::Trim);
     let markers = h.state().engine.session().markers.len();
+    // (the Pencil's tooltip goes on with its automation shape)
     for (label, tool, key) in
         [("Pencil (F10)", soundcraft_model::Tool::Pencil, Key::Enter), ("Grabber (F8)", soundcraft_model::Tool::Grabber, Key::Space)]
     {
-        h.get_by_label(label).focus();
+        h.get_by_label_contains(label).focus();
         h.run_steps(2);
-        assert!(h.get_by_label(label).is_focused());
+        assert!(h.get_by_label_contains(label).is_focused());
         h.key_press(key);
         h.run_steps(3);
         assert_eq!(h.state().engine.session().edit.tool, tool);

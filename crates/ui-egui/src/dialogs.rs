@@ -49,6 +49,135 @@ impl BounceRange {
     }
 }
 
+/// The Bounce Mix dialog's export options (`file.bounce_mix`'s `sample_rate`, `dither`,
+/// `channels`, `also`, `tags` and `import`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BounceMore {
+    /// Hz; 0 keeps the session's rate.
+    pub sample_rate: u32,
+    /// "tpdf", "shaped" or "off".
+    pub dither: String,
+    /// "as_mixed", "mono" or "split".
+    pub channels: String,
+    /// More formats written in the same pass.
+    pub also: Vec<String>,
+    pub tags: soundcraft_audio_io::export::Tags,
+    /// Add the bounce to the session on new tracks.
+    pub import: bool,
+    /// Play the range through the live player and print it (hardware inserts and outboard gear
+    /// heard and printed), instead of rendering offline.
+    pub realtime: bool,
+}
+
+impl Default for BounceMore {
+    fn default() -> Self {
+        BounceMore {
+            sample_rate: 0,
+            dither: "tpdf".into(),
+            channels: "as_mixed".into(),
+            also: Vec::new(),
+            tags: Default::default(),
+            import: false,
+            realtime: false,
+        }
+    }
+}
+
+/// The rates the Bounce dialog offers (0: the session's).
+pub const BOUNCE_RATES: [u32; 7] = [0, 44_100, 48_000, 88_200, 96_000, 176_400, 192_000];
+
+impl BounceMore {
+    /// Adds these options to `file.bounce_mix`'s parameters.
+    pub fn apply(&self, params: &mut serde_json::Value) {
+        if self.sample_rate > 0 {
+            params["sample_rate"] = json!(self.sample_rate);
+        }
+        params["dither"] = json!(self.dither);
+        params["channels"] = json!(self.channels);
+        if !self.also.is_empty() {
+            params["also"] = json!(self.also);
+        }
+        if !self.tags.is_empty() {
+            params["tags"] = json!(self.tags);
+        }
+        if self.import {
+            params["import"] = json!(true);
+        }
+        if self.realtime {
+            params["realtime"] = json!(true);
+        }
+    }
+
+    /// The dialog's rows for them.
+    fn show(&mut self, ui: &mut egui::Ui, format: &str, session_rate: u32) {
+        let dim = Tokens::current().text_dim;
+        ui.horizontal(|ui| {
+            let name = |r: u32| if r == 0 { format!("Session ({session_rate} Hz)") } else { format!("{r} Hz") };
+            egui::ComboBox::from_label("Sample Rate").selected_text(name(self.sample_rate)).show_ui(ui, |ui| {
+                for r in BOUNCE_RATES {
+                    ui.selectable_value(&mut self.sample_rate, r, name(r));
+                }
+            });
+            if !matches!(format, "mp3" | "opus") {
+                let dname = |d: &str| match d {
+                    "shaped" => "Noise-shaped",
+                    "off" => "Off",
+                    _ => "TPDF",
+                };
+                egui::ComboBox::from_label("Dither").selected_text(dname(&self.dither)).show_ui(ui, |ui| {
+                    for d in ["tpdf", "shaped", "off"] {
+                        ui.selectable_value(&mut self.dither, d.to_string(), dname(d));
+                    }
+                });
+            }
+        });
+        ui.horizontal(|ui| {
+            let cname = |c: &str| match c {
+                "mono" => "Mono (summed)",
+                "split" => "One file per channel",
+                _ => "As mixed",
+            };
+            egui::ComboBox::from_label("Channels").selected_text(cname(&self.channels)).show_ui(ui, |ui| {
+                for c in ["as_mixed", "mono", "split"] {
+                    ui.selectable_value(&mut self.channels, c.to_string(), cname(c));
+                }
+            });
+            ui.label("Also write");
+            for f in ["wav", "aiff", "flac", "mp3", "opus"] {
+                if f == format {
+                    continue;
+                }
+                let mut on = self.also.iter().any(|a| a == f);
+                if crate::widgets::checkbox(ui, &mut on, f.to_uppercase()).changed() {
+                    self.also.retain(|a| a != f);
+                    if on {
+                        self.also.push(f.to_string());
+                    }
+                }
+            }
+        });
+        egui::CollapsingHeader::new("Tags").id_salt("bounce_tags").show(ui, |ui| {
+            for (label, v) in [
+                ("Title", &mut self.tags.title),
+                ("Artist", &mut self.tags.artist),
+                ("Album", &mut self.tags.album),
+                ("Date", &mut self.tags.date),
+                ("Comment", &mut self.tags.comment),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.add_sized([60.0, 18.0], egui::Label::new(label));
+                    ui.add(egui::TextEdit::singleline(v).desired_width(300.0));
+                });
+            }
+            ui.label(egui::RichText::new("Written into every format: ID3 in MP3, INFO and the BWF description in WAV, Vorbis comments in FLAC and Opus, text chunks in AIFF").small().color(dim));
+        });
+        crate::widgets::checkbox(ui, &mut self.import, "Add to session (new tracks at the range's start)");
+        crate::widgets::checkbox(ui, &mut self.realtime, "In real time").on_hover_text(
+            "Plays the range through the audio device and prints it as it plays: hardware inserts and outboard gear are heard and printed",
+        );
+    }
+}
+
 /// What a mix group can link, as `track.group` names it, with the Group dialog's labels.
 pub const GROUP_ATTRIBUTES: [(&str, &str); 7] = [
     ("volume", "Volume"),
@@ -118,6 +247,8 @@ pub enum Dialog {
         source: String,
         /// Seconds rendered past the range, for a reverb or delay to ring out.
         tail: f32,
+        /// The rate, dither, channel layout, extra formats, text and Add to Session.
+        more: BounceMore,
     },
     RenameTrack {
         id: TrackId,
@@ -126,6 +257,17 @@ pub enum Dialog {
     RenameClip {
         id: ClipId,
         name: String,
+    },
+    /// The edit selection's Start, End or Length typed in the main counter's format (`field`
+    /// is the `edit.select` key: start, end or length).
+    SelectionField {
+        field: String,
+        text: String,
+    },
+    /// Clip Notes…: the clip's free text.
+    ClipNotes {
+        id: ClipId,
+        text: String,
     },
     RenameMarker {
         id: soundcraft_model::MarkerId,
@@ -156,6 +298,8 @@ pub enum Dialog {
         value: f64,
         suffix: String,
     },
+    /// Track › Rename Selected Tracks…: by a pattern, by find and replace, or by trimming.
+    RenameSelected(RenameSelected),
     TempoChange {
         at: Samples,
         bpm: f64,
@@ -173,7 +317,7 @@ pub enum Dialog {
     Spot(crate::spot::Spot),
     /// Edit › Fades › Create… (`fade_dialog`).
     Fades(crate::fade_dialog::FadeDialog),
-    /// Event › More MIDI › Change Velocity…: the selected notes in the MIDI Editor, else the
+    /// Event › Change Velocity…: the selected notes in the MIDI Editor, else the
     /// selected MIDI clips.
     ChangeVelocity(VelocityDialog),
     /// Clip › Quantize Audio…: how far towards the grid, and the swing.
@@ -205,14 +349,22 @@ pub enum Dialog {
         bit_depth: String,
         /// What takes are recorded as: `wav` (BWF) or `aiff` (`setup.record_format`).
         file_type: String,
+        /// The rate to convert the session to (`session.set_sample_rate`); the session's own
+        /// until another is picked.
+        rate: u32,
     },
     ScoreSetup {
         title: String,
         composer: String,
         bars_per_system: u32,
         show_track_names: bool,
+        staff_percent: u32,
+        part_pages: bool,
+        /// [`soundcraft_engine::score::PAGES`].
+        page: u8,
+        section_breaks: bool,
     },
-    /// Options › Pre/Post-Roll…: on/off and both amounts, in seconds.
+    /// Transport › Pre/Post-Roll…: on/off and both amounts, in seconds.
     PrePostRoll {
         on: bool,
         pre: f64,
@@ -295,8 +447,6 @@ pub struct Dialogs {
     pub dirs: crate::user_files::UserDirs,
     /// Runs once the session has been saved from `SaveChanges`.
     after_save: Option<(String, Value)>,
-    /// A session the browser read while the open one had changes, waiting for `SaveChanges`.
-    pending_session: Option<(String, Vec<u8>)>,
 }
 
 impl Dialogs {
@@ -311,11 +461,14 @@ impl Dialogs {
             Dialog::Bounce { .. } => "bounce",
             Dialog::RenameTrack { .. } => "rename_track",
             Dialog::RenameClip { .. } => "rename_clip",
+            Dialog::ClipNotes { .. } => "clip_notes",
+            Dialog::SelectionField { .. } => "selection_field",
             Dialog::RenameMarker { .. } => "rename_marker",
             Dialog::PointValue { .. } => "point_value",
             Dialog::ClearClips { .. } => "clear_clips",
             Dialog::PathPrompt { .. } => "path",
             Dialog::Number { .. } => "number",
+            Dialog::RenameSelected(_) => "rename_selected",
             Dialog::TempoChange { .. } => "tempo_change",
             Dialog::KeyPicker { .. } => "key_picker",
             Dialog::ChordPicker(_) => "chord_picker",
@@ -341,6 +494,15 @@ impl Dialogs {
 
     pub fn open_rename_clip(&mut self, id: ClipId, name: &str) {
         self.open = Some(Dialog::RenameClip { id, name: name.to_string() });
+    }
+
+    /// Type the edit selection's `field` (start, end or length), starting from `text` as shown.
+    pub fn open_selection_field(&mut self, field: &str, text: &str) {
+        self.open = Some(Dialog::SelectionField { field: field.to_string(), text: text.to_string() });
+    }
+
+    pub fn open_clip_notes(&mut self, id: ClipId, text: &str) {
+        self.open = Some(Dialog::ClipNotes { id, text: text.to_string() });
     }
 
     pub fn open_rename_marker(&mut self, id: soundcraft_model::MarkerId, name: &str) {
@@ -370,7 +532,7 @@ impl Dialogs {
         true
     }
 
-    /// Options › Pre/Post-Roll…, filled in from the session.
+    /// Transport › Pre/Post-Roll…, filled in from the session.
     pub fn open_pre_post_roll(&mut self, e: &Engine) {
         let ed = &e.session().edit;
         let sr = e.session().sample_rate;
@@ -448,23 +610,21 @@ impl Dialogs {
                     range: BounceRange::default_for(e.session()),
                     source: "main".into(),
                     tail: 0.0,
+                    more: BounceMore::default(),
                 }
             }
             "file.import_audio" => Dialog::PathPrompt { cmd: id.into(), title: "Import Audio".into(), path: home, key: "path".into() },
             // Not a path: the words to find (the prompt is the same one-line field).
             "lyrics.find" => Dialog::PathPrompt { cmd: id.into(), title: "Find in Transcript".into(), path: String::new(), key: "text".into() },
             "file.import_midi" => Dialog::PathPrompt { cmd: id.into(), title: "Import MIDI".into(), path: home, key: "path".into() },
+            "track.rename_selected" => Dialog::RenameSelected(RenameSelected::default()),
+            "file.import_musicxml" => Dialog::PathPrompt { cmd: id.into(), title: "Import MusicXML".into(), path: home, key: "path".into() },
             "session.open" => Dialog::PathPrompt { cmd: id.into(), title: "Open Session".into(), path: home, key: "path".into() },
             "session.save" if e.path.is_some() => return false,
             "session.save" | "session.save_as" | "session.save_copy" => Dialog::PathPrompt {
                 cmd: if id == "session.save_copy" { id } else { "session.save_as" }.into(),
                 title: "Save Session As".into(),
-                // The browser has no folders: the name becomes the bundle file's name.
-                path: if home.is_empty() {
-                    format!("{name}.{}", soundcraft_engine::io::bundle_extension_for(e.path.as_deref().unwrap_or_default()))
-                } else {
-                    format!("{home}/{name}/{name}.{}", soundcraft_model::SESSION_EXTENSION)
-                },
+                path: format!("{home}/{name}/{name}.{}", soundcraft_model::SESSION_EXTENSION),
                 key: "path".into(),
             },
             "transport.varispeed" => {
@@ -476,6 +636,34 @@ impl Dialogs {
                 key: "semitones".into(),
                 value: 0.0,
                 suffix: "st".into(),
+            },
+            // Clip › Elastic Properties…: the stretch of the first clip it acts on (rendered
+            // pitch-keeping on an Elastic track, varispeed elsewhere), to set a new one.
+            "clip.elastic_properties" => {
+                let s = e.session();
+                let first = soundcraft_engine::cmd::clip_ids_param(e, &json!({})).first().and_then(|id| s.find_clip(*id).map(|(_, c)| c.clone()));
+                let ratio = first
+                    .map(|c| {
+                        let rendered = s.edit.values.get(&format!("elastic.{}.ratio", c.id.0)).copied();
+                        rendered.unwrap_or(c.stretch)
+                    })
+                    .filter(|r| r.is_finite() && *r > 0.0)
+                    .unwrap_or(1.0);
+                Dialog::Number {
+                    cmd: id.into(),
+                    title: "Elastic Properties: stretch ratio (1 is the original length)".into(),
+                    key: "ratio".into(),
+                    value: ratio,
+                    suffix: "×".into(),
+                }
+            }
+            // Track › Automation › Write Trim Automation…: a relative volume trim over the selection.
+            "track.trim_automation_write" => Dialog::Number {
+                cmd: id.into(),
+                title: "Write Trim Automation over the selection".into(),
+                key: "db".into(),
+                value: -3.0,
+                suffix: "dB".into(),
             },
             "clip.loop_in_place" => {
                 Dialog::Number { cmd: id.into(), title: "Loop in Place".into(), key: "count".into(), value: 4.0, suffix: "times".into() }
@@ -508,11 +696,25 @@ impl Dialogs {
                     soundcraft_model::BitDepthSetting::Float32 => "32f",
                 };
                 let file_type = if s.record_file_type == soundcraft_model::RecordFileType::Aiff { "aiff" } else { "wav" };
-                Dialog::Session { frame_rate: s.frame_rate.label().into(), bit_depth: bit_depth.into(), file_type: file_type.into() }
+                Dialog::Session {
+                    frame_rate: s.frame_rate.label().into(),
+                    bit_depth: bit_depth.into(),
+                    file_type: file_type.into(),
+                    rate: s.sample_rate.hz(),
+                }
             }
             "file.score_setup" => {
                 let s = soundcraft_engine::score::ScoreSetup::from_session(e.session());
-                Dialog::ScoreSetup { title: s.title, composer: s.composer, bars_per_system: s.bars_per_system, show_track_names: s.show_track_names }
+                Dialog::ScoreSetup {
+                    title: s.title,
+                    composer: s.composer,
+                    bars_per_system: s.bars_per_system,
+                    show_track_names: s.show_track_names,
+                    staff_percent: s.staff_percent,
+                    part_pages: s.part_pages,
+                    page: s.page,
+                    section_breaks: s.section_breaks,
+                }
             }
             "track.rename" => {
                 let Some(t) = e.target_tracks().first().and_then(|id| e.session().track(*id)) else { return false };
@@ -548,7 +750,7 @@ impl Dialogs {
 /// When `id` would close a session with unsaved changes, ask first; true when the question is
 /// open instead. A take in progress is stopped first, so it counts as a change.
 pub fn ask_to_save(app: &mut SoundApp, id: &str, params: &Value) -> bool {
-    if !matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "file.import_dawproject" | "app.quit" | OPEN_PENDING)
+    if !matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "file.import_dawproject" | "app.quit")
         || soundcraft_engine::find_command(id).is_some_and(|c| (c.enabled)(&app.engine).is_err())
     {
         return false;
@@ -569,34 +771,6 @@ pub fn run_or_ask(app: &mut SoundApp, id: &str, params: Value) -> Result<Value, 
         return Ok(Value::Null);
     }
     app.run(id, params)
-}
-
-/// What `SaveChanges` carries on with to open the session the browser read.
-const OPEN_PENDING: &str = "ui.open_pending_session";
-
-/// Opens a session the browser read as bytes (picked or dropped), asking first when the open one
-/// has changes. The read finishes later than the pick, so the question is asked only now.
-pub fn open_session_bytes(app: &mut SoundApp, name: String, bytes: Vec<u8>) {
-    if crate::bounce::refuses_session_switch(app) {
-        return;
-    }
-    app.dialogs.pending_session = Some((name, bytes));
-    if !ask_to_save(app, OPEN_PENDING, &json!({})) {
-        open_pending_session(app);
-    }
-}
-
-fn open_pending_session(app: &mut SoundApp) {
-    let Some((name, bytes)) = app.dialogs.pending_session.take() else { return };
-    if crate::bounce::refuses_session_switch(app) {
-        return;
-    }
-    let _ = app.run("transport.stop", json!({}));
-    app.ui.status = match soundcraft_engine::io::open_session_bytes(&mut app.engine, &name, &bytes) {
-        Ok(missing) if missing.is_empty() => format!("Opened {name}"),
-        Ok(missing) => format!("Opened {name} ({} missing media)", missing.len()),
-        Err(e) => e.to_string(),
-    };
 }
 
 /// A path prompt for any command whose parameters start with a required `path` or `dir` (plus
@@ -677,19 +851,13 @@ fn clear_message(s: &Session, clips: &[ClipId], sources: &[SourceId]) -> Option<
 }
 
 fn default_dir() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        String::new()
-    }
+    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".into())
 }
 
 /// The main window's dialogs: Process, bounce and ML progress, and the open dialog when the
 /// main window opened it.
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+    crate::scope::release_momentary(app, ctx);
     audiosuite_window(app, ctx);
     crate::open_progress::show(app, ctx);
     crate::dawproject_report::show(app, ctx);
@@ -697,7 +865,6 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     crate::render::show(app, ctx);
     crate::split_progress::show(app, ctx);
     crate::capture_progress::show(app, ctx);
-    #[cfg(not(target_arch = "wasm32"))]
     crate::ml_ui::show(app, ctx);
     crate::tempo_ui::show(app, ctx);
     show_open(app, ctx);
@@ -740,10 +907,15 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::Bounce { .. } => "Bounce Mix",
         Dialog::RenameTrack { .. } => "Rename Track",
         Dialog::RenameClip { .. } => "Rename Clip",
+        Dialog::ClipNotes { .. } => "Clip Notes",
+        Dialog::SelectionField { field, .. } if field == "end" => "Selection End",
+        Dialog::SelectionField { field, .. } if field == "length" => "Selection Length",
+        Dialog::SelectionField { .. } => "Selection Start",
         Dialog::RenameMarker { .. } => "Rename Marker",
         Dialog::PointValue { .. } => "Set Point Value",
         Dialog::ClearClips { .. } => "Clear",
         Dialog::PathPrompt { title, .. } | Dialog::Number { title, .. } => title.as_str(),
+        Dialog::RenameSelected(_) => "Rename Selected Tracks",
         Dialog::TempoChange { .. } => "Tempo Change (BPM)",
         Dialog::KeyPicker { edit: true, .. } => "Edit Key",
         Dialog::KeyPicker { .. } => "Key Change",
@@ -936,7 +1108,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), json!({"path": path, "tracks": tracks})));
                     }
                 }
-                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, loudness, range, source, tail } => {
+                Dialog::Bounce { path, format, bit_depth, bitrate, normalize, loudness, range, source, tail, more } => {
                     ui.horizontal(|ui| {
                         ui.label("File");
                         ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
@@ -991,17 +1163,21 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     if matches!(format.as_str(), "mp3" | "opus") && app.engine.session().main_format().channels() > 2 {
                         ui.label(egui::RichText::new("MP3 and Opus hold stereo: the bounce is folded down").color(Tokens::current().text_dim));
                     }
-                    // The source: the main mix or any bus.
-                    let busses: Vec<(String, usize)> = app.engine.session().busses.iter().map(|b| (b.name.clone(), b.format.channels())).collect();
+                    // The source: the main mix, any bus, or a hardware output (I/O Setup's, past
+                    // the main output: what is routed to it, with the main mix's latency).
+                    let mut busses: Vec<(String, usize)> = app.engine.session().busses.iter().map(|b| (b.name.clone(), b.format.channels())).collect();
+                    let outputs = app.engine.session().outputs.iter().skip(1).map(|o| (format!("output:{}", o.name), o.format.channels()));
+                    busses.extend(outputs);
                     if source != "main" && !busses.iter().any(|(n, _)| n == source) {
                         *source = "main".into();
                     }
+                    let label = |n: &str| n.strip_prefix("output:").map_or_else(|| n.to_string(), |o| format!("Output: {o}"));
                     ui.horizontal(|ui| {
-                        let shown = if source == "main" { "Main Mix".to_string() } else { source.clone() };
+                        let shown = if source == "main" { "Main Mix".to_string() } else { label(source) };
                         egui::ComboBox::from_label("Source").selected_text(shown).show_ui(ui, |ui| {
                             ui.selectable_value(source, "main".to_string(), "Main Mix");
                             for (n, _) in &busses {
-                                ui.selectable_value(source, n.clone(), n.as_str());
+                                ui.selectable_value(source, n.clone(), label(n));
                             }
                         });
                         ui.add(egui::DragValue::new(tail).range(0.0..=soundcraft_engine::cmd::MAX_BOUNCE_TAIL_SECS as f32).speed(0.1).suffix(" s"));
@@ -1030,6 +1206,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     if loudness.is_none() {
                         crate::widgets::checkbox(ui, normalize, "Normalize to -0.1 dBFS");
                     }
+                    more.show(ui, format, app.engine.session().sample_rate.hz());
                     let chosen = range.range(app.engine.session());
                     if buttons_enabled(ui, "Bounce", enter, chosen.is_some() && refused.is_none())
                         && let Some(r) = chosen
@@ -1043,10 +1220,13 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         }
                         if matches!(format.as_str(), "mp3" | "opus") {
                             params["bitrate"] = json!(bitrate);
-                            if width > 2 {
-                                params["fold_down"] = json!("stereo");
-                            }
                         }
+                        // A lossy file (main or extra) of a surround mix is its stereo fold-down.
+                        let lossy = matches!(format.as_str(), "mp3" | "opus") || more.also.iter().any(|f| matches!(f.as_str(), "mp3" | "opus"));
+                        if lossy && width > 2 && more.channels == "as_mixed" {
+                            params["fold_down"] = json!("stereo");
+                        }
+                        more.apply(&mut params);
                         crate::bounce::start(app, &params);
                         keep = false;
                     }
@@ -1061,6 +1241,20 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     name_field(ui, name);
                     if buttons(ui, "OK", enter) {
                         action = Some(("clip.rename".into(), json!({"clip": id.0, "name": name})));
+                    }
+                }
+                Dialog::SelectionField { field, text } => {
+                    name_field(ui, text);
+                    ui.label(egui::RichText::new("In the main counter's format").small());
+                    if buttons(ui, "OK", enter) {
+                        action = Some(("edit.select".into(), json!({field.as_str(): text})));
+                    }
+                }
+                Dialog::ClipNotes { id, text } => {
+                    // Enter makes a new line here; OK applies.
+                    ui.add(egui::TextEdit::multiline(text).desired_rows(5).desired_width(320.0));
+                    if buttons(ui, "OK", false) {
+                        action = Some(("clip.notes".into(), json!({"clips": [id.0], "text": text})));
                     }
                 }
                 Dialog::RenameMarker { id, name } => {
@@ -1103,6 +1297,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         && cmd != "file.export_dawproject"
                         && key != "dir"
                         && key != "text"
+                        && key != "pattern"
                         && ui.button("Browse…").clicked()
                         && let Some(p) = pick(cmd, &[])
                     {
@@ -1122,6 +1317,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     {
                         *path = p;
                     }
+                    if cmd == "file.bounce_stems" {
+                        stems_choice(app, ui);
+                    }
+                    if cmd == "file.import_session_data" {
+                        session_data_choice(ui);
+                    }
                     let file = soundcraft_engine::io::session_file(path);
                     let replaces = soundcraft_engine::io::replaces(&app.engine, cmd, &file);
                     if replaces {
@@ -1133,6 +1334,18 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         if replaces {
                             v["replace"] = json!(true);
                         }
+                        if cmd == "file.bounce_stems" {
+                            let (selected, busses) = StemsChoice::get(ui.ctx());
+                            if selected {
+                                v["tracks"] = json!(app.engine.target_tracks().iter().map(|t| t.0).collect::<Vec<_>>());
+                            }
+                            if busses {
+                                v["busses"] = json!(true);
+                            }
+                        }
+                        if cmd == "file.import_session_data" {
+                            SessionDataChoice::get(ui.ctx()).params(&mut v);
+                        }
                         // Saved templates are listed in File › New from their folder: made on save.
                         if cmd == "session.save_template"
                             && let Some(dir) = app.dialogs.dirs.templates.as_deref()
@@ -1141,6 +1354,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                             let _ = std::fs::create_dir_all(dir);
                         }
                         action = Some((cmd.clone(), v));
+                    }
+                }
+                Dialog::RenameSelected(r) => {
+                    r.body(ui);
+                    if buttons(ui, "OK", enter) {
+                        action = Some(("track.rename_selected".into(), r.params()));
                     }
                 }
                 Dialog::Number { cmd, key, value, suffix, .. } => {
@@ -1217,6 +1436,16 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     ui.add(egui::Slider::new(min_ms, 0.0..=2000.0).text("Min strip duration ms"));
                     ui.add(egui::Slider::new(pre_ms, 0.0..=500.0).text("Clip start pad ms"));
                     ui.add(egui::Slider::new(post_ms, 0.0..=2000.0).text("Clip end pad ms"));
+                    // The preview: what would stay is worked out again as the settings change, and
+                    // the Edit window shades what would go.
+                    let settings = json!({"threshold_db": threshold, "min_length_ms": min_ms, "pad_before_ms": pre_ms, "pad_after_ms": post_ms});
+                    let shown = ui.ctx().data(|d| d.get_temp::<StripPreview>(egui::Id::new(STRIP_PREVIEW)));
+                    let key = settings.to_string();
+                    if shown.as_ref().is_none_or(|p| p.settings != key) {
+                        let preview = strip_preview(app, &settings);
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(STRIP_PREVIEW), preview));
+                    }
+                    ui.label(egui::RichText::new("Shaded in the Edit window: what would be stripped").small());
                     if buttons(ui, "Strip", enter) {
                         action = Some((
                             "edit.strip_silence".into(),
@@ -1266,7 +1495,25 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         action = Some((cmd.into(), params));
                     }
                 }
-                Dialog::Session { frame_rate, bit_depth, file_type } => {
+                Dialog::Session { frame_rate, bit_depth, file_type, rate } => {
+                    // The rate: converting the session (its audio and every position) is its own
+                    // step, one undo step.
+                    let now = app.engine.session().sample_rate.hz();
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_label("Sample Rate").selected_text(format!("{rate} Hz")).show_ui(ui, |ui| {
+                            for r in soundcraft_time::SampleRate::COMMON {
+                                ui.selectable_value(rate, r, format!("{r} Hz"));
+                            }
+                        });
+                        if *rate != now
+                            && ui
+                                .button(format!("Convert to {rate} Hz"))
+                                .on_hover_text("Resamples every audio file to new files and moves every position to the same time (one undo step)")
+                                .clicked()
+                        {
+                            action = Some(("session.set_sample_rate".into(), json!({"rate": *rate})));
+                        }
+                    });
                     egui::ComboBox::from_label("Timecode Rate").selected_text(frame_rate.as_str()).show_ui(ui, |ui| {
                         for r in soundcraft_time::FrameRate::ALL {
                             ui.selectable_value(frame_rate, r.label().to_string(), r.label());
@@ -1289,7 +1536,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         take_file_type = Some(file_type.clone());
                     }
                 }
-                Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names } => {
+                Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names, staff_percent, part_pages, page, section_breaks } => {
                     egui::Grid::new("score_setup").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                         ui.label("Title");
                         ui.text_edit_singleline(title);
@@ -1300,12 +1547,26 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.label("Bars per system");
                         ui.add(egui::DragValue::new(bars_per_system).range(1..=16));
                         ui.end_row();
+                        ui.label("Staff size");
+                        ui.add(egui::DragValue::new(staff_percent).range(70..=150).suffix(" %"));
+                        ui.end_row();
+                        ui.label("Page");
+                        let pages = soundcraft_engine::score::PAGES;
+                        egui::ComboBox::from_id_salt("score_page").selected_text(pages.get(usize::from(*page)).map_or("", |p| p.0)).show_ui(ui, |ui| {
+                            for (i, p) in pages.iter().enumerate() {
+                                ui.selectable_value(page, i as u8, p.0);
+                            }
+                        });
+                        ui.end_row();
                     });
                     crate::widgets::checkbox(ui, show_track_names, "Show track names");
+                    crate::widgets::checkbox(ui, part_pages, "Print each track as a part on its own page");
+                    crate::widgets::checkbox(ui, section_breaks, "Start a new system at each section");
                     if buttons(ui, "OK", enter) {
+                        let page_name = ["continuous", "a4", "letter"].get(usize::from(*page)).copied().unwrap_or("continuous");
                         action = Some((
                             "file.score_setup".into(),
-                            json!({"title": title, "composer": composer, "bars_per_system": bars_per_system, "show_track_names": show_track_names}),
+                            json!({"title": title, "composer": composer, "bars_per_system": bars_per_system, "show_track_names": show_track_names, "staff_percent": staff_percent, "part_pages": part_pages, "page": page_name, "section_breaks": section_breaks}),
                         ));
                     }
                 }
@@ -1336,7 +1597,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                 Dialog::SaveChanges { then } => {
                     let name = &app.engine.session().name;
                     let revert = then.0 == "session.revert";
-                    if revert || cfg!(target_arch = "wasm32") {
+                    if revert {
                         let (question, ok) = if revert {
                             (format!("Revert “{name}” to its last saved version?"), "Revert")
                         } else {
@@ -1364,7 +1625,6 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
     if esc || ctx.memory(|m| m.data.get_temp::<bool>(egui::Id::new("dlg_cancel")).unwrap_or(false)) {
         keep = false;
         app.dialogs.after_save = None;
-        app.dialogs.pending_session = None;
         ctx.memory_mut(|m| m.data.remove::<bool>(egui::Id::new("dlg_cancel")));
     }
     if let Some(then) = save_first {
@@ -1382,7 +1642,6 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         action = None;
     }
     let saving = action.as_ref().is_some_and(|(cmd, _)| cmd.starts_with("session.save"));
-    #[cfg(not(target_arch = "wasm32"))]
     let action = match action {
         // A movie is written behind the status line's progress, not in one long frame.
         Some((cmd, params)) if cmd == "file.bounce_movie" => {
@@ -1435,12 +1694,8 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
     }
 }
 
-/// Runs a dialog's command, or what `SaveChanges` carries on with.
+/// Runs a dialog's command (also what `SaveChanges` carries on with).
 fn run_then(app: &mut SoundApp, cmd: &str, params: Value) -> Result<Value, String> {
-    if cmd == OPEN_PENDING {
-        open_pending_session(app);
-        return Ok(Value::Null);
-    }
     app.run(cmd, params)
 }
 
@@ -1595,6 +1850,36 @@ fn new_session_body(app: &mut SoundApp, ui: &mut egui::Ui, n: &mut NewSession, e
 }
 
 /// Cancel/OK row; returns true when OK was pressed (or Enter).
+/// The Strip Silence dialog's preview, kept in egui's temp data while the dialog is open.
+#[derive(Clone, Debug, Default)]
+pub struct StripPreview {
+    /// The settings it was worked out for (as JSON text).
+    pub settings: String,
+    /// The selection it covers, and what would stay on each track.
+    pub range: (i64, i64),
+    pub keep: Vec<(TrackId, Vec<(i64, i64)>)>,
+}
+
+/// The egui temp-data id of [`StripPreview`].
+pub const STRIP_PREVIEW: &str = "strip_silence_preview";
+
+fn strip_preview(app: &mut SoundApp, settings: &serde_json::Value) -> StripPreview {
+    let mut out = StripPreview { settings: settings.to_string(), ..StripPreview::default() };
+    if let Ok(v) = app.engine.execute("edit.strip_silence_preview", settings) {
+        out.range = (v["start"].as_i64().unwrap_or(0), v["end"].as_i64().unwrap_or(0));
+        for t in v["tracks"].as_array().into_iter().flatten() {
+            let keep = t["keep"].as_array().into_iter().flatten().filter_map(|k| Some((k[0].as_i64()?, k[1].as_i64()?))).collect();
+            out.keep.push((TrackId(t["track"].as_u64().unwrap_or(0)), keep));
+        }
+    }
+    out
+}
+
+/// The Strip Silence preview while its dialog is open: the selection and what would stay per track.
+pub fn strip_preview_shown(app: &SoundApp, ctx: &egui::Context) -> Option<StripPreview> {
+    (app.dialogs.open_name() == Some("strip_silence")).then(|| ctx.data(|d| d.get_temp::<StripPreview>(egui::Id::new(STRIP_PREVIEW)))).flatten()
+}
+
 fn buttons(ui: &mut egui::Ui, ok: &str, enter: bool) -> bool {
     buttons_enabled(ui, ok, enter, true)
 }
@@ -1839,6 +2124,91 @@ fn audiosuite_window(app: &mut SoundApp, ctx: &egui::Context) {
     }
 }
 
+/// Export › Stems' choice: the selected tracks rather than every unmuted one, and a stem of each
+/// bus as well (`file.bounce_stems`'s `tracks` and `busses`), kept while the app runs.
+/// Import Session Data's choice: new tracks (as the other session has them), or onto this
+/// session's tracks of the same names with only the parts ticked (by `SESSION_DATA_PARTS`).
+#[derive(Clone, Copy)]
+struct SessionDataChoice {
+    onto: bool,
+    parts: [bool; 7],
+}
+
+/// The parts Import Session Data can bring onto an existing track: (section id, label, ticked
+/// at first).
+const SESSION_DATA_PARTS: [(&str, &str, bool); 7] = [
+    ("inserts", "Inserts", true),
+    ("sends", "Sends", true),
+    ("faders", "Fader and trim", true),
+    ("pan", "Pan, width and balance", true),
+    ("mutes", "Mute and solo", false),
+    ("delay", "Track delay", false),
+    ("automation", "Automation", false),
+];
+
+impl SessionDataChoice {
+    fn id() -> egui::Id {
+        egui::Id::new("session_data_choice")
+    }
+
+    fn get(ctx: &egui::Context) -> Self {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or(SessionDataChoice { onto: false, parts: SESSION_DATA_PARTS.map(|p| p.2) })
+    }
+
+    /// What the command takes for it: nothing for new tracks.
+    fn params(self, v: &mut Value) {
+        if self.onto {
+            v["onto"] = json!(true);
+            v["sections"] = json!(SESSION_DATA_PARTS.iter().zip(self.parts).filter(|(_, on)| *on).map(|(p, _)| p.0).collect::<Vec<_>>());
+        }
+    }
+}
+
+/// The Session Data prompt's rows for [`SessionDataChoice`].
+fn session_data_choice(ui: &mut egui::Ui) {
+    let mut c = SessionDataChoice::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut c.onto, false, "As new tracks");
+        ui.radio_value(&mut c.onto, true, "Onto tracks with the same names");
+    });
+    if c.onto {
+        ui.indent("session_data_parts", |ui| {
+            for (on, (_, label, _)) in c.parts.iter_mut().zip(SESSION_DATA_PARTS) {
+                crate::widgets::checkbox(ui, on, label);
+            }
+        });
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(SessionDataChoice::id(), c));
+}
+
+struct StemsChoice;
+
+impl StemsChoice {
+    fn id() -> egui::Id {
+        egui::Id::new("stems_choice")
+    }
+
+    fn get(ctx: &egui::Context) -> (bool, bool) {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or((false, false))
+    }
+}
+
+/// The Stems prompt's rows for [`StemsChoice`].
+fn stems_choice(app: &SoundApp, ui: &mut egui::Ui) {
+    let (mut selected, mut busses) = StemsChoice::get(ui.ctx());
+    let n = app.engine.target_tracks().len();
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut selected, false, "Every unmuted track");
+        ui.add_enabled_ui(n > 0, |ui| ui.radio_value(&mut selected, true, format!("Selected tracks ({n})")));
+    });
+    if n == 0 {
+        selected = false;
+    }
+    let has_busses = !app.engine.session().busses.is_empty();
+    ui.add_enabled_ui(has_busses, |ui| crate::widgets::checkbox(ui, &mut busses, "A stem of each bus too"));
+    ui.ctx().data_mut(|d| d.insert_temp(StemsChoice::id(), (selected, busses && has_busses)));
+}
+
 /// The Range rows of the Bounce Mix dialog: Loop, Between markers, Whole session.
 fn bounce_range_choice(app: &SoundApp, ui: &mut egui::Ui, range: &mut BounceRange) {
     let t = Tokens::current();
@@ -1911,9 +2281,103 @@ fn bounce_range_choice(app: &SoundApp, ui: &mut egui::Ui, range: &mut BounceRang
     });
 }
 
+/// Rename Selected Tracks' fields: how (0 a pattern, 1 find and replace, 2 trim) and each
+/// way's values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenameSelected {
+    pub mode: u8,
+    pub pattern: String,
+    pub start: u32,
+    pub find: String,
+    pub replace: String,
+    pub trim_start: u32,
+    pub trim_end: u32,
+}
+
+impl Default for RenameSelected {
+    fn default() -> Self {
+        RenameSelected { mode: 0, pattern: "* #".into(), start: 1, find: String::new(), replace: String::new(), trim_start: 0, trim_end: 0 }
+    }
+}
+
+impl RenameSelected {
+    fn body(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.mode, 0, "Pattern");
+            ui.selectable_value(&mut self.mode, 1, "Find and Replace");
+            ui.selectable_value(&mut self.mode, 2, "Trim");
+        });
+        egui::Grid::new("rename_selected").num_columns(2).show(ui, |ui| match self.mode {
+            1 => {
+                ui.label("Find");
+                ui.text_edit_singleline(&mut self.find);
+                ui.end_row();
+                ui.label("Replace with");
+                ui.text_edit_singleline(&mut self.replace);
+                ui.end_row();
+            }
+            2 => {
+                ui.label("Characters off the start");
+                ui.add(egui::DragValue::new(&mut self.trim_start).range(0..=64));
+                ui.end_row();
+                ui.label("Characters off the end");
+                ui.add(egui::DragValue::new(&mut self.trim_end).range(0..=64));
+                ui.end_row();
+            }
+            _ => {
+                ui.label("Name (* the name, # the number)");
+                ui.text_edit_singleline(&mut self.pattern);
+                ui.end_row();
+                ui.label("First number");
+                ui.add(egui::DragValue::new(&mut self.start).range(0..=9999));
+                ui.end_row();
+            }
+        });
+    }
+
+    /// The `track.rename_selected` parameters for the chosen way.
+    pub fn params(&self) -> Value {
+        match self.mode {
+            1 => json!({"find": self.find, "replace": self.replace}),
+            2 => json!({"trim_start": self.trim_start, "trim_end": self.trim_end}),
+            _ => json!({"pattern": self.pattern, "start": self.start}),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rename Selected Tracks: the dialog opens on Pattern and each way gives the command its
+    /// own parameters.
+    #[test]
+    fn rename_selected_gives_each_way_its_parameters() {
+        let mut d = Dialogs::default();
+        assert!(d.open_for_command(&Engine::default(), "track.rename_selected"));
+        let Some(Dialog::RenameSelected(r)) = &d.open else { panic!("the rename dialog") };
+        assert_eq!(r.params(), json!({"pattern": "* #", "start": 1}));
+        let mut r = r.clone();
+        r.mode = 1;
+        r.find = "DI".into();
+        r.replace = "Amp".into();
+        assert_eq!(r.params(), json!({"find": "DI", "replace": "Amp"}));
+        r.mode = 2;
+        r.trim_start = 3;
+        assert_eq!(r.params(), json!({"trim_start": 3, "trim_end": 0}));
+    }
+
+    /// Session Data's choice: new tracks add nothing to the command; onto existing tracks it
+    /// names the ticked parts, which the engine takes.
+    #[test]
+    fn session_data_onto_existing_tracks_names_the_ticked_parts() {
+        let mut v = json!({"path": "x"});
+        SessionDataChoice { onto: false, parts: SESSION_DATA_PARTS.map(|p| p.2) }.params(&mut v);
+        assert_eq!(v, json!({"path": "x"}));
+        SessionDataChoice { onto: true, parts: SESSION_DATA_PARTS.map(|p| p.2) }.params(&mut v);
+        assert_eq!(v["onto"], json!(true));
+        assert_eq!(v["sections"], json!(["inserts", "sends", "faders", "pan"]));
+    }
 
     #[test]
     fn capture_to_pantry_opens_for_an_instrument_track_with_the_commands_defaults() {
@@ -2022,6 +2486,12 @@ pub enum VelocityMode {
     Add,
     Scale,
     Ramp,
+    /// Clamp into `min..=max`.
+    Limit,
+    /// ± `random`, at random.
+    Randomise,
+    /// `compress` percent of each velocity's distance from their average.
+    Compress,
 }
 
 /// The Change Velocity… dialog's fields.
@@ -2034,22 +2504,32 @@ pub struct VelocityDialog {
     pub scale: f64,
     pub from: i64,
     pub to: i64,
+    pub min: i64,
+    pub max: i64,
+    pub random: i64,
+    /// Percent: under 100 compresses towards the average, over 100 expands.
+    pub compress: f64,
 }
 
 impl Default for VelocityDialog {
     fn default() -> Self {
-        VelocityDialog { mode: VelocityMode::Set, set: 100, add: 10, scale: 100.0, from: 40, to: 110 }
+        VelocityDialog { mode: VelocityMode::Set, set: 100, add: 10, scale: 100.0, from: 40, to: 110, min: 30, max: 110, random: 10, compress: 50.0 }
     }
 }
 
 impl VelocityDialog {
-    /// The change as command parameters (`set`, `add`, `scale` or `from`/`to`).
+    /// The change as command parameters (`set`, `add`, `scale`, `from`/`to`, `min`/`max`,
+    /// `random` or `compress`).
     pub fn params(&self) -> Value {
         match self.mode {
             VelocityMode::Set => json!({"set": self.set.clamp(1, 127)}),
             VelocityMode::Add => json!({"add": self.add.clamp(-127, 127)}),
             VelocityMode::Scale => json!({"scale": (self.scale / 100.0).clamp(0.0, 10.0)}),
             VelocityMode::Ramp => json!({"from": self.from.clamp(1, 127), "to": self.to.clamp(1, 127)}),
+            VelocityMode::Limit => json!({"min": self.min.clamp(1, 127), "max": self.max.clamp(1, 127)}),
+            // A new seed each time, so applying it twice does not repeat the same offsets.
+            VelocityMode::Randomise => json!({"random": self.random.clamp(0, 127), "seed": random_seed()}),
+            VelocityMode::Compress => json!({"compress": self.compress.clamp(0.0, 1000.0)}),
         }
     }
 }
@@ -2074,6 +2554,29 @@ fn velocity_fields(ui: &mut egui::Ui, d: &mut VelocityDialog) {
         ui.label("to");
         ui.add_enabled(on, egui::DragValue::new(&mut d.to).range(1..=127));
     });
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.mode, VelocityMode::Limit, "Limit to");
+        let on = d.mode == VelocityMode::Limit;
+        ui.add_enabled(on, egui::DragValue::new(&mut d.min).range(1..=127));
+        ui.label("to");
+        ui.add_enabled(on, egui::DragValue::new(&mut d.max).range(1..=127));
+    });
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.mode, VelocityMode::Randomise, "Randomise ±");
+        ui.add_enabled(d.mode == VelocityMode::Randomise, egui::DragValue::new(&mut d.random).range(0..=127));
+    });
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.mode, VelocityMode::Compress, "Compress to")
+            .on_hover_text("Each velocity's distance from the notes' average, in percent: under 100 evens them out, over 100 spreads them");
+        ui.add_enabled(d.mode == VelocityMode::Compress, egui::DragValue::new(&mut d.compress).range(0.0..=1000.0).suffix(" %"));
+    });
+}
+
+/// A seed for Randomise that differs each time it is applied (a counter stepped by an odd
+/// constant; never zero).
+fn random_seed() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0x2545_F491_4F6C_DD1D);
+    NEXT.fetch_add(0x9E37_79B9_7F4A_7C15, std::sync::atomic::Ordering::Relaxed) | 1
 }
 
 /// What Change Velocity… runs: on the notes selected in the MIDI Editor when it shows them,
@@ -2106,6 +2609,33 @@ pub(crate) fn bounce_refusal(format: &str, channels: usize) -> Option<&'static s
 #[cfg(test)]
 mod bounce_options_tests {
     use super::*;
+
+    /// The dialog's export options reach `file.bounce_mix` as its parameters, and a bounce made
+    /// with them is accepted by the command.
+    #[test]
+    fn the_bounce_dialogs_export_options_become_parameters() {
+        let mut p = json!({"path": "x.wav"});
+        BounceMore::default().apply(&mut p);
+        assert_eq!(p, json!({"path": "x.wav", "dither": "tpdf", "channels": "as_mixed"}), "nothing extra by default");
+        let more = BounceMore {
+            sample_rate: 44_100,
+            dither: "shaped".into(),
+            channels: "split".into(),
+            also: vec!["mp3".into()],
+            tags: soundcraft_audio_io::export::Tags { title: "Song".into(), ..Default::default() },
+            import: true,
+            realtime: true,
+        };
+        let mut p = json!({});
+        more.apply(&mut p);
+        assert_eq!(p["realtime"], true);
+        assert_eq!(p["sample_rate"], 44_100);
+        assert_eq!((p["dither"].as_str(), p["channels"].as_str()), (Some("shaped"), Some("split")));
+        assert_eq!(p["also"], json!(["mp3"]));
+        assert_eq!(p["tags"]["title"], "Song");
+        assert_eq!(p["import"], true);
+        assert!(BOUNCE_RATES.iter().all(|r| *r == 0 || (8_000..=soundcraft_engine::io::MAX_EXPORT_RATE).contains(r)));
+    }
 
     /// Mix bug 11: the dialog offered FLAC at 32-bit float and beyond 8 channels, which the
     /// writer refuses once the render is done.

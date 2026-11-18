@@ -47,6 +47,45 @@ pub fn specs() -> Vec<CommandSpec> {
             effects_set
         ),
         cmd!(
+            "clip.module_add",
+            "Add Clip Effects Module",
+            [],
+            None,
+            "{clips?, plugin: id} — adds a built-in effect to the end of each clip's Clip Effects chain (at most 8; heard after the EQ, dynamics and gain, its latency taken off and its tail heard after the clip)",
+            has_selection,
+            module_add
+        ),
+        cmd!(
+            "clip.module_remove",
+            "Remove Clip Effects Module",
+            [],
+            None,
+            "{clips?, module: id} — takes the module off each clip's Clip Effects chain",
+            has_selection,
+            module_remove
+        ),
+        cmd!(
+            "clip.module_set",
+            "Set Clip Effects Module",
+            [],
+            None,
+            "{clips?, module: id, params?: {name: number}, bypass?: bool, move?: index} — sets the module's parameters, bypasses it or moves it in the chain",
+            has_selection,
+            module_set
+        ),
+        CommandSpec {
+            id: "clip.module_state",
+            label: "Store Clip Effects Module State",
+            menu: &[],
+            shortcut: None,
+            params: "{clip: id, module: id, state: base64 | null} → {bytes}. A hosted Clip Effects module's own state, read from its running instance (as `mix.module_state` for an insert). Not undoable and not journaled (states can be large).",
+            enabled: has_tracks,
+            run: module_state,
+            journal: false,
+            undoable: false,
+            view: false,
+        },
+        cmd!(
             "clip.effects_bypass",
             "Bypass",
             ["Clip", "Clip Effects"],
@@ -69,7 +108,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conform to Tempo",
             ["Clip"],
             None,
-            "{clips?, source_bpm?} — stretches audio clips so their length in bars follows the session tempo; the first conform records the clip's tempo",
+            "{clips?, source_bpm?, keep_pitch?: bool} — stretches audio clips so their length in bars follows the session tempo (keeping the pitch on an Elastic track, or anywhere with keep_pitch); the first conform records the clip's tempo (an imported loop's tempo is recorded at import)",
             has_selection,
             conform
         ),
@@ -198,6 +237,120 @@ fn effects_set(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clips": ids.len(), "params": vals.len()}))
 }
 
+fn module_add(e: &mut Engine, p: &Value) -> Result<Value> {
+    const ID: &str = "clip.module_add";
+    let plugin = p.get("plugin").and_then(Value::as_str).ok_or_else(|| bad(ID, "`plugin` must be an effect's id"))?;
+    let Some(info) = soundcraft_mix::clip_module_plugin(plugin) else {
+        return Err(bad(
+            ID,
+            format!(
+                "{plugin} cannot go on a clip: the built-in effects and scanned CLAP and VST3 effects can (no instruments, meters or Audio Units)"
+            ),
+        ));
+    };
+    let ids: Vec<ClipId> = clip_ids_param(e, p);
+    let s = e.session_mut();
+    let mut added = Vec::new();
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id).filter(|c| c.is_audio()) else { continue };
+        if c.modules.len() >= soundcraft_model::MAX_CLIP_MODULES {
+            continue;
+        }
+        let m = c.modules.iter().map(|m| m.id).max().unwrap_or(0).saturating_add(1);
+        c.modules.push(soundcraft_model::ClipModule::new(m, info.id));
+        added.push(json!({"clip": id.0, "module": m}));
+    }
+    if added.is_empty() {
+        return Err(bad(ID, format!("select an audio clip with room for another module (at most {})", soundcraft_model::MAX_CLIP_MODULES)));
+    }
+    Ok(json!({"added": added}))
+}
+
+fn module_id(id: &str, p: &Value) -> Result<u32> {
+    p.get("module").and_then(Value::as_u64).and_then(|m| u32::try_from(m).ok()).ok_or_else(|| bad(id, "`module` must be a module id"))
+}
+
+fn module_remove(e: &mut Engine, p: &Value) -> Result<Value> {
+    let m = module_id("clip.module_remove", p)?;
+    let ids = clip_ids_param(e, p);
+    let s = e.session_mut();
+    let mut n = 0;
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
+        let before = c.modules.len();
+        c.modules.retain(|x| x.id != m);
+        n += before - c.modules.len();
+    }
+    if n == 0 {
+        return Err(bad("clip.module_remove", "no such module on the clips"));
+    }
+    Ok(json!({"removed": n}))
+}
+
+fn module_set(e: &mut Engine, p: &Value) -> Result<Value> {
+    const ID: &str = "clip.module_set";
+    let m = module_id(ID, p)?;
+    let ids = clip_ids_param(e, p);
+    let params: Vec<(String, f32)> = p
+        .get("params")
+        .and_then(Value::as_object)
+        .map(|o| o.iter().filter_map(|(k, v)| Some((k.chars().take(64).collect(), v.as_f64().filter(|x| x.is_finite())? as f32))).collect())
+        .unwrap_or_default();
+    let bypass = p.get("bypass").and_then(Value::as_bool);
+    let to = p.get("move").and_then(Value::as_u64).map(|x| usize::try_from(x).unwrap_or(usize::MAX));
+    let s = e.session_mut();
+    let mut n = 0;
+    for id in &ids {
+        let Some(c) = s.find_clip_mut(*id) else { continue };
+        let Some(at) = c.modules.iter().position(|x| x.id == m) else { continue };
+        n += 1;
+        if let Some(x) = c.modules.get_mut(at) {
+            let info = soundcraft_mix::clip_module_plugin(&x.plugin);
+            for (k, v) in &params {
+                // Only the module's own parameters, inside their range.
+                if let Some(q) = info.and_then(|i| i.params.iter().find(|q| q.id == k)) {
+                    x.params.insert(k.clone(), v.clamp(q.min, q.max));
+                }
+            }
+            if let Some(b) = bypass {
+                x.bypass = b;
+            }
+        }
+        if let Some(to) = to {
+            let x = c.modules.remove(at);
+            let to = to.min(c.modules.len());
+            c.modules.insert(to, x);
+        }
+    }
+    if n == 0 {
+        return Err(bad(ID, "no such module on the clips"));
+    }
+    Ok(json!({"clips": n}))
+}
+
+fn module_state(e: &mut Engine, p: &Value) -> Result<Value> {
+    const ID: &str = "clip.module_state";
+    let m = module_id(ID, p)?;
+    let clip = p.get("clip").and_then(Value::as_u64).map(ClipId).ok_or_else(|| bad(ID, "`clip` must be a clip id"))?;
+    let state = match p.get("state") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(soundcraft_model::b64::decode(s).ok_or_else(|| bad(ID, "`state` is not valid base64 (or is too large)"))?),
+        Some(_) => return Err(bad(ID, "`state` must be a base64 string or null")),
+    };
+    let c = e.session_mut().find_clip_mut(clip).ok_or_else(|| bad(ID, "no such clip"))?;
+    let x = c.modules.iter_mut().find(|x| x.id == m).ok_or_else(|| bad(ID, "no such module on the clip"))?;
+    // Only a hosted module keeps a state of its own (a built-in's is its parameters).
+    if !soundcraft_mix::is_third_party(&x.plugin) {
+        return Err(bad(ID, "only a hosted (CLAP or VST3) module keeps a state of its own"));
+    }
+    let n = state.as_ref().map_or(0, Vec::len);
+    match state {
+        Some(bytes) => x.set_state_bytes(&bytes),
+        None => x.state = None,
+    }
+    Ok(json!({"bytes": n}))
+}
+
 fn effects_bypass(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     if ids.is_empty() {
@@ -222,6 +375,7 @@ fn effects_render(e: &mut Engine, p: &Value) -> Result<Value> {
         let s = e.session_mut();
         if let Some(c) = s.find_clip_mut(*id) {
             c.effects.clear();
+            c.modules.clear();
             c.effects_bypass = false;
             c.fade_in.len = c.fade_in.len.min(c.length);
             c.fade_out.len = c.fade_out.len.min(c.length);
@@ -230,9 +384,11 @@ fn effects_render(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"rendered": n}))
 }
 
-fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(crate) fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
     let id = "clip.conform_to_tempo";
     let ids = clip_ids_param(e, p);
+    // A pitch-preserving stretch on any track, not only an Elastic one (an imported loop).
+    let force = bool_or(p, "keep_pitch", false);
     let given = p.get("source_bpm").and_then(Value::as_f64).filter(|b| b.is_finite());
     if let Some(b) = given
         && !(5.0..=1000.0).contains(&b)
@@ -249,7 +405,7 @@ fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
         if !c.is_audio() || c.edit_locked {
             continue;
         }
-        let keeps_pitch = s.track(t).and_then(|x| x.elastic.as_deref()).is_some_and(|a| a != "varispeed");
+        let keeps_pitch = force || s.track(t).and_then(|x| x.elastic.as_deref()).is_some_and(|a| a != "varispeed");
         let bpm_key = format!("clip.bpm.{}", cid.0);
         let len_key = format!("clip.len0.{}", cid.0);
         let stretch = if c.stretch.is_finite() && c.stretch > 0.0 { c.stretch } else { 1.0 };
@@ -273,7 +429,7 @@ fn conform(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     for (cid, ratio) in elastic {
-        super::clip::elastic(e, &json!({"clips": [cid.0], "ratio": ratio}))?;
+        super::clip::elastic(e, &json!({"clips": [cid.0], "ratio": ratio, "render": force}))?;
     }
     Ok(json!({"clips": out}))
 }
@@ -465,6 +621,81 @@ mod tests {
         assert!(e.session().find_clip(ids[0]).unwrap().1.effects.is_empty());
         e.execute("edit.paste_clip_effects", &json!({"clip": ids[0].0})).unwrap();
         assert_eq!(e.session().find_clip(ids[0]).unwrap().1.effects.len(), 1);
+    }
+
+    /// Clip Effects modules: any built-in effect goes on a clip (one undo step each), its
+    /// parameters kept in range, moved, bypassed, copied with the clip's effects and taken off;
+    /// a split's pieces keep the chain.
+    #[test]
+    fn clip_modules_add_set_move_copy_and_remove() {
+        let (mut e, _, ids) = engine_with(&[(0, 1000, 0)]);
+        let c = ids[0].0;
+        let v = e.execute("clip.module_add", &json!({"clip": c, "plugin": "fs_reverb"})).unwrap();
+        assert_eq!(v["added"][0]["module"], 1);
+        e.execute("clip.module_add", &json!({"clip": c, "plugin": "lull"})).unwrap();
+        assert!(e.execute("clip.module_add", &json!({"clip": c, "plugin": "subtractive_synth"})).is_err(), "no instruments");
+        assert!(e.execute("clip.module_add", &json!({"clip": c, "plugin": "clap:x"})).is_err(), "no hosted plug-ins yet");
+        e.execute("clip.module_set", &json!({"clip": c, "module": 2, "params": {"threshold": -500.0, "nonsense": 1.0}})).unwrap();
+        let clip = |e: &Engine| e.session().find_clip(ids[0]).unwrap().1.clone();
+        assert_eq!(clip(&e).modules[1].params.get("threshold"), Some(&-80.0), "clamped to the range");
+        assert!(!clip(&e).modules[1].params.contains_key("nonsense"));
+        e.execute("clip.module_set", &json!({"clip": c, "module": 2, "move": 0, "bypass": true})).unwrap();
+        assert_eq!(clip(&e).modules.iter().map(|m| m.id).collect::<Vec<_>>(), vec![2, 1]);
+        assert!(clip(&e).modules[0].bypass);
+        e.undo();
+        assert_eq!(clip(&e).modules.iter().map(|m| m.id).collect::<Vec<_>>(), vec![1, 2], "one undo step");
+        e.execute("edit.copy_clip_effects", &json!({"clip": c})).unwrap();
+        e.execute("edit.clear_clip_effects", &json!({"clip": c})).unwrap();
+        assert!(clip(&e).modules.is_empty());
+        e.execute("edit.paste_clip_effects", &json!({"clip": c})).unwrap();
+        assert_eq!(clip(&e).modules.len(), 2);
+        // Plain Paste puts a clipboard of modules only back too.
+        e.execute("edit.clear_clip_effects", &json!({"clip": c})).unwrap();
+        e.execute("edit.paste", &json!({"clips": [c]})).unwrap();
+        assert_eq!(clip(&e).modules.len(), 2, "Edit › Paste");
+        e.execute("clip.module_remove", &json!({"clip": c, "module": 1})).unwrap();
+        assert_eq!(clip(&e).modules.len(), 1);
+        // Saved and opened again: the chain is kept.
+        let json = serde_json::to_string(e.session()).unwrap();
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.find_clip(ids[0]).unwrap().1.modules, clip(&e).modules);
+    }
+
+    /// A hosted Clip Effects module's own state is stored on its clip slot (no undo step, not
+    /// journaled), saved and opened with the session; a built-in module has none; a module
+    /// saved before states existed (parameters only) opens unchanged, with none.
+    #[test]
+    fn a_hosted_clip_modules_state_is_kept_per_slot() {
+        let (mut e, _, ids) = engine_with(&[(0, 1000, 0)]);
+        let c = ids[0].0;
+        e.execute("clip.module_add", &json!({"clip": c, "plugin": "fs_reverb"})).unwrap();
+        // A hosted module, as `clip.module_add` puts one (the scan is not run in tests).
+        let mut hosted = soundcraft_model::ClipModule::new(2, "clap:test.state");
+        hosted.params.insert("gain".into(), -6.0);
+        e.session_mut().find_clip_mut(ids[0]).unwrap().modules.push(hosted.clone());
+        let undo = e.can_undo();
+        let blob = soundcraft_model::b64::encode(b"\x00plug-in state\xff");
+        let r = e.execute("clip.module_state", &json!({"clip": c, "module": 2, "state": blob})).unwrap();
+        assert_eq!(r["bytes"], 15);
+        let clip = |e: &Engine| e.session().find_clip(ids[0]).unwrap().1.clone();
+        assert_eq!(clip(&e).modules[1].state_bytes().unwrap(), b"\x00plug-in state\xff");
+        assert_eq!(e.can_undo(), undo, "not undoable");
+        assert!(e.journal.iter().all(|(id, _)| id != "clip.module_state"), "not journaled");
+        assert!(e.execute("clip.module_state", &json!({"clip": c, "module": 1, "state": blob})).is_err(), "a built-in has none");
+        assert!(e.execute("clip.module_state", &json!({"clip": c, "module": 9, "state": blob})).is_err());
+        assert!(e.execute("clip.module_state", &json!({"clip": c, "module": 2, "state": "%%"})).is_err());
+        // Saved and opened again.
+        let json = serde_json::to_string(e.session()).unwrap();
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.find_clip(ids[0]).unwrap().1.modules, clip(&e).modules);
+        // An older slot (parameters only) reads as before, and writes no state back.
+        let old = r#"{"id":2,"plugin":"clap:test.state","params":{"gain":-6.0}}"#;
+        let m: soundcraft_model::ClipModule = serde_json::from_str(old).unwrap();
+        assert_eq!(m, hosted);
+        assert_eq!(serde_json::to_string(&m).unwrap(), old);
+        // null clears it.
+        e.execute("clip.module_state", &json!({"clip": c, "module": 2, "state": null})).unwrap();
+        assert_eq!(clip(&e).modules[1].state, None);
     }
 
     #[test]

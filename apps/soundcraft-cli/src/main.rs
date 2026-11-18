@@ -715,9 +715,16 @@ fn monitor_profile(args: &[String]) -> ExitCode {
 
 fn info(args: &[String]) -> ExitCode {
     let Some(path) = args.first() else { return fail("info FILE") };
-    if soundcraft_model::is_session_path(path) {
+    let bundle = soundcraft_engine::io::is_bundle_path(path);
+    if soundcraft_model::is_session_path(path) || bundle {
         let mut e = Engine::default();
-        match soundcraft_engine::io::open_session(&mut e, path) {
+        // A bundle is read where it is (nothing is unpacked to describe it).
+        let opened = if bundle {
+            soundcraft_engine::io::read_bundle_file(path).and_then(|b| soundcraft_engine::io::open_session_bytes(&mut e, path, &b))
+        } else {
+            soundcraft_engine::io::open_session(&mut e, path)
+        };
+        match opened {
             Ok(missing) => warn_missing(&missing),
             Err(err) => return fail(err),
         }

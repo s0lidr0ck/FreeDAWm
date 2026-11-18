@@ -1,5 +1,5 @@
-//! The Sampler's instrument window: audio dropped on it loads the sample (by path on the
-//! desktop, by bytes in the browser), and built-in instruments show their parameters.
+//! The Sampler's instrument window: audio dropped on it loads the sample (by path), and built-in
+//! instruments show their parameters.
 
 use egui::{DroppedFile, Event, vec2};
 use egui_kittest::Harness;
@@ -150,35 +150,10 @@ fn dropping_audio_with_a_path_loads_the_sampler() {
 }
 
 #[test]
-fn dropping_audio_without_a_path_reads_its_bytes() {
-    let (mut h, keys) = harness();
-    drop_on_window(&mut h, keys, Dropped { path: PathBuf::from("web drop.wav"), bytes: wav(0.25) });
-    // Nothing loads until the shell has read the bytes (asynchronously, in the browser).
-    assert_eq!(instrument(&h, keys).plugin, "subtractive_synth");
-    let reads = h.state_mut().take_sample_reads();
-    assert_eq!(reads.len(), 1);
-    assert_eq!(reads[0].track, keys);
-    for r in &reads {
-        let bytes = r.file.bytes();
-        h.state_mut().load_sample_bytes(r, bytes);
-    }
-    let ins = instrument(&h, keys);
-    assert_eq!(ins.plugin, "sampler");
-    assert_eq!(h.state().engine.session().source(ins.sample.unwrap()).map(|s| s.name.as_str()), Some("web drop"));
-    assert_eq!(h.state().engine.undo_label(), Some("Load Sampler Sample"));
-    // Unreadable bytes leave the track alone and say why.
-    let before = h.state().engine.session().sources.len();
-    h.state_mut().load_sample_bytes(&reads[0], Err("permission denied".into()));
-    assert!(h.state().ui.status.contains("permission denied"));
-    assert_eq!(h.state().engine.session().sources.len(), before);
-}
-
-#[test]
 fn non_audio_drops_are_left_to_the_shell() {
     let (mut h, keys) = harness();
     drop_on_window(&mut h, keys, Dropped { path: PathBuf::from("/tmp/song.scraft"), bytes: Vec::new() });
     assert_eq!(instrument(&h, keys).plugin, "subtractive_synth");
-    assert!(h.state_mut().take_sample_reads().is_empty());
 }
 
 #[test]

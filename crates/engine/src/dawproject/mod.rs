@@ -4,7 +4,7 @@
 //! Bitwig 5.0.9+, Cubase/Nuendo 14+): a zip with `project.xml` (schema: github.com/bitwig/dawproject,
 //! MIT), `metadata.xml` and the embedded audio and plugin states. Our own reader and writer
 //! (`quick-xml` + the workspace `zip`): the `dawproject` crate pulls `zip` with its C codecs,
-//! which the web build can't take.
+//! which this workspace avoids.
 //!
 //! What maps, both ways:
 //! - transport: tempo, tempo automation (linear points are ramps), time signature changes, markers;
@@ -212,17 +212,9 @@ pub fn import_path(
     let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Imported".into());
     let file = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
     let dir = p.parent().map(std::path::Path::to_path_buf);
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let f = crate::io::open_read(p).map_err(|e| e.to_string())?;
-        let mut a = archive::Archive::new(std::io::BufReader::new(f))?;
-        import::import(&mut a, &stem, &file, dir.as_deref(), installed, progress)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let bytes = crate::io::read_file(p).map_err(|e| e.to_string())?;
-        import_bytes(&bytes, &stem, &file, installed, progress)
-    }
+    let f = crate::io::open_read(p).map_err(|e| e.to_string())?;
+    let mut a = archive::Archive::new(std::io::BufReader::new(f))?;
+    import::import(&mut a, &stem, &file, dir.as_deref(), installed, progress)
 }
 
 /// Imports an archive held in memory (no folder: external files can't be found).

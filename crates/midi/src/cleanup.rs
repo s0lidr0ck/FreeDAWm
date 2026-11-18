@@ -817,7 +817,7 @@ fn finish(input: &CleanupInput, mut work: Vec<Slot>, pedal: PedalOut) -> Cleanup
         }
     }
     let ctrls = pedal.ctrls.unwrap_or_else(|| input.ctrls.to_vec());
-    let mut sequence = Sequence { notes, ctrls };
+    let mut sequence = Sequence { notes, ctrls, sysex: Vec::new() };
     sequence.sort();
     CleanupOutput { sequence, edits, report }
 }
@@ -872,7 +872,7 @@ mod tests {
         let chords = [chord(0, 960, 0, &[0, 4, 7]), chord(960, 3840, 5, &[5, 9, 0])];
         let ctrls = [pedal(0, 127), pedal(900, 0), pedal(1000, 127)];
         let out = cleanup(&CleanupInput { ctrls: &ctrls, ..input(&notes, &chords, settings(0, 0, 0, 0, true)) });
-        let mut expect = Sequence { notes: notes.to_vec(), ctrls: ctrls.to_vec() };
+        let mut expect = Sequence { notes: notes.to_vec(), ctrls: ctrls.to_vec(), sysex: Vec::new() };
         expect.sort();
         assert_eq!(out.sequence, expect);
         assert!(out.edits.is_empty());
@@ -1389,7 +1389,7 @@ mod tests {
     fn non_positive_lengths_untouched_unless_edited() {
         let notes = [n(64, 0, 0, 80), n(62, 100, -5, 80), n(65, 480, 960, 80)];
         let out = cleanup(&input(&notes, &[], settings(0, 0, 0, 0, true)));
-        let mut expect = Sequence { notes: notes.to_vec(), ctrls: vec![] };
+        let mut expect = Sequence { notes: notes.to_vec(), ctrls: vec![], sysex: Vec::new() };
         expect.sort();
         assert_eq!(out.sequence, expect);
         assert!(out.edits.is_empty());

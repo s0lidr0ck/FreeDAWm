@@ -12,8 +12,8 @@
 //!   simulated outputs (`monitor_ui`).
 //!
 //! A preset that plays audio keeps it in `<name>_samples/` beside its file, so the folder can be
-//! copied or synced whole. The desktop app sets [`UserDirs`]; the web build has none, and the
-//! menus then offer only Browse….
+//! copied or synced whole. The desktop app sets [`UserDirs`]; without them (a bare app, tests)
+//! the menus offer only Browse….
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -21,7 +21,7 @@ use std::time::SystemTime;
 /// Track preset files' extension.
 pub const TRACK_PRESET_EXT: &str = "json";
 
-/// Where the Library's folders are (none in the browser).
+/// Where the Library's folders are (none in a bare app).
 #[derive(Debug, Clone, Default)]
 pub struct UserDirs {
     /// The Library folder itself.

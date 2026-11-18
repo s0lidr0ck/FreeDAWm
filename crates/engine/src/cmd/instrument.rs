@@ -5,7 +5,7 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_model::{Insert, TrackKind};
+use soundcraft_model::{Insert, TrackId, TrackKind};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -27,7 +27,109 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             set_instrument_param
         ),
+        cmd!(
+            "mix.instrument_output",
+            "Instrument Output",
+            [],
+            None,
+            "{track?, output: index (0: the instrument's first extra output), bus: id | null} — plays one of the instrument's extra outputs (Juke's Out 2-8) into a bus instead of its main output, or (null) back on its main output → {outputs: [{output, name, bus}]}",
+            has_selection,
+            set_output
+        ),
+        cmd!(
+            "mix.new_output_track",
+            "New Track for Output",
+            [],
+            None,
+            "{track?, output: index} — a stereo bus and an aux track reading it, named after the track and the output, and the instrument's extra output played into it → {aux, bus}",
+            has_selection,
+            new_output_track
+        ),
     ]
+}
+
+/// The names of the extra outputs `ins` has: a built-in instrument's (Juke's Out 2-8), or the
+/// auxiliary output ports a hosted CLAP or VST3 instrument declared when the mix made it. Empty
+/// for one without any.
+pub fn output_names(ins: &Insert) -> Vec<String> {
+    match soundcraft_dsp::create(&ins.plugin) {
+        Some(p) => p.extra_outputs(),
+        None => soundcraft_mix::inst_outs::known_outputs(&ins.plugin),
+    }
+}
+
+/// The instrument track and output a command names, checked.
+fn output_of(e: &Engine, id: &str, p: &Value) -> Result<(TrackId, u8, String)> {
+    let t = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "no track"))?;
+    let ins = e.session().track(t).and_then(|tr| tr.instrument.as_ref()).ok_or_else(|| bad(id, "the track has no instrument"))?;
+    let names = output_names(ins);
+    if names.is_empty() {
+        return Err(bad(id, format!("`{}` has no outputs besides its main one", ins.plugin)));
+    }
+    let output = p.get("output").and_then(Value::as_u64).ok_or_else(|| bad(id, "`output`: which extra output (0 first)"))?;
+    let name = usize::try_from(output)
+        .ok()
+        .and_then(|i| names.get(i).cloned())
+        .ok_or_else(|| bad(id, format!("`{}` has {} extra outputs; no index {output}", ins.plugin, names.len())))?;
+    Ok((t, u8::try_from(output).unwrap_or(0), name))
+}
+
+fn outputs_of(e: &Engine, t: TrackId) -> Value {
+    let Some(tr) = e.session().track(t) else { return json!([]) };
+    let names = tr.instrument.as_ref().map(output_names).unwrap_or_default();
+    json!(tr.instrument_outs.iter().map(|o| json!({"output": o.output, "name": names.get(usize::from(o.output)), "bus": o.bus})).collect::<Vec<_>>())
+}
+
+/// Plays `output` of `t`'s instrument into `bus` (`None`: back on its main output).
+fn route_output(e: &mut Engine, t: TrackId, output: u8, bus: Option<soundcraft_model::BusId>) {
+    if let Some(tr) = e.session_mut().track_mut(t) {
+        tr.instrument_outs.retain(|o| o.output != output);
+        if let Some(bus) = bus {
+            tr.instrument_outs.push(soundcraft_model::InstrumentOut { output, bus });
+            tr.instrument_outs.sort_by_key(|o| o.output);
+        }
+    }
+}
+
+fn set_output(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.instrument_output";
+    let (t, output, _) = output_of(e, C, p)?;
+    let bus = match p.get("bus") {
+        None => return Err(bad(C, "`bus`: a bus id, or null for the main output")),
+        Some(Value::Null) => None,
+        Some(v) => {
+            let id = v.as_u64().map(soundcraft_model::BusId).ok_or_else(|| bad(C, "`bus` is a bus id or null"))?;
+            if !e.session().busses.iter().any(|b| b.id == id) {
+                return Err(bad(C, format!("no bus {}", id.0)));
+            }
+            Some(id)
+        }
+    };
+    route_output(e, t, output, bus);
+    Ok(json!({"outputs": outputs_of(e, t)}))
+}
+
+fn new_output_track(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.new_output_track";
+    let (t, output, name) = output_of(e, C, p)?;
+    let s = e.session_mut();
+    let mut label = format!("{} {name}", s.track(t).map(|tr| tr.name.as_str()).unwrap_or(""));
+    soundcraft_model::truncate_chars(&mut label, soundcraft_model::MAX_NAME_CHARS);
+    // A bus of its own (a name already taken gets a number).
+    let mut bus_name = label.clone();
+    let mut n = 2;
+    while s.bus_by_name(&bus_name).is_some() {
+        bus_name = format!("{label} {n}");
+        n += 1;
+    }
+    let bus = s.add_bus(&bus_name, soundcraft_model::ChannelFormat::Stereo);
+    let aux = s.add_track(TrackKind::Aux, soundcraft_model::ChannelFormat::Stereo, Some(&bus_name));
+    if let Some(a) = s.track_mut(aux) {
+        a.mixer.input = soundcraft_model::Route::Bus(bus);
+        a.mixer.output = soundcraft_model::Route::Main;
+    }
+    route_output(e, t, output, Some(bus));
+    Ok(json!({"aux": aux, "bus": bus, "outputs": outputs_of(e, t)}))
 }
 
 /// Fields `mix.instrument` reads. Anything else (a parameter written beside `plugin`, say) used to
@@ -69,6 +171,8 @@ fn set_instrument(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     if let Some(tr) = e.session_mut().track_mut(t) {
         tr.instrument = Some(ins);
+        // Another instrument's outputs are its own: they start on its main output.
+        tr.instrument_outs.clear();
     }
     Ok(json!({"track": t, "plugin": info.id}))
 }
@@ -85,6 +189,9 @@ fn set_instrument_param(e: &mut Engine, p: &Value) -> Result<Value> {
     let pi = info.param(&param).ok_or_else(|| bad(id, format!("`{}` has no parameter `{param}`", info.id)))?;
     let v = pi.clamp(value);
     ins.params.insert(param.clone(), v);
+    // A move in the instrument's window or drawer is written as automation in Touch, Latch and
+    // Write, as a chain module's is.
+    e.automation_changed(t, soundcraft_model::AutoParam::Plugin { module: soundcraft_model::INSTRUMENT_MODULE, param: param.clone() });
     Ok(json!({"track": t, "param": param, "value": v}))
 }
 
@@ -103,6 +210,61 @@ mod tests {
 
     fn instrument_of(e: &Engine, t: TrackId) -> Option<String> {
         e.session().track(t).and_then(|tr| tr.instrument.as_ref()).map(|i| i.plugin.clone())
+    }
+
+    /// Parity section 7: an instrument's parameter moved while playing in Touch is written to its
+    /// lane, as a chain module's is.
+    #[test]
+    fn an_instrument_parameter_moved_in_touch_is_written() {
+        let mut e = Engine::default();
+        let t = track(&mut e, "instrument");
+        e.execute("mix.automation_mode", &json!({"tracks": [t.0], "mode": "touch"})).unwrap();
+        let q = i64::from(e.session().sample_rate.hz()) / 10;
+        e.transport.playing = true;
+        e.transport.position = 0;
+        e.automation_pass(true);
+        e.execute("mix.instrument_param", &json!({"track": t.0, "param": "level", "value": -18.0})).unwrap();
+        e.transport.position = q;
+        assert_eq!(e.automation_pass(true), 1);
+        let key = soundcraft_model::AutoParam::Plugin { module: soundcraft_model::INSTRUMENT_MODULE, param: "level".into() };
+        let lane = e.session().track(t).unwrap().lane(&key).expect("a lane on the instrument");
+        assert!(lane.points.iter().any(|p| p.value == -18.0), "{:?}", lane.points);
+    }
+
+    /// Juke's Out 3 on a track of its own: a bus, an aux reading it, the output played into it;
+    /// one undo step; another instrument starts on its main output again.
+    #[test]
+    fn an_instrument_output_gets_a_track_of_its_own() {
+        let mut e = Engine::default();
+        let t = track(&mut e, "instrument");
+        assert!(e.execute("mix.new_output_track", &json!({"track": t.0, "output": 0})).is_err(), "the synth has no extra outputs");
+        e.execute("mix.instrument", &json!({"track": t.0, "plugin": "juke"})).unwrap();
+        assert!(e.execute("mix.new_output_track", &json!({"track": t.0, "output": 7})).is_err(), "Out 2 to Out 8: seven");
+        let tracks = e.session().tracks.len();
+        let r = e.execute("mix.new_output_track", &json!({"track": t.0, "output": 1})).unwrap();
+        assert_eq!(r["outputs"][0]["name"], "Out 3");
+        let s = e.session();
+        let aux = s.tracks.last().unwrap();
+        assert_eq!(s.tracks.len(), tracks + 1);
+        assert_eq!(aux.kind, soundcraft_model::TrackKind::Aux);
+        let bus = s.track(t).unwrap().instrument_outs[0].bus;
+        assert_eq!(aux.mixer.input, soundcraft_model::Route::Bus(bus));
+        assert!(aux.name.ends_with("Out 3"), "{}", aux.name);
+        // Back on the main output, then into the bus again.
+        e.execute("mix.instrument_output", &json!({"track": t.0, "output": 1, "bus": null})).unwrap();
+        assert!(e.session().track(t).unwrap().instrument_outs.is_empty());
+        e.execute("mix.instrument_output", &json!({"track": t.0, "output": 1, "bus": bus.0})).unwrap();
+        assert!(e.execute("mix.instrument_output", &json!({"track": t.0, "output": 1, "bus": 999_999})).is_err());
+        // Kept with the session.
+        let back: soundcraft_model::Session = serde_json::from_str(&serde_json::to_string(e.session()).unwrap()).unwrap();
+        assert_eq!(back.track(t).unwrap().instrument_outs, e.session().track(t).unwrap().instrument_outs);
+        e.execute("mix.instrument", &json!({"track": t.0, "plugin": "subtractive_synth"})).unwrap();
+        assert!(e.session().track(t).unwrap().instrument_outs.is_empty());
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(e.session().tracks.len(), tracks, "the new track was one step");
     }
 
     #[test]

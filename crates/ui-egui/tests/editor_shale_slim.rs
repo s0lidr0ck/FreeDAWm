@@ -1,4 +1,4 @@
-//! Shale's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its header,
+//! Shale's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its header,
 //! the Mic menu, the dials, Kit Link and its phase row, and its More section (Shale's own More
 //! drawer).
 

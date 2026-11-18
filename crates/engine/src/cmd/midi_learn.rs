@@ -138,6 +138,11 @@ pub fn apply(e: &mut Engine, map: &MidiMap, value: u8) -> Result<()> {
         AutoParam::Trim => ("mix.trim", json!({"tracks": [t.0], "db": pos * 48.0 - 24.0})),
         AutoParam::Width => ("mix.width", json!({"track": t.0, "width": pos * 2.0 - 1.0})),
         AutoParam::Balance => ("mix.balance", json!({"track": t.0, "balance": pos * 2.0 - 1.0})),
+        AutoParam::Surround(i) => {
+            let (lo, hi, _) = param.range();
+            let axis = soundcraft_model::SURROUND_AXES.get(usize::from(*i)).copied().unwrap_or("x");
+            ("mix.surround_pan", json!({"track": t.0, axis: lo + (hi - lo) * pos}))
+        }
         AutoParam::Plugin { module, param } => {
             let plugin = e
                 .session()

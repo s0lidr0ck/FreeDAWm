@@ -14,12 +14,14 @@ pub mod capture_progress;
 pub mod chain_view;
 pub mod chamber_plan;
 pub mod channel_width;
+pub mod chord_pads;
 pub mod cleanq_ceiling;
 pub mod control;
 pub mod control_room;
 pub mod credits;
 pub mod curve_worker;
 pub mod dawproject_report;
+pub mod device_return;
 pub mod dialogs;
 pub mod docking;
 pub mod edit_window;
@@ -28,15 +30,17 @@ pub mod editors;
 pub mod engine_ui;
 pub mod extra_windows;
 pub mod fade_dialog;
+mod field_menu;
+pub mod fm_panel;
 pub mod fonts;
 pub mod fs_presets;
 pub mod hardware_credit;
 pub mod hearing_ui;
 pub mod hit_picker;
+mod hw_insert_ui;
 pub mod icons;
 mod imprint_ui;
 pub mod juke_fx;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod juke_kits_ui;
 pub mod juke_window;
 pub mod key_knobs;
@@ -61,20 +65,21 @@ mod midi_fx_menu;
 pub mod midi_ghosts;
 pub mod midi_lanes;
 pub mod midi_learn;
+pub mod midi_sync_in;
+pub mod midi_sysex_lane;
+pub mod midi_wide_lanes;
+pub mod mix_find;
+pub mod mix_more;
 pub mod mix_window;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_audition;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_downloads;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_text_ui;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ml_ui;
+mod modulators_ui;
 pub mod module_drawer;
 pub mod module_graphs;
 pub mod monitor_ui;
 pub mod musical_typing;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod net_ui;
 pub mod notes_panel;
 pub mod open_progress;
@@ -90,17 +95,21 @@ pub mod record_offset;
 pub mod recovery;
 pub mod render;
 pub mod ruler_items;
+pub mod sample_editor;
 pub mod sampler_window;
 pub mod scope;
 pub mod score_editor;
 pub mod scout;
+mod script_editor;
 pub mod scrub;
 pub mod session_key;
+pub mod set_list_ui;
 pub mod shale_ui;
 pub mod shortcut_editor;
 pub mod shortcuts;
 pub mod sidechain_picker;
 pub mod slider_drag;
+pub mod spectral;
 pub mod split_progress;
 pub mod spot;
 pub mod step_grid;
@@ -108,6 +117,7 @@ pub mod step_input;
 pub mod stretch_worker;
 pub mod surfaces;
 pub mod swale_ui;
+pub mod synth_panel;
 pub mod teleprompter;
 pub mod tempo_markers;
 pub mod tempo_ui;
@@ -115,6 +125,7 @@ pub mod theme;
 pub mod timeline_link;
 pub mod toolbar;
 pub mod tour;
+pub mod track_notes;
 pub mod user_files;
 pub mod value_entry;
 mod vault_ui;
@@ -126,7 +137,9 @@ pub mod vocal_mixer;
 pub mod vocal_style;
 pub mod vocal_track;
 pub mod vocal_worker;
+mod wait_note;
 pub mod waveform;
+pub mod wavetable_panel;
 pub mod widgets;
 pub mod window_sync;
 pub mod windows;
@@ -189,6 +202,9 @@ pub struct UiState {
     /// Window › Mix Snapshots.
     #[serde(default)]
     pub show_mix_snapshots: bool,
+    /// Window › Set List: the show's songs in order.
+    #[serde(default)]
+    pub show_set_list: bool,
     /// Window › Control Room.
     #[serde(default)]
     pub show_control_room: bool,
@@ -231,7 +247,7 @@ pub struct UiState {
     pub show_audio_health: bool,
     pub show_about: bool,
     pub show_midi_editor: bool,
-    /// The Vocal Editor (AI › Tune Vocal…); plan 3 draws it.
+    /// The Vocal Editor (AI › Tune Vocal › Open…); plan 3 draws it.
     pub show_vocal_editor: bool,
     /// The Vocal Editor's Preview toggle: a clicked or edited note plays once (`vocal.preview`).
     #[serde(default = "default_true", rename = "vocal.preview")]
@@ -287,6 +303,16 @@ pub struct UiState {
     /// Plugin windows pinned on top of the others (the window's Pin button).
     #[serde(skip)]
     pub pinned_plugins: Vec<(TrackId, SlotKey)>,
+    /// Plugin windows that follow the selected track (the window's Follow button): selecting
+    /// another track shows the same plug-in there, if it has one.
+    #[serde(skip)]
+    pub following_plugins: Vec<(TrackId, SlotKey)>,
+    /// The Modulators window, open on this track's modulators.
+    #[serde(skip)]
+    pub modulators_window: Option<TrackId>,
+    /// The Script Editor, open on this track's MIDI effect (by index).
+    #[serde(skip)]
+    pub script_window: Option<(TrackId, usize)>,
     /// Where a detached plugin window was last, `[x, y, w, h]` by plugin id (`plugin_windows.rects`):
     /// the next detached window of that plugin opens there.
     #[serde(default, rename = "plugin_windows.rects")]
@@ -355,6 +381,10 @@ pub struct UiState {
     /// The Mix window lives in its own native window (Window › Mix in Separate Window); the main
     /// window then always shows Edit.
     pub mix_separate: bool,
+    /// More Mix windows (Window › New Mix Window…), each with its own find, spill and sections
+    /// ([`mix_more`]). Not kept: they close with the app.
+    #[serde(skip)]
+    pub more_mix: Vec<mix_more::MoreMix>,
     /// The Vocal Editor lives in its own native window (Window › Vocal Editor in Separate
     /// Window, `vocal.separate`); closing that window docks it back.
     #[serde(default, rename = "vocal.separate")]
@@ -401,6 +431,11 @@ pub struct UiState {
     /// What each MIDI input port is called here, by port name (`midi.aliases`): per machine.
     #[serde(default, rename = "midi.aliases")]
     pub midi_aliases: std::collections::BTreeMap<String, String>,
+    /// The studio setup: what is connected to each MIDI output port, by port name
+    /// (`midi.studio`): each device's name and channel, which name the targets of the track
+    /// output menus. Per machine.
+    #[serde(default, rename = "midi.studio")]
+    pub midi_studio: std::collections::BTreeMap<String, Vec<midi_devices::StudioDevice>>,
     /// Each MIDI input port's timing offset in ms, by port name (`midi.offsets`): its messages
     /// arrive that late and are placed that much earlier. Per machine.
     #[serde(default, rename = "midi.offsets")]
@@ -427,6 +462,11 @@ pub struct UiState {
     /// the session is saved (on by default); off, the project refers to the original file.
     #[serde(default = "default_true")]
     pub copy_imported_audio: bool,
+    /// Preferences › Mixing: hosted CLAP plug-ins loaded from now on run in their own process
+    /// (`ui.plugin_process`; off by default; `FREEDAWM_PLUGIN_PROCESS` overrides it). The app
+    /// hands it to the bridge when it loads `ui.json` and when the command changes it.
+    #[serde(default)]
+    pub plugin_process: bool,
     /// The monitor stage (`monitor_ui`): the master fader's EAR key and its hearing profile.
     /// This computer's, never a session's.
     pub monitor_ear: bool,
@@ -448,12 +488,16 @@ pub struct UiState {
     pub shortcut_editor: shortcut_editor::EditorState,
     pub show_clip_effects: bool,
     pub show_beat_detective: bool,
+    pub show_process_history: bool,
+    pub show_sample_editor: bool,
+    pub show_arrangements: bool,
     pub show_tempo_ops: bool,
     pub show_time_ops: bool,
     pub show_midi_ops: bool,
     pub show_rtp: bool,
     pub show_input_quantize: bool,
     pub show_click_countoff: bool,
+    pub show_disk_allocation: bool,
     pub show_midi_offsets: bool,
     pub show_score: bool,
     pub show_search: bool,
@@ -464,6 +508,13 @@ pub struct UiState {
     pub workspace_dir: String,
     /// The level files and clips are auditioned at (Workspace, Clip List), in dB.
     pub preview_db: f32,
+    /// The device output pair files and clips are auditioned on: its first channel (0: outputs
+    /// 1–2).
+    pub preview_output: usize,
+    /// Files are auditioned at the session tempo when they say their own (Workspace).
+    pub preview_tempo: bool,
+    /// Files are auditioned in sync with the session while it plays (Workspace).
+    pub preview_sync: bool,
     /// The user's fade presets (Edit › Fades › Create…).
     pub fade_presets: Vec<fade_dialog::FadePreset>,
     pub configurations: Vec<(String, Value)>,
@@ -546,6 +597,7 @@ impl Default for UiState {
             show_big_counter: false,
             show_loudness: false,
             show_mix_snapshots: false,
+            show_set_list: false,
             show_control_room: false,
             talk_held: false,
             talk_button: false,
@@ -586,6 +638,9 @@ impl Default for UiState {
             full_editors: Vec::new(),
             detached_plugins: Vec::new(),
             pinned_plugins: Vec::new(),
+            following_plugins: Vec::new(),
+            modulators_window: None,
+            script_window: None,
             plugin_window_rects: HashMap::new(),
             juke_tabs: HashMap::new(),
             juke_clips: HashMap::new(),
@@ -618,6 +673,7 @@ impl Default for UiState {
             audio: soundcraft_playback::AudioConfig::default(),
             record_offsets: std::collections::BTreeMap::new(),
             mix_separate: false,
+            more_mix: Vec::new(),
             vocal_separate: false,
             midi_editor_separate: false,
             midi_editor_window: None,
@@ -633,6 +689,7 @@ impl Default for UiState {
             midi_inputs: std::collections::BTreeMap::new(),
             midi_outputs: std::collections::BTreeMap::new(),
             midi_aliases: std::collections::BTreeMap::new(),
+            midi_studio: std::collections::BTreeMap::new(),
             midi_offsets: std::collections::BTreeMap::new(),
             midi_thru: true,
             show_shortcuts: false,
@@ -642,6 +699,7 @@ impl Default for UiState {
             meter_hold_secs: preferences::DEFAULT_HOLD,
             meter_scale: String::new(),
             copy_imported_audio: true,
+            plugin_process: false,
             monitor_ear: false,
             monitor_ear_profile: String::new(),
             monitor_sim: false,
@@ -652,12 +710,16 @@ impl Default for UiState {
             shortcut_editor: shortcut_editor::EditorState::default(),
             show_clip_effects: false,
             show_beat_detective: false,
+            show_process_history: false,
+            show_sample_editor: false,
+            show_arrangements: false,
             show_tempo_ops: false,
             show_time_ops: false,
             show_midi_ops: false,
             show_rtp: false,
             show_input_quantize: false,
             show_click_countoff: false,
+            show_disk_allocation: false,
             show_midi_offsets: false,
             show_score: false,
             show_search: false,
@@ -666,6 +728,9 @@ impl Default for UiState {
             video_burn_in: false,
             workspace_dir: String::new(),
             preview_db: 0.0,
+            preview_output: 0,
+            preview_tempo: true,
+            preview_sync: true,
             fade_presets: Vec::new(),
             configurations: Vec::new(),
             theme: theme::ThemeMode::Dark,
@@ -683,14 +748,13 @@ impl Default for UiState {
     }
 }
 
-/// Host services (file dialogs, Scout's Claude call) injected by the app; absent in tests and on
-/// the web.
+/// Host services (file dialogs, Scout's Claude call) injected by the app; absent in tests.
 #[derive(Default)]
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn(&str, &[&str]) -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str, &str) -> Option<String>>>,
     pub pick_folder: Option<Box<dyn Fn(&str) -> Option<String>>>,
-    /// Sends a Scout question to Claude, streaming the answer back (native only).
+    /// Sends a Scout question to Claude, streaming the answer back.
     pub ask_claude: Option<scout::ask::AskClaude>,
     /// The Anthropic API key, masked ("sk-ant-…a1b2"), or `None` without one. Never the key.
     pub api_key_status: Option<scout::ask::KeyStatus>,
@@ -749,6 +813,16 @@ pub fn fit_window_to_screen(ctx: &egui::Context) {
 #[derive(Debug, Clone, Copy)]
 pub struct DragSource(pub u64);
 
+/// Drag-and-drop payload: a clip (its id) dragged from the Clip List; a copy lands where it is
+/// dropped.
+#[derive(Debug, Clone, Copy)]
+pub struct DragClip(pub u64);
+
+/// Drag-and-drop payload: a clip captured into the Clip List (Clip › Capture); a copy lands
+/// where it is dropped.
+#[derive(Debug, Clone, Copy)]
+pub struct DragCaptured(pub u64);
+
 /// Ballistic meter display state per strip.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MeterDisplay {
@@ -766,6 +840,11 @@ pub struct MeterDisplay {
     pub gr: f32,
     /// [`soundcraft_mix::PluginFailures::count`] as last seen.
     pub plugin_failures: u32,
+    /// Feedback protection silenced the track's monitored input (`StripMeter::feedback`).
+    pub feedback: bool,
+    /// MIDI activity: the loudest note-on velocity its instrument was given lately (0 to 1),
+    /// falling back over about half a second (`StripMeter::midi_velocity`).
+    pub midi: f32,
 }
 
 /// An in-progress mouse gesture in the Edit window.
@@ -807,6 +886,13 @@ pub enum Gesture {
         clip: soundcraft_model::ClipId,
         track: TrackId,
         fade_in: bool,
+        to: Samples,
+    },
+    /// A crossfade drawn by the Smart Tool from where two clips meet: centred on `edge`, as
+    /// wide as the drag to `to` either way.
+    Crossfade {
+        track: TrackId,
+        edge: Samples,
         to: Samples,
     },
     FadeCurve {
@@ -867,6 +953,13 @@ pub enum Gesture {
         param: soundcraft_model::AutoParam,
         at: Samples,
     },
+    /// Dragging a point of a clip's own automation (`at`: samples from the clip's start).
+    ClipPoint {
+        track: TrackId,
+        clip: soundcraft_model::ClipId,
+        param: soundcraft_model::AutoParam,
+        at: Samples,
+    },
     /// Dragging a selected breakpoint: all the selected ones move together. `grab` is the
     /// grabbed point's original time and the press; `moved` what has been applied so far.
     MovePoints {
@@ -897,10 +990,22 @@ pub enum Gesture {
         from: Samples,
         to: Samples,
     },
+    /// The Pencil on an audio clip at sample zoom: the points drawn (position, file value) on
+    /// channel `ch`, whose band in the clip's body is `body` (top, bottom) with `channels` bands.
+    DrawWave {
+        clip: soundcraft_model::ClipId,
+        ch: usize,
+        channels: usize,
+        body: (f32, f32),
+        points: Vec<(Samples, f32)>,
+    },
     ZoomBox {
         start: f32,
     },
 }
+
+/// How long after a refused Stop a second one stops a locked take (seconds).
+pub const RECORD_LOCK_SECONDS: f64 = 2.0;
 
 /// The selected automation breakpoints of one lane (times), kept by the UI: clicked, rubber-banded
 /// or inside the edit selection. Delete removes them; dragging one moves them all.
@@ -928,7 +1033,7 @@ pub struct SoundApp {
     /// When the recent sessions were last checked for existence, which list, and the result.
     recent_checked: Option<(f64, Vec<String>, Vec<bool>)>,
     pub player: Option<Player>,
-    /// Hardware MIDI input's rings (lent to each player; native only: `None` on the web).
+    /// Hardware MIDI input's rings (lent to each player).
     pub midi_hub: Option<std::sync::Arc<soundcraft_playback::midi_in::MidiHub>>,
     /// The MIDI input ports (`midi_devices`): the system's once the host sets
     /// `use_system_midi`, or a test's fake.
@@ -960,8 +1065,13 @@ pub struct SoundApp {
     /// the take started: what it counts beyond is this take's loss, reported at Stop.
     pub(crate) midi_rec_lost_at: u64,
     /// What was played on the MIDI inputs during the playback under way (or the last one), not
-    /// recorded: Event › More MIDI › Capture MIDI makes a take of it (`midi_devices::capture`).
+    /// recorded: Event › Capture MIDI makes a take of it (`midi_devices::capture`).
     pub(crate) midi_capture: Vec<soundcraft_playback::midi_in::RecordedMidi>,
+    /// Wait for Note: Record was pressed and the take starts at the first note played (the
+    /// length of `midi_capture` when it was last looked at; see `wait_note`).
+    pub(crate) wait_note: Option<usize>,
+    /// MIDI clock and timecode in, MMC out (`midi_sync_in`).
+    pub(crate) sync: midi_sync_in::SyncState,
     /// The last local MIDI take as recorded (events as heard, and where they go), for a remote
     /// recorder to send to the booth (`net_ui`).
     pub(crate) last_midi_take: Option<(soundcraft_engine::midi_record::MidiTake, Vec<soundcraft_engine::midi_record::RecordedEvent>)>,
@@ -993,21 +1103,26 @@ pub struct SoundApp {
     /// it off before it rolls from `play_from` (`SoundApp::countoff_status`).
     pub(crate) countoff: Option<soundcraft_playback::CountOff>,
     /// Setup › Network: the LAN listener, the remote recorder link and their per-frame glue.
-    #[cfg(not(target_arch = "wasm32"))]
     pub net: Option<net_ui::NetState>,
     /// Musical Typing: its window's keys and the computer keys as a live MIDI input.
     pub typing: musical_typing::TypingState,
-    /// Event › More MIDI › Step Input: its window and the chord being played.
+    /// Chord Pads' window and the pad held.
+    pub pads: chord_pads::PadState,
+    /// Event › Step Input: its window and the chord being played.
     pub step: step_input::StepInput,
     /// Input capture, opened on first record.
     pub recorder: Option<soundcraft_playback::record::Recorder>,
     record_start: Samples,
+    /// Tracks armed during this take that cannot join it (said once).
+    late_refused: Vec<TrackId>,
     /// Punch range to trim the take to (pre/post-roll recordings).
     punch: Option<Range>,
     recorder_failed: bool,
     /// A player was (re)opened and whether it opened the chosen device is still to be told
     /// (checked once in `logic`, with the audio settings loaded by then).
     device_notice_pending: bool,
+    /// The output device that went away, watched for so the app reconnects when it is back.
+    device_return: Option<device_return::Returning>,
     /// Input this take lost to a slow disk, as last reported (ms).
     lost_shown: u64,
     /// Where the takes being recorded go, autosaved with the session so a crash can't lose them.
@@ -1035,7 +1150,6 @@ pub struct SoundApp {
     last_autosave: Option<std::time::Instant>,
     /// PipeWire's sources and the "All sources" channels in effect (`None` off "All sources"),
     /// looked up at most every two seconds: I/O Setup asks every frame.
-    #[cfg(not(target_arch = "wasm32"))]
     all_sources: Option<(std::time::Instant, Option<AllSources>)>,
     pub dialogs: dialogs::Dialogs,
     pub meters: HashMap<TrackId, MeterDisplay>,
@@ -1043,6 +1157,9 @@ pub struct SoundApp {
     /// Reused multichannel snapshot; populated at an adaptive rate by `logic`.
     meter_snapshot: soundcraft_playback::MeterSnapshot,
     pub gesture: Option<Gesture>,
+    /// The edit a drag makes on release joins the undo step before it (a separation grab's
+    /// move joins its separate).
+    pub join_next_edit: bool,
     /// Who a solo leaves playing, as of a session revision: computed once for every strip and
     /// header ([`SoundApp::solo_scope`]).
     solo_cache: Option<(u64, std::sync::Arc<soundcraft_model::SoloScope>)>,
@@ -1050,6 +1167,8 @@ pub struct SoundApp {
     /// What keeps the Edit and Mix windows in step (`window_sync`).
     pub window_sync: window_sync::WindowSync,
     pub midi: midi_editor::MidiEditorState,
+    /// The Score Editor's note value, accidental and step-entry cursor.
+    pub score: score_editor::ScoreState,
     /// The Vocal Editor's selection, scroll and panel state.
     pub vocal: vocal_editor::VocalEditorState,
     /// While a Vocal Editor preview plays: the track the player hears soloed (it is handed a
@@ -1077,7 +1196,6 @@ pub struct SoundApp {
     pub kit_import_targets: Vec<(egui::Rect, TrackId, Option<usize>)>,
     /// This frame's places a dragged browser card can land (see `browser::drop`).
     pub(crate) plugin_drop_targets: Vec<browser::drop::Registered>,
-    sample_reads: Vec<sampler_window::SampleRead>,
     synthetic_grace: u32,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_shots: Vec<control::PendingShot>,
@@ -1103,8 +1221,16 @@ pub struct SoundApp {
     sim: Option<(Samples, Option<Samples>, Option<Range>)>,
     /// When Record last found nothing to record on, and why: the Record buttons show it for a moment.
     record_hint: Option<(f64, &'static str)>,
+    /// Options › Recording › Lock Record: when a Stop was refused while a locked take records (a
+    /// second Stop within [`RECORD_LOCK_SECONDS`] stops it).
+    record_lock_stop: Option<f64>,
+    /// The free space on the takes' disk and when it was read (`None` inside: unknown).
+    disk_free: Option<(f64, Option<u64>)>,
     /// The record offset key a loopback measurement out there was started with.
     measuring: Option<String>,
+    /// The Hardware Insert a measurement out there is for (its Ping): the result is its round
+    /// trip, not the record offset's.
+    pub(crate) measuring_insert: Option<(TrackId, soundcraft_model::ModuleId)>,
     /// The latencies of the take recording now, snapshotted at its first frame.
     take_reported: Option<soundcraft_playback::Latency>,
     pub quit_requested: bool,
@@ -1120,10 +1246,12 @@ pub struct SoundApp {
     pub video: video_track::VideoPool,
     /// The Bounce Mix in progress, rendered a slice per frame.
     pub bounce: Option<soundcraft_engine::io::Bounce>,
+    /// A real-time bounce's pass: the live player prints the range while it plays it, then
+    /// `bounce` writes the print (see [`bounce::start`]).
+    pub print: Option<bounce::PrintPass>,
     /// Export › Stems in progress, rendered a slice per frame (see [`bounce::start_stems`]).
     pub stems: Option<soundcraft_engine::io::StemsJob>,
     /// The movie bounce (File › Export › Movie) in progress, a few frames per frame.
-    #[cfg(not(target_arch = "wasm32"))]
     pub movie: Option<soundcraft_engine::movie_export::MovieBounce>,
     /// The Freeze / Commit / Bounce render running (see [`render`]).
     pub(crate) track_render: Option<soundcraft_engine::render_job::RenderJob>,
@@ -1138,10 +1266,8 @@ pub struct SoundApp {
     /// The last DAWproject import's report, while its window is open ([`dawproject_report`]).
     pub dawproject_report: Option<soundcraft_engine::dawproject::Report>,
     /// Local ML jobs (desktop only): the dialog, the job on its worker, the Models window.
-    #[cfg(not(target_arch = "wasm32"))]
     pub ml: ml_ui::MlUi,
     /// Juke's recorded kits: the installed ones, the kits release's list and its downloads.
-    #[cfg(not(target_arch = "wasm32"))]
     pub juke_kits: juke_kits_ui::KitDownloads,
     /// Event › Detect Tempo…: the dialog and its analysis worker.
     pub tempo: tempo_ui::TempoUi,
@@ -1184,11 +1310,6 @@ pub struct SoundApp {
     _palette_lock: theme::TestPaletteGuard,
 }
 
-/// Why this build cannot record, if it cannot: the browser build has no audio input yet.
-pub(crate) fn record_unavailable(web: bool) -> Option<&'static str> {
-    web.then_some("The browser build cannot record yet: record in the desktop app (Linux, macOS, Windows or FreeBSD) and open the session here.")
-}
-
 impl SoundApp {
     pub fn new(engine: Engine, player: Option<Player>, services: Services) -> Self {
         let thumb_dir = services.thumb_dir.clone();
@@ -1200,10 +1321,7 @@ impl SoundApp {
             vocal_worker: vocal_worker::VocalWorker::new(),
             stretch_worker: stretch_worker::StretchWorker::default(),
             player,
-            #[cfg(not(target_arch = "wasm32"))]
             midi_hub: Some(soundcraft_playback::midi_in::MidiHub::new()),
-            #[cfg(target_arch = "wasm32")]
-            midi_hub: None,
             midi_inputs: None,
             midi_outputs: None,
             use_system_midi: false,
@@ -1215,6 +1333,8 @@ impl SoundApp {
             learn_menu: None,
             learn_switches: std::collections::HashMap::new(),
             midi_rec: Vec::new(),
+            wait_note: None,
+            sync: midi_sync_in::SyncState::default(),
             midi_loop_preview: None,
             midi_rec_lost_at: 0,
             midi_capture: Vec::new(),
@@ -1231,15 +1351,17 @@ impl SoundApp {
             half_speed_play: false,
             loop_basis: (false, None),
             countoff: None,
-            #[cfg(not(target_arch = "wasm32"))]
             net: None,
             typing: musical_typing::TypingState::default(),
+            pads: chord_pads::PadState::default(),
             step: step_input::StepInput::default(),
             recorder: None,
             record_start: 0,
+            late_refused: Vec::new(),
             punch: None,
             recorder_failed: false,
             device_notice_pending: true,
+            device_return: None,
             lost_shown: 0,
             take_plan: None,
             ui: UiState::default(),
@@ -1254,19 +1376,20 @@ impl SoundApp {
             preset_dir: None,
             library_default: None,
             last_autosave: None,
-            #[cfg(not(target_arch = "wasm32"))]
             all_sources: None,
             dialogs: dialogs::Dialogs::default(),
             meters: HashMap::new(),
             main_meter: MeterDisplay::default(),
             meter_snapshot: soundcraft_playback::MeterSnapshot::default(),
             gesture: None,
+            join_next_edit: false,
             auto_sel: None,
             point_readout: None,
             solo_cache: None,
             edit_layout: edit_window::EditLayout::default(),
             window_sync: window_sync::WindowSync::default(),
             midi: midi_editor::MidiEditorState::default(),
+            score: score_editor::ScoreState::default(),
             vocal: vocal_editor::VocalEditorState::default(),
             preview_solo: None,
             audition_session: None,
@@ -1281,7 +1404,6 @@ impl SoundApp {
             kit_drop_targets: Vec::new(),
             kit_import_targets: Vec::new(),
             plugin_drop_targets: Vec::new(),
-            sample_reads: Vec::new(),
             synthetic_grace: 0,
             control_rx: None,
             pending_shots: Vec::new(),
@@ -1297,7 +1419,10 @@ impl SoundApp {
             docking_context: None,
             sim: None,
             record_hint: None,
+            record_lock_stop: None,
+            disk_free: None,
             measuring: None,
+            measuring_insert: None,
             take_reported: None,
             quit_requested: false,
             arrange_request: false,
@@ -1307,8 +1432,8 @@ impl SoundApp {
             last_meter_poll: f64::NEG_INFINITY,
             video: video_track::VideoPool::default(),
             bounce: None,
+            print: None,
             stems: None,
-            #[cfg(not(target_arch = "wasm32"))]
             movie: None,
             track_render: None,
             split: None,
@@ -1316,9 +1441,7 @@ impl SoundApp {
             lending: None,
             open: None,
             dawproject_report: None,
-            #[cfg(not(target_arch = "wasm32"))]
             ml: ml_ui::MlUi::default(),
-            #[cfg(not(target_arch = "wasm32"))]
             juke_kits: juke_kits_ui::KitDownloads::default(),
             tempo: tempo_ui::TempoUi::default(),
             scout: scout::ScoutUi::default(),
@@ -1376,7 +1499,6 @@ impl SoundApp {
         }
         let replacing = matches!(id, "session.new" | "session.open" | "session.close" | "session.revert" | "file.import_dawproject");
         // (a running render refuses the session commands below, through `render::blocked`)
-        #[cfg(not(target_arch = "wasm32"))]
         if replacing && ml_ui::refuses_session_switch(self) {
             return Err(self.ui.status.clone());
         }
@@ -1421,9 +1543,10 @@ impl SoundApp {
         }
         if id.starts_with("session.save")
             || id.starts_with("file.bounce")
-            || matches!(id, "track.freeze" | "track.commit" | "track.bounce" | "track.capture_multisample")
+            || matches!(id, "track.freeze" | "track.commit" | "track.bounce" | "track.make_inactive" | "track.capture_multisample")
         {
-            // Third-party plugins keep state the session can't see: store it first.
+            // Third-party plugins keep state the session can't see: store it first (Make
+            // Inactive frees them, and they are made again from it when the track is active).
             self.capture_plugin_states();
         }
         if id == "mix.instrument"
@@ -1451,14 +1574,7 @@ impl SoundApp {
 
     /// A movie bounce is running.
     pub fn movie_running(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.movie.is_some()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        self.movie.is_some()
     }
 
     /// The second half of [`SoundApp::run`]: the command itself and what the UI does after it.
@@ -1471,6 +1587,10 @@ impl SoundApp {
                 if let Some(note) = crate::sidechain_picker::result_note(&v) {
                     log::warn!("{id}: {note}");
                     self.ui.status = note;
+                }
+                // A command that did its work with a caveat says so in the status line.
+                if let Some(w) = v.get("warning").and_then(serde_json::Value::as_str) {
+                    self.ui.status = w.to_string();
                 }
                 if id.starts_with("session.save") && !self.engine.is_dirty() {
                     self.release_autosave(false);
@@ -1556,7 +1676,6 @@ impl SoundApp {
     /// reason in the status line) when command `id` has to wait. Paths that run commands outside
     /// [`SoundApp::run`] ask this too.
     pub(crate) fn edit_waits(&mut self, id: &str) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
         if self.ml.running.is_some() && ml_ui::blocks(id) {
             self.ui.status = ml_ui::BLOCKED.into();
             return true;
@@ -1633,6 +1752,8 @@ impl SoundApp {
         self.midi_capture.clear();
         self.countoff = countoff.filter(|_| self.player.is_some());
         if let Some(p) = &self.player {
+            // A play goes forwards (Shuttle Back turns it round after this).
+            p.set_reverse(false);
             p.set_band_library(self.engine.band_library());
             p.update_session(self.player_session());
             p.play_counted(from, end, looped, countoff);
@@ -1669,12 +1790,26 @@ impl SoundApp {
                 self.start_play(at, None, None);
             }
             if let Some(p) = &self.player {
+                p.set_reverse(false);
                 p.set_keep_pitch(self.engine.session().edit.flag(soundcraft_engine::cmd::transport::KEEP_PITCH));
                 p.set_speed(next.max(0.1));
             }
             self.ui.status = format!("Shuttle {next}×");
+        } else if next < 0.0 && self.player.is_some() && !self.engine.transport.recording {
+            // Backwards through the mixer: the player plays the session in reverse (sends,
+            // busses, the master and hosted plug-ins included), at most 4×.
+            if !self.is_playing() {
+                let at = self.engine.transport.position;
+                self.start_play(at, None, None);
+            }
+            if let Some(p) = &self.player {
+                p.set_keep_pitch(self.engine.session().edit.flag(soundcraft_engine::cmd::transport::KEEP_PITCH));
+                p.set_speed((-next).min(4.0));
+                p.set_reverse(true);
+            }
+            self.ui.status = format!("Shuttle {next}×");
         } else {
-            if self.is_playing() && was > 0.0 || next < 0.0 && self.is_playing() {
+            if self.is_playing() && was != 0.0 || next < 0.0 && self.is_playing() {
                 self.stop_play();
             }
             if let Some(p) = &self.player {
@@ -1751,6 +1886,7 @@ impl SoundApp {
     }
 
     pub(crate) fn stop_play(&mut self) {
+        wait_note::cancel(self);
         let counting = self.countoff_status().is_some();
         self.countoff = None;
         if let Some(p) = &self.player {
@@ -1767,6 +1903,10 @@ impl SoundApp {
         }
         self.sim = None;
         scout::transport_stopped(self);
+        // Solo Take lasts until the transport stops (owner's decision).
+        if self.engine.session().tracks.iter().any(|t| t.audition_layer.is_some()) {
+            self.engine.session_mut().tracks.iter_mut().for_each(|t| t.audition_layer = None);
+        }
         self.engine.transport.playing = false;
         self.engine.transport.recording = false;
         let stop_at = self.engine.transport.position;
@@ -1799,10 +1939,7 @@ impl SoundApp {
     }
 
     fn start_recording(&mut self, countoff: bool) {
-        if let Some(why) = record_unavailable(cfg!(target_arch = "wasm32")) {
-            self.ui.status = why.into();
-            return;
-        }
+        self.late_refused.clear();
         let armed = self.engine.session().tracks.iter().any(|t| t.mixer.record_arm);
         if !armed {
             let why = if self.engine.session().tracks.is_empty() {
@@ -1900,6 +2037,7 @@ impl SoundApp {
             latency,
             loop_from,
             punches: Vec::new(),
+            pre: 0,
         });
         if let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
@@ -1916,6 +2054,10 @@ impl SoundApp {
         // Each internal take's delay, in tap order (the order the plan lists them).
         let mut changed = (plan.start, plan.latency) != (start, latency);
         let rec = self.recorder.as_ref();
+        // Pre-record: known once the writer has put it in (so a recovered take is placed right).
+        let pre = rec.map_or(0, |r| i64::try_from(r.pre_frames()).unwrap_or(0));
+        changed |= plan.pre != pre;
+        plan.pre = pre;
         for (k, t) in plan.takes.iter_mut().filter(|t| t.internal).enumerate() {
             let tap = rec.and_then(|r| r.start_tap_latency(k)).map_or(0, i64::from);
             changed |= t.tap_latency != tap;
@@ -1926,6 +2068,125 @@ impl SoundApp {
         }
         (plan.start, plan.latency) = (start, latency);
         if let Some(root) = self.autosave_dir.clone() {
+            self.queue_autosave(root);
+        }
+    }
+
+    /// Arm or disarm during a take: a track armed while the take records gets a take of its own
+    /// from where it was armed, one disarmed stops recording there (Pro Tools, Cubase, Logic and
+    /// Studio Pro allow both). Not while loop recording (its passes are fixed at Record), nor for
+    /// a track recording a bus (its channels join the frame only at Record): said once.
+    /// Each late take's start goes into the plan once the writer has started it.
+    pub(crate) fn follow_record_arms(&mut self) {
+        if !self.engine.transport.recording {
+            return;
+        }
+        let Some(plan) = &self.take_plan else { return };
+        let Some(r) = &self.recorder else { return };
+        let looping = plan.pass.is_some();
+        let s = self.engine.session();
+        let armed = |t: &soundcraft_model::Track| t.mixer.record_arm && t.kind == soundcraft_model::TrackKind::Audio && !t.inactive;
+        let new: Vec<TrackId> =
+            s.tracks.iter().filter(|t| armed(t) && !r.records(t.id) && !self.late_refused.contains(&t.id)).map(|t| t.id).collect();
+        let gone: Vec<TrackId> = r.recording_tracks().iter().copied().filter(|t| !s.track(*t).is_some_and(armed)).collect();
+        if looping {
+            if let Some(t) = new.first().copied() {
+                self.late_refused.push(t);
+                self.ui.status = "Loop recording: tracks armed now record from the next Record".into();
+            }
+            return;
+        }
+        let name = soundcraft_engine::io::sanitize_name(&self.engine.session().name);
+        let unsaved_dir = self.autosave_dir.as_ref().map_or_else(std::env::temp_dir, |d| d.join(name));
+        let device = r.channels;
+        for t in new {
+            let planned = soundcraft_engine::io::plan_late_take(&self.engine, &unsaved_dir, device, t);
+            let Some(r) = &mut self.recorder else { return };
+            let added = match planned {
+                // No take for it (a remote recorder's input): nothing to say.
+                Ok(None) => Err(String::new()),
+                Ok(Some((inputs, path))) => r.add_take(t, inputs.clone(), path.clone()).map(|()| (inputs, path)),
+                Err(e) => Err(e),
+            };
+            match added {
+                Ok((inputs, path)) => {
+                    let (format, depth, bwf) = soundcraft_engine::io::take_format(self.engine.session());
+                    if let Some(plan) = &mut self.take_plan {
+                        plan.takes.push(soundcraft_engine::io::Take {
+                            track: t,
+                            path,
+                            channels: inputs.len(),
+                            internal: false,
+                            from_device: false,
+                            tap_latency: 0,
+                            file: Some(soundcraft_engine::io::TakeFile { format, depth, bwf: bwf.is_some() }),
+                            late: None,
+                            punches: Vec::new(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    self.late_refused.push(t);
+                    if !e.is_empty() {
+                        self.ui.status = e;
+                    }
+                }
+            }
+        }
+        // TrackPunch: a track disarmed while the take records is punched out (its take goes on
+        // recording, so each punch has handles, and the track plays its clips again); armed again,
+        // it punches back in. Without it, disarming ends the track's take there.
+        let gone = if self.engine.session().edit.flag(soundcraft_engine::cmd::TRACKPUNCH) { self.track_punch(&gone) } else { gone };
+        if let Some(r) = &mut self.recorder {
+            for t in gone {
+                r.end_take(t);
+            }
+        }
+        self.place_late_takes();
+    }
+
+    /// TrackPunch: punches out each recording track of `disarmed` that is punched in, and back in
+    /// each armed one punched out. Returns the tracks it has no take plan for (to end as usual).
+    fn track_punch(&mut self, disarmed: &[TrackId]) -> Vec<TrackId> {
+        let at = self.position();
+        let s = self.engine.session();
+        let armed: Vec<TrackId> = s.tracks.iter().filter(|t| t.mixer.record_arm).map(|t| t.id).collect();
+        let names: Vec<(TrackId, String)> = s.tracks.iter().map(|t| (t.id, t.name.clone())).collect();
+        let Some(plan) = &mut self.take_plan else { return disarmed.to_vec() };
+        let start = plan.start;
+        let mut changed = Vec::new();
+        for take in plan.takes.iter_mut() {
+            let punched_in = take.punches.last().is_none_or(|p| p.end == Samples::MAX);
+            let flip = if disarmed.contains(&take.track) { punched_in } else { !punched_in && armed.contains(&take.track) };
+            if flip {
+                let now_in = soundcraft_engine::io::toggle_punch(&mut take.punches, start, at);
+                changed.push((take.track, now_in));
+            }
+        }
+        let kept: Vec<TrackId> = plan.takes.iter().map(|t| t.track).collect();
+        if let Some((t, now_in)) = changed.last() {
+            let name = names.iter().find(|(id, _)| id == t).map_or("", |(_, n)| n.as_str());
+            self.ui.status =
+                if *now_in { format!("TrackPunch: {name} punched in") } else { format!("TrackPunch: {name} punched out (arm it to punch in again)") };
+            if let Some(root) = self.autosave_dir.clone() {
+                self.queue_autosave(root);
+            }
+        }
+        disarmed.iter().copied().filter(|t| !kept.contains(t)).collect()
+    }
+
+    /// The start of each take armed during the recording, from the writer, into the plan (so a
+    /// recovered take is placed right too).
+    fn place_late_takes(&mut self) {
+        let (Some(r), Some(plan)) = (&self.recorder, &mut self.take_plan) else { return };
+        let mut changed = false;
+        for t in plan.takes.iter_mut().filter(|t| t.late.is_none()) {
+            if let Some(f) = r.late_start(&t.path) {
+                t.late = Some(i64::try_from(f).unwrap_or(i64::MAX));
+                changed = true;
+            }
+        }
+        if changed && let Some(root) = self.autosave_dir.clone() {
             self.queue_autosave(root);
         }
     }
@@ -1961,6 +2222,8 @@ impl SoundApp {
                 from_device: plan.from_device(*track),
                 tap_latency: 0,
                 file: Some(file),
+                late: None,
+                punches: Vec::new(),
             })
             .collect();
         if let Some(p) = &self.player {
@@ -2016,6 +2279,7 @@ impl SoundApp {
     pub fn capture_plugin_states(&mut self) {
         self.sync_player();
         let Some(p) = &self.player else { return };
+        let clips = p.capture_clip_states();
         for (t, key, data) in p.capture_states() {
             let module = match key {
                 SlotKey::Instrument => json!("instrument"),
@@ -2025,6 +2289,36 @@ impl SoundApp {
             if let Err(e) = self.engine.execute("mix.module_state", &json!({"track": t.0, "module": module, "state": state})) {
                 log::warn!("storing plugin state: {e}");
             }
+        }
+        // The hosted Clip Effects modules' states too, on their clips.
+        for (slot, data) in clips {
+            self.store_clip_state(slot, &data);
+        }
+    }
+
+    /// Reads one hosted Clip Effects module's live state and stores it on the clip (before its
+    /// module is taken off, and when its editor closes).
+    pub(crate) fn capture_clip_slot(&mut self, slot: soundcraft_playback::ClipSlot) {
+        self.sync_player();
+        if let Some(data) = self.player.as_ref().and_then(|p| p.capture_clip_state(slot)) {
+            self.store_clip_state(slot, &data);
+        }
+    }
+
+    /// `clip.module_state` (no undo step), unless the clip has that state already.
+    fn store_clip_state(&mut self, (_, clip, module): soundcraft_playback::ClipSlot, data: &[u8]) {
+        let stored = self
+            .engine
+            .session()
+            .find_clip(soundcraft_model::ClipId(clip))
+            .and_then(|(_, c)| c.modules.iter().find(|m| m.id == module).map(soundcraft_model::ClipModule::state_bytes));
+        // The module is gone, or already holds this state.
+        if stored.as_ref().is_none_or(|s| s.as_deref() == Some(data)) {
+            return;
+        }
+        let state = soundcraft_model::b64::encode(data);
+        if let Err(e) = self.engine.execute("clip.module_state", &json!({"clip": clip, "module": module, "state": state})) {
+            log::warn!("storing clip plug-in state: {e}");
         }
     }
 
@@ -2102,6 +2396,33 @@ impl SoundApp {
                     let _ = self.engine.execute_merged("mix.instrument_param", &json!({"track": t.0, "param": param, "value": value}), &key);
                 }
             }
+        }
+        self.apply_clip_editor_edits();
+    }
+
+    /// [`SoundApp::apply_editor_edits`] for the hosted Clip Effects modules' own editors: an edit
+    /// goes on the clip's module (`clip.module_set`, one undo step per gesture), and a closed
+    /// editor's state is stored on the clip.
+    fn apply_clip_editor_edits(&mut self) {
+        let Some(p) = &self.player else { return };
+        let (edits, closed) = (p.clip_editor_edits(), p.clip_editors_closed());
+        for ((_, clip, module), param, value) in edits {
+            let stored = self
+                .engine
+                .session()
+                .find_clip(soundcraft_model::ClipId(clip))
+                .and_then(|(_, c)| c.modules.iter().find(|m| m.id == module))
+                .and_then(|m| m.params.get(param.as_str()).copied());
+            if stored.is_some_and(|v| (v - value).abs() <= 1e-6 * v.abs().max(1.0)) {
+                continue;
+            }
+            let key = format!("cfxm:{clip}:{module}:{param}");
+            let mut params = serde_json::Map::new();
+            params.insert(param, json!(value));
+            let _ = self.engine.execute_merged("clip.module_set", &json!({"clips": [clip], "module": module, "params": params}), &key);
+        }
+        for slot in closed {
+            self.capture_clip_slot(slot);
         }
     }
 
@@ -2293,22 +2614,17 @@ impl SoundApp {
 
     /// On PipeWire's "All sources" input: every source and the ones its channels record now.
     pub fn all_sources(&mut self) -> Option<AllSources> {
-        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((at, view)) = &self.all_sources
+            && at.elapsed() < std::time::Duration::from_secs(2)
         {
-            if let Some((at, view)) = &self.all_sources
-                && at.elapsed() < std::time::Duration::from_secs(2)
-            {
-                return view.clone();
-            }
-            let view = self.ui.audio.all_sources().then(|| AllSources {
-                sources: soundcraft_playback::pw::sources(),
-                chosen: soundcraft_playback::pw::effective_sources(&self.ui.audio.input_sources),
-            });
-            self.all_sources = Some((std::time::Instant::now(), view.clone()));
-            view
+            return view.clone();
         }
-        #[cfg(target_arch = "wasm32")]
-        None
+        let view = self.ui.audio.all_sources().then(|| AllSources {
+            sources: soundcraft_playback::pw::sources(),
+            chosen: soundcraft_playback::pw::effective_sources(&self.ui.audio.input_sources),
+        });
+        self.all_sources = Some((std::time::Instant::now(), view.clone()));
+        view
     }
 
     /// Records `keys` too on "All sources" (after its channels in use); the input reopens with
@@ -2324,10 +2640,7 @@ impl SoundApp {
         }
         chosen.extend(keys.iter().cloned());
         self.ui.audio.input_sources = chosen;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.all_sources = None;
-        }
+        self.all_sources = None;
         // The input reopens with the new channels on the next record or monitor.
         self.recorder = None;
         self.recorder_failed = false;
@@ -2443,7 +2756,14 @@ impl SoundApp {
                 "Use Reconnect audio device in Setup ▸ Playback Engine, or restart FreeDAWm.",
             ),
             OutputTrouble::Gone => {
-                (format!("“{name}” was disconnected"), "Plug it back in, then use Reconnect audio device in Setup ▸ Playback Engine.")
+                let system = self.player.as_ref().map(|p| p.system.clone()).unwrap_or_default();
+                self.device_return = device_return::Watch::new(&system, &name, std::time::Instant::now()).map(device_return::Returning::new);
+                let then = if self.device_return.is_some() {
+                    "Plug it back in: FreeDAWm reconnects when it returns."
+                } else {
+                    "Plug it back in, then use Reconnect audio device in Setup ▸ Playback Engine."
+                };
+                (format!("“{name}” was disconnected"), then)
             }
             OutputTrouble::Stalled => (format!("“{name}” stopped asking for audio"), "Use Reconnect audio device in Setup ▸ Playback Engine."),
         };
@@ -2460,6 +2780,19 @@ impl SoundApp {
         } else {
             format!("Audio output: {cause}. {then}")
         };
+    }
+
+    /// Reconnect by itself when the output device that went away is listed again.
+    fn watch_device_return(&mut self) {
+        let Some(r) = &mut self.device_return else { return };
+        if !r.poll(std::time::Instant::now()) {
+            return;
+        }
+        let name = r.watch.device.clone();
+        self.reconnect_audio();
+        if self.player.as_ref().is_some_and(|p| p.device_name == name) {
+            self.ui.status = format!("“{name}” is back: reconnected.");
+        }
     }
 
     /// Stop recording, keeping the take, when the input device or the disk fails, and say as soon
@@ -2503,6 +2836,7 @@ impl SoundApp {
         if open_progress::refuses(self) {
             return;
         }
+        self.device_return = None;
         if self.is_playing() || self.engine.transport.recording {
             self.stop_play();
         }
@@ -2528,6 +2862,42 @@ impl SoundApp {
 
     /// Discard Take: stop, and throw the take away. Nothing is placed, the take files go, and
     /// the MIDI heard is dropped.
+    /// Reads the free space on the disk the takes go to, at most every few seconds.
+    pub(crate) fn refresh_disk_free(&mut self) {
+        let now = self.last_frame.unwrap_or_default();
+        if self.disk_free.is_some_and(|(at, _)| (at..at + 5.0).contains(&now)) {
+            return;
+        }
+        let name = soundcraft_engine::io::sanitize_name(&self.engine.session().name);
+        let unsaved = self.autosave_dir.as_ref().map_or_else(std::env::temp_dir, |d| d.join(name));
+        let dir = soundcraft_engine::io::record_dir(&self.engine, &unsaved);
+        self.disk_free = Some((now, soundcraft_engine::io::disk_free(&dir)));
+    }
+
+    /// How long the armed tracks can still record on the takes' disk (`2 h 05 min`), when known.
+    pub(crate) fn record_time_left(&self) -> Option<String> {
+        let free = self.disk_free.and_then(|(_, b)| b)?;
+        soundcraft_engine::io::record_seconds_left(self.engine.session(), free).map(soundcraft_engine::io::time_left_text)
+    }
+
+    /// Options › Recording › Lock Record: whether this Stop is refused because a locked take is
+    /// recording. The first Stop only says so; a second within [`RECORD_LOCK_SECONDS`] stops.
+    /// Discard Take and Restart Take are deliberate and are not locked.
+    fn record_locked(&mut self) -> bool {
+        if !self.engine.transport.recording || !self.engine.session().edit.flag(soundcraft_engine::cmd::RECORD_LOCK) {
+            self.record_lock_stop = None;
+            return false;
+        }
+        let now = self.last_frame.unwrap_or_default();
+        if self.record_lock_stop.is_some_and(|at| now - at <= RECORD_LOCK_SECONDS) {
+            self.record_lock_stop = None;
+            return false;
+        }
+        self.record_lock_stop = Some(now);
+        self.ui.status = "Recording is locked: press Stop again to stop (Options › Recording › Lock Record)".into();
+        true
+    }
+
     fn discard_recording(&mut self) {
         if !self.engine.transport.recording {
             return;
@@ -2565,16 +2935,16 @@ impl SoundApp {
         midi_devices::lift_preview(self);
         let plan = self.take_plan.take();
         let latency = self.take_latency();
-        let (takes, problem, start) = match &mut self.recorder {
+        let (takes, problem, start, pre) = match &mut self.recorder {
             Some(r) => {
                 let (takes, problem) = r.finish();
                 let start = r.start_pos().unwrap_or(self.record_start);
-                (takes, problem, start)
+                (takes, problem, start, i64::try_from(r.pre_frames()).unwrap_or(0))
             }
-            None => (Vec::new(), None, self.record_start),
+            None => (Vec::new(), None, self.record_start, 0),
         };
         let tracks = takes.len().max(1);
-        let plan = plan.unwrap_or_else(|| soundcraft_engine::io::Recording {
+        let mut plan = plan.unwrap_or_else(|| soundcraft_engine::io::Recording {
             start,
             pass: None,
             punch: self.punch,
@@ -2583,11 +2953,22 @@ impl SoundApp {
             latency,
             loop_from: None,
             punches: Vec::new(),
+            pre: 0,
         });
+        // Pre-record: the input kept from before Record leads each take file (the clips' handle).
+        plan.pre = pre;
+        // Takes armed during the recording start where they were armed.
+        if let Some(r) = &self.recorder {
+            for t in plan.takes.iter_mut().filter(|t| t.late.is_none()) {
+                t.late = r.late_start(&t.path).map(|f| i64::try_from(f).unwrap_or(i64::MAX));
+            }
+        }
         self.punch = None;
         self.autosaved_rev = 0;
         // A remote recorder sends these to the booth (`net_ui`).
         self.last_audio_take = (!takes.is_empty()).then(|| (plan.clone(), takes.clone()));
+        // Audio, modules' MIDI and MIDI placed below are one undo step.
+        let depth = self.engine.undo_depth();
         let mut ids = soundcraft_engine::io::place_recording(&mut self.engine, &plan, takes);
         // Armed tracks playing modules' MIDI: their take is what the mix gave them over the pass
         // (within the punch range), printed now from the session as it stands.
@@ -2596,6 +2977,7 @@ impl SoundApp {
         }
         // Armed tracks on hardware MIDI input: what they heard, as clips.
         ids.extend(midi_devices::finish_take(self, &plan, end));
+        self.engine.join_undo_since(depth, "Record");
         self.ui.status =
             if plan.pass.is_some() { format!("Loop-recorded {} take(s)", ids.len() / tracks) } else { format!("Recorded {} clip(s)", ids.len()) };
         if let Some(p) = problem {
@@ -2691,7 +3073,14 @@ impl SoundApp {
         let sel = s.edit.selection;
         let preroll = if s.edit.pre_post_roll { s.edit.pre_roll } else { 0 };
         let postroll = if s.edit.pre_post_roll { s.edit.post_roll } else { 0 };
-        if s.edit.loop_playback && !sel.is_empty() {
+        if let Some(at) = soundcraft_engine::cmd::transport::play_start(s) {
+            // Dynamic Transport: from the play start marker, whatever the selection; with Loop
+            // Playback on, the loop range loops (from the marker when it is inside the loop).
+            match s.edit.loop_range.filter(|lp| s.edit.loop_playback && !lp.is_empty()) {
+                Some(lp) => self.start_play(if lp.contains(at) { at } else { lp.start }, None, Some(lp)),
+                None => self.start_play((at - preroll).max(0), None, None),
+            }
+        } else if s.edit.loop_playback && !sel.is_empty() {
             self.start_play(sel.start, None, Some(sel));
         } else if s.edit.loop_playback
             && sel.is_empty()
@@ -2742,13 +3131,17 @@ impl SoundApp {
                     }
                 }
                 TransportRequest::Stop => {
-                    self.paused = None;
-                    self.stop_play();
+                    if !self.record_locked() {
+                        self.paused = None;
+                        self.stop_play();
+                    }
                 }
                 TransportRequest::Pause => self.pause(),
                 TransportRequest::TogglePlay => {
                     if self.is_playing() {
-                        self.stop_play();
+                        if !self.record_locked() {
+                            self.stop_play();
+                        }
                     } else {
                         self.play_from_selection();
                     }
@@ -2757,8 +3150,10 @@ impl SoundApp {
                     if self.engine.transport.recording && self.is_playing() && self.engine.session().edit.quickpunch {
                         self.quick_punch();
                     } else if self.engine.transport.recording {
-                        self.stop_play();
-                    } else {
+                        if !self.record_locked() {
+                            self.stop_play();
+                        }
+                    } else if !wait_note::cancel(self) && !wait_note::begin(self) {
                         self.start_recording(countoff);
                     }
                 }
@@ -2818,6 +3213,15 @@ impl SoundApp {
                 TransportRequest::ScoutStart { capture, strips, start, end } => scout::start(self, capture, &strips, start, end),
                 TransportRequest::ScoutStop => scout::stop(self),
                 TransportRequest::DiscardTake => self.discard_recording(),
+                TransportRequest::RestartTake => {
+                    if self.engine.transport.recording {
+                        self.discard_recording();
+                        self.start_recording(true);
+                        if self.engine.transport.recording {
+                            self.ui.status = "Take discarded; recording again".into();
+                        }
+                    }
+                }
             }
         }
         self.shuttle_back_frame();
@@ -2846,6 +3250,14 @@ impl SoundApp {
             for (id, m) in &snap.tracks {
                 let d = self.meters.entry(*id).or_default();
                 feed_meter(d, m.peak, m.mean_square(), m.gain_reduction_db, dt, ballistics);
+                d.midi = (d.midi - dt * 2.0).max(f32::from(m.midi_velocity) / 127.0).clamp(0.0, 1.0);
+                if m.feedback != d.feedback {
+                    d.feedback = m.feedback;
+                    if m.feedback {
+                        let name = self.engine.session().track(*id).map_or_else(String::new, |t| t.name.clone());
+                        self.ui.status = format!("Feedback protection silenced {name}'s input: turn its monitoring (I) off and on to hear it again");
+                    }
+                }
                 if m.plugin_failures.count != d.plugin_failures {
                     d.plugin_failures = m.plugin_failures.count;
                     if let Some(msg) = failed_plugin_status(self.engine.session(), *id, m.plugin_failures.last) {
@@ -2917,9 +3329,7 @@ impl SoundApp {
         render::step(self, ctx);
         split_progress::step(self, ctx);
         capture_progress::step(self, ctx);
-        #[cfg(not(target_arch = "wasm32"))]
         ml_ui::step(self, ctx);
-        #[cfg(not(target_arch = "wasm32"))]
         ml_audition::step(self, ctx);
         // A MIDI Editor audition that has finished hands the document back.
         midi_editor::step(self);
@@ -2952,14 +3362,17 @@ impl SoundApp {
             }
         }
         self.watch_output();
+        self.watch_device_return();
         self.watch_bridged_plugins();
         self.watch_input();
         if self.engine.transport.recording {
             self.refine_take_plan();
+            self.follow_record_arms();
             midi_devices::collect(self);
             midi_devices::preview_loop(self);
         } else {
             midi_devices::collect_capture(self);
+            wait_note::tick(self);
         }
         self.poll_measure();
         if self.measuring.is_some() {
@@ -2967,15 +3380,16 @@ impl SoundApp {
         }
         // The LAN remote: its buttons and the booth it follows ask for the transport here, in
         // time for this frame's transport handling.
-        #[cfg(not(target_arch = "wasm32"))]
         net_ui::step(self, ctx);
         // Preferences › Operation › Copy imported audio into the project (this computer's).
         self.engine.copy_imported_audio = self.ui.copy_imported_audio;
         // Stop the old playback before sending a replacement session to the audio thread.
         self.handle_transport(dt);
+        set_list_ui::follow(self, ctx);
         midi_devices::tick(self);
         surfaces::tick(self);
         midi_learn::tick(self);
+        midi_sync_in::tick(self);
         scout::poll(self, ctx);
         // The band's Library can change without an edit (a reload): it is checked too.
         let band_lib = self.engine.band_library();
@@ -3003,6 +3417,11 @@ impl SoundApp {
             && self.engine.session().tracks.iter().any(|t| t.mixer.record_arm || t.mixer.may_hear_input())
         {
             self.ensure_input();
+        }
+        // Options › Recording › Pre-Record: the input keeps its last seconds while it is open.
+        if let Some(r) = &self.recorder {
+            let on = self.engine.session().edit.flag(soundcraft_engine::cmd::PRE_RECORD);
+            r.set_pre_record(if on { soundcraft_playback::record::PRE_RECORD_SECONDS } else { 0 });
         }
         // Autosave and the macOS menu bar only run on frames, and plugin editors are native windows egui never hears from.
         // egui takes its predicted frame time off every delay, so add it back.
@@ -3081,6 +3500,7 @@ impl SoundApp {
         if self.ui.mix_separate {
             mix_window::show_separate(self, &ctx);
         }
+        mix_more::show(self, &ctx);
         if self.ui.vocal_separate && self.ui.show_vocal_editor {
             vocal_editor::window::show_separate(self, &ctx);
         }
@@ -3094,6 +3514,7 @@ impl SoundApp {
         windows::show(self, &ctx);
         video_window::show(self, &ctx);
         ops_windows::show(self, &ctx);
+        sample_editor::show(self, &ctx);
         step_input::show(self, &ctx);
         extra_windows::show(self, &ctx);
         recovery::show(self, &ctx);
@@ -3141,8 +3562,9 @@ const RMS_TAU: f32 = 0.065;
 /// One display frame of a strip's meter: `peak` and `ms` (mean square over the blocks since the
 /// last poll; NaN when the engine gave none) per channel, `dt` seconds since the last frame.
 fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], ms: [f32; 2], gr: f32, dt: f32, b: preferences::Ballistics) {
-    // Instant attack; release and peak hold from Preferences › Metering (26 dB/s, 2 s).
-    let fall = 10f32.powf(-b.release_db_s * dt / 20.0);
+    // Instant attack; release and peak hold from Preferences › Metering (26 dB/s, 2 s), or the
+    // scale's own fall (a PPM's).
+    let fall = 10f32.powf(-b.scale.own_release_db_s().unwrap_or(b.release_db_s) * dt / 20.0);
     let k = if dt.is_finite() && dt > 0.0 { 1.0 - (-dt / RMS_TAU).exp() } else { 0.0 };
     for c in 0..2 {
         let target = ms.get(c).copied().filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
@@ -3270,6 +3692,11 @@ mod tests {
         assert!((d.level[0] - want).abs() < 0.02 * want, "{} vs {want}", d.level[0]);
         assert_eq!((d.hold[0], d.peak), (0.5, 0.5));
         assert!(!d.clip);
+        // A PPM falls 24 dB in 2.8 s whatever the release preference, from the peak.
+        let ppm = run(Ballistics { release_db_s: 96.0, hold_secs: 0.0, scale: crate::widgets::MeterScale::Ppm }, 2.8);
+        let fell = 20.0 * (0.5 / ppm.level[0]).log10();
+        assert!((fell - 24.0).abs() < 0.6, "fell {fell} dB");
+        assert_eq!(crate::widgets::MeterScale::from_id("ppm"), Some(crate::widgets::MeterScale::Ppm));
     }
 
     #[test]
@@ -3389,6 +3816,30 @@ mod tests {
         app.handle_transport(0.0);
         assert_eq!(app.sim.map(|s| s.2), Some(None), "off: plays on");
         assert!(app.is_playing());
+    }
+
+    #[test]
+    fn dynamic_transport_plays_from_the_play_start_marker() {
+        let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+        app.run("options.dynamic_transport", json!({"value": true})).unwrap();
+        app.run("edit.select", json!({"start": 48_000, "end": 96_000})).unwrap();
+        app.run("transport.set_play_start", json!({"at": 10_000})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim, Some((10_000, None, None)), "from the marker, not the selection, and on past its end");
+        app.stop_play();
+        // Loop Playback loops the loop range, from the marker when it is inside it.
+        app.run("loop.set", json!({"start": 5_000, "end": 20_000})).unwrap();
+        app.run("options.loop_playback", json!({"value": true})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        app.handle_transport(0.0);
+        let lp = soundcraft_time::Range::new(5_000, 20_000);
+        assert_eq!(app.sim, Some((10_000, None, Some(lp))));
+        app.stop_play();
+        app.run("transport.set_play_start", json!({"at": 30_000})).unwrap();
+        app.run("transport.play", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert_eq!(app.sim, Some((5_000, None, Some(lp))), "a marker outside the loop starts at the loop");
     }
 
     #[test]
@@ -3767,14 +4218,6 @@ mod tests {
     }
 
     #[test]
-    fn the_browser_build_says_it_cannot_record() {
-        // Only the web build is refused, and the reason names what to do instead.
-        assert_eq!(super::record_unavailable(false), None);
-        let why = super::record_unavailable(true).unwrap();
-        assert!(why.contains("cannot record") && why.contains("desktop app"), "{why}");
-    }
-
-    #[test]
     fn recording_is_refused_at_half_speed() {
         use serde_json::json;
         let mut engine = soundcraft_engine::Engine::default();
@@ -3788,5 +4231,26 @@ mod tests {
         app.handle_transport(1.0 / 60.0);
         assert!(!app.engine.transport.recording);
         assert_eq!(app.ui.status, "Cannot record: Recording needs full speed: at half speed the take would lose input. Stop, then record.");
+    }
+
+    /// Options › Recording › Lock Record: the first Stop during a take is refused and says so,
+    /// a second one soon after stops; without the lock one Stop stops.
+    #[test]
+    fn a_locked_take_stops_on_the_second_stop() {
+        use serde_json::json;
+        let mut app = super::SoundApp::new(soundcraft_engine::Engine::default(), None, super::Services::default());
+        app.engine.transport.recording = true;
+        app.run("transport.stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert!(!app.engine.transport.recording, "unlocked: one Stop stops");
+        app.run("options.record_lock", json!({"value": true})).unwrap();
+        app.engine.transport.recording = true;
+        app.run("transport.stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert!(app.engine.transport.recording, "locked: the first Stop is refused");
+        assert!(app.ui.status.contains("locked"), "{}", app.ui.status);
+        app.run("transport.stop", json!({})).unwrap();
+        app.handle_transport(0.0);
+        assert!(!app.engine.transport.recording, "a second Stop stops");
     }
 }

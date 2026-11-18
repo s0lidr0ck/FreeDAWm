@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::cmd;
-#[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -18,7 +17,6 @@ pub fn specs() -> Vec<CommandSpec> {
     )]
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn bounce_movie(e: &mut Engine, p: &Value) -> Result<Value> {
     let job = movie_job(e, p)?;
     let path = job.path().to_string_lossy().into_owned();
@@ -28,13 +26,7 @@ fn bounce_movie(e: &mut Engine, p: &Value) -> Result<Value> {
     )
 }
 
-#[cfg(target_arch = "wasm32")]
-fn bounce_movie(_: &mut Engine, _: &Value) -> Result<Value> {
-    Err(bad("file.bounce_movie", "the browser build cannot write movies"))
-}
-
 /// The movie `file.bounce_movie` writes for `p`, not rendered yet.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn movie_job(e: &Engine, p: &Value) -> Result<crate::movie_export::MovieBounce> {
     const C: &str = "file.bounce_movie";
     let path = str_param(p, "path").filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(C, "`path` required"))?.to_string();
@@ -51,7 +43,6 @@ pub fn movie_job(e: &Engine, p: &Value) -> Result<crate::movie_export::MovieBoun
 }
 
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
     use soundcraft_video::isobmff::{TrackKind, open};

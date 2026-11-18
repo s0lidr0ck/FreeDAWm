@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-/// FireStation's per-engine folder (under `%APPDATA%\FireStation`) and the SoundCraft plugin it
+/// FireStation's per-engine folder (under `FireStation` in `data_root`: `%APPDATA%` on Windows) and the SoundCraft plugin it
 /// is, for every engine with one (`EngineUi::user_presets`).
 pub fn engine_folders() -> Vec<(&'static str, &'static str)> {
     crate::engine_ui::engine_uis().iter().filter_map(|u| u.user_presets.map(|f| (f, u.id))).collect()
@@ -111,6 +111,47 @@ pub(crate) fn factory_menu(
     ui.label(egui::RichText::new("User").small().strong());
 }
 
+/// An instrument's factory presets, by group: each sets every parameter of the track's
+/// built-in instrument (`mix.instrument` with the same plugin). Nothing for an instrument
+/// without factory presets.
+/// Each preset has a ▶ beside it that plays a short phrase on a copy of the instrument with the
+/// preset's settings, leaving the track's own as it is (again: stops it).
+pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, track: soundcraft_model::TrackId, info: &PluginInfo) {
+    for (group, list) in factory_groups(info) {
+        ui.menu_button(group, |ui| {
+            for (name, json) in list {
+                ui.horizontal(|ui| {
+                    let what = format!("preset:{}:{name}", info.id);
+                    let on = app.audition.playing.as_deref() == Some(what.as_str());
+                    let hear = ui.selectable_label(on, "▶").on_hover_text(format!("Hear {name} without loading it"));
+                    hear.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Hear {name}")));
+                    if hear.clicked()
+                        && let Some(voice) = preset_voice(info, name, json)
+                    {
+                        crate::audition::preset(app, voice, name);
+                    }
+                    if ui.button(*name).clicked() {
+                        if let Some((_, params)) = factory_recall(info, name, json)
+                            && let Err(e) = app.run("mix.instrument", json!({"track": track.0, "plugin": info.id, "params": params}))
+                        {
+                            app.ui.status = e;
+                        }
+                        ui.close();
+                    }
+                });
+            }
+        });
+    }
+}
+
+/// A factory preset of a built-in instrument as a preview voice: the instrument and every
+/// parameter the preset sets.
+pub(crate) fn preset_voice(info: &PluginInfo, name: &str, json: &str) -> Option<crate::audition::Voice> {
+    let (_, params) = factory_recall(info, name, json)?;
+    let params = params.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()? as f32))).collect();
+    Some(crate::audition::Voice { plugin: info.id.to_string(), params })
+}
+
 /// What an import did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ImportCounts {
@@ -165,11 +206,47 @@ pub fn import_firestation(appdata: &Path, preset_root: &Path, engine: Option<&st
     Ok(n)
 }
 
-/// `presets.import_firestation {engine?}`: imports from `%APPDATA%` into the app's preset folder
+/// The per-user folders FireStation's settings may sit in on this platform, most likely first:
+/// `%APPDATA%` on Windows; `~/Library/Application Support` and `~/Library` on macOS;
+/// `$XDG_CONFIG_HOME` and `~/.config` elsewhere. `env` reads an environment variable.
+fn data_candidates(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<std::path::PathBuf> {
+    let var = |k: &str| env(k).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+    let home = var("HOME");
+    if cfg!(windows) {
+        var("APPDATA").into_iter().collect()
+    } else if cfg!(target_os = "macos") {
+        home.map(|h| vec![h.join("Library").join("Application Support"), h.join("Library")]).unwrap_or_default()
+    } else {
+        var("XDG_CONFIG_HOME").into_iter().chain(home.map(|h| h.join(".config"))).collect()
+    }
+}
+
+/// The folder holding `FireStation` (its per-engine user presets) on this computer, or why there
+/// is none: what File › Import › FireStation User Presets reads, and its hover when greyed out.
+pub(crate) fn data_root(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Result<std::path::PathBuf, String> {
+    let candidates = data_candidates(env);
+    if let Some(found) = candidates.iter().find(|c| c.join("FireStation").is_dir()) {
+        return Ok(found.clone());
+    }
+    match candidates.first() {
+        Some(c) => Err(format!("No FireStation presets: {} does not exist", c.join("FireStation").display())),
+        None => Err("No FireStation presets: the user settings folder is unknown (no home folder)".into()),
+    }
+}
+
+/// Whether File › Import › FireStation User Presets can run, and if not, why.
+pub(crate) fn available(app: &SoundApp) -> Result<(), String> {
+    if app.preset_dir.is_none() {
+        return Err("User presets need the desktop app".into());
+    }
+    data_root(|k| std::env::var_os(k)).map(|_| ())
+}
+
+/// `presets.import_firestation {engine?}`: imports from FireStation's folder ([`data_root`]) into the app's preset folder
 /// and reports `{imported, skipped, failed}` (also in the status line).
 pub(crate) fn command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
     let root = app.preset_dir.clone().ok_or("user presets need the desktop app")?;
-    let appdata = std::env::var_os("APPDATA").map(std::path::PathBuf::from).ok_or("APPDATA is not set")?;
+    let appdata = data_root(|k| std::env::var_os(k))?;
     let n = import_firestation(&appdata, &root, p.get("engine").and_then(Value::as_str))?;
     app.ui.status = format!("FireStation presets: {} imported, {} skipped (already there), {} failed", n.imported, n.skipped, n.failed);
     serde_json::to_value(n).map_err(|e| e.to_string())
@@ -178,6 +255,44 @@ pub(crate) fn command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FireStation's folder is looked for where this platform keeps per-user settings (it was
+    /// `%APPDATA%` only, so off Windows the import failed with "APPDATA is not set").
+    #[test]
+    fn firestation_is_found_where_this_platform_keeps_settings() {
+        let tmp = std::env::temp_dir().join(format!("fs-presets-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let env = |k: &str| matches!(k, "APPDATA" | "HOME" | "XDG_CONFIG_HOME").then(|| tmp.clone().into_os_string());
+        let first = data_candidates(env).first().cloned().expect("a settings folder on every desktop platform");
+        let missing = data_root(env).unwrap_err();
+        assert!(missing.contains(&first.join("FireStation").display().to_string()), "says where it looked: {missing}");
+        std::fs::create_dir_all(first.join("FireStation").join("Comp").join("Presets").join("User")).unwrap();
+        assert_eq!(data_root(env), Ok(first.clone()));
+        assert!(data_root(|_| None).is_err(), "no home folder: refused, not a panic");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// From the menu: greyed out with the reason where it cannot work, and when run anyway its
+    /// error reaches the status line (a UI command's error used to be dropped).
+    #[test]
+    fn the_menu_item_says_why_it_cannot_import() {
+        const PATH: &str = "File > Import > FireStation User Presets";
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        app.preset_dir = None;
+        assert_eq!(crate::menus::availability(&app, "presets.import_firestation"), Err("User presets need the desktop app".into()));
+        crate::menus::invoke_menu(&mut app, "presets.import_firestation", PATH);
+        assert_eq!(app.ui.status, "User presets need the desktop app");
+        let tmp = std::env::temp_dir().join(format!("fs-presets-menu-{}", std::process::id()));
+        app.preset_dir = Some(tmp.clone());
+        app.ui.status.clear();
+        let why = crate::menus::availability(&app, "presets.import_firestation");
+        crate::menus::invoke_menu(&mut app, "presets.import_firestation", PATH);
+        match why {
+            Err(why) => assert_eq!(app.ui.status, why, "the click says what the hover says"),
+            Ok(()) => assert!(app.ui.status.starts_with("FireStation presets:"), "{}", app.ui.status),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn a_factory_preset_recalls_its_values() {

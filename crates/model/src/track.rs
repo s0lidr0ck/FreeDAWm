@@ -236,6 +236,11 @@ pub struct Track {
     pub active_playlist: usize,
     pub mixer: Mixer,
     pub automation: Vec<AutomationLane>,
+    /// The lanes playback reads when a clip on the track has automation of its own: these lanes
+    /// with the clips' laid over their ranges ([`crate::clip_automation`], made by
+    /// [`Track::refresh_played`]). Empty otherwise. Not saved.
+    #[serde(skip)]
+    pub played: Vec<AutomationLane>,
     /// Which lane the track shows: `waveform`/`blocks`/`notes`/`regions` or an automation param id.
     pub view: String,
     /// The automation lanes shown under the track's main lane, top to bottom, by param id
@@ -293,6 +298,53 @@ pub struct Track {
     /// everything the instrument is given; at most [`crate::MAX_MIDI_FX`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_fx: Vec<crate::MidiFx>,
+    /// The texts of its Script MIDI effects, named by their [`crate::MidiFx::script`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_scripts: Vec<crate::MidiScript>,
+    /// LFOs and envelope followers that move its plug-ins' parameters, at most
+    /// [`crate::MAX_MODULATORS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modulators: Vec<crate::Modulator>,
+    /// The input menu's MIDI Effects › Record Effects' Output: a take on this track keeps what
+    /// its MIDI effects made of the keys (the clip then plays past them, `Clip::midi_fx_printed`)
+    /// instead of the keys as played (off, the default).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub midi_fx_record: bool,
+    /// The output menu's Play Instrument On › Record on the Target: with the track playing
+    /// other tracks' instruments (MIDI to Track, or Layers & Splits), a take on it goes onto those
+    /// tracks instead, as what each one heard: the keys through this track's MIDI effects, each
+    /// layer's key and velocity range, and the route's channel (off, the default: the take stays
+    /// on this track, as the keys were played).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub midi_record_on_target: bool,
+    /// The MPE zone its instrument is set up for (the input menu's MPE Zone): the MPE
+    /// Configuration Message and pitch-bend ranges are sent to it (`None`: not MPE, nothing sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mpe: Option<MpeZone>,
+    /// Sound variations (an expression map): the articulations its instrument switches between
+    /// by keyswitch, chosen in its clips by a controller lane (`None`: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub articulations: Option<Articulations>,
+    /// The instrument's extra outputs taken by mixer channels (`Plugin::extra_outputs`): each
+    /// plays into a bus, which an aux reads (the track's output menu › New Track for Output).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instrument_outs: Vec<InstrumentOut>,
+    /// Track › Lock Track: no command may add, change or remove a clip on any of its playlists
+    /// (Insert and Cut Time still move them); recording into it is refused too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub edit_locked: bool,
+    /// Comping: the take layer (playlist index) auditioned in place of the comp, its solo on
+    /// in the layer's header, until it is let go. Not saved.
+    #[serde(skip)]
+    pub audition_layer: Option<usize>,
+    /// The note editor's drum map: a name per pitch (pitch, name), sorted by pitch, set by the
+    /// user. Overrides the instrument's own drum names; on any other instrument it turns the drum
+    /// view on. Absent in sessions saved before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drum_map: Vec<(u8, String)>,
+    /// Track › Global Transpose › Independent: the track's notes ignore the transpose track.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transpose_independent: bool,
 }
 
 fn yes() -> bool {
@@ -337,6 +389,7 @@ impl Track {
             active_playlist: 0,
             mixer: Mixer::new(format),
             automation: Vec::new(),
+            played: Vec::new(),
             view: view.into(),
             auto_lanes: Vec::new(),
             hidden: false,
@@ -355,7 +408,26 @@ impl Track {
             layers_open: false,
             record_layer: None,
             midi_fx: Vec::new(),
+            midi_scripts: Vec::new(),
+            modulators: Vec::new(),
+            midi_fx_record: false,
+            midi_record_on_target: false,
+            mpe: None,
+            articulations: None,
+            instrument_outs: Vec::new(),
+            edit_locked: false,
+            audition_layer: None,
+            drum_map: Vec::new(),
+            transpose_independent: false,
         }
+    }
+
+    /// Whether the track's notes follow the global transpose track: MIDI and instrument tracks
+    /// not set to Independent, whose instrument is not a drum machine (Juke, the drum synth).
+    pub fn follows_global_transpose(&self) -> bool {
+        self.kind.is_midi()
+            && !self.transpose_independent
+            && !self.instrument.as_ref().is_some_and(|i| matches!(i.plugin.as_str(), "juke" | "drum_synth"))
     }
 
     /// Whether the track is a vocal track: the owner's flag, else its name; audio tracks only.
@@ -400,8 +472,52 @@ impl Track {
         self.playlist().map_or(&[], |p| p.clips.as_slice())
     }
 
+    /// The clips playback hears: an auditioned take layer's ([`Track::audition_layer`]) in
+    /// place of the comp, else the active playlist's ([`Track::clips`]). Editing always works
+    /// on [`Track::clips`].
+    pub fn heard_clips(&self) -> &[Clip] {
+        match self.audition_layer.filter(|l| self.is_layer(*l)).and_then(|l| self.playlists.get(l)) {
+            Some(p) => p.clips.as_slice(),
+            None => self.clips(),
+        }
+    }
+
+    /// The module automation lanes and mappings name by `id`: a chain module, or the
+    /// instrument for [`crate::INSTRUMENT_MODULE`].
+    pub fn module_or_instrument(&self, id: crate::ModuleId) -> Option<&crate::Insert> {
+        if id == crate::INSTRUMENT_MODULE { self.instrument.as_ref() } else { self.mixer.module(id) }
+    }
+
     pub fn lane(&self, p: &AutoParam) -> Option<&AutomationLane> {
         self.automation.iter().find(|l| &l.param == p)
+    }
+
+    /// The lane of `p` as playback reads it: `None` while it is suspended (automation Preview).
+    /// With clips that have automation, the lane with theirs laid over it.
+    pub fn played_lane(&self, p: &AutoParam) -> Option<&AutomationLane> {
+        self.played_lanes().iter().find(|l| &l.param == p).filter(|l| !l.suspended)
+    }
+
+    /// Every lane as playback reads it: [`Track::played`] when a clip has automation, else
+    /// [`Track::automation`].
+    pub fn played_lanes(&self) -> &[AutomationLane] {
+        if self.played.is_empty() { &self.automation } else { &self.played }
+    }
+
+    /// Makes [`Track::played`] again from the lanes and the active clips. True when it changed.
+    pub fn refresh_played(&mut self) -> bool {
+        let next = crate::clip_automation::played(&self.automation, self.clips());
+        if next == self.played {
+            return false;
+        }
+        self.played = next;
+        true
+    }
+
+    /// Whether [`Track::refresh_played`] has anything to do: a clip has automation, or played
+    /// lanes are left from before.
+    pub fn needs_played(&self) -> bool {
+        !self.played.is_empty() || self.clips().iter().any(|c| !c.automation.is_empty())
     }
 
     pub fn lane_mut(&mut self, p: &AutoParam) -> &mut AutomationLane {
@@ -436,6 +552,14 @@ impl Track {
             Some(f) => f.upto.and_then(|m| self.mixer.inserts.iter().position(|i| i.id == m)).map_or(n, |p| p.saturating_add(1)),
         }
     }
+}
+
+/// One of an instrument's extra outputs ([`Track::instrument_outs`]) and the bus it plays into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InstrumentOut {
+    /// Which extra output (0: the instrument's first after its main one).
+    pub output: u8,
+    pub bus: crate::BusId,
 }
 
 #[cfg(test)]
@@ -525,3 +649,73 @@ mod tests {
         assert_eq!(serde_json::from_str::<TrackHeight>("\"Large\"").unwrap(), TrackHeight::Large);
     }
 }
+
+/// An MPE zone (MIDI Polyphonic Expression): a master channel (1 for the lower zone, 16 for the
+/// upper) and `members` channels next to it, one per sounding note, each with its own pitch
+/// bend over `bend` semitones (48 by MPE's default) and the master's over `master_bend` (2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MpeZone {
+    /// The upper zone (master channel 16, members counted down from 15); else the lower.
+    #[serde(default)]
+    pub upper: bool,
+    /// Member channels, 1 to 15.
+    pub members: u8,
+    /// Member channels' pitch-bend range, semitones (0 to 96).
+    pub bend: u8,
+    /// The master channel's pitch-bend range, semitones (0 to 96).
+    #[serde(default = "MpeZone::default_master_bend")]
+    pub master_bend: u8,
+}
+
+impl Default for MpeZone {
+    fn default() -> Self {
+        MpeZone { upper: false, members: 15, bend: 48, master_bend: 2 }
+    }
+}
+
+impl MpeZone {
+    fn default_master_bend() -> u8 {
+        2
+    }
+
+    /// The master channel (0-based).
+    pub fn master(&self) -> u8 {
+        if self.upper { 15 } else { 0 }
+    }
+
+    /// The member channels (0-based), nearest the master first.
+    pub fn member_channels(&self) -> impl Iterator<Item = u8> + '_ {
+        let n = self.members.clamp(1, 15);
+        (1..=n).map(move |k| if self.upper { 15 - k } else { k })
+    }
+}
+
+/// Sound variations, or an expression map: a track's articulations (legato, staccato, pizzicato
+/// of an orchestral library), each switched to by its keyswitch, a key the instrument takes as
+/// "play the following notes this way". A clip chooses one with a controller of the lane `cc`
+/// whose value is the articulation's index: playback and chase send that articulation's
+/// keyswitch (a short note on the event's channel) in place of the controller, so the change is
+/// drawn, moved, cut and copied as any controller point is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Articulations {
+    /// The controller number that chooses (0 to 119); 3 by default (undefined in MIDI).
+    pub cc: u8,
+    pub items: Vec<Articulation>,
+}
+
+impl Default for Articulations {
+    fn default() -> Self {
+        Articulations { cc: 3, items: Vec::new() }
+    }
+}
+
+/// One articulation of [`Articulations`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Articulation {
+    pub name: String,
+    /// The key that switches to it (MIDI note number).
+    pub keyswitch: u8,
+}
+
+/// Most articulations a track holds (a controller value picks one).
+pub const MAX_ARTICULATIONS: usize = 128;

@@ -11,19 +11,11 @@ use std::path::Path;
 /// Known gaps: commands with no menu, shortcut or literal reference in the UI source today.
 /// Give each one a UI path and remove it from this list; don't add to it.
 const KNOWN_UNREACHED: &[&str] = &[
-    "edit.paste_clip_effects",
-    "edit.paste_clip_gain",
     "event.midi_note",
-    "markers.next",
-    "markers.previous",
-    "mix.clear_mutes",
-    "mix.phase_invert",
     "mix.send_surround_pan",
     "setup.hardware",        // menu opens the Playback Engine window, which doesn't run it
     "setup.playback_engine", // same
     "setup.reset_edit_state",
-    "track.pin",
-    "track.trim_automation_write",
     "transport.status",
     "video.offset",
     "view.sub_counter",
@@ -40,21 +32,22 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("automation.write_range", "Glide to Current was mis-aliased to it: needs a param and value"),
     ("event.renumber_bars", "a no-op (bars start at 1)"),
     ("event.retrospective_record", "no live MIDI capture buffer feeds it"),
-    ("midi.note_add", "for agents: the MIDI editor adds notes with midi.notes_add, Musical Typing's step mode with event.step_input"),
     ("options.auto_spot_clips", "stored flag nothing reads"),
     ("options.calibration_mode", "stored flag nothing reads"),
     ("options.destructive_punch", "stored flag nothing reads"),
     ("options.destructive_record", "stored flag nothing reads"),
-    ("options.dynamic_transport", "stored flag nothing reads"),
     ("options.layered_editing", "stored flag nothing reads"),
     ("options.marker_target_follows_selection", "stored flag nothing reads"),
     ("options.markers_follow_edit", "stored flag nothing reads"),
     ("options.midi_live_mode", "stored flag nothing reads"),
     ("options.midi_thru", "stored flag nothing reads"),
+    (
+        "options.prepare_dpe_tracks",
+        "Options › Prepare DPE Tracks left the menu in the 2026-11 layout: it prepares tracks for Destructive Punch, which FreeDAWm doesn't have; kept for agents",
+    ),
     ("options.transport_online", "stored flag nothing reads"),
     ("setup.current_feet_frames", "needs a position and has no dialog"),
     ("setup.current_timecode", "needs a position and has no dialog"),
-    ("setup.disk_allocation", "a stored setting with no window"),
     ("setup.external_timecode_offset", "a stored setting with no window; nothing reads it"),
     ("setup.midi_input_devices", "shown greyed out (coming soon): needs its own window"),
     ("setup.midi_studio", "a stored setting with no window"),
@@ -90,9 +83,68 @@ const OFF_THE_MENUS: &[(&str, &str)] = &[
     ("view.transport_synchronization", "stored flag nothing reads"),
 ];
 
+/// Menu items the 2026-11 layout took off the menu bar whose commands are UI-layer ones (so not in
+/// `command_specs`): (the path the item ran, its command, why). The commands stay, for agents and
+/// the control channel.
+const UI_OFF_THE_MENUS: &[(&str, &str, &str)] = &[
+    ("Window > Renderer", "window.renderer", "shows an object/bed mark only and changes no sound"),
+    ("View > Mix Window Views > Object", "view.mix_section", "the Object strip view shows a mark only and changes no sound"),
+];
+
+/// The Options settings the 2026-11 layout moved to Setup › Preferences…: off the menu bar, reached
+/// through the Preferences window's controls, which name them.
+#[test]
+fn settings_moved_to_preferences_are_reached_through_its_window() {
+    let prefs = std::fs::read_to_string(
+        Path::new(&std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into())).join("src/preferences.rs"),
+    )
+    .unwrap();
+    let shown = menu_commands();
+    assert_eq!(soundcraft_ui_egui::preferences::FROM_OPTIONS.len(), 10);
+    for id in soundcraft_ui_egui::preferences::FROM_OPTIONS {
+        assert!(soundcraft_engine::find_command(id).is_some(), "{id} is still a command");
+        // Named once in FROM_OPTIONS and once by its control.
+        assert!(prefs.matches(&format!("\"{id}\",")).count() >= 2, "{id} has a Preferences control");
+        assert!(!shown.contains(id), "{id} left the Options menu for Preferences");
+    }
+    // Delay Compensation and Suspend All Groups are toggled while working: they stay in Options.
+    for id in ["options.delay_compensation", "track.suspend_groups"] {
+        assert!(shown.contains(id), "{id} stays on the menu bar");
+    }
+}
+
+/// The items taken off the menu bar keep their commands; they are only not shown.
+#[test]
+fn removed_items_keep_their_commands() {
+    let extra = menus::ui_aliases();
+    let shown_paths: Vec<String> = {
+        fn walk(nodes: &[MenuNode], out: &mut Vec<String>) {
+            for n in nodes {
+                if n.children.is_empty() {
+                    out.push(n.path.clone());
+                }
+                walk(&n.children, out);
+            }
+        }
+        let mut v = Vec::new();
+        walk(&menus::tree(), &mut v);
+        v
+    };
+    for (path, id, why) in UI_OFF_THE_MENUS {
+        assert!(!why.is_empty());
+        assert!(!shown_paths.iter().any(|p| p == path), "{path} is still shown");
+        assert_eq!(menus::command_for_path(path, &extra).as_deref(), Some(*id), "{path} still runs {id}");
+    }
+    assert_eq!(menus::command_for_path("Options > Prepare DPE Tracks", &extra).as_deref(), Some("options.prepare_dpe_tracks"));
+    assert!(!shown_paths.iter().any(|p| p == "Options > Prepare DPE Tracks"));
+}
+
 /// Position-based aliases of the channel-chain commands: the UI acts by module id, so an alias is
-/// reached when the command it stands for is.
+/// reached when the command it stands for is. Paste Clip Gain and Paste Clip Effects are what Edit ›
+/// Paste does after Copy Special › Clip Gain or Clip Effects.
 const ALIASES: &[(&str, &str)] = &[
+    ("edit.paste_clip_gain", "edit.paste"),
+    ("edit.paste_clip_effects", "edit.paste"),
     ("mix.insert", "mix.module_add"),
     ("mix.insert_remove", "mix.module_remove"),
     ("mix.insert_move", "mix.module_move"),

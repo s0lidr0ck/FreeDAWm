@@ -12,8 +12,17 @@ pub struct OpsState {
     pub beat_sensitivity: f32,
     pub beat_separate: bool,
     pub beat_set_tempo: bool,
+    /// Beat Detective's conform: the pieces move to the grid (or `beat_groove`) by `beat_strength` %.
+    pub beat_conform: bool,
+    pub beat_strength: f32,
+    pub beat_groove: String,
+    /// Beat Detective's smoothing: each piece runs on to the next, the joins crossfaded.
+    pub beat_smooth: bool,
     pub beat_result: String,
     pub tempo_curve: String,
+    /// Tap Tempo's taps (seconds of egui time); not saved.
+    #[serde(skip)]
+    pub tap_times: Vec<f64>,
     pub tempo_start: f64,
     pub tempo_end: f64,
     pub time_op: String,
@@ -35,6 +44,8 @@ pub struct OpsState {
     pub rtp_quantize: String,
     pub rtp_q_strength: f64,
     pub transpose: i64,
+    /// Transpose by steps of the key (on the Key ruler) instead of semitones.
+    pub transpose_in_key: bool,
     pub velocity_add: i64,
     /// Change Duration: "legato", "set", "add" or "scale", and its value (ticks, or percent to scale).
     pub dur_mode: String,
@@ -46,13 +57,32 @@ pub struct OpsState {
     pub human_timing: i64,
     pub human_velocity: i64,
     pub half_time: bool,
+    /// Flam: ticks before each note, and the grace note's velocity in percent of the note's.
+    pub flam_ticks: i64,
+    pub flam_velocity: f64,
     /// Select Notes: pitch, velocity and length (ticks) ranges, the beats of the bar a note
-    /// starts in (1-based, fractional), and whether matching notes move to a new track instead.
+    /// starts in (1-based, fractional), and what is done to the matching notes: select, split
+    /// (to a new track), delete, mute, unmute or change.
     pub rule_pitch: (i64, i64),
     pub rule_velocity: (i64, i64),
     pub rule_length: (i64, i64),
     pub rule_beats: Option<(f64, f64)>,
-    pub rule_split: bool,
+    pub rule_action: &'static str,
+    /// Select Notes › Change them: velocity added, velocity scaled (percent), transpose
+    /// (semitones), length scaled (percent).
+    pub rule_change: (i64, f64, i64, f64),
+    /// Select Notes: the channels (from 1).
+    pub rule_channel: (i64, i64),
+    /// Select Notes on controller events instead of notes (`target: events`).
+    pub rule_events: bool,
+    /// Which kinds of event: control change, pitch bend, channel pressure, poly pressure, program.
+    pub rule_kinds: [bool; 5],
+    /// The controller number (a CC's, a poly pressure's key) and the value ranges.
+    pub rule_number: (i64, i64),
+    pub rule_value: (i64, i64),
+    /// Change them (events): value scaled (percent) and added; a CC's new number and a new
+    /// channel (`None`: kept).
+    pub rule_ev_change: (f64, i64, Option<i64>, Option<i64>),
     pub rtp_velocity: i64,
     pub rtp_transpose: i64,
     pub rtp_duration: f64,
@@ -70,8 +100,13 @@ impl Default for OpsState {
             beat_sensitivity: 0.5,
             beat_separate: true,
             beat_set_tempo: false,
+            beat_conform: false,
+            beat_strength: 100.0,
+            beat_groove: String::new(),
+            beat_smooth: false,
             beat_result: String::new(),
             tempo_curve: "linear".into(),
+            tap_times: Vec::new(),
             tempo_start: 100.0,
             tempo_end: 120.0,
             time_op: "insert".into(),
@@ -90,6 +125,7 @@ impl Default for OpsState {
             rtp_quantize: "off".into(),
             rtp_q_strength: 100.0,
             transpose: 12,
+            transpose_in_key: false,
             velocity_add: 10,
             dur_mode: "legato".into(),
             dur_value: 0.0,
@@ -98,11 +134,20 @@ impl Default for OpsState {
             human_timing: 10,
             human_velocity: 8,
             half_time: true,
+            flam_ticks: 30,
+            flam_velocity: 70.0,
             rule_pitch: (0, 127),
             rule_velocity: (1, 127),
             rule_length: (1, 15_360),
             rule_beats: None,
-            rule_split: false,
+            rule_action: "select",
+            rule_change: (0, 100.0, 0, 100.0),
+            rule_channel: (1, 16),
+            rule_events: false,
+            rule_kinds: [true; 5],
+            rule_number: (0, 127),
+            rule_value: (-8192, 8191),
+            rule_ev_change: (100.0, 0, None, None),
             rtp_velocity: 0,
             rtp_transpose: 0,
             rtp_duration: 100.0,
@@ -127,6 +172,8 @@ fn result_line(ui: &mut egui::Ui, r: &Result<Value, String>) {
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     beat_detective(app, ctx);
+    process_history(app, ctx);
+    arrangements(app, ctx);
     tempo_ops(app, ctx);
     time_ops(app, ctx);
     midi_ops(app, ctx);
@@ -134,6 +181,71 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     input_quantize(app, ctx);
     midi_offsets(app, ctx);
     click_countoff(app, ctx);
+    disk_allocation(app, ctx);
+}
+
+/// Setup › Disk Allocation: the folder the session's takes record into, and any track's own
+/// (`setup.disk_allocation`). A relative folder is inside the session's folder; empty is the
+/// default (`Audio Files`, or for a track the session's folder).
+fn disk_allocation(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_disk_allocation;
+    if !open {
+        return;
+    }
+    // As `setup.disk_allocation` reports them (read here, not run every frame).
+    let s = app.engine.session();
+    let text = |key: &str| s.edit.flags.iter().find_map(|f| f.strip_prefix(key).and_then(|r| r.strip_prefix('=')).map(str::to_string));
+    let root = text("disk.root").unwrap_or_else(|| "Audio Files".into());
+    let rows: Vec<(u64, String, String)> = s
+        .tracks
+        .iter()
+        .filter(|t| t.kind == soundcraft_model::TrackKind::Audio)
+        .map(|t| (t.id.0, t.name.clone(), text(&format!("disk.track.{}", t.id.0)).unwrap_or_else(|| root.clone())))
+        .collect();
+    let mut change: Option<Value> = None;
+    egui::Window::new("Disk Allocation").open(&mut open).default_size(vec2(460.0, 260.0)).show(ctx, |ui| {
+        ui.label(
+            egui::RichText::new(
+                "Where takes are recorded. A folder that is not inside the session's folder keeps its takes there when the session is saved.",
+            )
+            .small(),
+        );
+        let mut folder_row = |ui: &mut egui::Ui, label: &str, key: &str, value: &str, track: Option<u64>| {
+            ui.label(label);
+            let id = egui::Id::new(("disk_alloc", key));
+            let mut text: String = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_else(|| value.to_string());
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(240.0));
+            ui.ctx().data_mut(|d| d.insert_temp(id, text.clone()));
+            let mut pick = None;
+            if let Some(choose) = &app.services.pick_folder
+                && ui.small_button("Choose…").clicked()
+            {
+                pick = choose("disk.allocation");
+            }
+            let commit = pick.or_else(|| (r.lost_focus() && text != value).then(|| text.clone()));
+            if let Some(path) = commit {
+                ui.ctx().data_mut(|d| d.remove::<String>(id));
+                let mut p = json!({"path": path});
+                if let (Some(t), Some(o)) = (track, p.as_object_mut()) {
+                    o.insert("track".into(), json!(t));
+                }
+                change = Some(p);
+            }
+            ui.end_row();
+        };
+        egui::Grid::new("disk_allocation").num_columns(3).striped(true).show(ui, |ui| {
+            folder_row(ui, "Session", "root", &root, None);
+            for (id, name, path) in &rows {
+                folder_row(ui, name, &id.to_string(), path, Some(*id));
+            }
+        });
+    });
+    if let Some(p) = change
+        && let Err(e) = app.run("setup.disk_allocation", p)
+    {
+        app.ui.status = e;
+    }
+    app.ui.show_disk_allocation = open;
 }
 
 /// Setup › Click/Countoff: the metronome's level and sounds, whether it clicks only while
@@ -145,6 +257,9 @@ fn click_countoff(app: &mut SoundApp, ctx: &egui::Context) {
         return;
     }
     let mut pickup = app.engine.session().edit.flag("midi.keep_pickup");
+    // Where the click plays: the main mix, or one hardware output alone (a performer's phones).
+    let outputs: Vec<String> = app.engine.session().outputs.iter().skip(1).map(|o| o.name.clone()).collect();
+    let click_out: Option<String> = app.engine.session().edit.flags.iter().find_map(|f| f.strip_prefix("click.output=").map(str::to_string));
     let (mut db, mut accent, mut normal, mut countoff, mut bars, mut only_rec) = {
         let e = &app.engine.session().edit;
         (
@@ -174,6 +289,24 @@ fn click_countoff(app: &mut SoundApp, ctx: &egui::Context) {
         if crate::widgets::checkbox(ui, &mut only_rec, "Only while recording").changed() {
             p.insert("only_during_record".into(), json!(only_rec));
         }
+        ui.horizontal(|ui| {
+            ui.label("Output");
+            let shown = click_out.clone().unwrap_or_else(|| "Main mix".into());
+            egui::ComboBox::from_id_salt("click_output")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(click_out.is_none(), "Main mix").clicked() {
+                        p.insert("output".into(), json!("main"));
+                    }
+                    for o in &outputs {
+                        if ui.selectable_label(click_out.as_deref().is_some_and(|c| soundcraft_model::same_name(c, o)), o).clicked() {
+                            p.insert("output".into(), json!(o));
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("A hardware output plays the click alone, kept out of the main mix (Setup › I/O names the outputs)");
+        });
         ui.separator();
         ui.horizontal(|ui| {
             if crate::widgets::checkbox(ui, &mut countoff, "Count off").changed() {
@@ -287,6 +420,105 @@ fn midi_offsets(app: &mut SoundApp, ctx: &egui::Context) {
     app.ui.show_midi_offsets = open;
 }
 
+/// Track › Arrangements: the session's alternative arrangements (each its own playlists and
+/// markers), switched with one click; New keeps this one and starts another from it.
+fn arrangements(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_arrangements;
+    if !open {
+        return;
+    }
+    let (names, active) = {
+        let s = app.engine.session();
+        (s.arrangements.iter().map(|a| a.name.clone()).collect::<Vec<_>>(), s.arrangement.clone())
+    };
+    egui::Window::new("Arrangements").open(&mut open).default_size(vec2(300.0, 200.0)).show(ctx, |ui| {
+        if names.is_empty() {
+            ui.label("One arrangement. New keeps it as \"Main\" and starts another: every track gets a copy of its playlist.");
+        }
+        let mut action: Option<(&str, Value)> = None;
+        for n in &names {
+            ui.horizontal(|ui| {
+                let on = active.as_deref() == Some(n.as_str());
+                if ui.selectable_label(on, n).on_hover_text("Play this arrangement").clicked() && !on {
+                    action = Some(("arrangement.switch", json!({"name": n})));
+                }
+                if ui.add_enabled(!on, egui::Button::new("Delete").small()).on_hover_text("Forget it; its playlists stay on the tracks").clicked() {
+                    action = Some(("arrangement.delete", json!({"name": n})));
+                }
+            });
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            let key = egui::Id::new("arrangement_new_name");
+            let mut name: String = ui.ctx().memory(|m| m.data.get_temp(key)).unwrap_or_default();
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text("Name").desired_width(140.0));
+            if ui.button("New Arrangement").clicked() {
+                action = Some(("arrangement.new", if name.trim().is_empty() { json!({}) } else { json!({"name": name.trim()}) }));
+                name.clear();
+            }
+            ui.ctx().memory_mut(|m| m.data.insert_temp(key, name));
+        });
+        if let Some((cmd, p)) = action
+            && let Err(e) = app.run(cmd, p)
+        {
+            app.ui.status = e;
+        }
+    });
+    app.ui.show_arrangements = open;
+}
+
+/// Process › Process History: the selected audio clip's processes, oldest first, each bypassed,
+/// moved or removed (the clip is made again from the step that changed).
+fn process_history(app: &mut SoundApp, ctx: &egui::Context) {
+    let mut open = app.ui.show_process_history;
+    if !open {
+        return;
+    }
+    // A query: it changes nothing (and says nothing when no audio clip is selected).
+    let listed = app.engine.execute("process.history", &json!({}));
+    egui::Window::new("Process History").open(&mut open).default_size(vec2(340.0, 220.0)).show(ctx, |ui| {
+        let Ok(v) = listed else {
+            ui.label("Select an audio clip to see the processes its audio came through.");
+            return;
+        };
+        let clip = v["clip"].clone();
+        let steps = v["steps"].as_array().cloned().unwrap_or_default();
+        if steps.is_empty() {
+            ui.label("No processes yet: Process menu items add them here.");
+            return;
+        }
+        let last = steps.len().saturating_sub(1);
+        let mut action: Option<(&str, Value)> = None;
+        for (i, st) in steps.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let bypassed = st["bypassed"].as_bool().unwrap_or(false);
+                let name = st["process"].as_str().unwrap_or("?").replace('_', " ");
+                let text = egui::RichText::new(format!("{}. {name}", i + 1));
+                ui.label(if bypassed { text.strikethrough().weak() } else { text });
+                if ui.small_button(if bypassed { "Use" } else { "Bypass" }).clicked() {
+                    action = Some(("process.bypass_step", json!({"clip": clip, "step": i})));
+                }
+                if ui.add_enabled(i > 0, egui::Button::new("Up").small()).clicked() {
+                    action = Some(("process.move_step", json!({"clip": clip, "step": i, "to": i - 1})));
+                }
+                if ui.add_enabled(i < last, egui::Button::new("Down").small()).clicked() {
+                    action = Some(("process.move_step", json!({"clip": clip, "step": i, "to": i + 1})));
+                }
+                if ui.small_button("Remove").clicked() {
+                    action = Some(("process.remove_step", json!({"clip": clip, "step": i})));
+                }
+            });
+        }
+        ui.label(egui::RichText::new("A change makes the clip again from the audio before that step.").small());
+        if let Some((cmd, p)) = action
+            && let Err(e) = app.run(cmd, p)
+        {
+            app.ui.status = e;
+        }
+    });
+    app.ui.show_process_history = open;
+}
+
 fn beat_detective(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_beat_detective;
     if !open {
@@ -297,6 +529,12 @@ fn beat_detective(app: &mut SoundApp, ctx: &egui::Context) {
         ui.add(egui::Slider::new(&mut app.ops.beat_sensitivity, 0.0..=1.0).text("Sensitivity"));
         crate::widgets::checkbox(ui, &mut app.ops.beat_separate, "Separate clips at detected beats");
         crate::widgets::checkbox(ui, &mut app.ops.beat_set_tempo, "Set the session tempo from the beats");
+        crate::widgets::checkbox(ui, &mut app.ops.beat_conform, "Conform: move each piece to the grid or groove");
+        ui.add_enabled_ui(app.ops.beat_conform, |ui| {
+            ui.add(egui::Slider::new(&mut app.ops.beat_strength, 0.0..=100.0).text("Strength %"));
+            groove_combo(app, ui, "Groove", |o| &mut o.beat_groove);
+        });
+        crate::widgets::checkbox(ui, &mut app.ops.beat_smooth, "Smooth: fill the gaps and crossfade the joins");
         ui.horizontal(|ui| {
             if ui.button("Analyze").clicked() {
                 let r = app.run("event.beat_detective", json!({"sensitivity": app.ops.beat_sensitivity, "separate": false, "set_tempo": false}));
@@ -305,8 +543,29 @@ fn beat_detective(app: &mut SoundApp, ctx: &egui::Context) {
             if ui.button(egui::RichText::new("Apply").strong()).clicked() {
                 let r = app.run(
                     "event.beat_detective",
-                    json!({"sensitivity": app.ops.beat_sensitivity, "separate": app.ops.beat_separate, "set_tempo": app.ops.beat_set_tempo}),
+                    json!({
+                        "sensitivity": app.ops.beat_sensitivity,
+                        "separate": app.ops.beat_separate,
+                        "set_tempo": app.ops.beat_set_tempo,
+                        "conform": app.ops.beat_conform,
+                        "strength": app.ops.beat_strength,
+                        "groove": app.ops.beat_groove,
+                        "smooth": app.ops.beat_smooth,
+                    }),
                 );
+                app.ops.beat_result = r.map_or_else(|e| e, |v| v.to_string());
+            }
+            if ui.button("Groove from Selected Clip").on_hover_text("Take the selected audio clip's hits as a groove (sixteenths)").clicked() {
+                let r = app.run("event.groove_from_clip", json!({"grid": "1/16", "sensitivity": app.ops.beat_sensitivity}));
+                if let Ok(v) = &r
+                    && let Some(name) = v.get("name").and_then(|n| n.as_str())
+                {
+                    app.ops.beat_groove = name.to_string();
+                }
+                app.ops.beat_result = r.map_or_else(|e| e, |v| v.to_string());
+            }
+            if ui.button("Write MIDI").on_hover_text("A kick note for each hit, in a new MIDI clip on a new drum-synth track").clicked() {
+                let r = app.run("event.hits_to_midi", json!({"sensitivity": app.ops.beat_sensitivity}));
                 app.ops.beat_result = r.map_or_else(|e| e, |v| v.to_string());
             }
         });
@@ -362,6 +621,16 @@ fn tempo_ops(app: &mut SoundApp, ctx: &egui::Context) {
             )
             .small(),
         );
+        ui.horizontal(|ui| {
+            // Each tap after the first sets the tempo in effect at the insertion point; one undo step per run of taps.
+            if ui.button("Tap").on_hover_text("Tap Tempo: click in time; a pause of 2 s starts over").clicked() {
+                let now = ui.input(|i| i.time);
+                tap_tempo(app, now);
+            }
+            if let Some(bpm) = soundcraft_engine::cmd::tap_tempo::tapped_bpm(&app.ops.tap_times) {
+                ui.label(format!("{bpm:.1} bpm tapped"));
+            }
+        });
         if ui.button(egui::RichText::new("Apply").strong()).clicked() {
             let (id, p) = tempo_ops_apply(&app.ops.tempo_curve, app.ops.tempo_start, app.ops.tempo_end);
             let r = app.run(id, p);
@@ -369,6 +638,29 @@ fn tempo_ops(app: &mut SoundApp, ctx: &egui::Context) {
         }
     });
     app.ui.show_tempo_ops = open;
+}
+
+/// One Tap Tempo tap at `now` seconds: kept with the taps since the last pause, and from the
+/// second tap on the tempo they beat is set (`event.tap_tempo`), the run's taps merged into one undo step.
+pub fn tap_tempo(app: &mut SoundApp, now: f64) {
+    use soundcraft_engine::cmd::tap_tempo::{TAP_KEEP, TAP_RESET_SECONDS};
+    let taps = &mut app.ops.tap_times;
+    if taps.last().is_none_or(|t| now - t >= TAP_RESET_SECONDS || now <= *t) {
+        taps.clear();
+    }
+    taps.push(now);
+    if taps.len() > TAP_KEEP {
+        taps.remove(0);
+    }
+    if taps.len() >= 2 {
+        let key = format!("tap_tempo:{}", taps.first().copied().unwrap_or(0.0));
+        let r = app.engine.execute_merged("event.tap_tempo", &json!({"taps": taps.clone()}), &key);
+        if let Ok(v) = r
+            && let Some(bpm) = v["bpm"].as_f64()
+        {
+            app.ops.tempo_start = bpm;
+        }
+    }
 }
 
 fn time_ops(app: &mut SoundApp, ctx: &egui::Context) {
@@ -416,7 +708,7 @@ fn time_ops(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 /// The MIDI Operations window's operations.
-pub const MIDI_OPS: [&str; 12] = [
+pub const MIDI_OPS: [&str; 14] = [
     "select notes",
     "quantize",
     "transpose",
@@ -425,7 +717,9 @@ pub const MIDI_OPS: [&str; 12] = [
     "fix overlaps",
     "humanize",
     "strum",
+    "flam",
     "reverse",
+    "invert pitches",
     "half or double time",
     "flatten performance",
     "restore performance",
@@ -455,6 +749,7 @@ pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)>
             }
             ("event.quantize", p)
         }
+        "transpose" if o.transpose_in_key => ("event.transpose", json!({"steps": o.transpose})),
         "transpose" => ("event.transpose", json!({"semitones": o.transpose})),
         "change velocity" => ("event.change_velocity", json!({"add": o.velocity_add})),
         "change duration" => {
@@ -471,14 +766,59 @@ pub fn midi_op_params(o: &OpsState) -> Option<(&'static str, serde_json::Value)>
         "humanize" => ("event.humanize", json!({"timing": o.human_timing, "velocity": o.human_velocity})),
         "strum" => ("event.strum", json!({"ticks": o.strum_ticks, "direction": if o.strum_up { "up" } else { "down" }})),
         "reverse" => ("event.reverse_notes", json!({})),
+        "invert pitches" => ("event.invert_pitch", json!({})),
+        "flam" => ("event.flam", json!({"ticks": o.flam_ticks, "velocity": o.flam_velocity})),
         "half or double time" => ("event.time_scale", json!({"factor": if o.half_time { 2.0 } else { 0.5 }})),
+        "select notes" if o.rule_events => {
+            const KINDS: [&str; 5] = ["cc", "pitch_bend", "pressure", "poly_pressure", "program"];
+            let kinds: Vec<&str> = KINDS.iter().zip(o.rule_kinds).filter(|(_, on)| *on).map(|(k, _)| *k).collect();
+            let action = if matches!(o.rule_action, "delete" | "change") { o.rule_action } else { "select" };
+            let mut p = json!({
+                "target": "events", "kinds": kinds,
+                "number_from": o.rule_number.0, "number_to": o.rule_number.1,
+                "value_from": o.rule_value.0, "value_to": o.rule_value.1,
+                "action": action,
+            });
+            if action == "change" {
+                let (scale, add, number, channel) = o.rule_ev_change;
+                p["value_scale"] = json!(scale);
+                p["value_add"] = json!(add);
+                if let Some(n) = number {
+                    p["number_set"] = json!(n);
+                }
+                if let Some(c) = channel {
+                    p["channel_set"] = json!(c);
+                }
+            }
+            if o.rule_channel != (1, 16) {
+                p["channel_from"] = json!(o.rule_channel.0);
+                p["channel_to"] = json!(o.rule_channel.1);
+            }
+            if let Some((a, b)) = o.rule_beats {
+                let q = soundcraft_midi::PPQ as f64;
+                p["in_bar_from"] = json!((((a.min(b) - 1.0) * q).round() as i64).max(0));
+                p["in_bar_to"] = json!((((a.max(b)) * q).round() as i64 - 1).max(0));
+            }
+            ("event.select_split_notes", p)
+        }
         "select notes" => {
             let mut p = json!({
                 "pitch_from": o.rule_pitch.0, "pitch_to": o.rule_pitch.1,
                 "velocity_from": o.rule_velocity.0, "velocity_to": o.rule_velocity.1,
                 "length_from": o.rule_length.0, "length_to": o.rule_length.1,
-                "action": if o.rule_split { "split" } else { "select" },
+                "action": o.rule_action,
             });
+            if o.rule_action == "change" {
+                let (va, vs, tr, ls) = o.rule_change;
+                p["velocity_add"] = json!(va);
+                p["velocity_scale"] = json!(vs);
+                p["transpose"] = json!(tr);
+                p["length_scale"] = json!(ls);
+            }
+            if o.rule_channel != (1, 16) {
+                p["channel_from"] = json!(o.rule_channel.0);
+                p["channel_to"] = json!(o.rule_channel.1);
+            }
             // Beats of the bar (1-based) as ticks from the bar line; the end beat's whole length.
             if let Some((a, b)) = o.rule_beats {
                 let q = soundcraft_midi::PPQ as f64;
@@ -550,7 +890,10 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
             "transpose" => {
-                ui.add(egui::Slider::new(&mut app.ops.transpose, -48..=48).text("Semitones"));
+                let unit = if app.ops.transpose_in_key { "Scale steps" } else { "Semitones" };
+                ui.add(egui::Slider::new(&mut app.ops.transpose, -48..=48).text(unit));
+                ui.checkbox(&mut app.ops.transpose_in_key, "In the key")
+                    .on_hover_text("Move by steps of the key on the Key ruler (else the band's key): C up two in C major is E");
             }
             "change velocity" => {
                 ui.add(egui::Slider::new(&mut app.ops.velocity_add, -127..=127).text("Add"));
@@ -580,6 +923,13 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
                     ui.radio_value(&mut app.ops.strum_up, false, "Down");
                 });
             }
+            "flam" => {
+                ui.add(egui::Slider::new(&mut app.ops.flam_ticks, 1..=240).text("Ticks before"));
+                ui.add(egui::Slider::new(&mut app.ops.flam_velocity, 0.0..=200.0).text("Grace velocity %"));
+            }
+            "invert pitches" => {
+                ui.label("Mirrors the pitches around the middle of their range.");
+            }
             "half or double time" => {
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut app.ops.half_time, true, "Half time");
@@ -589,12 +939,19 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
             _ => {}
         }
         // Select Notes picks from every note of the clip open in the MIDI Editor.
-        let rule_clip = (app.ops.midi_op == "select notes" && !app.ops.rule_split && app.ui.show_midi_editor)
+        let rule_clip = (app.ops.midi_op == "select notes" && app.ops.rule_action != "split" && app.ui.show_midi_editor)
             .then(|| crate::midi_editor::target_clip(app))
             .flatten();
         let picked = if app.ops.midi_op == "select notes" { None } else { editor_selection(app) };
-        let whom = if rule_clip.is_some() {
-            "Selects the matching notes in the MIDI Editor."
+        let events = app.ops.midi_op == "select notes" && app.ops.rule_events;
+        let whom = if rule_clip.is_some() && app.ops.rule_action != "select" {
+            if events {
+                "Acts on the matching events of the clip in the MIDI Editor."
+            } else {
+                "Acts on the matching notes of the clip in the MIDI Editor."
+            }
+        } else if rule_clip.is_some() {
+            if events { "Selects the matching events in their lane of the MIDI Editor." } else { "Selects the matching notes in the MIDI Editor." }
         } else if picked.is_some() {
             "Applies to the notes selected in the MIDI Editor."
         } else {
@@ -606,10 +963,18 @@ fn midi_ops(app: &mut SoundApp, ctx: &egui::Context) {
                 Some((id, mut p)) if rule_clip.is_some() => {
                     p["clips"] = json!([rule_clip.map(|c| c.0)]);
                     let r = app.run(id, p);
-                    if let Ok(v) = &r
-                        && let Some(a) = v.get("indices").and_then(|x| x.as_array())
-                    {
-                        app.midi.selected = a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect();
+                    if app.ops.rule_events {
+                        if let (Ok(v), Some(c)) = (&r, rule_clip) {
+                            select_events(app, c, v);
+                        }
+                    } else if let Ok(v) = &r {
+                        // Select picks them; the other actions leave no selection (the notes
+                        // may have moved or gone).
+                        app.midi.selected = v
+                            .get("indices")
+                            .and_then(|x| x.as_array())
+                            .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect())
+                            .unwrap_or_default();
                         app.midi.clip = rule_clip;
                     }
                     r
@@ -664,8 +1029,103 @@ fn groove_combo(app: &mut SoundApp, ui: &mut egui::Ui, label: &str, field: fn(&m
     });
 }
 
+/// Select Notes on controller events: the MIDI Editor selects the matching points of the first
+/// kind found (its lane shown), as a click in that lane would; the other actions leave none.
+fn select_events(app: &mut SoundApp, clip: soundcraft_model::ClipId, v: &serde_json::Value) {
+    app.midi.ctrl_sel = None;
+    if v.get("action").and_then(|a| a.as_str()) != Some("select") {
+        return;
+    }
+    let indices: Vec<usize> =
+        v.get("indices").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect()).unwrap_or_default();
+    let Some(seq) = app.engine.session().find_clip(clip).and_then(|(_, c)| c.midi_playing().cloned()) else { return };
+    let Some(kind) = indices.first().and_then(|i| seq.ctrls.get(*i)).map(|c| c.kind) else { return };
+    let same: Vec<usize> = indices.into_iter().filter(|i| seq.ctrls.get(*i).is_some_and(|c| c.kind == kind)).collect();
+    crate::midi_lanes::toggle(app, kind, true);
+    app.midi.clip = Some(clip);
+    app.midi.ctrl_sel = Some((kind, same));
+}
+
+/// Select Notes' form for controller events: their kinds, number, value and channel ranges, the
+/// beats, and select, delete or change (value, CC number, channel).
+fn events_form(ui: &mut egui::Ui, o: &mut OpsState) {
+    let range = |ui: &mut egui::Ui, label: &str, v: &mut (i64, i64), lo: i64, hi: i64| {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.add(egui::DragValue::new(&mut v.0).range(lo..=hi));
+            ui.label("to");
+            ui.add(egui::DragValue::new(&mut v.1).range(lo..=hi));
+        });
+    };
+    ui.horizontal_wrapped(|ui| {
+        for (on, name) in o.rule_kinds.iter_mut().zip(["Controllers", "Pitch bend", "Aftertouch", "Poly pressure", "Program change"]) {
+            ui.checkbox(on, name);
+        }
+    });
+    if !o.rule_kinds.iter().any(|k| *k) {
+        o.rule_kinds = [true; 5];
+    }
+    range(ui, "Number", &mut o.rule_number, 0, 127);
+    ui.label(egui::RichText::new("A controller's number, a poly pressure's key").small());
+    range(ui, "Value", &mut o.rule_value, -8192, 8191);
+    ui.label(egui::RichText::new("0 to 127; pitch bend -8192 to 8191").small());
+    range(ui, "Channel", &mut o.rule_channel, 1, 16);
+    let mut beats = o.rule_beats.is_some();
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut beats, "On beats").on_hover_text("Only events in these beats of their bar (1 is the downbeat)").changed() {
+            o.rule_beats = beats.then_some((1.0, 1.0));
+        }
+        if let Some((a, b)) = &mut o.rule_beats {
+            ui.add(egui::DragValue::new(a).range(1.0..=64.0).speed(0.25));
+            ui.label("to");
+            ui.add(egui::DragValue::new(b).range(1.0..=64.0).speed(0.25));
+        }
+    });
+    if !matches!(o.rule_action, "select" | "delete" | "change") {
+        o.rule_action = "select";
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(&mut o.rule_action, "select", "Select them");
+        ui.radio_value(&mut o.rule_action, "delete", "Delete them");
+        ui.radio_value(&mut o.rule_action, "change", "Change them");
+    });
+    if o.rule_action == "change" {
+        let (scale, add, number, channel) = &mut o.rule_ev_change;
+        ui.horizontal(|ui| {
+            ui.label("Value ×");
+            ui.add(egui::DragValue::new(scale).range(0.0..=1000.0).suffix(" %"));
+            ui.label("+");
+            ui.add(egui::DragValue::new(add).range(-16383..=16383));
+        });
+        ui.horizontal(|ui| {
+            let mut set = number.is_some();
+            if ui.checkbox(&mut set, "Controller number").on_hover_text("Moves control changes to this controller").changed() {
+                *number = set.then_some(1);
+            }
+            if let Some(n) = number {
+                ui.add(egui::DragValue::new(n).range(0..=127));
+            }
+            let mut set = channel.is_some();
+            if ui.checkbox(&mut set, "Channel").changed() {
+                *channel = set.then_some(1);
+            }
+            if let Some(c) = channel {
+                ui.add(egui::DragValue::new(c).range(1..=16));
+            }
+        });
+    }
+}
+
 /// Select Notes' form: the ranges a note must fall in, and select or split.
 fn rule_form(ui: &mut egui::Ui, o: &mut OpsState) {
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut o.rule_events, false, "Notes");
+        ui.radio_value(&mut o.rule_events, true, "Controller events").on_hover_text("Control changes, pitch bend, aftertouch and program changes");
+    });
+    if o.rule_events {
+        events_form(ui, o);
+        return;
+    }
     let range = |ui: &mut egui::Ui, label: &str, v: &mut (i64, i64), lo: i64, hi: i64| {
         ui.horizontal(|ui| {
             ui.label(label);
@@ -681,6 +1141,7 @@ fn rule_form(ui: &mut egui::Ui, o: &mut OpsState) {
         ui.add(egui::DragValue::new(&mut o.rule_pitch.1).range(0..=127).custom_formatter(|v, _| soundcraft_midi::note_name(v as u8)));
     });
     range(ui, "Velocity", &mut o.rule_velocity, 1, 127);
+    range(ui, "Channel", &mut o.rule_channel, 1, 16);
     range(ui, "Length (ticks)", &mut o.rule_length, 1, 1_000_000);
     let mut beats = o.rule_beats.is_some();
     ui.horizontal(|ui| {
@@ -693,10 +1154,29 @@ fn rule_form(ui: &mut egui::Ui, o: &mut OpsState) {
             ui.add(egui::DragValue::new(b).range(1.0..=64.0).speed(0.25));
         }
     });
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut o.rule_split, false, "Select them");
-        ui.radio_value(&mut o.rule_split, true, "Move them to a new track");
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(&mut o.rule_action, "select", "Select them");
+        ui.radio_value(&mut o.rule_action, "split", "Move them to a new track");
+        ui.radio_value(&mut o.rule_action, "delete", "Delete them");
+        ui.radio_value(&mut o.rule_action, "mute", "Mute them");
+        ui.radio_value(&mut o.rule_action, "unmute", "Unmute them");
+        ui.radio_value(&mut o.rule_action, "change", "Change them");
     });
+    if o.rule_action == "change" {
+        let (va, vs, tr, ls) = &mut o.rule_change;
+        ui.horizontal(|ui| {
+            ui.label("Velocity ×");
+            ui.add(egui::DragValue::new(vs).range(0.0..=1000.0).suffix(" %"));
+            ui.label("+");
+            ui.add(egui::DragValue::new(va).range(-127..=127));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Transpose");
+            ui.add(egui::DragValue::new(tr).range(-127..=127).suffix(" st"));
+            ui.label("Length ×");
+            ui.add(egui::DragValue::new(ls).range(1.0..=10_000.0).suffix(" %"));
+        });
+    }
 }
 
 fn rtp(app: &mut SoundApp, ctx: &egui::Context) {
@@ -792,6 +1272,27 @@ fn rtp(app: &mut SoundApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Select Notes on controller events sends `target: events` with the kinds ticked and only
+    /// select, delete or change; on notes it sends what it always did (no target).
+    #[test]
+    fn select_notes_on_events_names_its_target_kinds_and_changes() {
+        let mut o = OpsState { midi_op: "select notes".into(), ..OpsState::default() };
+        let (_, p) = midi_op_params(&o).unwrap();
+        assert!(p.get("target").is_none(), "{p}");
+        o.rule_events = true;
+        o.rule_kinds = [true, true, false, false, false];
+        o.rule_action = "mute";
+        let (id, p) = midi_op_params(&o).unwrap();
+        assert_eq!(id, "event.select_split_notes");
+        assert_eq!((p["target"].as_str(), p["action"].as_str()), (Some("events"), Some("select")), "a notes-only action selects");
+        assert_eq!(p["kinds"], serde_json::json!(["cc", "pitch_bend"]));
+        o.rule_action = "change";
+        o.rule_ev_change = (50.0, 3, Some(11), None);
+        let (_, p) = midi_op_params(&o).unwrap();
+        assert_eq!((p["value_scale"].as_f64(), p["value_add"].as_i64(), p["number_set"].as_i64()), (Some(50.0), Some(3), Some(11)));
+        assert!(p.get("channel_set").is_none());
+    }
 
     #[test]
     fn stretch_uses_start_over_end_and_scale_uses_end_over_start() {

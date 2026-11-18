@@ -240,7 +240,7 @@ fn an_instrument_tracks_midi_takes_show_as_lanes_and_swipe() {
     app.run("track.input", json!({"tracks": [t.0], "input": "midi:all", "channel": 0})).unwrap();
     app.run("mix.record_arm", json!({"tracks": [t.0], "value": true})).unwrap();
     app.run("options.midi_record_mode", json!({"mode": "take_lanes"})).unwrap();
-    let ev = |at: i64, pass: u16, msg: [u8; 3]| RecordedEvent { at, port: "K".into(), msg, pass };
+    let ev = |at: i64, pass: u16, msg: [u8; 3]| RecordedEvent { at, port: "K".into(), msg, pass, sysex: Vec::new() };
     let take = MidiTake { start: 0, end: 2 * LEN, looped: Some(Range::new(0, LEN)), punch: None, latency: 0 };
     let events = [ev(0, 0, [0x90, 60, 100]), ev(LEN / 2, 0, [0x80, 60, 0]), ev(0, 1, [0x90, 72, 100]), ev(LEN / 2, 1, [0x80, 72, 0])];
     record_live_midi(&mut app.engine, &take, &events);
@@ -275,4 +275,48 @@ fn an_instrument_tracks_midi_takes_show_as_lanes_and_swipe() {
     let comp: Vec<Option<usize>> = keys(&h).clips().iter().map(|c| c.from_layer).collect();
     assert_eq!(comp.first().copied().flatten(), Some(first), "{comp:?}");
     assert_eq!(h.state().engine.undo_label(), Some("Comp"));
+}
+
+/// The S in a take layer's header solos that take (heard in place of the comp) until it is
+/// clicked again; the comp is untouched.
+#[test]
+fn the_solo_key_auditions_a_take() {
+    let (mut h, _t) = harness();
+    let comp_before = comp(&h);
+    let key = h.get_by_label("Solo take Take 3").rect().center();
+    click(&mut h, key, Modifiers::NONE);
+    let tr = vox(&h);
+    assert_eq!(tr.audition_layer, Some(3));
+    assert_eq!(tr.heard_clips()[0].name, "take3", "take 3 is heard");
+    assert_eq!(comp(&h), comp_before, "the comp is untouched");
+    let key = h.get_by_label("Solo take Take 3").rect().center();
+    click(&mut h, key, Modifiers::NONE);
+    assert_eq!(vox(&h).audition_layer, None, "clicked again: let go");
+    click(&mut h, key, Modifiers::NONE);
+    assert_eq!(vox(&h).audition_layer, Some(3));
+    h.state_mut().run("transport.play", json!({})).unwrap();
+    steps(&mut h, 2);
+    h.state_mut().run("transport.stop", json!({})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(vox(&h).audition_layer, None, "the transport stopping lets go too");
+}
+
+#[test]
+fn only_the_takes_matching_the_selection_are_shown() {
+    let (mut h, t) = harness();
+    // Take 3 ends early: nothing of it lies in the second half.
+    h.state_mut().engine.session_mut().track_mut(t).unwrap().playlists[3].clips[0].length = LEN / 4;
+    let medium = vox(&h).height.points();
+    h.state_mut().run("edit.select", json!({"tracks": [t.0], "start": LEN / 2, "end": LEN * 3 / 4})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(row(&h, t)[3] - row(&h, t)[1], medium + 5.0 * LAYER_H, "off: every layer");
+    h.state_mut().run("comp.matching_takes", json!({"value": true})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(row(&h, t)[3] - row(&h, t)[1], medium + 4.0 * LAYER_H, "take 3 is hidden");
+    assert!(h.query_by_label("Vox layer Take 3").is_none());
+    h.get_by_label("Vox layer Take 4");
+    // Without a selection every layer shows again.
+    h.state_mut().run("edit.select_none", json!({})).unwrap();
+    steps(&mut h, 4);
+    assert_eq!(row(&h, t)[3] - row(&h, t)[1], medium + 5.0 * LAYER_H);
 }

@@ -3,7 +3,8 @@
 //!
 //! Notes are quantized to sixteenths. Each part is a single voice: notes that start together form
 //! a chord, overlapping notes are cut at the next onset, and anything crossing a bar line is split
-//! and tied.
+//! and tied. A clip's lyrics are sung under the notes they fall on (a word goes to the note that
+//! starts nearest it, within an eighth).
 
 use soundcraft_model::{ClipContent, Session, TrackId, TrackKind};
 use soundcraft_time::TICKS_PER_QUARTER;
@@ -23,6 +24,47 @@ pub struct ScoreSetup {
     pub composer: String,
     pub bars_per_system: u32,
     pub show_track_names: bool,
+    /// The staff size, percent of the standard (70-150): the whole page is drawn larger or
+    /// smaller.
+    pub staff_percent: u32,
+    /// Print Score writes each track as its own part, on its own page, titled with its name.
+    pub part_pages: bool,
+    /// The key signature at the start: sharps (above 0) or flats (below 0), and minor or not.
+    pub fifths: i32,
+    pub minor: bool,
+    /// The page: [`PAGES`] (0: one continuous page as tall as needed, as before; 1: A4; 2: US
+    /// Letter). A sized page starts a new page wherever the next system would not fit.
+    pub page: u8,
+    /// A new system starts at each section of the arrangement (the Band's section lane).
+    pub section_breaks: bool,
+    /// The measures (from 0) where a section starts: filled from the session.
+    pub section_bars: Vec<usize>,
+}
+
+/// The page sizes Print Score offers: name and size in CSS pixels (96 per inch).
+pub const PAGES: [(&str, f64, f64); 3] = [("Continuous", 794.0, 0.0), ("A4", 794.0, 1123.0), ("US Letter", 816.0, 1056.0)];
+
+/// A key's signature: its tonic pitch class and scale (0 major, 1 minor) as sharps (above 0)
+/// or flats (below 0), the way the key is usually written (F# major has six sharps, Db major
+/// five flats).
+pub fn key_fifths(tonic: u8, scale: u8) -> i32 {
+    // The relative major's tonic.
+    let major = if scale == 1 { (tonic + 3) % 12 } else { tonic % 12 };
+    const FIFTHS: [i32; 12] = [0, -5, 2, -3, 4, -1, 6, 1, -4, 3, -2, 5];
+    FIFTHS[usize::from(major)]
+}
+
+/// The alteration the signature `fifths` gives the note letter `step`.
+fn key_alter(fifths: i32, step: char) -> i32 {
+    const SHARPS: [char; 7] = ['F', 'C', 'G', 'D', 'A', 'E', 'B'];
+    let n = fifths.unsigned_abs().min(7) as usize;
+    if fifths > 0 && SHARPS[..n].contains(&step) {
+        1
+    } else if fifths < 0 && SHARPS[7 - n..].contains(&step) {
+        -1
+    } else {
+        0
+    }
 }
 
 const TITLE_KEY: &str = "score.title=";
@@ -30,6 +72,8 @@ const COMPOSER_KEY: &str = "score.composer=";
 
 impl ScoreSetup {
     pub fn from_session(s: &Session) -> Self {
+        // The key at the start: the Key ruler's, else the band's.
+        let (tonic, scale) = crate::vocal::key_pc_at(s, 0);
         let text = |key: &str| s.edit.flags.iter().find_map(|f| f.strip_prefix(key)).map(str::to_string);
         let bars = s.edit.value("score.bars_per_system", 4.0);
         Self {
@@ -37,6 +81,19 @@ impl ScoreSetup {
             composer: text(COMPOSER_KEY).unwrap_or_default(),
             bars_per_system: if bars.is_finite() { bars.clamp(1.0, 16.0) as u32 } else { 4 },
             show_track_names: !s.edit.flag("score.hide_names"),
+            staff_percent: {
+                let v = s.edit.value("score.staff_percent", 100.0);
+                if v.is_finite() { v.clamp(70.0, 150.0) as u32 } else { 100 }
+            },
+            part_pages: s.edit.flag("score.part_pages"),
+            fifths: key_fifths(tonic, scale),
+            minor: scale == 1,
+            page: {
+                let v = s.edit.value("score.page", 0.0);
+                if v.is_finite() { v.clamp(0.0, (PAGES.len() - 1) as f64) as u8 } else { 0 }
+            },
+            section_breaks: s.edit.flag("score.section_breaks"),
+            section_bars: section_bars(s),
         }
     }
 
@@ -47,7 +104,83 @@ impl ScoreSetup {
         s.edit.flags.insert(format!("{COMPOSER_KEY}{}", clean(&self.composer)));
         s.edit.values.insert("score.bars_per_system".into(), f64::from(self.bars_per_system.clamp(1, 16)));
         s.edit.set_flag("score.hide_names", !self.show_track_names);
+        s.edit.values.insert("score.staff_percent".into(), f64::from(self.staff_percent.clamp(70, 150)));
+        s.edit.set_flag("score.part_pages", self.part_pages);
+        s.edit.values.insert("score.page".into(), f64::from(self.page.min(PAGES.len() as u8 - 1)));
+        s.edit.set_flag("score.section_breaks", self.section_breaks);
     }
+}
+
+/// The measures (counted from 0, as [`layout`] numbers them) where a section of the Band's
+/// section lane starts, in order.
+pub fn section_bars(s: &Session) -> Vec<usize> {
+    let mut v: Vec<usize> = s
+        .band
+        .sections
+        .iter()
+        .filter(|b| b.length_ticks > 0 && b.start_tick >= 0)
+        .filter_map(|b| usize::try_from(s.tempo.bar_beat_at_tick(b.start_tick).bar.saturating_sub(1)).ok())
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// The systems of `n` measures: `per` to a system, a new one also at each of `breaks`.
+pub fn systems(n: usize, per: usize, breaks: &[usize]) -> Vec<std::ops::Range<usize>> {
+    let per = per.max(1);
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < n.max(1) {
+        let next_break = breaks.iter().copied().find(|b| *b > start).unwrap_or(usize::MAX);
+        let end = (start + per).min(next_break).min(n.max(1));
+        out.push(start..end);
+        start = end;
+    }
+    out
+}
+
+/// One clip's notes as the printed score lays them out (the song's bars, one voice: rests,
+/// chords, notes split at bar lines and tied): each item with its start in ticks from the clip's
+/// start, inside the clip. The score view draws its rests, ties and beams from these.
+pub fn clip_items(s: &Session, clip: &soundcraft_model::Clip) -> Vec<(i64, Item)> {
+    let ClipContent::Midi { sequence } = &clip.content else { return Vec::new() };
+    let sr = s.sample_rate;
+    let base = s.tempo.samples_to_ticks(clip.start, sr);
+    let end = s.tempo.samples_to_ticks(clip.end(), sr);
+    let mut notes = Vec::new();
+    for n in sequence.notes.iter().filter(|n| !n.muted && n.length > 0) {
+        let st = base.saturating_add(n.start);
+        if st < base || st >= end {
+            continue;
+        }
+        let a = quantize(st);
+        let b = quantize(st.saturating_add(n.length).min(end)).max(a + 1);
+        notes.push((a, b, n.pitch));
+    }
+    // The clip's words inside its window, sung under the notes they fall on (as the printed
+    // score has them).
+    let mut words = Vec::new();
+    for w in clip.lyrics.iter().flat_map(|l| &l.words) {
+        let at = clip.start.saturating_add(w.start);
+        if at >= clip.start && at < clip.end() && !w.text.trim().is_empty() {
+            words.push((quantize(s.tempo.samples_to_ticks(at, sr)), w.text.trim().to_string()));
+        }
+    }
+    let last = notes.iter().map(|x| x.1).max().unwrap_or(0).max(quantize(end));
+    let bars = measure_grid(s, last);
+    let mut out = Vec::new();
+    for ((ms, _, _, _, _, _), m) in bars.iter().zip(fill_sung(&bars, &notes, &words)) {
+        let mut at = *ms;
+        for it in m.items {
+            let tick = at.saturating_mul(UNIT).saturating_sub(base);
+            at = at.saturating_add(i64::from(it.units));
+            if tick >= 0 && tick < end - base {
+                out.push((tick, it));
+            }
+        }
+    }
+    out
 }
 
 /// One measure: its meter and its items (notes, chords or rests), in sixteenths.
@@ -55,6 +188,9 @@ impl ScoreSetup {
 pub struct Measure {
     pub numerator: u32,
     pub denominator: u32,
+    /// The key signature in force from this measure: sharps (above 0) or flats (below 0).
+    pub fifths: i32,
+    pub minor: bool,
     pub items: Vec<Item>,
 }
 
@@ -66,6 +202,8 @@ pub struct Item {
     pub units: u32,
     pub tie_start: bool,
     pub tie_stop: bool,
+    /// The word sung on this note (its first item only).
+    pub lyric: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,12 +217,13 @@ pub struct Part {
 /// Lay out the MIDI (and instrument) tracks `tracks` (all of them when empty).
 pub fn layout(s: &Session, tracks: &[TrackId]) -> Vec<Part> {
     let sr = s.sample_rate;
-    let mut raw: Vec<(String, Vec<(i64, i64, u8)>)> = Vec::new();
+    let mut raw: Vec<(String, Vec<(i64, i64, u8)>, Vec<(i64, String)>)> = Vec::new();
     for t in &s.tracks {
         if !matches!(t.kind, TrackKind::Midi | TrackKind::Instrument) || (!tracks.is_empty() && !tracks.contains(&t.id)) {
             continue;
         }
         let mut notes = Vec::new();
+        let mut words = Vec::new();
         for c in t.clips() {
             let ClipContent::Midi { sequence } = &c.content else { continue };
             if c.muted {
@@ -101,15 +240,22 @@ pub fn layout(s: &Session, tracks: &[TrackId]) -> Vec<Part> {
                 let b = quantize(st.saturating_add(n.length).min(end)).max(a + 1);
                 notes.push((a, b, n.pitch));
             }
+            // The clip's words inside its window, from its start in samples.
+            for w in c.lyrics.iter().flat_map(|l| &l.words) {
+                let at = c.start.saturating_add(w.start);
+                if at >= c.start && at < c.end() && !w.text.trim().is_empty() {
+                    words.push((quantize(s.tempo.samples_to_ticks(at, sr)), w.text.trim().to_string()));
+                }
+            }
         }
-        raw.push((t.name.clone(), notes));
+        raw.push((t.name.clone(), notes, words));
     }
-    let last = raw.iter().flat_map(|(_, n)| n.iter().map(|x| x.1)).max().unwrap_or(0);
+    let last = raw.iter().flat_map(|(_, n, _)| n.iter().map(|x| x.1)).max().unwrap_or(0);
     let bars = measure_grid(s, last);
     raw.into_iter()
-        .map(|(name, notes)| {
+        .map(|(name, notes, words)| {
             let avg = if notes.is_empty() { 60.0 } else { notes.iter().map(|n| f64::from(n.2)).sum::<f64>() / notes.len() as f64 };
-            Part { name, bass: avg < 57.0, measures: fill(&bars, &notes) }
+            Part { name, bass: avg < 57.0, measures: fill_sung(&bars, &notes, &words) }
         })
         .collect()
 }
@@ -118,8 +264,20 @@ fn quantize(tick: i64) -> i64 {
     (tick.max(0) + UNIT / 2) / UNIT
 }
 
-/// (start unit, length in units, numerator, denominator) per measure, covering `end_unit`.
-fn measure_grid(s: &Session, end_unit: i64) -> Vec<(i64, i64, u32, u32)> {
+/// One measure of the grid: start unit, length in units, meter, and key signature.
+type Bar = (i64, i64, u32, u32, i32, bool);
+
+/// The key signature a measure starting at `tick` takes: the Key ruler's key there (a change
+/// up to a sixteenth into the bar counts, so one placed on the bar line a sample late still
+/// lands on it), else the band's.
+fn key_at_tick(s: &Session, tick: i64) -> (i32, bool) {
+    let at = s.tempo.tick_to_samples(tick.saturating_add(UNIT - 1), s.sample_rate);
+    let (tonic, scale) = crate::vocal::key_pc_at(s, at);
+    (key_fifths(tonic, scale), scale == 1)
+}
+
+/// The measures covering `end_unit`.
+fn measure_grid(s: &Session, end_unit: i64) -> Vec<Bar> {
     let mut v = Vec::new();
     let mut bar = 1;
     loop {
@@ -130,7 +288,8 @@ fn measure_grid(s: &Session, end_unit: i64) -> Vec<(i64, i64, u32, u32)> {
         if ub <= ua {
             break;
         }
-        v.push((ua, ub - ua, m.numerator, m.denominator));
+        let (fifths, minor) = key_at_tick(s, a);
+        v.push((ua, ub - ua, m.numerator, m.denominator, fifths, minor));
         bar += 1;
         if ub >= end_unit.max(1) || v.len() >= MAX_MEASURES {
             break;
@@ -150,7 +309,13 @@ fn split_units(mut units: i64) -> Vec<u32> {
     out
 }
 
-fn fill(bars: &[(i64, i64, u32, u32)], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
+#[cfg(test)]
+fn fill(bars: &[Bar], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
+    fill_sung(bars, notes, &[])
+}
+
+/// The measures of `notes`, with `words` ((unit, text)) on the notes starting nearest them.
+fn fill_sung(bars: &[Bar], notes: &[(i64, i64, u8)], words: &[(i64, String)]) -> Vec<Measure> {
     // Onsets → chords, each held until its longest note ends or the next onset.
     let mut onsets: std::collections::BTreeMap<i64, (i64, Vec<u8>)> = std::collections::BTreeMap::new();
     for (a, b, p) in notes {
@@ -167,12 +332,26 @@ fn fill(bars: &[(i64, i64, u32, u32)], notes: &[(i64, i64, u8)]) -> Vec<Measure>
         ps.sort_unstable();
         spans.push((a, end, ps));
     }
+    // Each word on the onset nearest it (within an eighth); two on one note are joined.
+    let mut sung: Vec<Option<String>> = vec![None; spans.len()];
+    for (u, text) in words {
+        let i = spans.partition_point(|(a, _, _)| a < u);
+        let near = [i.checked_sub(1), Some(i)].into_iter().flatten().filter(|k| *k < spans.len()).min_by_key(|k| (spans[*k].0 - u).abs());
+        if let Some(k) = near.filter(|k| (spans[*k].0 - u).abs() <= 2)
+            && let Some(slot) = sung.get_mut(k)
+        {
+            *slot = Some(match slot.take() {
+                Some(w) => format!("{w} {text}"),
+                None => text.clone(),
+            });
+        }
+    }
     let mut measures = Vec::new();
-    for (ms, ml, num, den) in bars {
+    for (ms, ml, num, den, fifths, minor) in bars {
         let me = ms + ml;
         let mut items = Vec::new();
         let mut cursor = *ms;
-        let emit = |from: i64, to: i64, pitches: &[u8], tied_in: bool, tied_out: bool, items: &mut Vec<Item>| {
+        let emit = |from: i64, to: i64, pitches: &[u8], tied_in: bool, tied_out: bool, lyric: Option<&String>, items: &mut Vec<Item>| {
             let parts = split_units(to - from);
             let n = parts.len();
             for (k, u) in parts.into_iter().enumerate() {
@@ -182,34 +361,43 @@ fn fill(bars: &[(i64, i64, u32, u32)], notes: &[(i64, i64, u8)]) -> Vec<Measure>
                     units: u,
                     tie_stop: !rest && (tied_in || k > 0),
                     tie_start: !rest && (tied_out || k + 1 < n),
+                    lyric: if k == 0 && !tied_in && !rest { lyric.cloned() } else { None },
                 });
             }
         };
-        for (a, b, ps) in spans.iter().filter(|(a, b, _)| *b > *ms && *a < me) {
+        for (si, (a, b, ps)) in spans.iter().enumerate().filter(|(_, (a, b, _))| *b > *ms && *a < me) {
             let from = (*a).max(*ms).max(cursor);
             let to = (*b).min(me);
             if to <= from {
                 continue;
             }
             if from > cursor {
-                emit(cursor, from, &[], false, false, &mut items);
+                emit(cursor, from, &[], false, false, None, &mut items);
             }
-            emit(from, to, ps, *a < *ms, *b > me, &mut items);
+            emit(from, to, ps, *a < *ms, *b > me, sung.get(si).and_then(Option::as_ref), &mut items);
             cursor = to;
         }
         if cursor < me {
-            emit(cursor, me, &[], false, false, &mut items);
+            emit(cursor, me, &[], false, false, None, &mut items);
         }
-        measures.push(Measure { numerator: *num, denominator: *den, items });
+        measures.push(Measure { numerator: *num, denominator: *den, fifths: *fifths, minor: *minor, items });
     }
     measures
 }
 
 /// (step, alter, octave) spelled with sharps.
 fn spell(pitch: u8) -> (char, i32, i32) {
-    const STEPS: [(char, i32); 12] =
+    spell_in(pitch, 0)
+}
+
+/// (step, alter, octave) spelled for the signature `fifths`: black keys as flats in a flat key,
+/// else as sharps.
+fn spell_in(pitch: u8, fifths: i32) -> (char, i32, i32) {
+    const SHARP: [(char, i32); 12] =
         [('C', 0), ('C', 1), ('D', 0), ('D', 1), ('E', 0), ('F', 0), ('F', 1), ('G', 0), ('G', 1), ('A', 0), ('A', 1), ('B', 0)];
-    let (step, alter) = STEPS[usize::from(pitch % 12)];
+    const FLAT: [(char, i32); 12] =
+        [('C', 0), ('D', -1), ('D', 0), ('E', -1), ('E', 0), ('F', 0), ('G', -1), ('G', 0), ('A', -1), ('A', 0), ('B', -1), ('B', 0)];
+    let (step, alter) = if fifths < 0 { FLAT } else { SHARP }[usize::from(pitch % 12)];
     (step, alter, i32::from(pitch / 12) - 1)
 }
 
@@ -249,20 +437,30 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
     for (i, p) in parts.iter().enumerate() {
         let _ = writeln!(x, "  <part id=\"P{}\">", i + 1);
         let mut meter = (0, 0);
+        let mut key = (setup.fifths, setup.minor);
         for (mi, m) in p.measures.iter().enumerate() {
             let _ = writeln!(x, "    <measure number=\"{}\">", mi + 1);
-            if mi == 0 || meter != (m.numerator, m.denominator) {
+            // The first measure takes the start key; a later one writes a key change.
+            let new_key = if mi == 0 { key } else { (m.fifths, m.minor) };
+            if mi == 0 || meter != (m.numerator, m.denominator) || new_key != key {
                 x.push_str("      <attributes>");
                 if mi == 0 {
-                    x.push_str("<divisions>4</divisions><key><fifths>0</fifths></key>");
+                    x.push_str("<divisions>4</divisions>");
                 }
-                let _ = write!(x, "<time><beats>{}</beats><beat-type>{}</beat-type></time>", m.numerator, m.denominator);
+                if mi == 0 || new_key != key {
+                    let _ = write!(x, "<key><fifths>{}</fifths><mode>{}</mode></key>", new_key.0, if new_key.1 { "minor" } else { "major" });
+                }
+                if mi == 0 || meter != (m.numerator, m.denominator) {
+                    let _ = write!(x, "<time><beats>{}</beats><beat-type>{}</beat-type></time>", m.numerator, m.denominator);
+                }
                 if mi == 0 {
                     x.push_str(if p.bass { "<clef><sign>F</sign><line>4</line></clef>" } else { "<clef><sign>G</sign><line>2</line></clef>" });
                 }
                 x.push_str("</attributes>\n");
                 meter = (m.numerator, m.denominator);
+                key = new_key;
             }
+            let fifths = key.0;
             for it in &m.items {
                 let (ty, dot) = note_type(it.units);
                 if it.pitches.is_empty() {
@@ -275,7 +473,7 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                     continue;
                 }
                 for (k, pitch) in it.pitches.iter().enumerate() {
-                    let (step, alter, octave) = spell(*pitch);
+                    let (step, alter, octave) = spell_in(*pitch, fifths);
                     x.push_str("      <note>");
                     if k > 0 {
                         x.push_str("<chord/>");
@@ -295,8 +493,13 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                     if dot {
                         x.push_str("<dot/>");
                     }
-                    if alter != 0 {
-                        x.push_str("<accidental>sharp</accidental>");
+                    // Shown where the note differs from the signature (no courtesy accidentals).
+                    if alter != key_alter(fifths, step) {
+                        x.push_str(match alter {
+                            1 => "<accidental>sharp</accidental>",
+                            -1 => "<accidental>flat</accidental>",
+                            _ => "<accidental>natural</accidental>",
+                        });
                     }
                     if it.tie_stop || it.tie_start {
                         x.push_str("<notations>");
@@ -307,6 +510,11 @@ pub fn musicxml(parts: &[Part], setup: &ScoreSetup) -> String {
                             x.push_str("<tied type=\"start\"/>");
                         }
                         x.push_str("</notations>");
+                    }
+                    if k == 0
+                        && let Some(w) = &it.lyric
+                    {
+                        let _ = write!(x, "<lyric number=\"1\"><syllabic>single</syllabic><text>{}</text></lyric>", xml_escape(w));
                     }
                     x.push_str("</note>\n");
                 }
@@ -329,31 +537,62 @@ fn staff_step(pitch: u8, bass: bool) -> i32 {
 
 /// An engraved score as a printable SVG page (A4 portrait width, as tall as needed).
 pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
-    const W: f64 = 794.0;
     const MARGIN: f64 = 48.0;
     const SP: f64 = 7.0; // staff space
     const STAFF_GAP: f64 = 70.0;
     const SYSTEM_GAP: f64 = 40.0;
     let n_measures = parts.iter().map(|p| p.measures.len()).max().unwrap_or(0);
     let per = setup.bars_per_system.max(1) as usize;
-    let systems = n_measures.div_ceil(per).max(1);
+    let breaks: &[usize] = if setup.section_breaks { &setup.section_bars } else { &[] };
+    let groups = systems(n_measures, per, breaks);
+    let (_, w, page_h) = PAGES.get(usize::from(setup.page)).copied().unwrap_or(PAGES[0]);
     let label_w = if setup.show_track_names { 70.0 } else { 0.0 };
     let staff_x0 = MARGIN + label_w + 34.0;
-    let staff_x1 = W - MARGIN;
+    let staff_x1 = w - MARGIN;
     let sys_h = parts.len().max(1) as f64 * STAFF_GAP + SYSTEM_GAP;
     let top = 110.0;
-    let h = top + systems as f64 * sys_h + MARGIN;
+    // Where each system goes: down the page, and onto a new page (a sized page) when it would
+    // not fit; the first page under the title.
+    let mut tops = Vec::with_capacity(groups.len());
+    let mut y = top;
+    let mut pages = 1usize;
+    let mut on_page = 0;
+    for _ in &groups {
+        if page_h > 0.0 && on_page > 0 && y + sys_h > pages as f64 * page_h - MARGIN {
+            y = pages as f64 * page_h + MARGIN + 20.0;
+            pages += 1;
+            on_page = 0;
+        }
+        tops.push(y);
+        y += sys_h;
+        on_page += 1;
+    }
+    let h = if page_h > 0.0 { pages as f64 * page_h } else { y + MARGIN };
     let mut o = String::new();
-    let _ =
-        writeln!(o, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{W}\" height=\"{h:.0}\" viewBox=\"0 0 {W} {h:.0}\" font-family=\"serif\">");
+    // A staff size other than 100 % scales the page (the drawing keeps its proportions).
+    let k = f64::from(setup.staff_percent.clamp(70, 150)) / 100.0;
+    let _ = writeln!(
+        o,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{:.0}\" height=\"{:.0}\" viewBox=\"0 0 {w} {h:.0}\" font-family=\"serif\">",
+        w * k,
+        h * k
+    );
     let _ = writeln!(o, "<rect width=\"100%\" height=\"100%\" fill=\"white\"/>");
-    let _ = writeln!(o, "<text x=\"{}\" y=\"56\" font-size=\"24\" text-anchor=\"middle\">{}</text>", W / 2.0, xml_escape(&setup.title));
+    for k in 1..pages {
+        // Where one page ends and the next begins.
+        let _ = writeln!(
+            o,
+            "<line x1=\"0\" y1=\"{:.0}\" x2=\"{w:.0}\" y2=\"{:.0}\" stroke=\"#bbb\" stroke-dasharray=\"4 4\" class=\"page-break\"/>",
+            k as f64 * page_h,
+            k as f64 * page_h
+        );
+    }
+    let _ = writeln!(o, "<text x=\"{}\" y=\"56\" font-size=\"24\" text-anchor=\"middle\">{}</text>", w / 2.0, xml_escape(&setup.title));
     if !setup.composer.is_empty() {
-        let _ = writeln!(o, "<text x=\"{}\" y=\"84\" font-size=\"13\" text-anchor=\"end\">{}</text>", W - MARGIN, xml_escape(&setup.composer));
+        let _ = writeln!(o, "<text x=\"{}\" y=\"84\" font-size=\"13\" text-anchor=\"end\">{}</text>", w - MARGIN, xml_escape(&setup.composer));
     }
     let bar_w = (staff_x1 - staff_x0) / per as f64;
-    for sys in 0..systems {
-        let y_sys = top + sys as f64 * sys_h;
+    for (sys, (group, y_sys)) in groups.iter().zip(tops.iter().copied()).enumerate() {
         for (pi, p) in parts.iter().enumerate() {
             let y0 = y_sys + pi as f64 * STAFF_GAP; // top line
             let bottom = y0 + 4.0 * SP;
@@ -376,8 +615,7 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
                 bottom + if p.bass { -SP } else { SP * 0.6 },
                 if p.bass { 26 } else { 36 }
             );
-            for k in 0..per {
-                let mi = sys * per + k;
+            for (k, mi) in group.clone().enumerate() {
                 let x0 = staff_x0 + k as f64 * bar_w;
                 let _ = writeln!(
                     o,
@@ -401,6 +639,14 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
                             let _ = writeln!(o, "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"1.3\"/>", x + 7.0, y0 + 1.5 * SP);
                         }
                         continue;
+                    }
+                    if let Some(w) = &it.lyric {
+                        let _ = writeln!(
+                            o,
+                            "<text x=\"{x:.1}\" y=\"{:.1}\" font-size=\"10\" text-anchor=\"middle\">{}</text>",
+                            bottom + 4.5 * SP,
+                            xml_escape(w)
+                        );
                     }
                     let steps: Vec<i32> = it.pitches.iter().map(|p2| staff_step(*p2, p.bass)).collect();
                     let filled = it.units < 8;
@@ -523,6 +769,124 @@ mod tests {
         assert!(split_units(0).is_empty());
     }
 
+    /// Parity section 7: the key on the Key ruler becomes the export's key signature, notes are
+    /// spelled for it and only those outside it carry an accidental.
+    #[test]
+    fn the_key_signature_is_exported_and_spells_the_notes() {
+        assert_eq!(key_fifths(7, 0), 1); // G major
+        assert_eq!(key_fifths(5, 0), -1); // F major
+        assert_eq!(key_fifths(0, 1), -3); // C minor
+        assert_eq!(key_fifths(9, 1), 0); // A minor
+        assert_eq!(key_fifths(6, 0), 6); // F# major
+        assert_eq!(spell_in(70, -1), ('B', -1, 4));
+        assert_eq!(key_alter(-1, 'B'), -1);
+        assert_eq!(key_alter(2, 'C'), 1);
+        let mut s = Session::default();
+        s.key_signatures.push((0, "F major".into()));
+        let setup = ScoreSetup::from_session(&s);
+        assert_eq!((setup.fifths, setup.minor), (-1, false));
+        let part = Part {
+            name: "Keys".into(),
+            bass: false,
+            measures: vec![Measure {
+                numerator: 4,
+                denominator: 4,
+                fifths: -1,
+                minor: false,
+                items: vec![
+                    Item { pitches: vec![70], units: 8, tie_start: false, tie_stop: false, lyric: None },
+                    Item { pitches: vec![71], units: 8, tie_start: false, tie_stop: false, lyric: None },
+                ],
+            }],
+        };
+        let x = musicxml(&[part], &setup);
+        assert!(x.contains("<key><fifths>-1</fifths><mode>major</mode></key>"), "{x}");
+        // Bb is in the key: no accidental; B natural is not: a natural sign.
+        assert!(x.contains("<step>B</step><alter>-1</alter>"));
+        assert_eq!(x.matches("<accidental>").count(), 1);
+        assert!(x.contains("<accidental>natural</accidental>"));
+    }
+
+    /// Parity section 7: a key change on the Key ruler is written as a new key signature in the
+    /// measure it falls in, and the notes after it are spelled for the new key.
+    #[test]
+    fn a_key_change_later_is_written_where_it_falls() {
+        let mut s = Session::default();
+        s.key_signatures.push((0, "C major".into()));
+        // Bar 3 starts at tick 2 × 4 quarters (4/4).
+        let bar3 = s.tempo.tick_to_samples(8 * TICKS_PER_QUARTER, s.sample_rate);
+        s.key_signatures.push((bar3, "F major".into()));
+        let setup = ScoreSetup::from_session(&s);
+        let grid = measure_grid(&s, 4 * 16);
+        assert_eq!(grid.iter().map(|b| b.4).collect::<Vec<_>>(), vec![0, 0, -1, -1]);
+        // A# in bar 1 (C major: spelled sharp) and Bb in bar 3 (F major: in the key).
+        let measures = fill(&grid, &[(0, 4, 70), (32, 36, 70)]);
+        let part = Part { name: "Keys".into(), bass: false, measures };
+        let x = musicxml(&[part], &setup);
+        assert_eq!(x.matches("<key>").count(), 2, "{x}");
+        let m3 = x.split("<measure number=\"3\">").nth(1).unwrap_or_default();
+        assert!(m3.starts_with("\n      <attributes><key><fifths>-1</fifths><mode>major</mode></key></attributes>"), "{m3}");
+        assert!(m3.contains("<step>B</step><alter>-1</alter>"));
+        let m1 = x.split("<measure number=\"2\">").next().unwrap_or_default();
+        assert!(m1.contains("<step>A</step><alter>1</alter>") && m1.contains("<accidental>sharp</accidental>"));
+        assert_eq!(x.matches("<accidental>").count(), 1, "the Bb after the change carries none");
+    }
+
+    /// Parity section 7: a clip's words are sung under the notes they fall on, in the MusicXML
+    /// export (`lyric`) and the printed score.
+    #[test]
+    fn lyrics_go_under_their_notes() {
+        let bars = vec![(0, 16, 4, 4, 0, false)];
+        // "Hel" on the first note, "lo" a 16th late for the second (still nearest it), nothing
+        // on the third; "far" too far from any note.
+        let words = vec![(0, "Hel".to_string()), (5, "lo".to_string()), (14, "far".to_string())];
+        let m = fill_sung(&bars, &[(0, 4, 60), (4, 8, 62), (8, 10, 64)], &words);
+        let sung: Vec<Option<&str>> = m[0].items.iter().map(|i| i.lyric.as_deref()).collect();
+        assert_eq!(sung, vec![Some("Hel"), Some("lo"), None, None]);
+        let part = Part { name: "Voice".into(), bass: false, measures: m };
+        let setup = ScoreSetup {
+            title: "T".into(),
+            composer: String::new(),
+            bars_per_system: 4,
+            show_track_names: true,
+            staff_percent: 100,
+            part_pages: false,
+            fifths: 0,
+            minor: false,
+            page: 0,
+            section_breaks: false,
+            section_bars: Vec::new(),
+        };
+        let x = musicxml(std::slice::from_ref(&part), &setup);
+        assert_eq!(x.matches("<lyric ").count(), 2);
+        assert!(x.contains("<lyric number=\"1\"><syllabic>single</syllabic><text>Hel</text></lyric>"));
+        assert!(svg(&[part], &setup).contains(">lo</text>"));
+        // Through a session: a MIDI clip's lyric lines.
+        let mut s = Session::default();
+        let t = s.add_track(soundcraft_model::TrackKind::Instrument, soundcraft_model::ChannelFormat::Stereo, Some("Voice"));
+        let mut seq = soundcraft_midi::Sequence::default();
+        seq.notes.push(soundcraft_midi::Note {
+            probability: 100,
+            pitch: 67,
+            velocity: 90,
+            muted: false,
+            release_velocity: 64,
+            channel: 0,
+            start: 0,
+            length: 960,
+        });
+        let id = s.new_clip_id();
+        let mut clip = soundcraft_model::Clip::midi(id, "v", 0, 96_000, seq);
+        clip.lyrics = vec![soundcraft_model::LyricLine {
+            start: 0,
+            end: 10,
+            words: vec![soundcraft_model::LyricWord { start: 0, end: 10, text: "Sing".into() }],
+        }];
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(clip);
+        let parts = layout(&s, &[]);
+        assert_eq!(parts[0].measures[0].items[0].lyric.as_deref(), Some("Sing"));
+    }
+
     #[test]
     fn spelling_and_staff_steps() {
         assert_eq!(spell(60), ('C', 0, 4));
@@ -533,9 +897,50 @@ mod tests {
     }
 
     #[test]
+    fn pages_and_section_breaks() {
+        assert_eq!(systems(10, 4, &[]), vec![0..4, 4..8, 8..10]);
+        assert_eq!(systems(10, 4, &[3, 6]), vec![0..3, 3..6, 6..10]);
+        assert_eq!(systems(0, 4, &[]), vec![0..1]);
+        let whole = Item { pitches: vec![60], units: 16, tie_start: false, tie_stop: false, lyric: None };
+        let part = Part {
+            name: "P".into(),
+            bass: false,
+            measures: (0..64).map(|_| Measure { numerator: 4, denominator: 4, fifths: 0, minor: false, items: vec![whole.clone()] }).collect(),
+        };
+        let mut setup = ScoreSetup {
+            title: "T".into(),
+            composer: String::new(),
+            bars_per_system: 4,
+            show_track_names: false,
+            staff_percent: 100,
+            part_pages: false,
+            fifths: 0,
+            minor: false,
+            page: 0,
+            section_breaks: false,
+            section_bars: vec![2],
+        };
+        let continuous = svg(std::slice::from_ref(&part), &setup);
+        assert!(!continuous.contains("page-break"), "one page as before");
+        setup.page = 1;
+        let a4 = svg(std::slice::from_ref(&part), &setup);
+        assert!(a4.contains("page-break"), "sixteen systems need more than one A4 page");
+        let height =
+            a4.split("viewBox=\"0 0 ").nth(1).and_then(|r| r.split('"').next()).and_then(|v| v.split(' ').nth(1)).and_then(|h| h.parse::<f64>().ok());
+        assert!(height.is_some_and(|h| h > 1123.0 && (h / 1123.0).fract() < 1e-9), "whole pages tall: {height:?}");
+        setup.section_breaks = true;
+        let broken = svg(std::slice::from_ref(&part), &setup);
+        // A system starts at the section's bar: bar 3's number heads a staff line of its own.
+        assert!(broken.len() > a4.len(), "the section adds a system");
+        let mut s = Session::default();
+        s.band.sections.push(soundcraft_model::SectionBlock { id: 1, start_tick: 4 * 3840, length_ticks: 3840, ..Default::default() });
+        assert_eq!(section_bars(&s), vec![4]);
+    }
+
+    #[test]
     fn measures_fill_exactly_and_tie_across_bars() {
         // 4/4: one bar = 16 units. A note from unit 12 to 20 crosses the bar line.
-        let bars = vec![(0, 16, 4, 4), (16, 16, 4, 4)];
+        let bars = vec![(0, 16, 4, 4, 0, false), (16, 16, 4, 4, 0, false)];
         let m = fill(&bars, &[(0, 4, 60), (0, 4, 64), (12, 20, 67)]);
         assert_eq!(m.len(), 2);
         for meas in &m {

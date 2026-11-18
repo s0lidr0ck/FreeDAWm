@@ -15,7 +15,7 @@
 //!   note-off for each held note, then sustain up and All Notes Off on every channel, before the
 //!   port closes.
 
-use soundcraft_mix::external_midi::{self, OutHub, message_len};
+use soundcraft_mix::external_midi::{self, OutHub, OutMsg, message_len};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +59,8 @@ pub struct OutPortInfo {
 struct Sender {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// Whole messages from the UI thread, sent as they come (MIDI Machine Control out).
+    now: std::sync::mpsc::Sender<Vec<u8>>,
 }
 
 impl Drop for Sender {
@@ -92,7 +94,7 @@ impl MidiOutputs {
         MidiOutputs { backend, hub: external_midi::hub(), ports: Vec::new(), choices, reserved: Vec::new(), wanted: Vec::new(), last_scan: None }
     }
 
-    /// The system's ports (`None` where there is no MIDI backend: the web build).
+    /// The system's ports (`None` where there is no MIDI backend).
     pub fn system(choices: BTreeMap<String, bool>) -> Option<MidiOutputs> {
         system_backend().map(|b| MidiOutputs::new(b, choices))
     }
@@ -138,6 +140,12 @@ impl MidiOutputs {
             self.reserved = names;
             self.apply();
         }
+    }
+
+    /// Sends `bytes` (one whole message, SysEx too) to the port named `name` at once, from the UI
+    /// thread, not timed with the audio (MIDI Machine Control out); false when it is not open.
+    pub fn send_now(&self, name: &str, bytes: &[u8]) -> bool {
+        self.ports.iter().find(|p| p.info.name == name).and_then(|p| p.sender.as_ref()).is_some_and(|s| s.now.send(bytes.to_vec()).is_ok())
     }
 
     /// Rescans when the last scan is 2 s old (or there was none).
@@ -204,20 +212,29 @@ impl MidiOutputs {
         let slot = self.hub.open(name).ok_or_else(|| "too many MIDI output ports open".to_string())?;
         let stop = Arc::new(AtomicBool::new(false));
         let (hub, flag) = (self.hub, Arc::clone(&stop));
-        let thread = std::thread::Builder::new().name(format!("MIDI out {name}")).spawn(move || run_sender(hub, slot, conn, &flag)).map_err(|e| {
-            hub.close(slot);
-            e.to_string()
-        })?;
-        Ok(Sender { stop, thread: Some(thread) })
+        let (now, rx) = std::sync::mpsc::channel();
+        let thread =
+            std::thread::Builder::new().name(format!("MIDI out {name}")).spawn(move || run_sender(hub, slot, conn, &flag, &rx)).map_err(|e| {
+                hub.close(slot);
+                e.to_string()
+            })?;
+        Ok(Sender { stop, thread: Some(thread), now })
     }
 }
 
 /// A sender thread: sends what is queued for `slot` when it is due, until told to stop; then
 /// lets go of every note it left on and gives the slot back.
-fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, stop: &AtomicBool) {
-    let mut pending: Vec<(u64, [u8; 3])> = Vec::with_capacity(external_midi::OUT_RING);
+fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, stop: &AtomicBool, now_rx: &std::sync::mpsc::Receiver<Vec<u8>>) {
+    let mut pending: Vec<(u64, OutMsg)> = Vec::with_capacity(external_midi::OUT_RING);
     let mut held = [[0u64; 2]; 16];
-    let send = |conn: &mut Box<dyn MidiSend>, held: &mut [[u64; 2]; 16], m: [u8; 3]| {
+    let send = |conn: &mut Box<dyn MidiSend>, held: &mut [[u64; 2]; 16], m: OutMsg| {
+        let m = match m {
+            OutMsg::Short(m) => m,
+            OutMsg::SysEx(bytes) => {
+                conn.send(&bytes);
+                return;
+            }
+        };
         let (ch, pitch) = (usize::from(m[0] & 0x0F), m[1] & 0x7F);
         if let Some(w) = held.get_mut(ch).and_then(|h| h.get_mut(usize::from(pitch / 64))) {
             let bit = 1u64 << (pitch % 64);
@@ -240,7 +257,9 @@ fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, st
         if stopping {
             // What was queued and not yet due is dropped, except the note-offs (a stop's).
             for (_, m) in pending.drain(..) {
-                if m[0] & 0xF0 == 0x80 || (m[0] & 0xF0 == 0x90 && m[2] == 0) {
+                if let OutMsg::Short(s) = m
+                    && (s[0] & 0xF0 == 0x80 || (s[0] & 0xF0 == 0x90 && s[2] == 0))
+                {
                     send(&mut conn, &mut held, m);
                 }
             }
@@ -248,6 +267,9 @@ fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, st
         }
         // Stable: messages due together keep the order they were played in.
         pending.sort_by_key(|e| e.0);
+        while let Ok(bytes) = now_rx.try_recv() {
+            conn.send(&bytes);
+        }
         let now = hub.now_us();
         let due = pending.partition_point(|e| e.0 <= now);
         for (_, m) in pending.drain(..due) {
@@ -271,7 +293,6 @@ fn run_sender(hub: &'static OutHub, slot: usize, mut conn: Box<dyn MidiSend>, st
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod system {
     use super::{MidiOutBackend, MidiSend};
 
@@ -316,40 +337,19 @@ mod system {
     }
 }
 
-/// The system's MIDI output backend (`None` on the web).
+/// The system's MIDI output backend.
 pub fn system_backend() -> Option<Box<dyn MidiOutBackend>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Some(Box::new(system::Midir))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
+    Some(Box::new(system::Midir))
 }
 
 /// Opens the system's output port `name` directly (a control surface's feedback port).
 pub fn open_system_port(name: &str) -> Result<Box<dyn MidiSend>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        system::open_port(name)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        Err(format!("{name}: no MIDI output here"))
-    }
+    system::open_port(name)
 }
 
-/// The system's output port names (empty on the web).
+/// The system's output port names.
 pub fn system_port_names() -> Vec<String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        system::port_names()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        Vec::new()
-    }
+    system::port_names()
 }
 
 /// A backend with ports a test adds and removes; what each port was sent is kept. Shared state,
@@ -466,20 +466,39 @@ mod tests {
         assert!(hub.send(key, now, [0x90, 60, 100]));
         assert!(hub.send(key, now, [0xC1, 5, 0]));
         assert!(hub.send(key, now + 1_000, [0x90, 64, 90]));
+        assert!(hub.send_sysex(key, now + 1_500, &[0xF0, 0x43, 0x10, 0xF7]));
         assert!(hub.send(key, now + 60_000_000, [0x90, 67, 90]));
-        wait_for(|| fake.sent("Out Test Synth").len() >= 4);
-        assert_eq!(fake.sent("Out Test Synth"), vec![vec![0x90, 60, 100], vec![0xC1, 5], vec![0x90, 64, 90], vec![0x80, 60, 0]]);
+        wait_for(|| fake.sent("Out Test Synth").len() >= 5);
+        assert_eq!(
+            fake.sent("Out Test Synth"),
+            vec![vec![0x90, 60, 100], vec![0xC1, 5], vec![0x90, 64, 90], vec![0xF0, 0x43, 0x10, 0xF7], vec![0x80, 60, 0]],
+            "a SysEx goes whole, in time order"
+        );
         // Disabled: the held note gets its note-off, every channel sustain up and All Notes Off;
         // the note not yet due never goes.
         outs.set_enabled("Out Test Synth", false);
         assert!(!fake.is_open("Out Test Synth"));
         let sent = fake.sent("Out Test Synth");
-        assert_eq!(sent.get(4), Some(&vec![0x80, 64, 0]));
+        assert_eq!(sent.get(5), Some(&vec![0x80, 64, 0]));
         assert!(sent.contains(&vec![0xBF, 123, 0]) && sent.contains(&vec![0xB0, 64, 0]));
         assert!(!sent.contains(&vec![0x90, 67, 90]));
-        assert_eq!(sent.len(), 5 + 32);
+        assert_eq!(sent.len(), 6 + 32);
         assert!(!hub.send(key, 0, [0x90, 1, 1]), "the slot is free again");
         assert_eq!(outs.choices().get("Out Test Synth"), Some(&false));
+    }
+
+    #[test]
+    fn a_whole_message_goes_out_at_once_from_the_ui() {
+        let fake = FakeOutBackend::with_ports(&["Out Test Deck"]);
+        let mut outs = MidiOutputs::new(fake.boxed(), BTreeMap::new());
+        outs.rescan();
+        let play = [0xF0, 0x7F, 0x7F, 0x06, 0x02, 0xF7];
+        assert!(!outs.send_now("Out Test Deck", &play), "not open");
+        outs.set_enabled("Out Test Deck", true);
+        assert!(outs.send_now("Out Test Deck", &play));
+        wait_for(|| !fake.sent("Out Test Deck").is_empty());
+        assert_eq!(fake.sent("Out Test Deck"), vec![play.to_vec()]);
+        outs.set_enabled("Out Test Deck", false);
     }
 
     #[test]

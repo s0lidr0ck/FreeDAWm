@@ -207,7 +207,18 @@ fn bounce(h: &mut Harness<'_, SoundApp>, file: &Path) -> Vec<u8> {
     assert!(h.state().bounce.is_some(), "{}", h.state().ui.status);
     h.run();
     assert!(h.state().bounce.is_none());
-    std::fs::read(file).unwrap()
+    without_stamp(std::fs::read(file).unwrap())
+}
+
+/// A bounced WAV with its BWF origination date and time (the wall clock when it was written)
+/// blanked, so two bounces of the same audio compare equal byte for byte.
+fn without_stamp(mut wav: Vec<u8>) -> Vec<u8> {
+    let bext = wav.windows(4).take(4096).position(|w| w == b"bext").expect("a BWF bext chunk");
+    // description 256, originator 32, originator reference 32, then date 10 and time 8.
+    let stamp = bext + 8 + 256 + 32 + 32;
+    assert!(wav[stamp..stamp + 18].iter().all(|b| b.is_ascii_digit() || *b == b'-' || *b == b':'), "the date and time");
+    wav[stamp..stamp + 18].fill(0);
+    wav
 }
 
 #[test]

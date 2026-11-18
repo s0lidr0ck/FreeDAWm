@@ -22,7 +22,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::config::{NetConfig, PairedDevice};
-use crate::pairing::{Confirm, Pairing, PendingPair};
+use crate::pairing::exchange::{self, Confirmed, Exchange, LinkKeys, Side};
+use crate::pairing::{Confirm, PAIRING_VERSION, Pairing, PendingPair};
 use crate::proto::{BoothTransport, FollowerReport, RemoteAction, RemoteStatus, RigStatus, SketchNote, TransportState};
 use crate::take::{BoothAnchor, TakeEnvelope, remote_port_name};
 
@@ -137,6 +138,11 @@ const STYLE: &str = include_str!("../web/remote.css");
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+/// What a PC with an older FreeDAWm (one that would send the code itself) is told when it asks
+/// to pair.
+pub const UPDATE_PC: &str =
+    "update FreeDAWm on this computer to pair with this booth: it pairs PCs by a newer exchange in which the code is never sent";
 
 /// A fresh random number from the OS (for codes and tokens).
 pub fn random_u64() -> u64 {
@@ -364,25 +370,86 @@ impl Hub {
         let now = self.now_s();
         let r = lock(&self.inner.pairing).request(name, kind, now, random_u64).ok_or("too many pairing requests; try again in a few minutes")?;
         log::info!("pairing requested by {} ({}): code shown on screen", r.name, r.kind);
-        Ok(json!({"request": r.id, "pc": self.pc_name()}))
+        Ok(json!({"request": r.id, "pc": self.pc_name(), "pairing": PAIRING_VERSION}))
     }
 
-    /// `peer`: the device's key when it pairs over the encrypted local link (it is then bound to
-    /// that key and that link).
-    fn pair_confirm(&self, id: &str, code: &str, peer: Option<&str>) -> Result<Value, (String, u8)> {
+    /// A browser typed the code (the phone's page; a PC's code is never sent).
+    fn pair_confirm(&self, id: &str, code: &str) -> Result<Value, (String, u8)> {
         let now = self.now_s();
         let got = lock(&self.inner.pairing).confirm(id, code, now);
         match got {
-            Confirm::Paired { name, kind } => {
-                let token = new_token();
-                let key = peer.unwrap_or_default().to_string();
-                let dev = PairedDevice { name: name.clone(), kind, token: token.clone(), follows: false, key };
-                self.update_config(|c| c.paired.push(dev));
-                Ok(json!({"token": token, "name": name, "pc": self.pc_name()}))
-            }
+            Confirm::Paired { name, kind } => Ok(self.paired(name, kind, None)),
             Confirm::Wrong { left } => Err((format!("wrong code ({left} tries left)"), left)),
             Confirm::Unknown => Err(("that pairing request has expired; ask again".into(), 0)),
         }
+    }
+
+    /// Remembers a device just paired and answers with its token. `peer`: the PC's key when it
+    /// paired over the encrypted local link (it is then bound to that key and that link).
+    fn paired(&self, name: String, kind: String, peer: Option<&str>) -> Value {
+        let token = new_token();
+        let key = peer.unwrap_or_default().to_string();
+        let dev = PairedDevice { name: name.clone(), kind, token: token.clone(), follows: false, key };
+        self.update_config(|c| c.paired.push(dev));
+        json!({"token": token, "name": name, "pc": self.pc_name()})
+    }
+
+    /// `pair.exchange {request, msg}`: a PC starts the key exchange for its request (see
+    /// [`crate::pairing::exchange`]), spending one of its tries. `keys`: the two link keys as this
+    /// connection's TLS session proved them (`LinkKeys::PLAIN` on the plain link). Returns the
+    /// request, this side's confirmation state and the answer (the booth's message and
+    /// confirmation). Every failure after the try was spent ends the exchange as failed.
+    fn pair_exchange(&self, params: &Value, keys: Option<LinkKeys>) -> Result<(String, Confirmed, Value), String> {
+        let keys = keys.ok_or("the encrypted link did not say which keys it proved")?;
+        let id = params.get("request").and_then(Value::as_str).filter(|s| s.len() <= 64).ok_or("no pairing request named")?;
+        let code =
+            lock(&self.inner.pairing).begin_exchange(id, self.now_s()).ok_or("that pairing request has expired or has no tries left; ask again")?;
+        let theirs = params
+            .get("msg")
+            .and_then(Value::as_str)
+            .filter(|s| s.len() <= 4 * exchange::MSG_LEN)
+            .and_then(crate::audio::b64_decode)
+            .filter(|m| m.len() == exchange::MSG_LEN);
+        let confirmed = theirs.ok_or(exchange::Damaged).and_then(|theirs| {
+            let (ex, mine) = Exchange::start(Side::Booth, &code, keys);
+            ex.finish(&theirs).map(|c| (c, mine))
+        });
+        drop(code);
+        match confirmed {
+            Ok((c, mine)) => {
+                let answer = json!({"msg": crate::audio::b64_encode(&mine), "confirm": crate::audio::b64_encode(&c.tag())});
+                Ok((id.to_string(), c, answer))
+            }
+            Err(e) => {
+                self.pair_exchange_failed(id);
+                Err(e.to_string())
+            }
+        }
+    }
+
+    /// `pair.finish {confirm}`: the PC's confirmation for the exchange `id` this connection began.
+    /// Pairs when it matches (compared in constant time); otherwise the try stays spent.
+    fn pair_finish(&self, id: &str, c: &Confirmed, params: &Value, peer: Option<&str>) -> Result<Value, String> {
+        let tag = params.get("confirm").and_then(Value::as_str).filter(|s| s.len() <= 4 * exchange::TAG_LEN).and_then(crate::audio::b64_decode);
+        let ok = tag.is_some_and(|t| c.check(&t));
+        let got = lock(&self.inner.pairing).finish_exchange(id, ok, self.now_s());
+        match got {
+            Confirm::Paired { name, kind } => {
+                log::info!("network: {name} paired; its code proved both PCs' keys");
+                Ok(self.paired(name, kind, peer))
+            }
+            Confirm::Wrong { left } => {
+                log::info!("network: a PC's pairing exchange failed (a wrong code, or another computer in between)");
+                Err(format!("wrong code, or another computer is in between ({left} tries left)"))
+            }
+            Confirm::Unknown => Err("that pairing request has expired; ask again".into()),
+        }
+    }
+
+    /// An exchange begun for `id` ended without a match (its try stays spent).
+    fn pair_exchange_failed(&self, id: &str) {
+        let now = self.now_s();
+        let _ = lock(&self.inner.pairing).finish_exchange(id, false, now);
     }
 
     fn device(&self, token: &str) -> Option<PairedDevice> {
@@ -882,7 +949,7 @@ impl Hub {
             ("POST", "/api/pair/confirm") => {
                 let id = body.get("request").and_then(Value::as_str).unwrap_or("");
                 let code = body.get("code").and_then(Value::as_str).unwrap_or("");
-                match self.pair_confirm(id, code, None) {
+                match self.pair_confirm(id, code) {
                     Ok(v) => respond_json(&mut out, 200, &v),
                     Err((e, left)) => respond_json(&mut out, 403, &json!({"error": e, "left": left})),
                 }
@@ -982,8 +1049,13 @@ impl Hub {
 
     fn serve_lines(&self, mut reader: BufReader<TcpStream>, out: TcpStream, addr: SocketAddr, stop: &Arc<AtomicBool>, kind: LinkKind) {
         let internet = kind == LinkKind::Internet;
-        // The caller's key on the encrypted link (its bridge's first line).
+        // The caller's key on the encrypted link (its bridge's first line), and this PC's own as
+        // that connection's TLS session proved them.
         let mut peer: Option<String> = None;
+        let mut me: Option<String> = None;
+        // A PC's pairing exchange under way on this connection: its request and this side's
+        // confirmation state. Anything but `pair.finish` next ends it as failed.
+        let mut exchange: Option<(String, Confirmed)> = None;
         let out = Arc::new(Mutex::new(out));
         let mut buf = Vec::new();
         let mut who: Option<PairedDevice> = None;
@@ -1006,6 +1078,9 @@ impl Hub {
             let msg: Value = match serde_json::from_str(text) {
                 Ok(v) => v,
                 Err(e) => {
+                    if let Some((id, _)) = exchange.take() {
+                        self.pair_exchange_failed(&id);
+                    }
                     write_line(&out, &json!({"ok": false, "error": format!("bad JSON: {e}")}));
                     continue;
                 }
@@ -1017,12 +1092,22 @@ impl Hub {
                 self.touch_link(l);
             }
             let plain_refused = kind == LinkKind::Plain && lock(&self.inner.cfg).encrypted_only;
+            // An exchange is answered by `pair.finish` at once, or it failed (its try is spent).
+            if method != "pair.finish"
+                && let Some((id, _)) = exchange.take()
+            {
+                self.pair_exchange_failed(&id);
+            }
+            // This line's answer ends the connection (a failed pairing exchange).
+            let mut close = false;
             let reply: Option<Value> = match method.as_str() {
                 "link.peer" => {
                     let key = params.get("key").and_then(Value::as_str).filter(|k| crate::internet::key_from_hex(k).is_some());
-                    match key {
-                        Some(k) if kind == LinkKind::Encrypted && peer.is_none() && who.is_none() => {
+                    let own = params.get("me").and_then(Value::as_str).filter(|k| crate::internet::key_from_hex(k).is_some());
+                    match (key, own) {
+                        (Some(k), Some(m)) if kind == LinkKind::Encrypted && peer.is_none() && who.is_none() => {
                             peer = Some(k.to_string());
+                            me = Some(m.to_string());
                             None
                         }
                         _ => Some(json!({"ok": false, "error": "not on this link"})),
@@ -1031,25 +1116,51 @@ impl Hub {
                 _ if kind == LinkKind::Encrypted && peer.is_none() => {
                     Some(json!({"ok": false, "error": "the encrypted link did not say who is calling"}))
                 }
-                "pair.request" | "pair.confirm" | "pair.invite" | "hello" if plain_refused => Some(
+                "pair.request" | "pair.confirm" | "pair.exchange" | "pair.finish" | "pair.invite" | "hello" if plain_refused => Some(
                     json!({"ok": false, "error": "this booth takes PCs over the encrypted local link only (Setup › Network on the booth)", "pair": true}),
                 ),
-                "pair.request" | "pair.confirm" if internet => {
+                "pair.request" | "pair.confirm" | "pair.exchange" | "pair.finish" if internet => {
                     Some(json!({"ok": false, "error": "over the internet, pair with an invite from the booth", "pair": true}))
                 }
                 "pair.invite" => Some(answer(self.pair_invite(
                     params.get("secret").and_then(Value::as_str).unwrap_or(""),
                     params.get("name").and_then(Value::as_str).unwrap_or("PC"),
                 ))),
+                // A PC with an older FreeDAWm says no version (it would send the code itself):
+                // told to update before any code is shown.
+                "pair.request" if params.get("pairing").and_then(Value::as_u64).is_none_or(|v| v < PAIRING_VERSION) => {
+                    Some(json!({"ok": false, "error": UPDATE_PC, "pair": true, "update": true}))
+                }
                 "pair.request" => Some(answer(self.pair_request(params.get("name").and_then(Value::as_str).unwrap_or("PC"), "pc"))),
-                "pair.confirm" => Some(answer(
-                    self.pair_confirm(
-                        params.get("request").and_then(Value::as_str).unwrap_or(""),
-                        params.get("code").and_then(Value::as_str).unwrap_or(""),
-                        peer.as_deref(),
-                    )
-                    .map_err(|(e, _)| e),
-                )),
+                // The code in the clear (an older FreeDAWm): never compared, never accepted.
+                "pair.confirm" => Some(json!({"ok": false, "error": UPDATE_PC, "pair": true, "update": true})),
+                "pair.exchange" => {
+                    let keys = match kind {
+                        LinkKind::Encrypted => peer.as_deref().zip(me.as_deref()).and_then(|(p, m)| LinkKeys::from_hex(m, p)),
+                        _ => Some(LinkKeys::PLAIN),
+                    };
+                    match self.pair_exchange(&params, keys) {
+                        Ok((id, c, result)) => {
+                            exchange = Some((id, c));
+                            Some(json!({"ok": true, "result": result}))
+                        }
+                        Err(e) => {
+                            close = true;
+                            Some(json!({"ok": false, "error": e, "pair": true}))
+                        }
+                    }
+                }
+                "pair.finish" => {
+                    close = true;
+                    match exchange.take() {
+                        Some((id, c)) => {
+                            let r = self.pair_finish(&id, &c, &params, if kind == LinkKind::Encrypted { peer.as_deref() } else { None });
+                            close = r.is_err();
+                            Some(answer(r))
+                        }
+                        None => Some(json!({"ok": false, "error": "no pairing exchange on this connection", "pair": true})),
+                    }
+                }
                 "hello" => {
                     let token = params.get("token").and_then(Value::as_str).unwrap_or("");
                     match self.device(token) {
@@ -1139,6 +1250,12 @@ impl Hub {
                     break;
                 }
             }
+            if close {
+                break;
+            }
+        }
+        if let Some((id, _)) = exchange.take() {
+            self.pair_exchange_failed(&id);
         }
         if let Some(p) = pusher {
             p.store(true, Ordering::SeqCst);

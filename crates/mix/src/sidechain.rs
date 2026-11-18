@@ -291,7 +291,12 @@ fn resolve_with(s: &Session, over: Over<'_>) -> Plan {
         if !renders(tu) {
             continue;
         }
-        let feeds = |b: &Route| tu.mixer.output == *b || tu.mixer.sends.iter().flatten().any(|x| x.target == *b);
+        // (An instrument's extra outputs feed their busses too.)
+        let feeds = |b: &Route| {
+            tu.mixer.output == *b
+                || tu.mixer.sends.iter().flatten().any(|x| x.target == *b)
+                || tu.instrument_outs.iter().any(|o| *b == Route::Bus(o.bus))
+        };
         for (v, tv) in s.tracks.iter().enumerate() {
             if v != u
                 && renders(tv)
@@ -344,8 +349,19 @@ fn resolve_with(s: &Session, over: Over<'_>) -> Plan {
     }
     // MIDI tracks playing an instrument on another track (MIDI to Track) order like module MIDI
     // inputs: the source renders before the target; one that would close a loop plays nothing.
-    for (si, st) in s.tracks.iter().enumerate() {
-        let Some(target) = st.instrument.as_ref().and_then(crate::track_midi::target_of) else { continue };
+    let targets = s.tracks.iter().enumerate().flat_map(|(si, st)| {
+        let mut seen: Vec<TrackId> = Vec::new();
+        let zones = st.instrument.as_ref().map(crate::track_midi::zones_of).unwrap_or_default();
+        zones
+            .into_iter()
+            .filter(move |z| {
+                let fresh = !seen.contains(&z.track);
+                seen.push(z.track);
+                fresh
+            })
+            .map(move |z| (si, st, z.track))
+    });
+    for (si, st, target) in targets {
         let ci = s.tracks.iter().position(|t| t.id == target);
         let result = ci.map_or(Err(SidechainProblem::Missing), |ci| check_routed(s, &adj, ci, si));
         if result.is_ok()

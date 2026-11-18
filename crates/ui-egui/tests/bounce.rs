@@ -145,3 +145,75 @@ fn an_mp3_bounce_offers_a_bitrate_instead_of_a_bit_depth() {
     assert!((kbps - 128.0).abs() < 16.0, "{kbps:.0} kbps");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn harness_with_player() -> (Harness<'static, SoundApp>, soundcraft_playback::StalledAudio) {
+    let engine = soundcraft_engine::demo::demo_engine();
+    let (player, audio) = soundcraft_playback::Player::stalled(engine.session_arc(), 48_000, 512, 2);
+    let app = SoundApp::new(engine, Some(player), Services::default());
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
+        |ui, app: &mut SoundApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    (h, audio)
+}
+
+/// Bounce Mix › In real time: the live player plays the range and prints it; the file is what an
+/// offline bounce of the range writes, and the transport stops at the end.
+#[test]
+fn a_real_time_bounce_plays_the_range_and_writes_what_the_offline_bounce_writes() {
+    let dir = scratch("bounce-realtime");
+    let (mut h, mut audio) = harness_with_player();
+    let (start, end) = (480_000, 480_000 + 24_000);
+    let params = |name: &str, realtime: bool| json!({"path": dir.join(name).to_string_lossy(), "bit_depth": "32f", "start": start, "end": end, "realtime": realtime});
+    soundcraft_ui_egui::bounce::start(h.state_mut(), &params("Live.wav", true));
+    assert!(h.state().print.is_some(), "{}", h.state().ui.status);
+    assert!(h.state().rendering(), "editing and the transport wait for the pass");
+    let mut out = vec![0.0f32; 2 * 512];
+    for _ in 0..200 {
+        audio.fill(&mut out, 2);
+        h.step();
+        if h.state().print.is_none() && h.state().bounce.is_none() {
+            break;
+        }
+    }
+    assert!(h.state().bounce.is_none(), "{}", h.state().ui.status);
+    assert!(h.state().ui.status.starts_with("Bounced Live.wav"), "{}", h.state().ui.status);
+    audio.fill(&mut out, 2);
+    assert!(!h.state().player.as_ref().unwrap().is_playing(), "the transport stopped");
+    // The same range offline, through instances of its own.
+    let offline = soundcraft_engine::cmd::bounce_job(&h.state().engine, &params("Offline.wav", false)).unwrap().run().unwrap();
+    let read = |p: &Path| soundcraft_audio_io::decode(&std::fs::read(p).unwrap(), None).unwrap().1;
+    let (live, off) = (read(&dir.join("Live.wav")), read(&offline.files[0]));
+    assert_eq!(live.frames(), 24_000);
+    assert_eq!(live.channels.len(), off.channels.len());
+    let worst = live.channels.iter().zip(&off.channels).flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
+    assert!(worst < 1e-4, "the print is the mix: {worst}");
+    assert!(live.channels[0].iter().any(|x| x.abs() > 1e-3), "something played");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Cancel during the pass stops the transport and writes nothing.
+#[test]
+fn cancelling_a_real_time_bounce_stops_it_and_writes_nothing() {
+    let dir = scratch("bounce-realtime-cancel");
+    let (mut h, mut audio) = harness_with_player();
+    let p = json!({"path": dir.join("Live.wav").to_string_lossy(), "start": 0, "end": 480_000, "realtime": true});
+    soundcraft_ui_egui::bounce::start(h.state_mut(), &p);
+    let mut out = vec![0.0f32; 2 * 512];
+    for _ in 0..4 {
+        audio.fill(&mut out, 2);
+        h.step();
+    }
+    assert!(h.state().print.is_some());
+    h.get_by_label("Cancel").click();
+    h.step();
+    h.step();
+    assert!(h.state().print.is_none() && h.state().bounce.is_none());
+    assert_eq!(h.state().ui.status, "Bounce cancelled");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}

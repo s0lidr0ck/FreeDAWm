@@ -230,7 +230,7 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
             })
             .collect()
     });
-    // Cmd and Ctrl are separate keys only on macOS (asked at runtime so the web build in a Mac browser agrees).
+    // Cmd and Ctrl are separate keys only on macOS.
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     // Typing over the plugin browser goes to its search field, not to the single-key commands.
     let over_browser = app
@@ -248,6 +248,10 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
         }
         // The Vocal Editor under the pointer takes S, J, Escape, Delete and Ctrl+A.
         if crate::vocal_editor::owns_key(app, ctx, key, mods) {
+            continue;
+        }
+        // The Score Editor's staff under the pointer takes its entry keys (letters, values, arrows).
+        if crate::score_editor::owns_key(app, ctx, key, mods) {
             continue;
         }
         // The MIDI Editor under the pointer takes F (Fit).
@@ -506,6 +510,8 @@ fn fixed(app: &mut SoundApp, window: MainWindow, key: Key, m: Modifiers, mac: bo
         }
         Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 if plain => {
             let tool = match key {
+                // F6+F7 or F7+F8 held together, in either order, is the Smart Tool.
+                Key::F6 | Key::F7 | Key::F8 if smart_chord(app, key) => "smart",
                 Key::F5 => "zoom",
                 Key::F6 => "trim",
                 Key::F7 => "selector",
@@ -593,6 +599,16 @@ fn fixed(app: &mut SoundApp, window: MainWindow, key: Key, m: Modifiers, mac: bo
             let _ = app.run(id, json!({}));
             true
         }
+        _ => false,
+    }
+}
+
+/// True when `pressed` completes F6+F7 or F7+F8: the other key of the pair is held.
+fn smart_chord(app: &SoundApp, pressed: Key) -> bool {
+    let held = |k: Key| app.docking_context.as_ref().is_some_and(|c| c.input(|i| i.key_down(k)));
+    match pressed {
+        Key::F6 | Key::F8 => held(Key::F7),
+        Key::F7 => held(Key::F6) || held(Key::F8),
         _ => false,
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! - Factory presets are the engine's bundled ones (`fs_presets::factory_groups`), in the
 //!   catalogue's group order; user presets are the files in the DAW's preset folder for the
-//!   plugin (`SoundApp::preset_dir`, the folder the narrow drawer's preset menu uses). There is no
-//!   preset folder on the web, so the browser shows factory presets only there.
+//!   plugin (`SoundApp::preset_dir`, the folder the narrow drawer's preset menu uses). Without a
+//!   preset folder the browser shows factory presets only.
 //! - Categories: Favorites, All, the factory groups, User. Favourites persist as a JSON list next
 //!   to the preset folders (`.favourites/<plugin folder>.json`), as `favourites.json` does.
 //! - Recall goes through `mix.module_params {params, preset}` as one undo step. A preset may
@@ -98,9 +98,8 @@ pub struct BrowserOut {
 /// The merge key a recall is sent under (the editor's extra joins it).
 pub const RECALL_GESTURE: &str = "preset";
 
-/// The file system the browser touches: the user preset folder and the favourites file. None on
-/// the web (no file system): factory presets only, no Save / Delete / Folder.
-#[cfg(not(target_arch = "wasm32"))]
+/// The file system the browser touches: the user preset folder and the favourites file. Without
+/// a preset folder: factory presets only, no Save / Delete / Folder.
 mod disk {
     use std::path::Path;
     pub fn json_files(dir: &Path) -> Vec<(String, String)> {
@@ -124,22 +123,6 @@ mod disk {
     pub fn make_dir(d: &Path) {
         let _ = std::fs::create_dir_all(d);
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod disk {
-    use std::path::Path;
-    pub fn json_files(_dir: &Path) -> Vec<(String, String)> {
-        Vec::new()
-    }
-    pub fn read(_f: &Path) -> Option<String> {
-        None
-    }
-    pub fn write(_f: &Path, _text: &str) -> bool {
-        false
-    }
-    pub fn remove(_f: &Path) {}
-    pub fn make_dir(_d: &Path) {}
 }
 
 fn user_dir(app: &SoundApp, plugin: &str) -> Option<std::path::PathBuf> {

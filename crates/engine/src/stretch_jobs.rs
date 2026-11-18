@@ -170,8 +170,9 @@ pub fn rendered(s: &Session) -> Option<Session> {
     Some(out)
 }
 
-/// Which transpose render a job makes: clip, file, cents, first file position and length.
-pub type PitchKey = (soundcraft_model::ClipId, SourceId, i32, i64, usize);
+/// Which transpose render a job makes: clip, file, cents, first file position and length, and
+/// the Clean Vocal mix it renders (cleaned source, amount bits and bypass), if any.
+pub type PitchKey = (soundcraft_model::ClipId, SourceId, i32, i64, usize, Option<(SourceId, u32, bool)>);
 
 /// How much of the file beyond a transposed clip's window its render takes (so a small trim
 /// open still finds it), seconds.
@@ -189,12 +190,14 @@ pub struct PitchJob {
 impl PitchJob {
     /// Make the render (slow: off the UI thread). `None` when the audio is gone.
     pub fn run(&self) -> Option<soundcraft_model::PitchRender> {
-        let (_, source, cents, start, len) = self.key;
+        let (_, source, cents, start, len, _) = self.key;
         let ch = soundcraft_mix::clip_heard_window(&self.snap, &self.base, start, len)?;
         let sr = self.snap.sample_rate;
         let out = soundcraft_dsp::offline::pitch_shift(&ch, cents as f32 / 100.0, sr.as_f64() as f32);
         let audio = Arc::new(SourceAudio::new(soundcraft_audio_io::AudioBuffer { sample_rate: sr.hz(), channels: out }));
-        Some(soundcraft_model::PitchRender { source, channel: self.base.source_channel, cents, start, audio })
+        // The render is of what the clip is heard playing: Clean Vocal's mix blended in.
+        let clean = self.base.clean_alt().copied();
+        Some(soundcraft_model::PitchRender { source, channel: self.base.source_channel, cents, start, audio, clean })
     }
 }
 
@@ -206,7 +209,7 @@ pub fn next_pitch_job(e: &Engine) -> Option<PitchJob> {
     }
     let s = e.session_arc();
     let handle = s.sample_rate.samples(PITCH_HANDLE_SECS).max(0);
-    for c in s.all_clips().filter(|c| c.transpose_cents != 0 && c.is_audio() && c.clean_alt().is_none()) {
+    for c in s.all_clips().filter(|c| c.transpose_cents != 0 && c.is_audio()) {
         let Some(source) = c.source() else { continue };
         let Some(audio) = s.pool.get(source) else { continue };
         if s.pitch_renders.0.get(&c.id).is_some_and(|r| r.serves(c)) {
@@ -217,7 +220,8 @@ pub fn next_pitch_job(e: &Engine) -> Option<PitchJob> {
         let lo = c.source_offset().saturating_sub(handle).max(0);
         let hi = c.source_offset().saturating_add(span).saturating_add(handle).min(frames);
         let Some(len) = usize::try_from(hi.saturating_sub(lo)).ok().filter(|n| *n > 0) else { continue };
-        let key = (c.id, source, c.transpose_cents, lo, len);
+        let clean = c.clean_alt().map(|k| (k.source, k.mix.to_bits(), k.bypass));
+        let key = (c.id, source, c.transpose_cents, lo, len, clean);
         if e.pitch_tried.contains(&key) {
             continue;
         }
@@ -435,6 +439,32 @@ mod tests {
         };
         let steps = ((hi - lo) * 2.0) as i64;
         (0..steps).map(|k| lo + k as f64 * 0.5).max_by(|a, b| power(*a).total_cmp(&power(*b))).unwrap_or(0.0)
+    }
+
+    /// A transposed clip playing a Clean Vocal mix gets a render too, of the mix it plays.
+    #[test]
+    fn a_transposed_clip_with_clean_vocal_gets_a_render_of_what_it_plays() {
+        let (mut e, t, cid, _) = tone(true);
+        e.session_mut().track_mut(t).unwrap().elastic = None;
+        // The cleaned audio: a 660 Hz tone, all of it heard (mix 1).
+        let v: Vec<f32> = (0..96_000).map(|i| (std::f64::consts::TAU * 660.0 * i as f64 / SR).sin() as f32 * 0.5).collect();
+        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![v] };
+        let s = e.session_mut();
+        let cleaned = crate::io::add_source(s, "Tone clean", buf, None, soundcraft_audio_io::FileFormat::Wav);
+        let c = s.find_clip_mut(cid).unwrap();
+        let original = c.source().unwrap();
+        c.clean = Some(soundcraft_model::CleanAlt { source: cleaned, original, origin: 0, mix: 1.0, bypass: false });
+        e.execute("clip.transpose", &json!({"clips": [cid.0], "semitones": 7})).unwrap();
+        let job = super::next_pitch_job(&e).expect("a Clean Vocal clip gets a render too");
+        assert!(super::install_pitch(&mut e, &job, job.run()));
+        let hq = out(&e, t, 96_000);
+        let want = 660.0 * 2f64.powf(7.0 / 12.0);
+        let got = peak_hz(&hq[20_000..80_000], want - 40.0, want + 40.0);
+        assert!((got / want - 1.0).abs() < 0.005, "the cleaned audio, transposed: {got} Hz for {want}");
+        // A new Clean Vocal mix is heard live again until its own render.
+        e.session_mut().find_clip_mut(cid).unwrap().clean.as_mut().unwrap().mix = 0.5;
+        assert!(soundcraft_mix::pitch_render(e.session(), e.session().find_clip(cid).unwrap().1).is_none());
+        assert!(super::next_pitch_job(&e).is_some());
     }
 
     /// Clip › Real-Time › Transpose: the live shifter is heard at once; the background render,

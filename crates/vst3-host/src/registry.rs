@@ -426,7 +426,8 @@ fn build_info(d: &Vst3Descriptor, inst: &Instance) -> &'static PluginInfo {
         params: Box::leak(params.into_boxed_slice()),
         is_instrument: d.is_instrument,
         audiosuite: false,
-        sidechain: false,
+        // An auxiliary audio input is the plugin's sidechain: the host offers a key.
+        sidechain: inst.key_bus().is_some(),
         link: None,
         references: 0,
         midi_out: false,

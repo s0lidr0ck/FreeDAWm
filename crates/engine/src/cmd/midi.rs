@@ -3,7 +3,6 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_midi::ops::VelocityOp;
 use soundcraft_midi::{Note, Sequence};
 use soundcraft_model::{Clip, ClipContent, ClipId};
 use soundcraft_time::TICKS_PER_QUARTER;
@@ -64,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Notes",
             [],
             None,
-            "{clip, indices: [n], pitch?, start?, length?: ticks, velocity?: 1..127, channel?: 0..15, muted?: bool, probability?: 0..100} — the same value on every picked note (a muted note does not play; one with a probability plays on that share of passes) -> {indices}",
+            "{clip, indices: [n], pitch?, start?, length?: ticks, velocity?: 1..127, release_velocity?: 0..127 (note-off velocity), channel?: 0..15, muted?: bool, probability?: 0..100} — the same value on every picked note (a muted note does not play; one with a probability plays on that share of passes) -> {indices}",
             always,
             notes_set
         ),
@@ -91,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Change Note Velocity",
             [],
             None,
-            "{clip, indices?: [n] (default every note), set? | add? | scale? | from?, to? (a ramp over the notes' starts) | values?: [v] (one per index)} -> {changed}",
+            "{clip, indices?: [n] (default every note), set? | add? | scale? | from?, to? (a ramp over the notes' starts) | min?, max? | random? | compress?, center? (as event.change_velocity) | values?: [v] (one per index)} -> {changed}",
             always,
             notes_velocity
         ),
@@ -424,17 +423,7 @@ fn notes_copy(e: &mut Engine, p: &Value) -> Result<Value> {
 fn notes_velocity(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "midi.notes_velocity";
     let id = clip_id(p, C)?;
-    let op = if let Some(v) = p.get("set").and_then(Value::as_i64) {
-        Some(VelocityOp::Set(v.clamp(1, 127) as u8))
-    } else if let Some(v) = p.get("add").and_then(Value::as_i64) {
-        Some(VelocityOp::Add(v.clamp(-127, 127) as i32))
-    } else if let Some(v) = p.get("scale").and_then(Value::as_f64).filter(|v| v.is_finite()) {
-        Some(VelocityOp::Scale((v as f32).clamp(0.0, 10.0)))
-    } else if let (Some(a), Some(b)) = (p.get("from").and_then(Value::as_i64), p.get("to").and_then(Value::as_i64)) {
-        Some(VelocityOp::Ramp { from: a.clamp(1, 127) as u8, to: b.clamp(1, 127) as u8 })
-    } else {
-        None
-    };
+    let op = super::event::velocity_op(p);
     // `values` pairs with `indices` as given (order kept), so it is read from them directly.
     let values: Option<Vec<(usize, i64)>> = match p.get("values") {
         None => None,
@@ -448,7 +437,7 @@ fn notes_velocity(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     };
     if op.is_none() && values.is_none() {
-        return Err(bad(C, "give set, add, scale, from and to, or values"));
+        return Err(bad(C, "give set, add, scale, from and to, min or max, random, compress, or values"));
     }
     let seq = seq_mut(e, id, C)?;
     let mut changed = 0;
@@ -459,11 +448,11 @@ fn notes_velocity(e: &mut Engine, p: &Value) -> Result<Value> {
                 changed += 1;
             }
         }
-    } else if let Some(op) = op {
+    } else if let Some((op, seed)) = op {
         // The op works on a slice: gather the picked notes, change them, put them back.
         let at = picked(p, seq.notes.len());
         let mut work: Vec<Note> = at.iter().filter_map(|i| seq.notes.get(*i).copied()).collect();
-        soundcraft_midi::ops::change_velocity(&mut work, op);
+        soundcraft_midi::ops::change_velocity_with_seed(&mut work, op, seed);
         for (i, n) in at.iter().zip(work) {
             if let Some(slot) = seq.notes.get_mut(*i) {
                 slot.velocity = n.velocity;
@@ -485,8 +474,9 @@ fn notes_set(e: &mut Engine, p: &Value) -> Result<Value> {
     let (pitch, start, length, velocity, channel) = (int("pitch"), int("start"), int("length"), int("velocity"), int("channel"));
     let muted = p.get("muted").and_then(Value::as_bool);
     let probability = int("probability");
-    if [pitch, start, length, velocity, channel, probability].iter().all(Option::is_none) && muted.is_none() {
-        return Err(bad(C, "give pitch, start, length, velocity, channel, muted or probability"));
+    let release = int("release_velocity");
+    if [pitch, start, length, velocity, channel, probability, release].iter().all(Option::is_none) && muted.is_none() {
+        return Err(bad(C, "give pitch, start, length, velocity, release_velocity, channel, muted or probability"));
     }
     let seq = seq_mut(e, id, C)?;
     let idx = picked(p, seq.notes.len());
@@ -512,6 +502,9 @@ fn notes_set(e: &mut Engine, p: &Value) -> Result<Value> {
             }
             if let Some(v) = probability {
                 n.probability = v.clamp(0, 100) as u8;
+            }
+            if let Some(v) = release {
+                n.release_velocity = v.clamp(0, 127) as u8;
             }
         }
     }
@@ -739,6 +732,43 @@ mod tests {
         e.execute("edit.trim_clip", &json!({"clip": clip, "start": 2_500})).unwrap();
         e.execute("event.restore_performance", &json!({"clips": [clip]})).unwrap();
         assert_eq!(starts_pitches(&mut e, clip).first(), Some(&(-100, 60)));
+    }
+
+    /// Parity section 7: with Split Notes at the Cut on, a note sounding across a split is cut in
+    /// two: the left clip's part ends at the cut and the right clip starts with the rest. Off,
+    /// the whole note stays in the left clip, as before.
+    #[test]
+    fn split_notes_at_the_cut_keeps_a_note_in_both_halves() {
+        let lens = |e: &mut Engine, clip: u64| -> Vec<(i64, i64, u64)> {
+            let n = e.execute("midi.notes", &json!({"clip": clip})).unwrap();
+            n["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| (x["start"].as_i64().unwrap(), x["length"].as_i64().unwrap(), x["pitch"].as_u64().unwrap()))
+                .collect()
+        };
+        for on in [false, true] {
+            let mut e = Engine::default();
+            let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Keys"));
+            let clip = e.execute("midi.new_clip", &json!({"track": t.0, "start": 0, "end": 192_000})).unwrap()["clip"].as_u64().unwrap();
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": 60, "start_ticks": 3_000, "length_ticks": 2_000})).unwrap();
+            e.execute("midi.note_add", &json!({"clip": clip, "pitch": 64, "start_ticks": 4_000, "length_ticks": 480})).unwrap();
+            assert_eq!(e.execute("midi.split_notes", &json!({"on": on})).unwrap()["on"], on);
+            // The cut at bar 2 (3 840 ticks).
+            e.execute("edit.separate", &json!({"tracks": [t.0], "at": 96_000})).unwrap();
+            let right = e.session().track(t).unwrap().clips()[1].id.0;
+            if on {
+                assert_eq!(lens(&mut e, clip), vec![(3_000, 840, 60)]);
+                assert_eq!(lens(&mut e, right), vec![(0, 1_160, 60), (160, 480, 64)]);
+                // One undo puts the note back whole.
+                assert!(e.undo());
+                assert_eq!(lens(&mut e, clip), vec![(3_000, 2_000, 60), (4_000, 480, 64)]);
+            } else {
+                assert_eq!(lens(&mut e, clip), vec![(3_000, 2_000, 60)]);
+                assert_eq!(lens(&mut e, right), vec![(160, 480, 64)]);
+            }
+        }
     }
 
     /// Bug 4: notes moved, copied or added past the clip's end grow it to the next bar line, but

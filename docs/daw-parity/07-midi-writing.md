@@ -1,6 +1,6 @@
 # Four-DAW parity, section 7: writing MIDI
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** minor (bug fixes and tier-2 items over two rounds, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (bug fixes and tier-2 items over three rounds, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Third-party instruments named below belong to their makers.
@@ -57,24 +57,26 @@ The gaps are of four kinds:
    grooves and playback quantize, a drum view, chord stamping and scale folding, several clips
    in the editor, controller ramps and a full event list; the third round editing across
    clips, ramps that play smoothly, shared clip copies, stretching a clip and per-note
-   probability (the rows below say how far each goes). Still absent: chord pads, editable drum maps and note entry in the score.
-4. **Instruments are few and thin.** Four built in; the synth has two oscillators, one low-pass
-   filter, no LFO and no presets; the sampler holds one sample. No instrument parameter can be
-   automated, instrument latency is not compensated, and notes from clips reach the instrument
-   without their channel.
+   probability (the rows below say how far each goes); the follow-up round notes edited on the
+   track, 14-bit and RPN lanes, tempo from a performance, chord pads and the MIDI writers.
+4. **Instruments are few and thin.** Five built in; the synth has two oscillators with a sub and
+   noise, five filter types, an LFO, mono and legato play and factory presets; the sampler holds
+   one sample, and Pantry, the multisampler, plays zones by key and velocity (captured from an
+   instrument or loaded from SFZ and Decent Sampler libraries). Instrument parameters now take
+   automation lanes, instrument latency is compensated and notes from clips keep their channel.
 
 ## A. The note editor
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Piano roll opened from a clip, docked or in its own window | ● | ● | ● | ● | **Works** |
-| Notes edited directly on the track | ● | ◐ | ○ | ● | **Flag only**: the view exists in the menu; nothing handles it |
+| Notes edited directly on the track | ● | ◐ | ○ | ● | **Works**: a MIDI or instrument track showing Notes (their default view) is a small piano roll: its clip's lowest to highest note fill the clip's height. With the Smart, Grabber or Pencil tool a drag on a note moves it in time and pitch (the editor's selected notes with it), a drag on its right end resizes it, a click selects it in the MIDI Editor (Shift adds), Alt-click deletes it, and the Pencil clicked on empty clip space adds a note there; moves snap to the editor's grid from the bar (Alt: free). Each is the editor's own command, one undo step. A double-click still opens the editor. Clip moves are made by the clip's empty space or name bar, or with the track showing Clips (`ui-egui/src/track_notes.rs`) |
 | Draw, move, resize, copy by dragging, delete | ● | ● | ● | ● | **Works**; drawing needs the main window's Pencil tool |
 | Marquee, shift-click, select all | ● | ● | ● | ● | **Works** |
 | Select by clicking a key; invert; select by rule (pitch, velocity, position) | ● | ● | ● | ● | **Works**: a click on a piano key selects that pitch's notes (Shift adds, a drag along the keys adds each key's); Invert Selection, Select Same Pitch and Select by Rule… (pitch, velocity, length and beat-of-the-bar ranges, in the MIDI Operations window) in the editor's More menu |
 | Split a note, join notes | ● | ● | ● | ● | **Works** |
 | Mute notes | ● | ● | ● | ● | **Works**: Mute Notes / Unmute Notes in the editor's More menu (`midi.notes_set` with `muted`); a muted note is drawn faint, does not play and is left out of MIDI and DAWproject export; sessions saved before load unmuted, and unmuted notes save as before |
-| Hear a note on click and while dragging it | ● | ● | ● | ● | **Partial**: on click, draw and drop, not during the drag |
+| Hear a note on click and while dragging it | ● | ● | ● | ● | **Works**: on click, draw and drop, and while a note is dragged to another pitch (each new pitch sounds as a held piano key does, stopping when it is let go); with Audition on |
 | Type exact start, length, pitch, velocity | ● | ● | ● | ● | **Works** (note bar) |
 | Ghost notes from other tracks | ● | ● | ● | ● | **Works**, per track, read-only |
 | Edit several clips or tracks at once | ● | ● | ● | ● | **Works**: with several MIDI clips selected, the roll spans them all, the others' notes in their track's colour. A marquee, Shift-click, Select All and Ctrl+A select notes in any of them; moving, copying, resizing, nudging, deleting and Quantize (and the MIDI Operations on the selection) act on the selected notes of every clip as one undo step; the Pencil draws into the selected clip under it. A plain click on another clip's note makes it the one the velocity and controller lanes and the note bar show (the Clip menu too); those lanes edit that clip only. Scripts run the per-clip commands |
@@ -87,11 +89,11 @@ The gaps are of four kinds:
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Grid from whole notes to 64ths, triplets | ● | ● | ● | ● | **Works** |
-| Dotted values, other tuplets | ● | ● | ● | ● | **Partial**: dotted only by following the main window's grid; no quintuplets and the like |
-| Grid that adapts to zoom | ○ | ● | ● | ● | **Missing** |
-| Snap to the grid, or keep the offset from it | ● | ● | ● | ● | **Partial**: edges snap to lines, bodies keep their offset; no switch |
+| Dotted values, other tuplets | ● | ● | ● | ● | **Works**: the editor's Grid menu takes each value straight, triplet, dotted, quintuplet (5:4) or septuplet (7:4) (`ui.midi_editor` grid ids `1/8d`, `1/16q`, `1/8s`); the lines are counted from each bar |
+| Grid that adapts to zoom | ○ | ● | ● | ● | **Works**: Grid › Adapt to Zoom snaps to the finest straight value (1/64 to 1/1) whose lines stay 14 points apart, following each zoom (`auto`) |
+| Snap to the grid, or keep the offset from it | ● | ● | ● | ● | **Works**: edges snap to lines; a moved note keeps its offset from the grid, or with More › Snap Moves to the Grid its start lands on a line (Alt: free either way) |
 | New note takes the last note's length and velocity | ● | ● | ● | ● | **Works** |
-| Zoom, scroll, zoom to the notes | ● | ● | ● | ● | **Partial**: fit shows the clip, not the notes |
+| Zoom, scroll, zoom to the notes | ● | ● | ● | ● | **Works**: Fit shows the clip; Notes zooms to the selected notes (or every note), in time and in pitch (time only on a folded roll) |
 | Keys: nudge, transpose by semitone and octave | ● | ● | ● | ● | **Works** |
 | Keys: lengthen and shorten | ● | ● | ● | ● | **Works**: Alt+Right and Alt+Left, a grid step |
 
@@ -101,16 +103,17 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Velocity lane; drag one or many; draw a ramp | ● | ● | ● | ● | **Works**; stacked notes are spread so each can be grabbed |
 | Velocity shown as note colour | ● | ● | ● | ● | **Works** |
-| Scale, compress, limit, randomise velocity | ● | ● | ● | ● | **Partial**: scale has a dialog; limit and randomise are **Flag only** |
-| Release velocity | ● | ◐ | ● | ● | **Flag only**: stored; every edit writes the middle value |
+| Scale, compress, limit, randomise velocity | ● | ● | ● | ● | **Works**: Event › Change Velocity… sets, adds, scales, ramps, limits to a range, randomises (± an amount, a new seed each time) and compresses or expands (a percent of each velocity's distance from the notes' average), on the editor's selected notes or the selected clips (`event.change_velocity` and `midi.notes_velocity` `min`, `max`, `random`, `compress`, `center`) |
+| Release velocity | ● | ◐ | ● | ● | **Works**: the note bar's Release field shows and sets the selected notes' note-off velocity (`midi.notes_set` `release_velocity`); recorded notes keep theirs, drawn notes take 64, and it goes out with the note-off |
 | Per-note probability | ○ | ● | ◐ | ◐ | **Works**: MIDI Editor › More › Probability (0-100 %) on the selected notes (`midi.notes_set` `probability`; the hover shows it). Each pass the clip plays from somewhere new (a start, a locate, a loop turn) rolls every such note again with a generator seeded from the note, its clip and the pass, so a bounce or freeze plays the same notes each time. Sessions saved before load at 100 %, and notes at 100 % save as before. MIDI export writes every note. Pattern steps keep their own |
 | Lanes for any controller, pitch bend, channel pressure; several at once | ● | ● | ● | ● | **Works**, per MIDI channel or every channel with a line each (bug 20, fixed) |
 | Lanes for poly aftertouch and program change | ● | ● | ● | ● | **Works**: a Program Change lane and a Poly Pressure lane per key (Lanes › Poly Pressure lists the keys with data and the selected notes' keys first); a clip with such data opens with them shown |
+| 14-bit controllers and RPN/NRPN shown and edited as one value | ● | ◐ | ● | ● | **Works**: Lanes › 14-bit and RPN shows a 14-bit pair (CC n with CC n+32, for n 0–31) or a registered or non-registered parameter (Pitch Bend Range, Fine and Coarse Tuning, Modulation Depth offered, any other found in the clip) as one lane of 0–16383; a click sets a value at the grid line, a drag draws freehand, Alt-click removes one (`midi.ctrl14s`, `midi.ctrl14_draw`, `midi.ctrl14_clear`). A pair writes both controllers; a parameter its select, Data Entry and then the null RPN, so a later CC 6 is not taken for it. A clip with such data opens with the lanes shown. Playback is unchanged (ordinary controllers; the chase already sends a parameter's select before its value) |
 | Draw freehand | ● | ● | ● | ● | **Works** |
 | Line, curve and shape tools; ramps between points | ● | ● | ● | ● | **Works**: Lanes › a drag on empty space Draws a Line or Draws a Curve, written as two points with a straight or curved segment between them; right-click › Ramp Between Points replaces the points between the selected ones with such a segment, Step Between Points makes it a held value again. A ramp plays as a value every 32 samples where it changes (and is chased mid-ramp on a locate), is drawn as a line, and goes to MIDI files as steps at most every 10 ticks; DAWproject keeps straight ones as linear points. Sessions saved before load as steps (the field is new and absent from steps). No sine, square or other periodic shapes |
 | Scale or thin a range of controller data | ● | ● | ● | ● | **Works**: right-click on selected points › Scale Points (percent) and Thin Points (drops points a straight line passes within 2 of, and repeats); `midi.ctrl_scale` also adds an offset |
 | Controllers move and copy with their notes | ● | ● | ● | ● | **Works** as an option (More › Controllers Follow Notes): moving or copying notes takes the controllers from the first note's start to the last one's end along, replacing what was on those lanes and channels where they land |
-| Per-note expression (MPE) editing | ◐ | ● | ● | ● | **Missing** |
+| Per-note expression (MPE) editing | ◐ | ● | ● | ● | **Works**: the per-note expression model is MPE's own: a note on a channel of its own carries its tuning (bend), pressure and brightness (CC 74) on that channel while it sounds (`soundcraft_midi::note_expr`; `midi.note_expr`, `midi.note_expr_set`). Event › Give Notes Their Own Channels (`midi.own_channels`) spreads a clip's notes over member channels 2–16 so each can carry its own; an MPE recording already has them. In the MIDI Editor, Lanes › Channel › Follow the Selected Note ties the lanes to the selected note: they show and write its channel, its length marked, so its expression is drawn with the usual tools. A write is refused for a note that shares its channel. Give Notes Their Own Channels and Clear the Note's Expression are in the Lanes menu and in Event › MIDI editing (greyed out, with the reason, when no clip is open in the MIDI Editor or no single note on a channel of its own is selected). Tested with synthetic input (no MPE controller here): `a_notes_expression_is_its_channels_controllers_while_it_sounds`, `notes_sharing_a_channel_get_their_own_first`, `a_notes_expression_round_trips_and_needs_a_channel_of_its_own` |
 
 ## D. Operations
 
@@ -118,18 +121,18 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Quantize the selected notes: grid, strength, swing | ● | ● | ● | ● | **Works**: the selected notes (every note when none is), on the grid counted from the bar (bugs 1 and 2, fixed); triplet, dotted and quintuplet grids |
 | Quantize window, note ends, keep length, random offset | ● | ● | ● | ● | **Works**: window, random offset, note ends and keep lengths in the MIDI Operations window (`event.quantize` `window`, `random`, `ends`, `keep_length`) |
-| Groove templates; take a groove from audio or MIDI | ● | ● | ● | ● | **Works**: built-in swung 8ths and 16ths (54 to 66 %), pushed and laid-back 16ths, made in code; Groove from Selected Clip takes a MIDI clip's timing (each grid step where its notes fall, over one bar), kept in the session; Quantize and playback quantize follow either. A groove taken from a clip keeps its accents too (each step's median velocity against the steps' average), which Quantize, playback quantize, Apply and Write to Notes and MIDI export add to the velocity, by the strength; the built-in grooves and grooves saved before are timing only. When a clip plays with a swing or a groove, the editor's drawing grid swings with it (its lines and the snap). Not from audio |
+| Groove templates; take a groove from audio or MIDI | ● | ● | ● | ● | **Works**: built-in swung 8ths and 16ths (54 to 66 %), pushed and laid-back 16ths, made in code; Groove from Selected Clip takes a MIDI clip's timing (each grid step where its notes fall, over one bar), kept in the session; Quantize and playback quantize follow either. A groove taken from a clip keeps its accents too (each step's median velocity against the steps' average), which Quantize, playback quantize, Apply and Write to Notes and MIDI export add to the velocity, by the strength; the built-in grooves and grooves saved before are timing only. When a clip plays with a swing or a groove, the editor's drawing grid swings with it (its lines and the snap). From audio too: Groove from Selected Clip on an audio clip takes the timing of its hits (the transients Beat Detective finds, in its first two minutes; `event.groove_from_clip` `sensitivity`), timing only (no accents) (ddff138) |
 | Quantize applied at playback, original kept | ● | ● | ● | ● | **Works**: per clip (MIDI Editor › More › Playback Quantize: a grid or a groove) or per track (Real-Time Properties › Quantize, with strength); the notes stay where they are and play, freeze, bounce and export quantized; Apply to Notes and Write to Notes write it and keep the performance for Restore Performance. The editor draws the notes where they are written, and an outline where each one playback quantize moves plays |
 | Restore the original performance | ● | ● | ● | ● | **Works** with playback quantize (turn it off), after applying it (Apply to Notes, Write to Notes), for takes recorded with input quantize and after an explicit flatten; kept in place through trims and splits (bug 12, fixed). A destructive Quantize is undone with Undo |
 | Humanise timing | ● | ● | ● | ● | **Works**: timing and velocity, seeded, in the MIDI Operations window |
 | Transpose | ● | ● | ● | ● | **Works** by semitones |
-| Transpose within the key | ● | ● | ● | ● | **Missing** |
+| Transpose within the key | ● | ● | ● | ● | **Works**: MIDI Operations › Transpose › In the Key moves the notes by steps of the key on the Key ruler at each clip's start (else the band's key); a note out of the key keeps its distance from the key's tone below it, and a chord stops as a whole at the keyboard's ends (`event.transpose` `steps`) |
 | Snap notes to the scale or the chord | ◐ | ● | ● | ● | **Works**, following the key ruler |
 | Legato, set or scale length, fix overlaps | ● | ● | ● | ● | **Works**: legato, set, add and scale length (bug 7, fixed) and Fix Overlaps in the MIDI Operations window, on the selected notes |
 | Remove duplicate notes | ● | ● | ● | ● | **Works** |
-| Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Partial**: strum (up or down), reverse, half and double time in the MIDI Operations window; no flam or pitch inversion |
-| Split notes out by pitch or channel | ● | ● | ● | ● | **Flag only** |
-| Rule-based transformer | ◐ | ◐ | ● | ● | **Missing** |
+| Strum, flam, reverse, invert, half and double time | ◐ | ● | ● | ● | **Works**: strum (up or down), flam (a grace note of the same pitch a set number of ticks before each note, at a share of its velocity; `event.flam`), reverse, invert pitches (mirrored around the middle of their range, or a given pitch; `event.invert_pitch`), half and double time in the MIDI Operations window |
+| Split notes out by pitch or channel | ● | ● | ● | ● | **Works**: MIDI Operations › Select Notes picks notes by pitch, velocity, length, place in the bar and channel, and Move Them to a New Track splits them out (`event.select_split_notes` `action: split`, `channel_from`, `channel_to`); the first version of this page said Flag only, but the pitch split was already built |
+| Rule-based transformer | ◐ | ◐ | ● | ● | **Partial**: MIDI Operations › Select Notes is a transformer for notes and, with **Controller events** chosen, for control changes, pitch bend, channel and poly pressure and program changes. Notes: the notes matching every condition (pitch, velocity, length, start, beats of the bar, channel ranges) are selected, moved to a new track, deleted, muted or unmuted, or changed (velocity scaled and offset, transposed, length scaled or set, channel set). Events: the events matching every condition (their kinds, the controller number or poly pressure key, the value in the kind's own range, start, beats of the bar, channel ranges) are selected (in their lane of the MIDI Editor), deleted, or changed (value scaled and offset, clamped to the kind's range; a control change moved to another controller number; channel set). `event.select_split_notes` with `target: notes|events` (notes by default, as before), one undo step, on the editor's clip or the selected clips (a9dec8e; events: test `matching_controller_events_are_selected_deleted_or_changed`). Left: conditions other than ranges (no "not", no either/or), table and random actions, and rules saved by name |
 
 ## E. Scales and chords
 
@@ -138,36 +141,36 @@ The gaps are of four kinds:
 | Key signature track | ● | ● | ● | ● | **Works** |
 | Scale shown in the editor; rows folded to the scale | ◐ | ● | ● | ● | **Works**: with a key on the Key ruler, rows out of the key are shaded, and More › Fold to Scale keeps only the scale's rows (and those of pitches with notes) |
 | Notes drawn or dragged stay in the scale | ○ | ● | ● | ● | **Works** as an option (More › Keep to Scale): the Pencil and a vertical drag land on the nearest pitch of the key at the clip's start |
-| Chord track | ◐ | ● | ● | ● | **Partial**: a chord lane feeds the Band and Cleanup; shown above the editor |
+| Chord track | ◐ | ● | ● | ● | **Partial**: a chord lane feeds the Band, Cleanup, Write Progression and MIDI clips that follow it; shown above the editor. Audio following the chord track is **not planned here**: it needs polyphonic note editing of audio (Studio Pro's Harmonic Editing, Melodyne-style detection), which FreeDAWm does not have; monophonic audio can be moved by hand in the Vocal Editor |
 | Chords detected from MIDI or audio | ◐ | ● | ● | ● | **Works** (Detect Chords) |
 | Clips follow the chord track when it changes | ○ | ● | ● | ● | **Works** per clip, opt in (More › Follow Chord Lane, `clip.follow_chords`): the clip keeps the chords it was written against; when the chord lane or the band key changes, its chord tones go to the nearest tone of the new chord and other notes move as the root does, in the same undo step. Destructive (the notes are rewritten); the Band is unchanged |
-| Chord stamp tool, chord pads | ○ | ◐ | ◐ | ● | **Partial**: More › Chord Stamp makes the Pencil draw a chord on the note clicked (major, minor, 7, maj7, m7, sus4, dim, aug, or the triad in key); no chord pads |
+| Chord stamp tool, chord pads | ○ | ◐ | ◐ | ● | **Works**: More › Chord Stamp makes the Pencil draw a chord on the note clicked (major, minor, 7, maj7, m7, sus4, dim, aug, or the triad in key). Window › Chord Pads… opens eight pads from the key on the Key ruler at the playhead (its seven triads, I ii iii IV V vi vii° in major, and V7), an octave setting; holding a pad plays its chord on the Musical Typing input, so armed or monitored instrument tracks hear it and a take records it. Pads are not yet played from a MIDI keyboard's keys |
 | Wrong notes corrected against key and chords, switchable | ○ | ○ | ○ | ○ | **Works** (MIDI Cleanup, non-destructive) |
 
 ## F. Drums and patterns
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Drum editor: one named row per drum, hits without length | ○ | ● | ◐ | ● | **Works** in the note editor for Juke and the drum synth (More › Drum View, on by default there): a named row per drum, hits drawn as diamonds on their start and moved, not resized |
-| Drum maps and note names from the instrument | ◐ | ● | ● | ● | **Partial**: Juke's pad names on their trigger notes, General MIDI names for the drum synth; no editable drum maps, and hosted instruments get none |
+| Drum editor: one named row per drum, hits without length | ○ | ● | ◐ | ● | **Works** in the note editor for Juke, the drum synth and any track with a drum map (More › Drum View, on by default there): a named row per drum, hits drawn as diamonds on their start and moved, not resized |
+| Drum maps and note names from the instrument | ◐ | ● | ● | ● | **Works**: Juke's pad names on their trigger notes, General MIDI names for the drum synth, and a drum map per track (MIDI Editor › More › Drum Map: name the selected notes' pitch, fill in General MIDI names, clear; `track.drum_map`, saved with the track) whose names override the instrument's and give any instrument, hosted ones too, the drum view. Names only: a map does not send a drum to another note (no input/output note pairs) and does not reorder the rows (5817ba3) |
 | Show only the rows in use | ◐ | ● | ● | ● | **Works**: the drum view shows the rows with hits (every named drum while the clip is empty, or with More › Every Drum Row) |
 | Step sequencer with pattern clips | ○ | ● | ● | ● | **Works** (Juke Steps) |
 | Per-step velocity, probability, repeats, nudge | ○ | ● | ● | ● | **Works**, plus flam, accent and conditions (every Nth, fills) |
 | Rows of different lengths, rates and directions | ○ | ● | ● | ◐ | **Works**, up to 64 steps |
-| Pattern variations | ○ | ● | ● | ● | **Partial**: fills and conditions only |
+| Pattern variations | ○ | ● | ● | ● | **Works**: a pattern clip holds up to eight variations, A–H, each a full step grid of its own (tabs over the step grid pick the one edited; + adds a copy; right-click plays one in the clip or removes it). The clip plays its chosen variation, and a switch lane beside the tabs (a cell per bar) can name another for any bar. Fills and conditions work in every variation; recording into a pattern clip lands on the variation its bar plays. Variation A keeps its dice, so existing patterns play exactly as before (`pattern.variation_add`, `pattern.variation_remove`, `pattern.play`, `pattern.switch`; tests `variations_play_where_the_clip_and_its_switch_lane_say`, `variations_are_grids_of_their_own_and_the_switch_lane_picks_per_bar`) |
 | Turn a pattern into ordinary notes | ○ | ● | ● | ● | **Works** |
-| Step patterns for melodic instruments | ○ | ● | ● | ● | **Missing**: drum machine only |
+| Step patterns for melodic instruments | ○ | ● | ● | ● | **Works**: Clip › New Step Sequence (`pattern.new_sequence`) makes a step pattern for any instrument: its notes go out on channel 1, each step holds a pitch (the row's note until set) and a gate (1–200 % of the step; every pattern has one now, half a step as before), with velocity, probability, nudge, roll, conditions and variations as the drum patterns have. In the step grid a lit step shows its note, a drag up or down moves it a semitone at a time, and the step's details have Pitch and Gate; Convert to MIDI keeps the notes. A drum pattern can be switched to melodic (`pattern.settings {melodic}`). Drum patterns saved before play and save exactly as they did (tests `melodic_steps_hold_their_pitch_and_gate_on_channel_one`, `a_step_sequence_holds_a_pitch_per_step_and_plays_on_any_instrument`) |
 
 ## G. Event list and score
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Event list of every kind of event, typed values, insert, filter | ● | ○ | ● | ● | **Works**: notes, CC, pitch bend, aftertouch, poly pressure and program changes in time order; position (written when the drag or typing ends), channel, note or number, velocity or value and length typed; an Insert row for each kind at the insertion point; filters by kind and channel. No SysEx (the model keeps none) |
-| Score view | ● | ● | ● | ● | **Partial**: a read-only grand staff |
-| Enter and edit notes in the score | ● | ● | ● | ● | **Missing**; designed (below, not built) |
+| Score view | ● | ● | ● | ● | **Works**: a grand staff with heads by length, stems and flags, ledger lines, bar lines from the meter map, flats in a flat key (sharps otherwise); rests, ties over bar lines and beams by the beat, laid out as the printed score is (`e7768d1`, next rows); notes entered and edited there (next row). No key signature is drawn in the view: each note off the white keys carries its own accidental (the printed score and MusicXML have one) |
+| Enter and edit notes in the score | ● | ● | ● | ● | **Works** as designed below: a value row (whole to 32nd, dotted, triplet, ♯ ♭ ♮ for the next note); a click on empty staff adds a note of that value snapped to the value's bar-counted grid, its pitch the line's or space's note in the key on the Key ruler (an F in G major is F♯); a click on a head selects it (Shift adds; the piano roll's selection); over the staff, Delete removes, Up and Down move a step of the key (Alt: a semitone), 1–6 choose the value and set the selected notes' length, A–G enter the nearest such note at the cursor and move it on, R rests. Each is one undo step through the piano roll's commands. No vertical drag of a head, and step entry from a MIDI keyboard is not wired |
 | Print the score | ● | ● | ● | ● | **Works** |
-| Lyrics, layout, parts | ◐ | ◐ | ● | ● | **Missing** |
-| MusicXML export and import | ● | ● | ● | ● | **Partial**: export only, to 16ths, with no key signature |
+| Lyrics, layout, parts | ◐ | ◐ | ● | ● | **Works**: lyrics work. A MIDI clip's lyrics (typed in the Lyrics panel, imported with a MIDI or MusicXML file) are sung under the notes they fall on in the printed score and the MusicXML export (each word on the note starting nearest it, within an eighth; `lyric` elements) (2ac9936). Parts: with File › Score Setup… › Print each track as a part on its own page, Print Score writes a page per track, titled with its name; Staff size (70–150 %) scales the page. Layout: Score Setup's Page (Continuous as before, A4 or US Letter: a new page wherever the next system would not fit) and Start a new system at each section (the section lane's). The score view draws the clip as the printed score lays it out: rests in the gaps, ties over bar lines (the head carried on drawn faint), and eighths and shorter beamed by the beat. The score view sings the clip's lyrics under the staff (round five): the same lyric data (a MIDI clip's lyric lines, `Clip::lyrics`) and the same placement as the printed score (`score::clip_items` now carries each word on its note), each word at its note, moved right only to clear the word before it; no new data model was needed. Tests `rests_ties_and_beams_come_from_the_laid_out_items`, `a_clip_lays_out_as_the_printed_score_does`, `a_clips_lyrics_go_under_their_notes`, `pages_and_section_breaks` |
+| MusicXML export and import | ● | ● | ● | ● | **Works**: export to 16ths. The key at the start (the Key ruler's, else the band's) is written as the key signature, and each later key change on the Key ruler as a new signature in the measure it falls in (a change up to a 16th after the bar line counts as on it); the notes are spelled for the key in force (flats in a flat key) with accidentals only where they leave it. Import (File › Import › MusicXML…, `file.import_musicxml`): a partwise `.musicxml`/`.xml` file at the insertion point, a track per part with one clip (chords, ties, voices through `backup` and `forward`, any `divisions`), its meters and `sound tempo` marks on the tempo map, its key signatures on the Key ruler and its first verse's words as the clip's lyrics; an unpitched part plays its drums on the drum synth through its `midi-unpitched` numbers. Not read: compressed `.mxl`, timewise scores, dynamics, articulations, repeats and grace notes (8135515, 0d5f801) |
 
 ## H. MIDI clips on the timeline
 
@@ -177,17 +180,17 @@ The gaps are of four kinds:
 | Notes shown in the clip | ● | ● | ● | ● | **Works** |
 | Clips stay on their bars when the tempo changes | ● | ● | ● | ● | **Works** for MIDI clips on tick-timebase tracks, the default for MIDI and instrument tracks (bug 3, fixed) |
 | Track set to follow bars or absolute time | ● | ● | ● | ● | **Works** for MIDI clips: a tick track's clips follow tempo edits, a sample track's stay; audio clips stay in samples on either |
-| Split | ● | ● | ● | ● | **Partial**: a note across the cut stays in the left clip and stops at the cut; the right clip gets none of it but starts in the controller state from before the cut (bug 11, fixed) |
+| Split | ● | ● | ● | ● | **Works**: by default a note across the cut stays in the left clip and stops at the cut, and the right clip starts in the controller state from before the cut (bug 11, fixed). With MIDI Editor › More › Split Notes at the Cut (`midi.split_notes`, a session setting, off by default) the note is cut in two: the left part ends at the cut and the right clip starts with the rest (same velocities, channel and release velocity), so both halves sound it; this holds for every edit that splits (Separate, a range cut or clear). Heal Separation joins the clips but leaves the two parts as two notes (1d9783f) |
 | Trim the end; drag it back out | ● | ● | ● | ● | **Works** |
 | Trim the start; drag it back out | ● | ● | ● | ● | **Works**: what falls before the new start is hidden, its controllers set the starting state, and dragging back returns it (bug 5, fixed) |
-| Join clips | ● | ● | ● | ● | **Partial**: Consolidate works; Heal is for audio only |
+| Join clips | ● | ● | ● | ● | **Works**: Consolidate merges any MIDI clips; Edit › Heal Separation joins neighbouring MIDI clips whose settings match (transpose, velocity, mute, playback quantize and the rest; not shared copies, patterns, clips under Cleanup or with a stored original performance), so a split heals back with the note across the cut whole; what either hid past the join is dropped |
 | Move, copy, duplicate, repeat | ● | ● | ● | ● | **Works**; Loop and Repeat space MIDI copies on tick tracks in bars (bug 15, fixed) |
 | Loop a clip; copies that change together | ◐ | ● | ● | ● | **Works**: Clip › Duplicate as Shared Copy (`clip.share`) puts a copy after each selected MIDI clip that shares its notes and controllers (marked `=` on the timeline); a note edit in any (the editor, the event list, the MIDI Operations, Reverse, Apply to Notes) is made in all, in the same undo step, and Duplicate or paste of a shared clip shares too. Each copy keeps its own place, length, mute, transpose and velocity. Clip › Make Independent ends it; an edit that changes one copy's notes some other way (a start trim, a split, Consolidate) leaves that copy on its own. Loop still makes independent copies |
 | Mute, lock, colour, name | ● | ● | ● | ● | **Works** |
 | Transpose and velocity offset per clip | ● | ● | ● | ● | **Works**: MIDI Editor › More › Clip transpose and Clip velocity (`clip.midi_offsets`), applied as the clip plays and in MIDI export, with the track's Real-Time Properties; the notes stay as written |
 | Stretch a clip so the notes scale | ● | ● | ● | ● | **Works**: trimming a MIDI clip's edge with Alt held (as for audio; `clip.stretch_to`) scales its notes' starts and lengths and its controllers in ticks from its start, the other edge staying; one undo step. A Juke pattern clip is refused |
 | Reverse a clip | ◐ | ● | ● | ● | **Works**: More › Reverse Clip (`clip.midi_reverse`): notes and controllers play backwards in the clip's window, each controller value holding over the mirror of its span; a ramp runs the other way with its curve bent the other way, so the reversed controller curve is the mirror image (it kept each point's ramp on the same point before, so a reversed ramp did not mirror) |
-| Bounce a clip or selection to audio in place | ● | ● | ● | ● | **Partial**: freeze and commit work on the whole track |
+| Bounce a clip or selection to audio in place | ● | ● | ● | ● | **Works**: Track › Commit… › Commit Selection (`track.commit` with `start` and `end`) renders only the edit selection's range to audio, the source track muted there; freeze and commit also take the whole track (the first version of this page said Partial: Commit Selection was already built) |
 
 ## I. How written MIDI plays
 
@@ -200,8 +203,8 @@ The gaps are of four kinds:
 | Two overlapping notes of one pitch each get their own end | ● | ● | ● | ● | **Works**: the later note retriggers the voice and the sound lasts to the later end (bug 19, fixed) |
 | Each note plays on its own channel | ● | ● | ● | ● | **Works**: any clip with an event off channel 1 plays every event on its channel (bug 9, fixed) |
 | Track delay, transpose, velocity and length changed at playback | ● | ● | ● | ● | **Works** (Real-Time Properties), undoable; a negative delay plays early notes before the clip (bug 10, fixed) |
-| MIDI effects on a track or clip, rendered to notes on request | ● | ● | ● | ● | **Partial**: on a track (arpeggiator, chord, scale, note repeat; section 6, H), played live; not on a clip, and not rendered to notes |
-| Dense clips play without cost growing | ● | ● | ● | ● | **Works**: beside each MIDI clip's notes the session keeps a derived index (`Clip::midi_index`, never saved: whether the notes are in start order, the longest note), made by the engine after every command and undo step and when a session is opened, from the notes as they then are (`engine/src/note_index.rs`). The scheduler binary-searches the notes that can sound in the block (start at least the block's first tick less the longest length, the delay and the largest playback-quantize move, a grid step or a groove's period) and stops past its end; the retrigger check looks only at the notes that can sound across that point. The index is used only for the very notes it was made from (their address and count; a hash when it is refreshed), so a copy, a cleanup's output or notes edited outside a command are searched whole, as before. Checked by playing random dense clips (overlaps, mutes, channels, probabilities, delays and lengths, playback quantize by grid, swing and groove, start trims, locates with Note Chase) block by block with and without their indexes and comparing every message and offset (`indexed_clips_play_event_for_event_as_before`). Controllers are still scanned whole each block |
+| MIDI effects on a track or clip, rendered to notes on request | ● | ● | ● | ● | **Works**: on a track (arpeggiator, chord, scale, note repeat; section 6, H), played live, and rendered to notes on request: Event › Write Arpeggio prints the track's MIDI effects over a clip into its notes, the clip then playing past them. On a clip too (`d44f5f2`): a MIDI clip's right-click menu › MIDI Effects on Clip, up to four of its own, run on that clip's notes only and saved with it (it then ignores playback quantize and the track's Real-Time Properties; see [section 6](06-midi-recording.md), which owns MIDI effects) |
+| Dense clips play without cost growing | ● | ● | ● | ● | **Works**: beside each MIDI clip's notes the session keeps a derived index (`Clip::midi_index`, never saved: whether the notes are in start order, the longest note), made by the engine after every command and undo step and when a session is opened, from the notes as they then are (`engine/src/note_index.rs`). The scheduler binary-searches the notes that can sound in the block (start at least the block's first tick less the longest length, the delay and the largest playback-quantize move, a grid step or a groove's period) and stops past its end; the retrigger check looks only at the notes that can sound across that point. The index is used only for the very notes it was made from (their address and count; a hash when it is refreshed), so a copy, a cleanup's output or notes edited outside a command are searched whole, as before. The index covers the controllers too (`NoteIndex::of_sequence`): whether they are in tick order and the longest ramp (from a ramp point to the next point of its lane), so each block looks only at the controllers in it and the ramp points whose ramp can reach into it (`NoteIndex::ctrl_window`). Checked by playing random dense clips (overlaps, mutes, channels, probabilities, delays and lengths, controllers on several lanes and channels with ramps and hidden ones, playback quantize by grid, swing and groove, start trims, locates with Note Chase) block by block with and without their indexes and comparing every message and offset (`indexed_clips_play_event_for_event_as_before`). A controller chase on a locate still reads the clip's controllers once (7ee22e2) |
 
 ## J. Tempo and arrangement
 
@@ -209,11 +212,11 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Tempo track: points, ramps, curves; meter changes | ● | ● | ● | ● | **Works** |
 | Tempo taken from a selection | ● | ● | ● | ● | **Works** (Identify Beat) |
-| Tempo taken from a MIDI performance | ◐ | ◐ | ● | ● | **Missing** |
+| Tempo taken from a MIDI performance | ◐ | ◐ | ● | ● | **Works**: Event › Tempo from MIDI Performance (`event.tempo_from_midi`, the selected MIDI clip): the clip's note onsets are tracked as beats (an onset curve, a period from its autocorrelation between 60 and 200 bpm, dynamic programming for steady beats near onsets, each beat moved onto its strongest onset) and a tempo point written at each so they land on the quarter-note grid; the beat or two before the first is stretched to meet it. The clip keeps its samples (its notes are given new ticks), so the performance sounds as played; other clips on tick tracks follow the new tempo. One undo step. Tested on a performance drifting from 100 to 110 bpm (each beat's tempo within 1 bpm). Audio performances: Detect Tempo |
 | Insert and cut time across the song | ● | ● | ● | ● | **Works**: clips, automation, markers, tempo, meter, key and the Band's chord and section lanes move (bug 14, fixed) |
-| Arranger sections to reorder the song | ○ | ● | ● | ● | **Missing** for clips; sections drive the Band only |
+| Arranger sections to reorder the song | ○ | ● | ● | ● | **Works**: a block on the Sections ruler (the Band's song lane) is a handle on the song: its right-click menu Copies with the Song (right after it), Moves with the Song (before another section or to the end) and Removes with the Song (`arrange.copy`, `arrange.move`, `arrange.remove`). Every track's clips (the playlist shown) and automation, the Band's chords and the block go with it; later material makes room or closes up as with Insert and Cut Time; one undo step. A section that changes tempo or meter inside is refused, and a copy goes only where the same tempo and meter are in force (the material is copied in samples). Markers, key changes and take layers other than the one shown are not copied (c8cfbb1) |
 | Track alternatives for MIDI | ● | ● | ● | ● | **Works** (playlists) |
-| Global transpose track | ○ | ● | ● | ● | **Missing** |
+| Global transpose track | ○ | ● | ● | ● | **Works** for MIDI: the transpose track (`Session::transpose_track`), shown on the Key ruler as "T+2" tags and set from its right-click › Global Transpose from Here (−12 to +12; `song.transpose` takes −24 to 24, `song.transpose_remove`). Every MIDI and instrument track plays its notes transposed by the change in force where each note is written, with the clip's and the track's own transpose; drum instruments (Juke, the drum synth) and tracks set to ignore it (`track.global_transpose`, from the same menu) play as written. Insert and Cut Time move the changes; MIDI export writes the notes transposed, as they play. Audio clips do not follow; poly pressure keys are not moved with it (c8e1963) |
 
 ## K. Tools that write MIDI
 
@@ -221,10 +224,10 @@ The gaps are of four kinds:
 |---|:-:|:-:|:-:|:-:|---|
 | Virtual players that follow chords and sections | ○ | ○ | ● | ◐ | **Works**: the Band, six players (drums, bass, keys, organ, guitar, bowed) with feels; printed to editable clips |
 | Audio to MIDI | ● | ● | ● | ● | **Works**: general, piano, drum and vocal models, and a single-line pitch tracker |
-| Drum hits in audio to notes | ◐ | ● | ● | ● | **Partial**: through the drum model; Beat Detective writes no notes |
-| Arpeggio, strum and chord-progression writers | ○ | ● | ● | ● | **Missing** |
+| Drum hits in audio to notes | ◐ | ● | ● | ● | **Works**: through the drum model (kick, snare, hats apart), and Beat Detective › Write MIDI (`event.hits_to_midi`): a note for each hit found in the selection on the selected audio tracks (one pitch, the kick's unless given, and one velocity; hits within 30 ms are one), in a new MIDI clip on a new drum-synth track. Hits are not sorted into drums by sound, and their loudness is not read (58c4add) |
+| Arpeggio, strum and chord-progression writers | ○ | ● | ● | ● | **Works**: Event › Write Arpeggio (`event.write_arpeggio`) turns the selected clip's held notes into the notes an arpeggiator plays (rate, pattern, octaves, gate; the track's own MIDI effects when it has some, the clip then playing past them as Record Effects' Output does), by the same effect code run offline on the song's grid. Write Progression (`event.write_progression`) writes a clip of voiced chords on the selected MIDI track over the edit selection (else four bars): the chord lane's chords, or a progression in the key (I–V–vi–IV and six others, or degrees typed so), whole, half, quarter or strummed, each chord moving to the inversion nearest the one before with its root below. Strum: the MIDI Operations' Strum. One undo step each. The menu items run with the defaults; scripts set the rest |
 | MIDI from a text description; a song from a prompt | ○ | ○ | ○ | ○ | **Works** (downloaded models) |
-| Loop library of MIDI phrases, previewed at the song tempo | ◐ | ● | ● | ● | **Missing** |
+| Loop library of MIDI phrases, previewed at the song tempo | ◐ | ● | ● | ● | **Not planned here**: needs a library of phrases (content the owner would source) |
 
 ## L. Instruments in the box
 
@@ -236,17 +239,17 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
-| Piano, electric piano, organ, strings and other sampled instruments | ● | ● | ● | ● | **Missing**; every imported MIDI part plays the synth |
-| Analogue-style synth | ● | ● | ● | ● | **Partial**: two oscillators (four waves), one 12 dB low-pass, two envelopes, glide, 16 voices, a Bend Range setting and mod-wheel vibrato. No LFO, unison, sub, noise, sync, mono mode, key tracking or effects. Mono output |
-| Wavetable, FM, granular synths | ◐ | ● | ● | ● | **Missing** |
+| Piano, electric piano, organ, strings and other sampled instruments | ● | ● | ● | ● | **Not planned here**: needs recorded samples the owner is sourcing; every imported MIDI part plays the synth |
+| Analogue-style synth | ● | ● | ● | ● | **Works**: two oscillators (four waves) with a sub oscillator and noise, hard sync (oscillator 2 restarted by oscillator 1, the restart band-limited), unison (up to seven detuned copies of both oscillators spread across the stereo field, constant power, the stack's level kept), a 12 or 24 dB low-pass, high-pass, band-pass or notch filter with key tracking, two envelopes, an LFO (sine, triangle, square, saw) to pitch, cutoff and level, poly, mono or legato play, glide, 16 voices, a Bend Range setting and mod-wheel vibrato; 15 factory presets, three using unison and sync. The new parameters default to the sound it had: the defaults and the first twelve presets render the same samples as before (test `the_defaults_and_the_factory_presets_sound_as_before_unison_and_sync`, hashes taken before the change). Written without listening; tested by spectra and levels (`unison_spreads_a_detuned_stack_across_the_sides_at_the_same_level`, `hard_sync_locks_osc_2_to_osc_1_without_the_naive_aliasing`). Effects inside the synth are left to the track's inserts |
+| Wavetable, FM, granular synths | ◐ | ● | ● | ● | **Works** (wavetable and FM; granular **Not planned here**): the **Wavetable Synth** works (Track › Instrument, `mix.instrument` id `wavetable_synth`): thirteen tables of 32 frames, every one made in code from mathematics (additive spectra, exact Fourier series of pulse-width, hard-sync and stepped shapes, vowel formants, drawbar registrations, phase bending and folding, a comb, fixed random spectra; no sample files), each frame stored at 18 band limits half an octave apart so a note reads only harmonics below half the sample rate (measured: a 2.6 kHz saw folds back at −113 dB against −13 dB for the unlimited table, −80 dB through the whole synth with seven unison copies; test `the_mip_map_keeps_a_high_note_from_aliasing`). Position moved by envelope 2, an LFO, velocity and the mod wheel; unison up to seven copies spread in stereo, sub and noise, the Subtractive Synth's filter, envelopes, LFO, pitch bend, mod-wheel vibrato, sustain pedal, glide and voice stealing (16 voices; shared code). Its panel draws the current wave with later frames behind it and the two envelopes; dragging the wave moves the position. Twelve factory presets, starting points only. Not listened to: checked by spectra and levels, its sound pinned by hashes (`the_defaults_and_the_factory_presets_are_pinned`). No mono/legato mode and no per-note MPE expression (the Subtractive Synth has none either). The **FM Synth** works (id `fm_synth`): four sine operators in eight algorithms, each with a ratio (0.5 or 1 to 16, fine and detune) or a fixed frequency, a level, its own envelope, velocity sensitivity, key scaling (dB per octave from middle C) and self-feedback; an LFO to pitch, level and the modulators' depth, the mod wheel to vibrato and to the modulators, pitch bend, sustain pedal and voice stealing (16 voices; the Subtractive Synth's envelopes, events and voice choice). It runs at four times the sample rate and comes down through two half-band filters: on C7 with a modulator at full level, what folds back below 20 kHz is −96 dB against −12 dB at the plain rate, −102 dB against −7 dB with feedback (test `oversampling_keeps_the_sidebands_from_folding_back`; folding between 20 kHz and half the rate is not counted); the filters delay the sound by about 0.3 ms, not reported as latency. Its panel draws the algorithm (carriers on the output line, each modulator above what it modulates, levels as fills, feedback as a loop; a click steps to the next algorithm) and the four envelopes. Twelve factory presets, starting points only. Not listened to: checked by spectra and levels, its sound pinned (`fm::tests::the_defaults_and_the_factory_presets_are_pinned`). Granular: **Not planned here**: the owner dropped it this round (it would need a grain engine reading a user-loaded sample, designed from scratch) |
 | Sampler: drop a sound, play it across the keys, loop, slice | ● | ● | ● | ● | **Works**: loop with crossfade, slicing to keys, filter, LFO, tempo-following mode, root detection |
-| Sampler: many samples mapped by key and velocity; SFZ or other formats | ● | ● | ● | ● | **Missing**: one sample |
+| Sampler: many samples mapped by key and velocity; SFZ or other formats | ● | ● | ● | ● | **Works**: Pantry, the multisampler (merged from its own branch, `9476894`): zones by key and velocity in up to eight parts (notes, release samples, pedal noises, a layer under them), round-robins, velocity layers blended, sustain pedal and ±2 semitone bend, 128 voices, its samples played from disk. It is made by Track › Capture to Pantry… from any instrument track (`track.capture_multisample`), or loaded from an SFZ file or a Decent Sampler preset or library (`mix.multisample_load`; the mapping, key ranges, pedal positions and velocity curves are read, the SFZ's own synthesis opcodes are not) |
 | Drum machine with pads, layers, chokes, per-pad shaping | ● | ● | ● | ● | **Works** (Juke): 16 pads, four velocity layers and round robins, pad synth, sends and bus effects |
 | Drum kits supplied | ● | ● | ● | ● | **Works**: 28 kits made by the pad synth; recorded kits are a separate download |
-| Separate mixer channels per pad | ● | ● | ● | ● | **Missing** |
-| Factory presets for instruments | ● | ● | ● | ● | **Missing** for the synth and sampler; Juke has its own |
-| Custom editors | ● | ● | ● | ● | **Partial**: Juke and the sampler; the synth is a list of sliders |
-| Layer and split several instruments on one track | ◐ | ● | ● | ● | **Missing** |
+| Separate mixer channels per pad | ● | ● | ● | ● | **Works**: each Juke pad has an Output choice (Main, Out 2–8) and a taken output plays on its own mixer channel (07fac63, [section 6](06-midi-recording.md)'s instruments with several outputs) |
+| Factory presets for instruments | ● | ● | ● | ● | **Partial**: the Subtractive Synth has 12 factory presets, FreeDAWm's own parameter settings (basses, leads, pads, keys, plucks, a riser), from the Presets menu of its window (`mix.instrument` with their parameters); written without listening, so they are starting points. Juke has its own kits. The sampler has none: its sound is the sample it is given (048efd1) |
+| Custom editors | ● | ● | ● | ● | **Works**: Juke and the sampler have editors; the Subtractive Synth's window has a panel over its controls: the filter's response drawn at its cutoff and resonance in the type's own shape (the 24 dB low-pass as two stages), the range its envelope sweeps shaded, and the amp and filter envelopes drawn to scale with their length; dragging the curve sideways moves the cutoff, up and down the resonance (one undo step per drag). Tests `each_filter_type_has_its_shape`, `an_envelope_is_drawn_to_its_times` |
+| Layer and split several instruments on one track | ◐ | ● | ● | ● | **Works**: an instrument or MIDI track plays up to four other tracks' instruments at once, each over a key range and a velocity range (overlapping ranges layer, side by side ones split): the output menu's **Layers & Splits** (Add Layer, each layer's lowest and highest key and velocity as drag values, ✕ to take it off; `mix.midi_layers`). Its clips, live input and the Band all reach the layers; note-ons go by key and velocity, note-offs and poly pressure by key, the pedal, bend and controllers to every layer. Built on MIDI to Track (several targets with zones), so each layer keeps its own strip, inserts and mix; a route that would feed a track into itself is refused; existing MIDI to Track routes are one zone over everything and play as before. Tests `zones_read_split_and_layer_and_hostile_text_is_tamed`, `one_track_layers_and_splits_several_instruments`, `a_track_layers_and_splits_several_instruments_and_undo_takes_it_back` |
 
 ## M. Instrument tracks and hosted instruments
 
@@ -254,27 +257,27 @@ workstation (HALion Sonic), a drum instrument, synths and a sampler track. FreeD
 |---|:-:|:-:|:-:|:-:|---|
 | Swap the instrument, keep the notes | ● | ● | ● | ● | **Works** |
 | Track presets: instrument plus effects | ● | ● | ● | ● | **Works** |
-| Automate instrument parameters | ● | ● | ● | ● | **Missing**, for built-in and hosted instruments alike |
+| Automate instrument parameters | ● | ● | ● | ● | **Works** for built-in and hosted instruments: the lane picker lists the instrument's parameters under its name, a lane plays into the instrument as an insert's does (sample-block rate), and scripts name it `plugin:instrument:<param>` (stored with the instrument's own module id, `INSTRUMENT_MODULE`). Sessions without such lanes sound as before. Not carried to DAWproject |
 | Instrument latency compensated | ● | ● | ● | ● | **Works** (bug 23, fixed) |
 | Freeze with the release tail | ● | ● | ● | ● | **Works** |
-| Mix bounce keeps the last note's tail | ● | ● | ● | ● | **Missing**: the bounce ends at the last clip |
+| Mix bounce keeps the last note's tail | ● | ● | ● | ● | **Works**: the Bounce dialog's tail (`file.bounce_mix` `tail`, up to 30 s past the range; see [section 3](03-mixing.md)) lets the last notes ring out; it is 0 unless set |
 | Third-party instruments with state saved in the session | ● | ● | ● | ● | **Works** (CLAP, VST3, AU) |
-| Their editor windows | ● | ● | ● | ● | **Partial**: not for AU |
-| Per-note expression sent to plug-ins | ◐ | ● | ● | ● | **Missing**: no note ids or note expressions |
-| Parameter moves in the plug-in window recorded as automation | ● | ● | ● | ● | **Missing** |
-| A crashing plug-in does not take the session down | ○ | ○ | ◐ | ○ | **Partial**: scanning is isolated; running is not |
-| Preview an instrument preset or a MIDI file from the browser | ◐ | ● | ● | ● | **Missing** |
+| Their editor windows | ● | ● | ● | ● | **Partial**: not for AU. **Not planned here**: an AU editor needs a Mac to build and test |
+| Per-note expression sent to plug-ins | ◐ | ● | ● | ● | **Works**: MPE-style data (a channel per note) reaches CLAP note-port plug-ins as per-note expressions on the sounding notes (bug 24: bend as tuning, pressure, CC74 as brightness, volume, pan, expression), the tuning now scaled by each channel's bend range as RPN 0 sets it (an MPE zone's setup sends it: ±48 semitones by default), and MIDI plug-ins get the channels as played; a clip's notes given their own channels (`midi.own_channels`) carry their own expression to both. Test `a_channels_bend_range_scales_its_tuning`. Round five: every CLAP note now carries a note id of its own (`NoteIds`: a fixed table by key and channel, no allocation), and an expression goes to each note sounding on its channel by that id (a poly pressure to its one key; with nothing sounding, by channel as before); CLAP has no per-expression declaration, so a note-port plug-in that takes CLAP notes gets them all (tests `each_note_has_its_own_id_until_it_ends`, `note_offs_and_expressions_reach_clap_whole`). VST3: every note carries a note id too, and a plug-in whose controller declares note expressions (`INoteExpressionController`, which the repo's `vst3` crate exposes) gets a member channel's (2–16) bend as tuning over the channel's RPN 0 range, CC7 volume, CC10 pan, CC1 vibrato, CC11 expression and CC74 brightness as `kNoteExpressionValueEvent`s to each held note by id, each only when declared, kept and given again to notes that start later, and channel pressure there as each held note's poly pressure; channel 1, and plug-ins that declare none, go through the MIDI mapping as before (tests `member_channel_messages_become_vst3_note_expressions`, `note_events_carry_their_channel`). Not tested against a real VST3 instrument: the repo has no VST3 test plug-in, so the checks are on the events built |
+| Parameter moves in the plug-in window recorded as automation | ● | ● | ● | ● | **Works**: a parameter changed in a plug-in's own window (or its drawer) while playing in Write, Touch or Latch is written to its lane, an instrument's too. For inserts this was already built (every parameter command reports the move to the automation pass); the instrument's now reports it as well |
+| A crashing plug-in does not take the session down | ○ | ○ | ◐ | ○ | **Partial**: scanning is isolated; with Setup › Preferences › Mixing › Run CLAP and VST3 plug-ins in their own process (off by default) each such plug-in runs in a helper process, a crash silences only it and Restart Plug-in brings it back with its last state. Left: AU, the plug-in's own editor while it runs there, a per-insert choice ([section 8](08-unique-features.md) owns these) |
+| Preview an instrument preset or a MIDI file from the browser | ◐ | ● | ● | ● | **Works**: a click on a `.mid` in the Workspace browser plays it at the session tempo where the playhead is, rendered on a worker (up to two minutes) through the preview voice at the preview level, on a copy of the selected track's own instrument with its settings when that is the Subtractive Synth or the Drum Synth (every channel), else on the Subtractive Synth (the drum channel left out); a click again stops it, a double-click still imports it. In an instrument's Presets menu a ▶ beside each factory preset plays a short phrase (a rising arpeggio and a held chord; a drum instrument a beat) on a hidden copy of the instrument with the preset's settings, leaving the track's own as it is. Hosted plug-ins, the sampler and Juke are not copied (they need their plug-in or samples loaded): their tracks preview on the synth. Tests `a_midi_file_is_rendered_on_the_synth_at_the_tempo_without_its_drums`, `a_preset_preview_plays_a_phrase_on_a_copy_with_the_presets_settings` |
 
 ## N. Getting MIDI in and out
 
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Import and export standard MIDI files | ● | ● | ● | ● | **Works**; see [section 6](06-midi-recording.md#l-files) and bugs 16 and 17 |
-| Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Partial**: a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click. Dragging a clip out to the desktop is not possible (the window toolkit receives drops but cannot start a drag to other programs); Clip › Export Clip as MIDI… (`file.export_clip_midi`) writes the selected MIDI clips as a .mid file starting at the clip's start (with several, at the earliest one's, the others keeping their spacing; owner's decision), opened by the tempo and meter in force there |
+| Drag a .mid file in; drag a clip out as .mid | ● | ● | ● | ● | **Works** (in), **Not planned here** (out): a `.mid` dropped on the desktop window imports (the first version of this page said Missing: it did, at the session start; now at the insertion point); the browser imports on double-click. Dragging a clip out to the desktop is **not planned here** (the window toolkit receives drops but cannot start a drag to other programs); Clip › Export Clip as MIDI… (`file.export_clip_midi`) writes the selected MIDI clips as a .mid file starting at the clip's start (with several, at the earliest one's, the others keeping their spacing; owner's decision), opened by the tempo and meter in force there |
 | DAWproject | ○ | ● | ○ | ● | **Works**, notes and controllers both ways; muted notes are left out of an export (the format cannot mark a note muted, so they would come back sounding; owner's decision), and the export report says so |
-| Copy and paste between sessions | ● | ● | ● | ● | **Missing**: the clipboard lives in one session |
+| Copy and paste between sessions | ● | ● | ● | ● | **Works** for MIDI: the clipboard belongs to the program, not the session, so clips copied in one session (MIDI clips with their notes and controllers) paste into the next one opened (the first version of this page said Missing). Not between two copies of the program running at once, nor through the system clipboard |
 
-### Design: entering notes in the score (not built)
+### Design: entering notes in the score (built)
 
 The score (`ui-egui/src/score_editor.rs`, about 170 lines) only draws: heads placed at
 `start × px_per_tick` on a grand staff, pitch from `diatonic`, sharps only. Entry needs no new
@@ -300,6 +303,136 @@ and scriptable as they are.
 - **Tests.** A UI test per gesture: a click on the treble G line at beat 2 with a quarter chosen
   adds G4, 960 ticks long, at tick 960; Delete and the arrows edit it; each is one undo step;
   the key of G sharpens an F. Est. 6–10 h with the tests.
+
+## Designs (round three, follow-up)
+
+Designs for the rows still open, in the order they would be built. None of these is built; each
+row above says what is. Estimates are agent-hours with tests, as above.
+
+### Notes edited on the track (A)
+
+Today the "notes" view of a MIDI track draws the clip's notes and edits nothing. Make the lane a
+small piano roll that reuses the note editor's model: `midi_editor::RollGeometry` laid over the
+clip's rectangle (pitch range: the clip's lowest to highest note, at least an octave), and the
+editor's own hit-testing and commands (`midi.notes_move`, `midi.notes_resize`, `midi.note_add`
+with the Pencil, `midi.note_delete`), so every edit stays one undo step and scriptable. The
+selection is the editor's (`app.midi.selected`, its clip the one under the pointer). No lanes,
+no keyboard: Smart Tool behaviour only (move, trim edges, Pencil draws, Alt-click deletes). Test:
+a UI test drags a note on the track one row up and one beat right, as in `midi_quantize.rs`.
+Est. 6–10 h.
+
+### 14-bit controllers and RPN/NRPN as one value (C)
+
+The model keeps 7-bit CCs; keep it. Add derived lanes in the editor only:
+- **14-bit CC n (0–31).** Shown as one line `msb × 128 + lsb`, the LSB being CC n+32 at the same
+  tick (or the last one before). Drawing writes both events at each point (one command,
+  `midi.ctrl14_set {clip, cc, points: [[tick, value 0..16383]]}`, which replaces the pair in the
+  range). Picked under Lanes › 14-bit.
+- **RPN/NRPN.** A parameter (CC 101/100 or 99/98 then data entry 6/38) shown as one lane per
+  parameter number found in the clip; drawing writes the select, the data entry and, after it,
+  the null RPN (127/127), so a later CC 6 is not taken for it.
+- Playback is unchanged (the events are ordinary CCs); the chase on a locate already sends the
+  last value of each CC, so the pair arrives; a chased RPN needs its select sent before the data:
+  `chase_channel` would send each parameter's select + data entry in that order.
+Test: a clip with CC1/CC33 pairs shows one line whose values round-trip through the command;
+an NRPN lane reads parameter 0x0102 from four CCs. Est. 6–8 h.
+
+### Per-note expression: editing and plug-ins (C, M)
+
+Model: `Note` gains an optional, skip-if-empty `expr: Vec<NoteExpr>` (tick from the note's start,
+kind: tuning in semitones, pressure, brightness (timbre), volume, pan; value), so old sessions
+load unchanged. Recording: an MPE input (a channel per note, section 6) keeps each note's
+channel's bend, pressure and CC74 as its expressions instead of channel controllers. Editing: with
+one note selected, the controller lanes show its expressions (the same drawing code, the lane's
+events read from and written to `expr` through `midi.note_expr_set`). Playback: CLAP plug-ins get
+`CLAP_EVENT_NOTE_EXPRESSION` with the note id the host already gives each note
+(`clap-host/src/plugin.rs` sends channel messages as expressions today, bug 24); MIDI-only
+plug-ins get MPE (each sounding note rotated onto its own channel 2–16, its expressions as that
+channel's bend, pressure and CC74; an MPE configuration message first). VST3 note expressions
+follow the same path later. Est. 14–20 h; needs an MPE controller or a scripted input to test end
+to end.
+
+### Rule-based transformer: what is left (D; doc 08's logical editor)
+
+The note part is built (Select Notes' actions), and controller events (CC number and value,
+bend, pressure, program) with select, delete and change (2026-11-18). Left: "not" and "either/or" between
+conditions; actions from a table (a velocity curve) and random ranges; rules saved by name
+(`Session::transformers`, and presets in the settings folder) and run from a menu; a project-wide
+editor that acts on tracks and plug-ins (Cubase's Project Logical Editor). Est. 6–8 h.
+### Chord pads (E)
+
+A pad window (Window › Chord Pads): 8 pads, each a chord (root, quality, voicing, inversion)
+filled from the key on the Key ruler (I ii iii IV V vi vii° and one free pad) or set by hand.
+Clicking a pad (or its key: the eight keys of a MIDI keyboard's lowest octave when Pads Take
+Input is on) plays the chord on the selected instrument track through the same audition path
+the editor's piano keys use, and while recording records it. Built on the chord stamp's chord
+spelling (`midi_edit_tools::Chord`) and the Band's chord names. Est. 6–8 h.
+
+### Pattern variations and melodic step patterns (F)
+
+Juke Steps keeps one pattern per clip with fills and conditions. Variations: a pattern clip holds
+up to 8 variations (A–H), each a full step grid; the clip plays the one chosen per clip (and a
+lane on the clip may switch it per bar). Melodic steps: a pattern row for a pitched instrument
+whose steps hold a pitch (and gate, velocity, probability as today), in a "Step Sequencer" clip
+type that plays on any instrument; Turn into Notes works as it does for drums. Est. 6–10 h.
+
+### Score layout and parts (G)
+
+Layout: the printed score (`score::svg`) gains page size, staff size, systems per page and
+breaks at sections; the score view shows beams, ties and rests (it draws heads only). Parts:
+File › Print Score… picks the tracks (it takes `tracks` already) and "One page per part" prints
+each track's staff alone with its own title. Est. 8–12 h. Not started: notation is a small part of
+what FreeDAWm users are expected to need.
+
+### Tempo from a MIDI performance (J)
+
+`event.tempo_from_midi {clip, beats?: bars to fit}`: the note onsets of a clip played without a
+click are tracked as beats (onset strength over time; a period from autocorrelation between 40
+and 240 bpm; dynamic programming picks beats near onsets with a steady period), and a tempo point
+is written at each beat so the beats land on the grid. The clip's notes keep their sample times:
+they are given new ticks in the new map, and the clip is excluded from the tick-track move of
+bug 3 (it moves with its notes, not with its ticks). Test: a clip played at a drifting 100–110
+bpm comes back with tempo points within 1 bpm of the drift and its notes at the same samples.
+Est. 8–12 h.
+
+### Arpeggio and chord-progression writers (K)
+
+The arpeggiator exists as a live MIDI effect (section 6). Writers: "Write Arpeggio" renders the
+track's arpeggiator over the selected clip's held notes to a new clip (the same effect code run
+offline); "Write Progression" turns the chord lane (or a chosen progression in the key: I–V–vi–IV
+and others) into a clip of voiced chords with a rhythm (whole, half, quarter or a strum pattern).
+Est. 6–10 h.
+
+### Previewing presets and MIDI files from the browser (M)
+
+A selected `.mid` in the browser plays on the selected instrument track (or the synth) at the
+song tempo through the audition path, from the browser's Play button, stopping on another
+selection. An instrument preset previews by loading it into a hidden copy of the track's
+instrument (made off the audio thread, as a built-in added while playing is) and playing a short
+phrase. Est. 4–6 h.
+
+### Instruments (L)
+
+New instruments are the largest items here and need listening; none is started.
+- **Synth upgrade (14–22 h):** LFOs (2, to pitch, cutoff, amp, pan), filter types (12/24 dB LP,
+  HP, BP, notch), unison with detune and spread (stereo output), sub and noise oscillators, hard
+  sync, mono/legato mode and key tracking, the factory presets extended to the new parameters
+  (parameter settings, no samples).
+- **Synth editor (6–8 h):** a panel like the sampler's: oscillators, filter with its envelope
+  drawn, amp envelope, LFOs, presets menu.
+- **Wavetable synth (12–20 h):** tables made in code (basic shapes, additive spectra, morphs
+  between them), position modulated by LFO and envelope; same voice and filter code as the synth. Built
+  (2026-11-18): see the row.
+- **FM synth (10–16 h):** four operators, eight algorithms, per-operator envelope and ratio;
+  presets authored as parameter settings. Built (2026-11-18): see the row.
+- **Sampler zones and SFZ (12–18 h):** the sampler gains a zone list (sample, key range, root,
+  velocity range, round-robin group, loop); the SFZ reader parses `<region>`, `<group>`,
+  `<control>` headers and the opcodes sample, lokey/hikey/key, pitch_keycenter, lovel/hivel,
+  loop_mode/loop_start/loop_end, tune, volume, pan, ampeg_*, seq_length/seq_position, into zones;
+  no content is bundled.
+- **Layer and split (6–8 h):** an instrument track hosts up to four instruments, each with a key
+  range and velocity range (layer = overlapping ranges), summed into the track; built on the
+  existing instrument slot as a small rack.
 
 ## Bugs found on the way
 
@@ -428,3 +561,56 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-16 | minor | Grooves from a clip keep velocity accents; the drawing grid swings with a clip's playback quantize; notes playback quantize moves are outlined where they play |
 | 2026-11-16 | minor | Dense clips: an index of each clip's notes lets the scheduler look only at the notes near the playhead; played event for event as before |
 | 2026-11-16 | minor | A design for entering notes in the score (not built) |
+| 2026-11-17 | minor | Round three reconciled: bouncing a selection in place and a bounce's tail already worked; sampled instruments, a MIDI phrase library, AU editors and dragging a clip out are not planned here; pad outputs and MIDI effects on clips left to section 6 |
+| 2026-11-17 | minor | Change Velocity… limits, randomises and compresses or expands |
+| 2026-11-17 | minor | Notes entered and edited in the score (click, keys, step entry), spelled in the key |
+| 2026-11-17 | minor | Transpose within the key, by steps of the key on the Key ruler |
+| 2026-11-17 | minor | Flam and pitch inversion in the MIDI Operations window |
+| 2026-11-17 | minor | The release velocity shown and set in the note bar |
+| 2026-11-17 | minor | Notes split out by channel too (the pitch split was already built) |
+| 2026-11-17 | minor | Instrument parameters take automation lanes, and their moves are written in Touch, Latch and Write |
+| 2026-11-17 | minor | The editor's grid takes dotted, quintuplet and septuplet values, and one that adapts to the zoom |
+| 2026-11-17 | minor | Snap Moves to the Grid: a moved note's start lands on a line instead of keeping its offset |
+| 2026-11-17 | minor | A note dragged to another pitch sounds there during the drag |
+| 2026-11-17 | minor | Zoom to the notes: the selected notes (or every note) fill the roll |
+| 2026-11-17 | minor | Copying MIDI between sessions already worked (the clipboard outlives the session); a test pins it |
+| 2026-11-17 | minor | MusicXML export writes the key signature and spells the notes for it |
+| 2026-11-17 | minor | Heal Separation joins neighbouring MIDI clips with matching settings |
+| 2026-11-17 | minor | MusicXML export writes later key changes as new key signatures and spells the notes after them for the new key |
+| 2026-11-17 | minor | Split Notes at the Cut: a note across a split is kept in both halves |
+| 2026-11-17 | minor | Dense clips: the clip index covers the controllers, so each block looks only at the controllers near it |
+| 2026-11-17 | minor | Drum maps: name a track's drums (or fill in General MIDI names) for any instrument |
+| 2026-11-17 | minor | MusicXML import: a track per part, with meters, tempo, keys and lyrics |
+| 2026-11-17 | minor | Arranger: copy, move and remove a section with the song's clips and automation |
+| 2026-11-17 | minor | A rule-based transformer for notes: the matching notes deleted, muted or changed |
+| 2026-11-17 | minor | Lyrics under their notes in the printed score and the MusicXML export |
+| 2026-11-17 | minor | A global transpose track for MIDI and instrument tracks, on the Key ruler |
+| 2026-11-17 | minor | Groove from an audio clip's hits |
+| 2026-11-17 | minor | Beat Detective writes the hits it finds as MIDI notes |
+| 2026-11-17 | minor | Factory presets for the Subtractive Synth |
+| 2026-11-17 | minor | Designs for the rows still open: notes on the track, 14-bit and RPN lanes, per-note expression, the rest of the transformer, chord pads, pattern variations and melodic steps, score layout, tempo from a performance, arpeggio and progression writers, previews, and the instruments |
+| 2026-11-17 | minor | Commits noted on the follow-up's MIDI rows |
+| 2026-11-17 | minor | Subtractive Synth: filter types, LFO, sub and noise, key tracking, mono and legato |
+| 2026-11-17 | minor | 14-bit controllers and RPN/NRPN parameters as one lane value |
+| 2026-11-17 | minor | Notes edited directly on a MIDI track showing Notes |
+| 2026-11-17 | minor | Tempo from a MIDI performance |
+| 2026-11-17 | minor | MIDI files previewed from the browser |
+| 2026-11-17 | minor | Chord Pads |
+| 2026-11-17 | minor | Write Arpeggio and Write Progression |
+| 2026-11-17 | minor | Score parts on their own pages and a staff size |
+| 2026-11-17 | minor | End states for the last open rows: MPE, pattern variations and melodic steps, chord track and audio, wavetable and FM, sampler zones (Pantry), synth editor, layer and split |
+| 2026-11-18 | minor | Pattern variations A–H and a per-bar switch lane |
+| 2026-11-18 | minor | Step sequences with a pitch per step, for any instrument |
+| 2026-11-18 | minor | Previews on the selected track's instrument, and factory presets heard from their menu |
+| 2026-11-18 | minor | Drag a .mid row: end state (in works; out needs the window toolkit to start drags)|
+| 2026-11-18 | minor | Layers and splits: one track playing several instruments by key and velocity |
+| 2026-11-18 | minor | Synth unison, stereo spread and hard sync, and presets using them |
+| 2026-11-18 | minor | The synth's panel: filter curve and envelopes drawn |
+| 2026-11-18 | minor | Score view rests, ties and beams; printed pages and section breaks |
+| 2026-11-18 | minor | Per-note expression: the model, own channels, lanes that follow the selected note |
+| 2026-11-18 | minor | CLAP tuning follows each channel's bend range |
+| 2026-11-18 | minor | Per-note expression: its two commands also in Event › MIDI editing |
+| 2026-11-18 | minor | Rows brought up to the code: score view draws rests, ties and beams; sampler zones Works (Pantry); plug-ins in their own process include VST3 |
+| 2026-11-18 | minor | Wavetable Synth |
+| 2026-11-18 | minor | Rule-based transformer: controller events (CC, bend, pressure, program) selected, deleted or changed |
+| 2026-11-18 | minor | FM Synth; granular not planned |

@@ -397,6 +397,30 @@ impl Default for SurroundPan {
 }
 
 impl SurroundPan {
+    /// The axis an [`AutoParam::Surround`](crate::AutoParam::Surround) lane moves: 0 x, 1 y,
+    /// 2 z, 3 divergence (anything else reads x).
+    pub fn axis(&self, i: u8) -> f32 {
+        match i {
+            1 => self.y,
+            2 => self.z,
+            3 => self.divergence,
+            _ => self.x,
+        }
+    }
+
+    /// Sets [`SurroundPan::axis`] `i` to `v`, kept in its range (a non-finite value is ignored).
+    pub fn set_axis(&mut self, i: u8, v: f32) {
+        if !v.is_finite() {
+            return;
+        }
+        match i {
+            1 => self.y = v.clamp(-1.0, 1.0),
+            2 => self.z = v.clamp(0.0, 1.0),
+            3 => self.divergence = v.clamp(0.0, 1.0),
+            _ => self.x = v.clamp(-1.0, 1.0),
+        }
+    }
+
     /// Puck at the stereo pan position (front edge).
     pub fn from_stereo(pan: f32) -> Self {
         SurroundPan { x: finite_or(pan, 0.0).clamp(-1.0, 1.0), ..SurroundPan::default() }
@@ -411,6 +435,52 @@ impl SurroundPan {
         self.center = finite_or(self.center, d.center).clamp(0.0, 100.0);
         self.lfe_db = finite_or(self.lfe_db, d.lfe_db).clamp(-144.0, 12.0);
     }
+}
+
+/// The character of a bus's summing (Mix Engine FX, Studio Pro's console models).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummingModel {
+    /// A console's summing amplifiers: gentle odd harmonics as the level rises.
+    #[default]
+    Console,
+    /// Tape: rounder, earlier saturation.
+    Tape,
+}
+
+impl SummingModel {
+    pub const ALL: [SummingModel; 2] = [SummingModel::Console, SummingModel::Tape];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            SummingModel::Console => "console",
+            SummingModel::Tape => "tape",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SummingModel::Console => "Console",
+            SummingModel::Tape => "Tape",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.id().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// A bus's summing model and how hard it is driven (0 to 1).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Summing {
+    #[serde(default)]
+    pub model: SummingModel,
+    #[serde(default = "half_drive")]
+    pub drive: f32,
+}
+
+fn half_drive() -> f32 {
+    0.5
 }
 
 /// An internal mix bus (Pro Tools "bus" paths).
@@ -430,29 +500,43 @@ pub struct OutputPath {
     pub format: ChannelFormat,
 }
 
-/// Physical input paths (from the I/O setup): a named mono or stereo pair of device input
-/// channels. A channel the open device lacks is kept and shown "(not available)".
+/// Physical input paths (from the I/O setup): named device input channels, mono, stereo or a
+/// multichannel (surround) group of up to [`ChannelFormat::MAX_MIX_CHANNELS`] channels. A channel
+/// the open device lacks is kept and shown "(not available)".
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InputPath {
     pub name: String,
     /// First hardware channel (0-based).
     pub first_channel: u16,
-    /// Mono or Stereo.
+    /// Mono, stereo or a multichannel format (up to 16 channels).
     pub format: ChannelFormat,
 }
 
+impl InputPath {
+    /// How many device channels the input takes (1 to [`ChannelFormat::MAX_MIX_CHANNELS`]).
+    pub fn width(&self) -> usize {
+        self.format.channels().clamp(1, ChannelFormat::MAX_MIX_CHANNELS)
+    }
+}
+
 /// The device input channel that track channel `k` reads from an input of `width` channels
-/// starting at `first`: a mono input feeds both sides of a stereo track.
-pub fn track_input_channel(k: usize, first: usize, width: usize) -> usize {
-    first.saturating_add(k.min(width.saturating_sub(1)))
+/// starting at `first`: a mono input feeds every side of the track; a wider input feeds the
+/// track's channels in order, and a track wider than it hears silence on the channels past the
+/// input's (`None`), never a repeat of the input's last channel (a stereo input on a 5.1 track
+/// is heard and recorded on L and R alone).
+pub fn track_input_channel(k: usize, first: usize, width: usize) -> Option<usize> {
+    match width {
+        0 | 1 => Some(first),
+        _ => (k < width).then(|| first.saturating_add(k)),
+    }
 }
 
 /// The device input channel that track channel `k` of a `track_channels`-wide track reads when no
 /// hardware input is chosen, on a device with `device_inputs` channels: the device's first
-/// channels in order (a stereo track hears and records In 1-2), and on a device with fewer
-/// channels than the track, its last channel on the remaining sides (a mono device feeds both
-/// sides). Monitoring and recording both use this, so what is heard is what is recorded.
-pub fn default_input_channel(k: usize, track_channels: usize, device_inputs: usize) -> usize {
+/// channels in order (a stereo track hears and records In 1-2); a mono device feeds every side,
+/// and a device with fewer channels than the track leaves the rest silent (`None`). Monitoring
+/// and recording both use this, so what is heard is what is recorded.
+pub fn default_input_channel(k: usize, track_channels: usize, device_inputs: usize) -> Option<usize> {
     track_input_channel(k, 0, track_channels.min(device_inputs).max(1))
 }
 
@@ -692,6 +776,24 @@ pub const MAX_MODULES: usize = 32;
 /// Most knobs a module can pin to its strip face.
 const MAX_KNOBS: usize = 4;
 
+/// The id under which channel `channel` (0-based, 1 or more) of a multi-mono unlinked module keeps
+/// parameter `param` ([`Insert::multi_mono_unlinked`]): `c1:gain`. Channel 0 is `param` itself.
+pub fn channel_param_id(channel: usize, param: &str) -> String {
+    if channel == 0 { param.to_string() } else { format!("c{channel}:{param}") }
+}
+
+/// A per-channel parameter id split into its channel (1 or more) and the plugin's own id; `None`
+/// for a plain id.
+pub fn split_channel_param(id: &str) -> Option<(usize, &str)> {
+    let rest = id.strip_prefix('c')?;
+    let (n, param) = rest.split_once(':')?;
+    if n.is_empty() || n.len() > 3 || !n.bytes().all(|b| b.is_ascii_digit()) || param.is_empty() {
+        return None;
+    }
+    let n: usize = n.parse().ok()?;
+    (n >= 1).then_some((n, param))
+}
+
 /// How wide the channel strips are drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum StripSize {
@@ -772,6 +874,26 @@ pub struct Insert {
     /// track.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub post_fader: bool,
+    /// Multi-mono: on a track of more than one channel the module runs one mono instance per
+    /// channel, all taking its parameters and automation (linked), as Pro Tools' multi-mono
+    /// plug-ins. Its stored state is the first instance's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_mono: bool,
+    /// Multi-mono unlinked: each channel past the first has its own parameter set, stored in
+    /// `params` under [`channel_param_id`] (`c1:gain` is the second channel's Gain) with lanes of
+    /// those ids; the plain ids are the first channel's. Only read while `multi_mono` is on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_mono_unlinked: bool,
+    /// The channel the module's plugin window edits while it runs multi-mono unlinked (0: the
+    /// first, whose values are the plain ids): `mix.module_param` writes that channel's values.
+    /// Not saved; not part of what the module sounds like.
+    #[serde(skip)]
+    pub edit_channel: u16,
+    /// The insert's wet/dry mix, 0 (its input only) to 1 (its output only, the default): the
+    /// mixer blends the module's output with its input, delayed by its latency, so any effect
+    /// can be used in parallel. Clamped by the mixer.
+    #[serde(default = "unity", skip_serializing_if = "is_unity")]
+    pub mix: f32,
     /// Which loading of `state` the running plugin instance should have: a hosted preset loaded
     /// into the module (`mix.module_preset`) changes it, so the instance is created again from
     /// `state`, and undo (which puts the previous value back) does the same with the previous
@@ -783,6 +905,107 @@ pub struct Insert {
     /// it, so exporting the project again writes it back unchanged. `None` for every other module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreign: Option<ForeignDevice>,
+    /// Vault's edit of its impulse response ([`SpaceEdit`] as text: reverse, trim, stretch),
+    /// applied when the response is made ready; empty: the file as it is. The response is kept
+    /// ready per reference and edit (`AssetPool::get_edited`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub space_edit: String,
+}
+
+/// An edit of Vault's impulse response, made when it is read: the file's `start`..`end`
+/// (seconds; `end` 0 is the file's end), then `reverse`d, then played `stretch` times as long
+/// (read at a changed rate: longer is also darker, as a slowed tape). Stored on the module as
+/// text ([`Insert::space_edit`]); the default edit is empty text.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpaceEdit {
+    pub reverse: bool,
+    pub start: f64,
+    pub end: f64,
+    pub stretch: f64,
+}
+
+impl Default for SpaceEdit {
+    fn default() -> SpaceEdit {
+        SpaceEdit { reverse: false, start: 0.0, end: 0.0, stretch: 1.0 }
+    }
+}
+
+impl SpaceEdit {
+    /// The stretch range.
+    pub const STRETCH: (f64, f64) = (0.5, 2.0);
+    /// The longest trim position (Vault reads files of at most a minute).
+    pub const MAX_SECONDS: f64 = 60.0;
+
+    /// The edit kept in range: times from 0 to a minute (`end` 0 or after `start`), stretch
+    /// from half to twice.
+    pub fn clamped(self) -> SpaceEdit {
+        let t = |x: f64| if x.is_finite() { (x * 1000.0).round() / 1000.0 } else { 0.0 }.clamp(0.0, Self::MAX_SECONDS);
+        let start = t(self.start);
+        let end = t(self.end);
+        let stretch = if self.stretch.is_finite() { (self.stretch * 1000.0).round() / 1000.0 } else { 1.0 }.clamp(Self::STRETCH.0, Self::STRETCH.1);
+        SpaceEdit { reverse: self.reverse, start, end: if end > start { end } else { 0.0 }, stretch }
+    }
+
+    /// The edit as stored: only what differs from the file, in a fixed order (empty: none).
+    pub fn to_text(self) -> String {
+        let e = self.clamped();
+        let mut parts = Vec::new();
+        if e.reverse {
+            parts.push("rev=1".to_string());
+        }
+        if e.start > 0.0 {
+            parts.push(format!("start={}", e.start));
+        }
+        if e.end > 0.0 {
+            parts.push(format!("end={}", e.end));
+        }
+        if e.stretch != 1.0 {
+            parts.push(format!("stretch={}", e.stretch));
+        }
+        parts.join(",")
+    }
+
+    /// The edit stored text holds (unknown or bad parts are left at their defaults).
+    pub fn parse(text: &str) -> SpaceEdit {
+        let mut e = SpaceEdit::default();
+        for part in text.split(',') {
+            let Some((k, v)) = part.split_once('=') else { continue };
+            let n = v.trim().parse::<f64>().ok().filter(|x| x.is_finite());
+            match (k.trim(), n) {
+                ("rev", Some(x)) => e.reverse = x != 0.0,
+                ("start", Some(x)) => e.start = x,
+                ("end", Some(x)) => e.end = x,
+                ("stretch", Some(x)) => e.stretch = x,
+                _ => {}
+            }
+        }
+        e.clamped()
+    }
+
+    pub fn is_none(self) -> bool {
+        self.to_text().is_empty()
+    }
+
+    /// The edit applied to a file's channels at `rate`: the channels trimmed and turned, and the
+    /// rate to read them at (the stretch). Empty channels when the trim leaves nothing.
+    pub fn apply(self, channels: &[Vec<f32>], rate: f64) -> (Vec<Vec<f32>>, f64) {
+        let e = self.clamped();
+        let frames = channels.iter().map(Vec::len).min().unwrap_or(0);
+        let at = |secs: f64| ((secs * rate).round().max(0.0) as usize).min(frames);
+        let a = at(e.start);
+        let b = if e.end > 0.0 { at(e.end) } else { frames };
+        let out = channels
+            .iter()
+            .map(|c| {
+                let mut v = c.get(a..b.max(a)).unwrap_or(&[]).to_vec();
+                if e.reverse {
+                    v.reverse();
+                }
+                v
+            })
+            .collect();
+        (out, rate / e.stretch)
+    }
 }
 
 /// A device read from a DAWproject file, kept as written ([`Insert::foreign`]).
@@ -863,6 +1086,10 @@ fn is_unity(v: &f32) -> bool {
 
 fn is_zero(v: &f32) -> bool {
     *v == 0.0
+}
+
+fn is_zero_u16(v: &u16) -> bool {
+    *v == 0
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -963,6 +1190,10 @@ pub struct KitFx {
 /// The first module id kit effects use; chain modules stay below it.
 pub const KIT_FX_BASE: u32 = u32::MAX - 63;
 
+/// The id automation lanes and mappings give a track's instrument (`Track::instrument`), which
+/// is not in the chain: just below the kit effects' ids, never handed to a chain module.
+pub const INSTRUMENT_MODULE: ModuleId = ModuleId(KIT_FX_BASE - 1);
+
 impl KitFx {
     /// Effect slots per bus.
     pub const SLOTS: usize = 4;
@@ -1024,8 +1255,13 @@ impl Insert {
             kit_fx: Vec::new(),
             link_group: None,
             post_fader: false,
+            multi_mono: false,
+            multi_mono_unlinked: false,
+            edit_channel: 0,
+            mix: 1.0,
             state_load: 0,
             foreign: None,
+            space_edit: String::new(),
         }
     }
 
@@ -1079,11 +1315,26 @@ pub struct SendSlot {
     /// The send's pan follows the track's main pan (and its automation) instead of its own.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pan_follows_main: bool,
+    /// An additional output (Pro Tools'): a post-fader copy of the main output into `target`, at
+    /// the fader's level and with the main pan, whatever the send's own level, pan, mute and
+    /// lanes say. It takes a send slot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub output: bool,
 }
 
 impl SendSlot {
     pub fn new(target: Route) -> Self {
-        SendSlot { target, level_db: -144.0, pan: 0.0, mute: false, pre_fader: false, follow_main_pan: true, surround: None, pan_follows_main: false }
+        SendSlot {
+            target,
+            level_db: -144.0,
+            pan: 0.0,
+            mute: false,
+            pre_fader: false,
+            follow_main_pan: true,
+            surround: None,
+            pan_follows_main: false,
+            output: false,
+        }
     }
 }
 
@@ -1099,14 +1350,22 @@ pub struct Mixer {
     pub solo_safe: bool,
     #[serde(default)]
     pub record_arm: bool,
+    /// Record safe: the track cannot be record-armed until this is turned off (Pro Tools).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record_safe: bool,
     #[serde(default)]
     pub input_monitor: InputMonitor,
     /// Record with inserts (print): an armed audio track's take is what its trim, polarity and
     /// inserts make of the input (after them, before the fader), not the input as it came in.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub record_inserts: bool,
+    /// Every channel's polarity inverted.
     #[serde(default)]
     pub phase_invert: bool,
+    /// Single channels' polarity inverted, bit `c` for channel `c` (with `phase_invert` off;
+    /// see [`Mixer::inverts`]).
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub phase_invert_channels: u16,
     pub input: Route,
     pub output: Route,
     /// The channel chain, in signal order (dense, at most [`MAX_MODULES`]). `null` entries
@@ -1141,6 +1400,60 @@ pub struct Mixer {
     /// compensation leaves it in: it moves the track against the others on purpose.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub delay: u32,
+    /// Mix Engine FX: on a strip that sums a bus (an aux or a routing folder), the console model
+    /// every source going into that bus passes through as it is added ([`Summing`]). `None` (the
+    /// default): the bus sums cleanly, as always.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summing: Option<Summing>,
+    /// How a stereo track's two pans move together when one is moved.
+    #[serde(default, skip_serializing_if = "PanLink::is_off")]
+    pub pan_link: PanLink,
+}
+
+/// How a stereo track's left and right pans follow each other (Pro Tools' link and inverse link).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanLink {
+    /// Each pan moves alone.
+    #[default]
+    Off,
+    /// Moving one moves the other by as much, the same way: the pair keeps its spread.
+    Link,
+    /// Moving one moves the other by as much the other way: the image widens or narrows about
+    /// its centre.
+    Mirror,
+}
+
+impl PanLink {
+    pub fn is_off(&self) -> bool {
+        *self == PanLink::Off
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            PanLink::Off => "off",
+            PanLink::Link => "link",
+            PanLink::Mirror => "mirror",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<PanLink> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "independent" => Some(PanLink::Off),
+            "link" | "linked" => Some(PanLink::Link),
+            "mirror" | "mirrored" | "inverse" => Some(PanLink::Mirror),
+            _ => None,
+        }
+    }
+
+    /// Where the other pan goes when one moves by `d` from where it was.
+    pub fn follow(self, other: f32, d: f32) -> f32 {
+        match self {
+            PanLink::Off => other,
+            PanLink::Link => (other + d).clamp(-1.0, 1.0),
+            PanLink::Mirror => (other - d).clamp(-1.0, 1.0),
+        }
+    }
 }
 
 impl Mixer {
@@ -1156,10 +1469,12 @@ impl Mixer {
             mute: false,
             solo: false,
             solo_safe: false,
+            record_safe: false,
             record_arm: false,
             input_monitor: InputMonitor::Auto,
             record_inserts: false,
             phase_invert: false,
+            phase_invert_channels: 0,
             input: Route::None,
             output: Route::Main,
             inserts: Vec::new(),
@@ -1173,7 +1488,20 @@ impl Mixer {
             width: 1.0,
             balance: 0.0,
             delay: 0,
+            summing: None,
+            pan_link: PanLink::Off,
         }
+    }
+
+    /// Whether channel `ch`'s polarity is inverted: every channel's when `phase_invert`, else
+    /// the channels `phase_invert_channels` names.
+    pub fn inverts(&self, ch: usize) -> bool {
+        self.phase_invert || (ch < 16 && self.phase_invert_channels & (1 << ch) != 0)
+    }
+
+    /// Whether any channel's polarity is inverted.
+    pub fn inverts_any(&self) -> bool {
+        self.phase_invert || self.phase_invert_channels != 0
     }
 
     /// Whether the strip hears its hardware input now: On always, Off never, Auto when armed
@@ -1243,8 +1571,8 @@ impl Mixer {
 
     /// Hands out the next unused id; `None` once the counter is exhausted.
     fn fresh_module_id(&mut self) -> Option<ModuleId> {
-        // Ids from `KIT_FX_BASE` up are the kit effects'.
-        if self.next_module >= KIT_FX_BASE {
+        // Ids from `KIT_FX_BASE` up are the kit effects', the one below it the instrument's.
+        if self.next_module >= INSTRUMENT_MODULE.0 {
             return None;
         }
         let id = self.next_module.max(1);
@@ -1258,14 +1586,14 @@ impl Mixer {
         let mut max_id = 0u32;
         let mut need = Vec::new();
         for (idx, ins) in self.inserts.iter().enumerate() {
-            if ins.id.0 == 0 || ins.id.0 >= KIT_FX_BASE || !seen.insert(ins.id) {
+            if ins.id.0 == 0 || ins.id.0 >= INSTRUMENT_MODULE.0 || !seen.insert(ins.id) {
                 need.push(idx);
             } else {
                 max_id = max_id.max(ins.id.0);
             }
         }
         self.next_module = self.next_module.max(max_id.saturating_add(1));
-        let mut exhausted = max_id >= KIT_FX_BASE - 1;
+        let mut exhausted = max_id >= INSTRUMENT_MODULE.0 - 1;
         if !exhausted {
             for idx in need {
                 match self.fresh_module_id() {
@@ -1691,22 +2019,27 @@ mod tests {
         }
     }
 
+    /// A mono input feeds every side; a wider one feeds the track in order, and a track wider
+    /// than its input is silent past it (bug 10 of the recording section).
     #[test]
     fn a_mono_input_feeds_both_sides() {
-        assert_eq!(track_input_channel(0, 4, 1), 4);
-        assert_eq!(track_input_channel(1, 4, 1), 4);
-        assert_eq!(track_input_channel(0, 6, 2), 6);
-        assert_eq!(track_input_channel(1, 6, 2), 7);
-        assert_eq!(track_input_channel(5, 6, 2), 7);
-        assert_eq!(track_input_channel(1, 3, 0), 3);
+        assert_eq!(track_input_channel(0, 4, 1), Some(4));
+        assert_eq!(track_input_channel(1, 4, 1), Some(4));
+        assert_eq!(track_input_channel(5, 4, 1), Some(4));
+        assert_eq!(track_input_channel(0, 6, 2), Some(6));
+        assert_eq!(track_input_channel(1, 6, 2), Some(7));
+        assert_eq!(track_input_channel(2, 6, 2), None, "a stereo input on a quad track: the rears are silent");
+        assert_eq!(track_input_channel(5, 6, 2), None);
+        assert_eq!(track_input_channel(1, 3, 0), Some(3));
     }
 
     #[test]
     fn no_input_is_the_devices_first_channels() {
         let chans = |track, device| (0..track).map(|k| default_input_channel(k, track, device)).collect::<Vec<_>>();
-        assert_eq!(chans(2, 8), [0, 1]);
-        assert_eq!(chans(2, 1), [0, 0]);
-        assert_eq!(chans(1, 8), [0]);
-        assert_eq!(chans(2, 0), [0, 0], "no device channels: nothing to read, never a panic");
+        assert_eq!(chans(2, 8), [Some(0), Some(1)]);
+        assert_eq!(chans(2, 1), [Some(0), Some(0)]);
+        assert_eq!(chans(1, 8), [Some(0)]);
+        assert_eq!(chans(4, 2), [Some(0), Some(1), None, None], "a quad track on a stereo device");
+        assert_eq!(chans(2, 0), [Some(0), Some(0)], "no device channels: nothing to read, never a panic");
     }
 }

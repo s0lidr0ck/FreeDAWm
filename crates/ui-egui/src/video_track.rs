@@ -1,9 +1,8 @@
 //! Video track: the movie pool (opened from `Session::videos` paths, decoded off the UI thread)
 //! and thumbnails drawn along video clips in the Edit window.
 //!
-//! Decoding runs on one background thread on native targets: the playhead frame request always
-//! replaces the previous one (latest wins), thumbnails queue behind it. On the web there are no
-//! threads, so the same worker runs inline on the UI thread with a per-frame budget.
+//! Decoding runs on one background thread: the playhead frame request always replaces the
+//! previous one (latest wins), thumbnails queue behind it.
 
 use crate::SoundApp;
 use crate::edit_window::{sample_at, x_of};
@@ -47,7 +46,7 @@ enum Done {
     Thumb(ThumbKey, Result<Arc<Frame>, String>),
 }
 
-/// Owns the open movies; runs jobs (on the worker thread, or inline on wasm).
+/// Owns the open movies; runs jobs (on the worker thread).
 #[derive(Default)]
 struct Worker {
     movies: HashMap<MovieKey, Result<Movie, String>>,
@@ -90,19 +89,10 @@ impl Worker {
 }
 
 fn open_movie(path: &str) -> Result<Movie, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-        Movie::open_source(Arc::new(f)).map_err(|e| e.to_string())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        Movie::open(bytes).map_err(|e| e.to_string())
-    }
+    let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    Movie::open_source(Arc::new(f)).map_err(|e| e.to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod backend {
     use super::{Done, Job, Worker};
     use std::collections::VecDeque;
@@ -210,55 +200,6 @@ mod backend {
                 Err(_) => worker = Worker::default(),
             }
             ctx.request_repaint();
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod backend {
-    use super::{Done, Job, Worker};
-    use std::collections::VecDeque;
-
-    /// Inline decoding with a per-frame budget (no threads on the web).
-    pub struct Backend {
-        worker: Worker,
-        frame: Option<Job>,
-        thumbs: VecDeque<Job>,
-        ctx: egui::Context,
-    }
-
-    impl Backend {
-        pub fn new(ctx: egui::Context) -> Option<Backend> {
-            Some(Backend { worker: Worker::default(), frame: None, thumbs: VecDeque::new(), ctx })
-        }
-        pub fn submit(&mut self, job: Job) {
-            match job {
-                Job::Frame { .. } => self.frame = Some(job),
-                Job::Thumb { .. } => {
-                    self.thumbs.push_back(job);
-                    while self.thumbs.len() > 96 {
-                        self.thumbs.pop_front();
-                    }
-                }
-            }
-        }
-        /// Run at most one frame and two thumbnails per UI frame.
-        pub fn poll(&mut self) -> Vec<Done> {
-            let mut out = Vec::new();
-            if let Some(j) = self.frame.take() {
-                out.extend(self.worker.run(j));
-            }
-            for _ in 0..2 {
-                let Some(j) = self.thumbs.pop_back() else { break };
-                out.extend(self.worker.run(j));
-            }
-            if !self.thumbs.is_empty() {
-                self.ctx.request_repaint();
-            }
-            out
-        }
-        pub fn queued_thumbs(&self) -> Vec<super::ThumbKey> {
-            self.thumbs.iter().filter_map(|j| if let Job::Thumb { tk, .. } = j { Some(*tk) } else { None }).collect()
         }
     }
 }

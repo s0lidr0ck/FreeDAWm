@@ -16,6 +16,8 @@ const MAX_BLOCK: usize = 1 << 16;
 const MAX_CHANNELS: usize = 64;
 /// An `unsynced` slot with no value waiting (a NaN pattern, which `set_param` never stores).
 const SYNCED: u64 = u64::MAX;
+/// The most SysEx bytes waiting for the next block (a message is at most 1 KB).
+const SYSEX_ARENA: usize = 8 * 1024;
 
 /// How a SoundCraft parameter value maps to the VST3 normalized value.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,6 +47,10 @@ pub struct Vst3Plugin {
     unsynced: Arc<[AtomicU64]>,
     /// Pending notes, kept sorted by time. Never grows past `EVENT_CAP`.
     notes: Vec<NoteEvent>,
+    /// The bytes of the pending SysEx messages (`NoteEvent::SysEx` points into it), made
+    /// beforehand; `sysex_used` bytes are taken. Emptied once none is pending.
+    sysex: Vec<u8>,
+    sysex_used: usize,
     /// The parameter each MIDI controller drives per channel (see `Instance::midi_mapping`),
     /// built at `prepare`.
     midi_map: Vec<Option<u32>>,
@@ -59,9 +65,24 @@ pub struct Vst3Plugin {
     outputs: BusBuffers,
     has_input: bool,
     has_output: bool,
+    /// The input bus the sidechain key is fed to, when the plugin has one with channels.
+    key_bus: Option<usize>,
     event_input: bool,
     /// Held notes: a bitmask of MIDI channels per key.
     held: [u16; 128],
+    /// The id each held note was started with (-1: none), and the next to give out.
+    note_ids: [[i32; 16]; 128],
+    next_id: i32,
+    /// The standard note expressions the plug-in declares (a bit per type id, see
+    /// `Instance::note_expression_types`), read at `prepare`. 0: none, and member channels' bend
+    /// and controllers go through its MIDI mapping as before.
+    note_expr: u8,
+    /// Per channel, each standard note expression's last value (normalized; NaN: none yet), given
+    /// again to every note that starts on the channel.
+    expr: [[f64; EXPRESSIONS]; 16],
+    /// Each channel's pitch-bend range (semitones) as RPN 0 last set it, and its RPN selection.
+    bend_range: [f32; 16],
+    rpn: [(u8, u8); 16],
     channels: usize,
     max_block: usize,
     latency: usize,
@@ -70,6 +91,12 @@ pub struct Vst3Plugin {
     transport: Option<Transport>,
     /// Set up for an offline render (`kOffline` process mode) at the next `prepare`.
     offline: bool,
+    /// An instrument's auxiliary output buses a mixer channel can take: (bus, name).
+    extra: Vec<(usize, String)>,
+    /// Which of `extra` the host takes (bit per entry).
+    taken: u32,
+    /// Each extra output's block (two channels), copied out after `process` while taken.
+    extra_bufs: Vec<[Vec<f32>; 2]>,
 }
 
 impl Vst3Plugin {
@@ -102,6 +129,8 @@ impl Vst3Plugin {
             pending: Vec::with_capacity(ids.len().min(PARAM_QUEUE_CAP)),
             unsynced: ids.iter().map(|_| AtomicU64::new(SYNCED)).collect(),
             notes: Vec::with_capacity(EVENT_CAP),
+            sysex: vec![0; SYSEX_ARENA],
+            sysex_used: 0,
             midi_map: Vec::new(),
             program_steps: [127.0; 16],
             dropped_program_changes: 0,
@@ -110,8 +139,15 @@ impl Vst3Plugin {
             outputs: BusBuffers::new(&[], 0),
             has_input: false,
             has_output: false,
+            key_bus: None,
             event_input: false,
             held: [0; 128],
+            note_ids: [[-1; 16]; 128],
+            next_id: 0,
+            note_expr: 0,
+            expr: [[f64::NAN; EXPRESSIONS]; 16],
+            bend_range: [2.0; 16],
+            rpn: [(127, 127); 16],
             channels: 2,
             max_block: 0,
             latency: 0,
@@ -119,10 +155,14 @@ impl Vst3Plugin {
             position: 0,
             transport: None,
             offline: false,
+            extra: Vec::new(),
+            taken: 0,
+            extra_bufs: Vec::new(),
             ids,
             maps,
             inst,
         };
+        p.extra = p.inst.aux_outputs();
         let values: Vec<f32> = (0..p.ids.len())
             .map(|i| {
                 let (Some(pi), Some(&id)) = (p.info.params.get(i), p.ids.get(i)) else { return 0.0 };
@@ -229,23 +269,125 @@ impl Vst3Plugin {
         }
         let ch = ch & 0x0F;
         let time = u32::try_from(offset).unwrap_or(u32::MAX);
-        self.push_note(NoteEvent::On { time, channel: ch, key: note, velocity: f32::from(velocity.min(127)) / 127.0 });
+        let id = self.next_id;
+        self.next_id = if self.next_id == i32::MAX { 0 } else { self.next_id + 1 };
+        if let Some(slot) = self.note_ids.get_mut(usize::from(note)).and_then(|c| c.get_mut(usize::from(ch))) {
+            *slot = id;
+        }
+        self.push_note(NoteEvent::On { time, id, channel: ch, key: note, velocity: f32::from(velocity.min(127)) / 127.0 });
+        // On a member channel, the channel's expressions so far apply to the new note too.
+        if self.note_expr != 0 && ch != 0 {
+            let state = self.expr.get(usize::from(ch)).copied().unwrap_or([f64::NAN; EXPRESSIONS]);
+            for (type_id, value) in (0u32..).zip(state) {
+                if value.is_finite() {
+                    self.push_note(NoteEvent::Expression { time, id, type_id, value });
+                }
+            }
+        }
         if let Some(h) = self.held.get_mut(note as usize) {
             *h |= 1 << ch;
         }
     }
 
-    /// A note-off on MIDI channel `ch` (0–15).
-    fn key_off(&mut self, offset: usize, ch: u8, note: u8) {
+    /// The id of the note held on `ch` at `key` (-1: none).
+    fn note_id(&self, ch: u8, key: u8) -> i32 {
+        self.note_ids.get(usize::from(key)).and_then(|c| c.get(usize::from(ch & 0x0F))).copied().unwrap_or(-1)
+    }
+
+    /// RPN 0 (pitch-bend sensitivity) per channel, as an MPE zone's setup sends it.
+    fn hear_rpn(&mut self, msg: [u8; 3]) {
+        if msg[0] & 0xF0 != 0xB0 {
+            return;
+        }
+        let ch = usize::from(msg[0] & 0x0F);
+        let (Some(sel), Some(range)) = (self.rpn.get_mut(ch), self.bend_range.get_mut(ch)) else { return };
+        let v = msg[2] & 0x7F;
+        match msg[1] {
+            101 => sel.0 = v,
+            100 => sel.1 = v,
+            99 | 98 => *sel = (127, 127),
+            6 if *sel == (0, 0) => *range = f32::from(v) + range.fract(),
+            38 if *sel == (0, 0) => *range = range.trunc() + f32::from(v.min(99)) / 100.0,
+            _ => {}
+        }
+    }
+
+    /// A member channel's message as note expressions on the notes held there, when the plug-in
+    /// declares that expression: true when sent (or kept for the notes to come).
+    fn as_note_expression(&mut self, time: u32, msg: [u8; 3]) -> bool {
+        let ch = msg[0] & 0x0F;
+        if self.note_expr == 0 || ch == 0 || !self.event_input {
+            return false;
+        }
+        let range = f64::from(self.bend_range.get(usize::from(ch)).copied().unwrap_or(2.0));
+        if msg[0] & 0xF0 == 0xD0 {
+            // Channel pressure on a member channel: each held note's own pressure.
+            let pressure = f32::from(msg[1] & 0x7F) / 127.0;
+            for k in 0..128u8 {
+                if self.held.get(usize::from(k)).is_some_and(|m| m & (1 << ch) != 0) {
+                    let id = self.note_id(ch, k);
+                    self.push_note(NoteEvent::Pressure { time, id, channel: ch, key: k, pressure });
+                }
+            }
+            return true;
+        }
+        let Some((type_id, value)) = note_expression_of(msg, range) else { return false };
+        if self.note_expr & (1 << type_id) == 0 {
+            return false;
+        }
+        if let Some(slot) = self.expr.get_mut(usize::from(ch)).and_then(|c| c.get_mut(type_id as usize)) {
+            *slot = value;
+        }
+        for k in 0..128u8 {
+            if self.held.get(usize::from(k)).is_some_and(|m| m & (1 << ch) != 0) {
+                let id = self.note_id(ch, k);
+                self.push_note(NoteEvent::Expression { time, id, type_id, value });
+            }
+        }
+        true
+    }
+
+    /// A note-off on MIDI channel `ch` (0–15) with its release velocity (0–127; 0: none).
+    fn key_off(&mut self, offset: usize, ch: u8, note: u8, release: u8) {
         if note > 127 || !self.event_input {
             return;
         }
         let ch = ch & 0x0F;
         let time = u32::try_from(offset).unwrap_or(u32::MAX);
-        self.push_note(NoteEvent::Off { time, channel: ch, key: note });
+        let id = self.note_ids.get_mut(usize::from(note)).and_then(|c| c.get_mut(usize::from(ch))).map_or(-1, |slot| std::mem::replace(slot, -1));
+        self.push_note(NoteEvent::Off { time, id, channel: ch, key: note, velocity: f32::from(release.min(127)) / 127.0 });
         if let Some(h) = self.held.get_mut(note as usize) {
             *h &= !(1 << ch);
         }
+    }
+}
+
+/// How many standard VST3 note expressions the host sends (volume … brightness).
+const EXPRESSIONS: usize = 6;
+
+/// The standard VST3 note expression a member channel's message stands for, normalized as VST3
+/// has them: (type id, value). Bend is tuning (0.5 none, 0 and 1 ∓120 semitones) over the
+/// channel's `bend_range`; CC7 volume (0.25 unity: the General MIDI curve over 0–4), CC10 pan,
+/// CC1 vibrato, CC11 expression, CC74 brightness. Anything else has none.
+pub(crate) fn note_expression_of(msg: [u8; 3], bend_range: f64) -> Option<(u32, f64)> {
+    use vst3::Steinberg::Vst::NoteExpressionTypeIDs_ as t;
+    let [status, d1, d2] = msg;
+    let unit = |v: u8| f64::from(v.min(127)) / 127.0;
+    let range = if bend_range.is_finite() { bend_range.clamp(0.0, 96.0) } else { 2.0 };
+    match status & 0xF0 {
+        0xE0 => {
+            let bend = (i32::from(d1 & 0x7F) | (i32::from(d2 & 0x7F) << 7)) - 8192;
+            Some((t::kTuningTypeID, (0.5 + f64::from(bend) / 8192.0 * range / 240.0).clamp(0.0, 1.0)))
+        }
+        0xB0 => match d1 {
+            1 => Some((t::kVibratoTypeID, unit(d2))),
+            7 => Some((t::kVolumeTypeID, unit(d2) * unit(d2) / 4.0)),
+            10 => Some((t::kPanTypeID, unit(d2))),
+            11 => Some((t::kExpressionTypeID, unit(d2))),
+            74 => Some((t::kBrightnessTypeID, unit(d2))),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -263,13 +405,16 @@ impl Plugin for Vst3Plugin {
             Ok(layout) => {
                 self.inputs = BusBuffers::new(&layout.inputs, mb);
                 self.outputs = BusBuffers::new(&layout.outputs, mb);
+                self.extra_bufs = self.extra.iter().map(|_| [vec![0.0; mb], vec![0.0; mb]]).collect();
                 self.has_input = layout.inputs.first().is_some_and(|&c| c > 0);
                 self.has_output = layout.outputs.first().is_some_and(|&c| c > 0);
+                self.key_bus = layout.key_bus.filter(|&b| layout.inputs.get(b).is_some_and(|&c| c > 0));
                 self.event_input = layout.event_input;
                 self.max_block = mb;
                 self.latency = self.inst.latency() as usize;
                 self.tail = self.inst.tail() as usize;
                 self.build_midi_map();
+                self.note_expr = self.inst.note_expression_types();
             }
             Err(e) => {
                 log::warn!("{}: {e}", self.info.id);
@@ -287,8 +432,11 @@ impl Plugin for Vst3Plugin {
 
     fn reset(&mut self) {
         self.notes.clear();
+        self.sysex_used = 0;
         self.controls.clear();
         self.held = [0; 128];
+        self.note_ids = [[-1; 16]; 128];
+        self.expr = [[f64::NAN; EXPRESSIONS]; 16];
     }
 
     fn set_param(&mut self, id: &str, value: f32) -> bool {
@@ -315,7 +463,29 @@ impl Plugin for Vst3Plugin {
         self.values.get(i).copied()
     }
 
+    /// A point in the next block's parameter queue at its offset (dropped when the queue is
+    /// full).
+    fn set_param_at(&mut self, offset: usize, id: &str, value: f32) -> bool {
+        let Some(i) = self.info.params.iter().position(|p| p.id == id) else { return false };
+        let (Some(pi), Some(&vid)) = (self.info.params.get(i), self.ids.get(i)) else { return false };
+        let v = pi.clamp(value);
+        if let Some(slot) = self.values.get_mut(i) {
+            *slot = v;
+        }
+        let Some(n) = self.normalized_from_plain(i, v) else { return true };
+        if self.controls.len() < self.controls.capacity() {
+            self.controls.push((u32::try_from(offset).unwrap_or(u32::MAX), vid, n));
+        }
+        true
+    }
+
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+        self.process_with_sidechain(io, frames, None);
+    }
+
+    /// The key (when the plugin has a sidechain bus) goes to that bus, a mono key to every one
+    /// of its channels; no key leaves the bus silent.
+    fn process_with_sidechain(&mut self, io: &mut [Vec<f32>], frames: usize, key: Option<&[Vec<f32>]>) {
         if !self.inst.is_active() || self.max_block == 0 {
             return;
         }
@@ -349,6 +519,16 @@ impl Plugin for Vst3Plugin {
                     }
                 }
             }
+            if let Some(b) = self.key_bus {
+                for c in 0..self.inputs.channels(b) {
+                    let Some(dst) = self.inputs.channel_mut(b, c).and_then(|d| d.get_mut(..n)) else { continue };
+                    let kc = key.map_or(0, <[Vec<f32>]>::len);
+                    match key.and_then(|k| k.get(c.min(kc.saturating_sub(1)))).and_then(|s| s.get(start..start + n)) {
+                        Some(src) => dst.copy_from_slice(src),
+                        None => dst.fill(0.0),
+                    }
+                }
+            }
             let k = self.notes.iter().position(|e| e.time() >= end).unwrap_or(self.notes.len());
             let offset = u32::try_from(start).unwrap_or(u32::MAX);
             let notes = self.notes.get(..k).unwrap_or(&[]);
@@ -359,6 +539,7 @@ impl Plugin for Vst3Plugin {
                 &self.pending,
                 &self.controls,
                 notes,
+                &self.sysex,
                 offset,
                 self.position,
                 self.transport.as_ref(),
@@ -366,6 +547,21 @@ impl Plugin for Vst3Plugin {
             self.pending.clear();
             self.notes.drain(..k);
             self.position = self.position.saturating_add(i64::try_from(n).unwrap_or(0));
+            if r.is_ok() && self.taken != 0 {
+                // The taken auxiliary outputs, as they came (mono to both sides).
+                for (k, ((bus, _), bufs)) in self.extra.iter().zip(self.extra_bufs.iter_mut()).enumerate() {
+                    if self.taken & (1 << k) == 0 {
+                        continue;
+                    }
+                    let oc = self.outputs.channels(*bus);
+                    for (c, dst) in bufs.iter_mut().enumerate() {
+                        let src = self.outputs.channel(*bus, c.min(oc.saturating_sub(1))).and_then(|s| s.get(..n));
+                        if let (Some(src), Some(dst)) = (src, dst.get_mut(start..start + n)) {
+                            dst.copy_from_slice(src);
+                        }
+                    }
+                }
+            }
             match r {
                 Ok(()) if self.has_output => {
                     let oc = self.outputs.channels(0);
@@ -388,6 +584,31 @@ impl Plugin for Vst3Plugin {
             start += n;
         }
         self.controls.clear();
+        if !self.notes.iter().any(|e| matches!(e, NoteEvent::SysEx { .. })) {
+            self.sysex_used = 0;
+        }
+    }
+
+    fn extra_outputs(&self) -> Vec<String> {
+        self.extra.iter().map(|(_, n)| n.clone()).collect()
+    }
+
+    fn set_outputs_taken(&mut self, mask: u32) {
+        self.taken = mask;
+    }
+
+    /// The auxiliary bus's block of the last `process` (none while it was not taken then).
+    fn read_output(&mut self, index: usize, out: &mut [Vec<f32>], frames: usize) -> bool {
+        let Some(src) = self.extra_bufs.get(index) else { return false };
+        if self.taken & (1 << index.min(31)) == 0 {
+            return false;
+        }
+        for (o, c) in out.iter_mut().zip(src.iter()) {
+            for (d, s) in o.iter_mut().zip(c.iter()).take(frames) {
+                *d = *s;
+            }
+        }
+        true
     }
 
     fn latency(&self) -> usize {
@@ -411,7 +632,7 @@ impl Plugin for Vst3Plugin {
     }
 
     fn note_off(&mut self, offset: usize, note: u8) {
-        self.key_off(offset, 0, note);
+        self.key_off(offset, 0, note, 0);
     }
 
     /// Controllers, pressure, pitch bend and program change on the message's own channel: each
@@ -419,6 +640,12 @@ impl Plugin for Vst3Plugin {
     /// dropped (a dropped program change is counted).
     fn midi(&mut self, offset: usize, msg: [u8; 3]) {
         let time = u32::try_from(offset).unwrap_or(u32::MAX);
+        self.hear_rpn(msg);
+        // MPE: a member channel's bend, controllers and pressure reach its notes as the note
+        // expressions the plug-in declares, by note id.
+        if self.as_note_expression(time, msg) {
+            return;
+        }
         let ch = msg[0] & 0x0F;
         let [_, d1, d2] = msg.map(|b| b & 0x7F);
         let (ctrl, value) = match msg[0] & 0xF0 {
@@ -430,7 +657,8 @@ impl Plugin for Vst3Plugin {
                 (PROGRAM_CHANGE, (f64::from(d1) / steps).clamp(0.0, 1.0))
             }
             0xA0 if self.event_input => {
-                self.push_note(NoteEvent::Pressure { time, channel: ch, key: d1, pressure: f32::from(d2) / 127.0 });
+                let id = self.note_id(ch, d1);
+                self.push_note(NoteEvent::Pressure { time, id, channel: ch, key: d1, pressure: f32::from(d2) / 127.0 });
                 return;
             }
             _ => return,
@@ -451,9 +679,25 @@ impl Plugin for Vst3Plugin {
         let ch = status & 0x0F;
         match status & 0xF0 {
             0x90 if d2 > 0 => self.key_on(offset, ch, d1, d2),
-            0x80 | 0x90 => self.key_off(offset, ch, d1),
+            // A note-off carries its release velocity; a note-on at velocity 0 has none.
+            0x80 => self.key_off(offset, ch, d1, d2),
+            0x90 => self.key_off(offset, ch, d1, 0),
             _ => self.midi(offset, msg),
         }
+    }
+
+    /// To a plug-in with an event input, as a `kDataEvent` of type `kMidiSysEx` at its offset;
+    /// dropped when the block's SysEx room ([`SYSEX_ARENA`] bytes) or the event queue is full.
+    fn sysex(&mut self, offset: usize, data: &[u8]) {
+        if !self.event_input || data.is_empty() || self.notes.len() >= self.notes.capacity() {
+            return;
+        }
+        let at = self.sysex_used;
+        let Some(end) = at.checked_add(data.len()) else { return };
+        let (Some(dst), Ok(start), Ok(len)) = (self.sysex.get_mut(at..end), u32::try_from(at), u32::try_from(data.len())) else { return };
+        dst.copy_from_slice(data);
+        self.sysex_used = end;
+        self.push_note(NoteEvent::SysEx { time: u32::try_from(offset).unwrap_or(u32::MAX), at: start, len });
     }
 
     fn all_notes_off(&mut self) {
@@ -461,7 +705,7 @@ impl Plugin for Vst3Plugin {
             let mask = self.held.get(k as usize).copied().unwrap_or(0);
             for ch in 0..16u8 {
                 if mask & (1 << ch) != 0 {
-                    self.key_off(0, ch, k);
+                    self.key_off(0, ch, k, 0);
                 }
             }
         }
@@ -646,5 +890,30 @@ impl PluginEditor for Vst3Editor {
         // but some plugins put them in both.
         let units = self.units.get(i).map_or("", |u| u.trim());
         if units.is_empty() || text.trim_end().to_lowercase().ends_with(&units.to_lowercase()) { Some(text) } else { Some(format!("{text} {units}")) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::note_expression_of;
+    use vst3::Steinberg::Vst::NoteExpressionTypeIDs_ as t;
+
+    /// A member channel's bend and controllers as VST3's standard note expressions, normalized:
+    /// tuning around 0.5 over the channel's bend range, volume with unity at 0.25.
+    #[test]
+    fn member_channel_messages_become_vst3_note_expressions() {
+        assert_eq!(note_expression_of([0xE1, 0, 0x40], 48.0), Some((t::kTuningTypeID, 0.5)));
+        let (_, up) = note_expression_of([0xE1, 0x7F, 0x7F], 48.0).unwrap();
+        assert!((up - (0.5 + 48.0 * 8191.0 / 8192.0 / 240.0)).abs() < 1e-12, "{up}");
+        let (_, down) = note_expression_of([0xE2, 0, 0], 2.0).unwrap();
+        assert!((down - (0.5 - 2.0 / 240.0)).abs() < 1e-12);
+        assert_eq!(note_expression_of([0xB1, 7, 127], 2.0), Some((t::kVolumeTypeID, 0.25)));
+        assert_eq!(note_expression_of([0xB1, 10, 0], 2.0), Some((t::kPanTypeID, 0.0)));
+        assert_eq!(note_expression_of([0xB1, 74, 127], 2.0), Some((t::kBrightnessTypeID, 1.0)));
+        assert_eq!(note_expression_of([0xB1, 1, 127], 2.0), Some((t::kVibratoTypeID, 1.0)));
+        assert_eq!(note_expression_of([0xB1, 11, 0], 2.0), Some((t::kExpressionTypeID, 0.0)));
+        assert_eq!(note_expression_of([0xB1, 64, 127], 2.0), None);
+        assert_eq!(note_expression_of([0xC1, 3, 0], 2.0), None);
+        assert_eq!(note_expression_of([0xE1, 0, 0], f64::NAN).map(|x| x.0), Some(t::kTuningTypeID));
     }
 }

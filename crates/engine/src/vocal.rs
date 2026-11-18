@@ -3,7 +3,7 @@
 //! or between frames → [`install`]) and keeping the clips' edits on their notes when an analysis
 //! changes (a changed Clean Vocal Amount, a reload that analyses slightly differently).
 //!
-//! The engine spawns no threads (it stays wasm-clean): the host runs jobs where it can.
+//! The engine spawns no threads: the host runs jobs where it can.
 
 use crate::{Engine, EngineError, Result};
 use serde::{Deserialize, Serialize};
@@ -378,7 +378,7 @@ pub enum VocalDone {
 }
 
 impl VocalJob {
-    /// Does the work (worker thread, or between frames on wasm); stops promptly once `cancel`
+    /// Does the work (on the host's worker thread); stops promptly once `cancel`
     /// is set.
     pub fn run(self, cancel: &AtomicBool) -> std::result::Result<VocalDone, VocalError> {
         match self {
@@ -487,9 +487,18 @@ pub fn cannot_analyse_text(track: &str) -> String {
     )
 }
 
-/// Whether `clip` plays stretched (`stretch != 1`): its tuning is not rendered or played.
+/// Whether `clip` plays stretched (`stretch != 1`).
 pub fn stretched(clip: &Clip) -> bool {
     !clip.stretch.is_finite() || (clip.stretch - 1.0).abs() >= 1e-9
+}
+
+/// Whether `clip`'s tuning can't follow how it plays: an Elastic stretch still playing live
+/// (heard through the live stretcher, not its file), or a stretch together with warp markers,
+/// a reverse or a loop (the notes are drawn and edited through the plain varispeed mapping
+/// only). A plain varispeed clip tunes in file time and plays the tuned file stretched.
+pub fn tune_blocked(s: &Session, clip: &Clip) -> bool {
+    let live = clip.source().is_some_and(|src| soundcraft_mix::live_stretch(s, src).is_some());
+    live || (stretched(clip) && (!clip.warp.is_empty() || clip.reversed || clip.loop_len != 0))
 }
 
 /// The render job of the clip that most needs one (see [`next_job`]).
@@ -498,7 +507,7 @@ fn pick_render(snap: &Arc<Session>, focus: Option<ClipId>, playhead: Samples, on
     let mut cands: Vec<(bool, Samples, &Clip)> = Vec::new();
     for t in &s.tracks {
         for c in t.clips() {
-            if only.is_some_and(|ids| !ids.contains(&c.id)) || !c.is_audio() || stretched(c) {
+            if only.is_some_and(|ids| !ids.contains(&c.id)) || !c.is_audio() || tune_blocked(s, c) {
                 continue;
             }
             let Some(inputs) = render_inputs(s, c) else { continue };
@@ -854,26 +863,47 @@ pub(crate) struct FrameMap {
     hop: Samples,
     /// The clip's window in source samples.
     window: (Samples, Samples),
+    /// A varispeed clip's stretch (1: none), its start and offset: frames are in file time and
+    /// map to session time through it.
+    stretch: f64,
+    start: Samples,
+    offset: Samples,
 }
 
 impl FrameMap {
     pub(crate) fn of(clip: &Clip, a: &VocalAnalysis) -> FrameMap {
         let offset = clip.source_offset();
+        let stretch = if clip.stretch.is_finite() && clip.stretch > 0.0 { clip.stretch } else { 1.0 };
         FrameMap {
             zero: clip.start.saturating_sub(offset),
             hop: Samples::from(a.track.hop_samples.max(1)),
-            window: (offset, offset.saturating_add(clip.length)),
+            window: (offset, offset.saturating_add(soundcraft_time::to_samples(clip.length as f64 / stretch))),
+            stretch,
+            start: clip.start,
+            offset,
         }
+    }
+
+    fn plain(&self) -> bool {
+        (self.stretch - 1.0).abs() < 1e-9
     }
 
     /// Session time of frame `f`.
     pub(crate) fn time(&self, f: u32) -> Samples {
-        self.zero.saturating_add(Samples::from(f).saturating_mul(self.hop))
+        let at = Samples::from(f).saturating_mul(self.hop);
+        if self.plain() {
+            return self.zero.saturating_add(at);
+        }
+        self.start.saturating_add(soundcraft_time::to_samples((at - self.offset) as f64 * self.stretch))
     }
 
     /// The frame sounding at session time `at` (`None` before the source starts).
     pub(crate) fn frame(&self, at: Samples) -> Option<u32> {
-        let rel = at.checked_sub(self.zero)?;
+        let rel = if self.plain() {
+            at.checked_sub(self.zero)?
+        } else {
+            self.offset.saturating_add(soundcraft_time::to_samples((at - self.start) as f64 / self.stretch))
+        };
         if rel < 0 {
             return None;
         }

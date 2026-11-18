@@ -176,3 +176,23 @@ fn right_click_deletes_or_ramps() {
     r.app.run("edit.undo", json!({})).unwrap();
     assert_eq!(r.tempos().len(), 2);
 }
+
+#[test]
+fn dragging_a_bar_line_time_warps_the_tempo_before_it() {
+    let mut r = Rig::new();
+    // Bar 2's line lies halfway between the two markers (both bars at 100 BPM).
+    let (m0, m2) = (r.find("100").x - 10.0, r.find("140").x - 10.0);
+    let y = r.find("100").y;
+    let line = pos2((m0 + m2) * 0.5, y);
+    let sr = r.app.engine.session().sample_rate;
+    let before = r.app.engine.session().tempo.tick_to_samples(BAR, sr);
+    r.drag(line, line + vec2(40.0, 0.0), Modifiers::NONE);
+    let t = r.tempos();
+    assert_eq!(t.len(), 3, "a change at bar 2 keeps its tempo: {t:?}");
+    assert!(t[0].1 < 100.0, "bar 1 plays slower to reach the drop: {t:?}");
+    assert_eq!((t[1].0, t[1].1), (BAR, 100.0), "{t:?}");
+    assert_eq!((t[2].0, t[2].1), (2 * BAR, 140.0), "{t:?}");
+    assert!(r.app.engine.session().tempo.tick_to_samples(BAR, sr) > before, "bar 2 moved later");
+    r.app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(r.tempos().len(), 2, "one undo step");
+}

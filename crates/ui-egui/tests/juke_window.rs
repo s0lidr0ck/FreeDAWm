@@ -142,6 +142,62 @@ fn the_step_grid_shows_a_pattern_clip_and_its_bar_edits_it() {
 }
 
 #[test]
+fn the_variation_tabs_edit_one_variation_and_the_switch_lane_picks_per_bar() {
+    let (mut h, clip) = grid();
+    h.get_by_label("+").click();
+    h.run_steps(2);
+    assert_eq!(pattern(&h, clip).variation_count(), 2);
+    // The grid now edits B: a lane mute lands on B, not A.
+    h.get_all_by_label("Mute the lane").next().unwrap().click();
+    h.run_steps(2);
+    let p = pattern(&h, clip);
+    assert!(p.variations[0][0].mute && !p.lanes[0].mute);
+    // Back on A; a bar of the switch lane set to B.
+    h.get_by_label("Variation A").click();
+    h.run_steps(2);
+    h.get_by_label("Bar 2 variation").click();
+    h.run_steps(2);
+    h.get_by_label("B").click();
+    h.run_steps(2);
+    assert_eq!(pattern(&h, clip).switches, vec![None, Some(1)]);
+}
+
+#[test]
+fn value_rows_are_added_painted_and_muted_from_the_grid() {
+    let (mut h, clip) = grid();
+    // Three lanes, so the rows are in view under them.
+    for _ in 0..5 {
+        h.state_mut().run("pattern.lane_remove", json!({"clip": clip.0, "lane": 3})).unwrap();
+    }
+    h.run_steps(2);
+    h.get_by_label("+ Row").click();
+    h.run_steps(2);
+    // The menu offers the common controllers, any CC and the track's own parameters.
+    assert!(h.query_by_label("Pitch Bend").is_some(), "bend");
+    assert!(h.query_by_label_contains("Other CC").is_some(), "any CC");
+    assert!(h.query_by_label("volume").is_some(), "the track's volume");
+    h.get_by_label("Brightness (CC 74)").click();
+    h.run_steps(2);
+    let p = pattern(&h, clip);
+    assert_eq!(p.rows.len(), 1);
+    assert_eq!(p.rows[0].target, soundcraft_midi::pattern::RowTarget::Cc(74));
+    // A click on the row sets a step's value (one undo step); right-click clears it.
+    let depth = h.state().engine.undo_depth();
+    h.get_by_label("Brightness (CC 74) values").click();
+    h.run_steps(2);
+    let set = pattern(&h, clip).rows[0].steps.iter().filter(|s| s.is_some()).count();
+    assert_eq!(set, 1, "{:?}", pattern(&h, clip).rows[0].steps);
+    assert_eq!(h.state().engine.undo_depth(), depth + 1);
+    h.get_by_label("Brightness (CC 74) values").click_secondary();
+    h.run_steps(2);
+    assert!(pattern(&h, clip).rows[0].steps.iter().all(Option::is_none));
+    // The row's mute chip.
+    h.get_by_label("Mute the row").click();
+    h.run_steps(2);
+    assert!(pattern(&h, clip).rows[0].mute);
+}
+
+#[test]
 fn the_midi_editor_sends_a_pattern_clip_to_the_juke_window() {
     let (mut h, clip) = grid();
     let tid = h.state().engine.session().find_clip(clip).map(|(t, _)| t).unwrap();

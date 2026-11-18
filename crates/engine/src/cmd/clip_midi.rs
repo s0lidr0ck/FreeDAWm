@@ -36,6 +36,24 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             note_chase
         ),
+        cmd!(
+            noundo "midi.split_notes",
+            "Split Notes at the Cut",
+            [],
+            None,
+            "{on?: bool (default: toggle)} — splitting a MIDI clip cuts a note sounding across the cut in two, its rest starting the right clip (off: the note stays whole in the left clip, ending at the cut)",
+            always,
+            split_notes
+        ),
+        cmd!(
+            "track.drum_map",
+            "Drum Map",
+            [],
+            None,
+            "{track, pitch?: 0..127, name?: text (empty: the pitch loses its name), gm?: true (General MIDI names for every pitch without one), clear?: true} — the note editor's names per pitch for the track; they override the instrument's and turn on the drum view for any instrument",
+            always,
+            drum_map
+        ),
     ]
 }
 
@@ -182,6 +200,56 @@ fn note_chase(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"on": on}))
 }
 
+fn split_notes(e: &mut Engine, p: &Value) -> Result<Value> {
+    let s = e.session_mut();
+    let on = p.get("on").and_then(Value::as_bool).unwrap_or(!s.edit.flag(crate::edit::SPLIT_NOTES));
+    s.edit.set_flag(crate::edit::SPLIT_NOTES, on);
+    Ok(json!({"on": on}))
+}
+
+fn drum_map(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.drum_map";
+    let id = track_param(e, C, p, "track")?.ok_or_else(|| bad(C, "`track` required"))?;
+    let pitch = match p.get("pitch") {
+        None => None,
+        Some(v) => Some(v.as_u64().filter(|n| *n <= 127).ok_or_else(|| bad(C, "`pitch` must be 0..127"))? as u8),
+    };
+    let name = p.get("name").and_then(Value::as_str).map(|n| {
+        let mut n: String = n.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
+        soundcraft_model::truncate_chars(&mut n, soundcraft_model::MAX_NAME_CHARS);
+        n
+    });
+    let gm = p.get("gm").and_then(Value::as_bool).unwrap_or(false);
+    let clear = p.get("clear").and_then(Value::as_bool).unwrap_or(false);
+    if name.is_some() && pitch.is_none() {
+        return Err(bad(C, "`name` needs a `pitch`"));
+    }
+    if name.is_none() && !gm && !clear {
+        return Err(bad(C, "give `pitch` and `name`, `gm` or `clear`"));
+    }
+    let Some(t) = e.session_mut().track_mut(id) else { return Err(bad(C, "no such track")) };
+    if clear {
+        t.drum_map.clear();
+    }
+    if gm {
+        for p in 0..=127u8 {
+            if let Some(n) = soundcraft_midi::gm_drum_name(p)
+                && !t.drum_map.iter().any(|(q, _)| *q == p)
+            {
+                t.drum_map.push((p, n.to_string()));
+            }
+        }
+    }
+    if let (Some(p), Some(n)) = (pitch, name) {
+        t.drum_map.retain(|(q, _)| *q != p);
+        if !n.is_empty() {
+            t.drum_map.push((p, n));
+        }
+    }
+    t.drum_map.sort_by_key(|(p, _)| *p);
+    Ok(json!({"track": id.0, "names": t.drum_map.len()}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,7 +260,11 @@ mod tests {
     fn a_clip_reverses_notes_and_controller_spans() {
         let n = |pitch, start, length| Note { probability: 100, pitch, velocity: 100, muted: false, release_velocity: 64, channel: 0, start, length };
         let c = |tick, value| CtrlEvent { tick, channel: 0, kind: CtrlKind::Cc(1), value, shape: Default::default() };
-        let seq = Sequence { notes: vec![n(60, 0, 100), n(62, 300, 200), n(64, -50, 10)], ctrls: vec![c(-10, 5), c(200, 10), c(600, 20)] };
+        let seq = Sequence {
+            notes: vec![n(60, 0, 100), n(62, 300, 200), n(64, -50, 10)],
+            ctrls: vec![c(-10, 5), c(200, 10), c(600, 20)],
+            sysex: Vec::new(),
+        };
         let r = reversed(&seq, 1000);
         let notes: Vec<(u8, i64, i64)> = r.notes.iter().map(|n| (n.pitch, n.start, n.length)).collect();
         assert_eq!(notes, vec![(64, -50, 10), (62, 500, 200), (60, 900, 100)]);
@@ -231,6 +303,7 @@ mod tests {
                 c(900, 30, CtrlShape::Ramp(-0.4)),
                 c(1200, 127, CtrlShape::Step),
             ],
+            sysex: Vec::new(),
         };
         let len = 1000;
         let r = reversed(&seq, len);
@@ -246,6 +319,35 @@ mod tests {
             let (want, got) = (lane_value(&seq, t).unwrap_or(f64::NAN), lane_value(&rr, t).unwrap_or(f64::NAN));
             assert!((want - got).abs() <= 1.0, "at {t}: twice reversed {got}, original {want}");
         }
+    }
+
+    /// Parity section 7: a track's drum map names pitches, fills in General MIDI names, is
+    /// cleared, is undone and saved with the track.
+    #[test]
+    fn a_drum_map_names_pitches_on_the_track() {
+        let mut e = Engine::default();
+        let t = e.session_mut().add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Kit"));
+        e.execute("track.drum_map", &json!({"track": t.0, "pitch": 36, "name": "Big Kick"})).unwrap();
+        e.execute("track.drum_map", &json!({"track": t.0, "pitch": 38, "name": "Snare\n"})).unwrap();
+        assert_eq!(e.session().track(t).unwrap().drum_map, vec![(36, "Big Kick".to_string()), (38, "Snare".to_string())]);
+        // GM names fill only the pitches without one.
+        e.execute("track.drum_map", &json!({"track": t.0, "gm": true})).unwrap();
+        let map = &e.session().track(t).unwrap().drum_map;
+        assert_eq!(map.iter().find(|(p, _)| *p == 36).map(|x| x.1.as_str()), Some("Big Kick"));
+        assert_eq!(map.iter().find(|(p, _)| *p == 42).map(|x| x.1.as_str()), soundcraft_midi::gm_drum_name(42));
+        // An empty name removes one; a bad pitch is refused.
+        e.execute("track.drum_map", &json!({"track": t.0, "pitch": 36, "name": ""})).unwrap();
+        assert!(!e.session().track(t).unwrap().drum_map.iter().any(|(p, _)| *p == 36));
+        assert!(e.execute("track.drum_map", &json!({"track": t.0, "pitch": 200, "name": "x"})).is_err());
+        assert!(e.execute("track.drum_map", &json!({"track": t.0})).is_err());
+        // Saved with the track; undone step by step.
+        let saved = serde_json::to_string(e.session().track(t).unwrap()).unwrap();
+        let back: soundcraft_model::Track = serde_json::from_str(&saved).unwrap();
+        assert_eq!(back.drum_map, e.session().track(t).unwrap().drum_map);
+        e.execute("track.drum_map", &json!({"track": t.0, "clear": true})).unwrap();
+        assert!(e.session().track(t).unwrap().drum_map.is_empty());
+        assert!(e.undo());
+        assert!(!e.session().track(t).unwrap().drum_map.is_empty());
     }
 
     #[test]

@@ -100,12 +100,16 @@ pub struct PatternClip {
     /// edited by hand, and the clip becomes a plain MIDI clip rather than lose the edit.
     #[serde(default)]
     pub expanded: u64,
+    /// The automation lane ids (`plugin:m3:cutoff`, …) the pattern's parameter rows wrote onto the
+    /// clip's own automation: kept in step with the rows, and taken off when a row goes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owned: Vec<String>,
 }
 
 impl PatternClip {
     /// A pattern clip that has not been expanded yet.
     pub fn new(pattern: soundcraft_midi::pattern::Pattern, phase: i64) -> PatternClip {
-        PatternClip { pattern, phase, seen: None, expanded: 0 }
+        PatternClip { pattern, phase, seen: None, expanded: 0, owned: Vec::new() }
     }
 
     pub fn sanitize(&mut self) {
@@ -287,9 +291,18 @@ pub struct Clip {
     /// values are moved here by [`crate::Session::sanitize`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<(String, f64)>,
+    /// Automation inside the clip ([`crate::clip_automation`]): lanes with points in samples from
+    /// the clip's start, heard while the clip plays. A copy has its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub automation: Vec<crate::AutomationLane>,
     /// Clip Effects bypassed: kept but not heard.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub effects_bypass: bool,
+    /// Clip Effects modules: any built-in effect, in order, after the EQ, compressor and gain
+    /// above. Heard while the clip plays (and for their tail after it), the chain's latency taken
+    /// off; [`Clip::effects_bypass`] bypasses them too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<ClipModule>,
     /// A MIDI clip's playback quantize: its notes play quantized and stay where they are.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub play_quantize: Option<soundcraft_midi::ops::PlayQuantize>,
@@ -297,6 +310,18 @@ pub struct Clip {
     /// from its start). `None`: it does not follow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_chords: Option<Vec<soundcraft_midi::ops::FollowChord>>,
+    /// A MIDI clip that already holds its track's MIDI effects' output (a take recorded with
+    /// Record Effects' Output): it plays straight to the instrument, past the effects.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub midi_fx_printed: bool,
+    /// A MIDI clip's own MIDI effects (an arpeggiator, a chord, a scale, note repeat), run on
+    /// its notes only; what they make goes straight to the instrument, past the track's effects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_fx: Vec<crate::MidiFx>,
+    /// What the clip's own MIDI effects make of it, as the mix plays it (derived, never saved;
+    /// made by the engine off the audio thread).
+    #[serde(skip)]
+    pub midi_fx_render: MidiFxRender,
     /// A MIDI clip's own transpose in semitones, applied as it plays (with its track's).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub midi_transpose: i8,
@@ -332,6 +357,36 @@ pub struct Clip {
     /// overlapping (a crossfade) play together. 0 for every clip placed in the Overwrite mode.
     #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub layer: i32,
+    /// Clip Notes: free text about the clip (Clip › Notes…), kept by splits and copies; at most
+    /// [`crate::MAX_NOTE_CHARS`] characters.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    /// Process history: the offline processes (Process, `process.run`) this audio clip's file
+    /// came through, oldest first. Each keeps the clip as it was before it, so a step can be
+    /// bypassed, moved or removed later and the clip made again from there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processes: Vec<ProcessStep>,
+}
+
+/// One step of a clip's process history ([`Clip::processes`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProcessStep {
+    /// The process (`process.run`'s `process`).
+    pub process: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<(String, f32)>,
+    /// The handles it rendered beyond the clip's edges, in milliseconds.
+    #[serde(default)]
+    pub handle_ms: f64,
+    /// Left out: the clip is made without it, and it stays listed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypassed: bool,
+    /// Where the clip started in the file the step made (its handle before the clip).
+    #[serde(default)]
+    pub lead: Samples,
+    /// The clip as it was before this step (its own history left out): where a change to
+    /// the history renders again from.
+    pub before: Box<Clip>,
 }
 
 fn is_zero_i64(v: &i64) -> bool {
@@ -388,9 +443,14 @@ impl Clip {
             source_channel: None,
             gain_bypass: false,
             effects: Vec::new(),
+            automation: Vec::new(),
             effects_bypass: false,
+            modules: Vec::new(),
             play_quantize: None,
             follow_chords: None,
+            midi_fx_printed: false,
+            midi_fx: Vec::new(),
+            midi_fx_render: MidiFxRender::default(),
             midi_transpose: 0,
             midi_velocity: 0,
             midi_index: soundcraft_midi::NoteIndexSlot(None),
@@ -400,6 +460,8 @@ impl Clip {
             transpose_cents: 0,
             shared: None,
             layer: 0,
+            notes: String::new(),
+            processes: Vec::new(),
         }
     }
 
@@ -423,6 +485,16 @@ impl Clip {
             Err(i) if self.effects.len() < MAX_CLIP_EFFECTS => self.effects.insert(i, (key.to_string(), value)),
             Err(_) => {}
         }
+    }
+
+    /// The Clip Effects modules to hear: none when the effects are bypassed.
+    pub fn live_modules(&self) -> &[ClipModule] {
+        if self.effects_bypass { &[] } else { self.modules.as_slice() }
+    }
+
+    /// Whether the clip has Clip Effects to hear (settings or modules).
+    pub fn has_live_effects(&self) -> bool {
+        self.live_effects().is_some() || !self.live_modules().is_empty()
     }
 
     /// The Clip Effects to hear: none when bypassed or not set.
@@ -508,7 +580,7 @@ impl Clip {
 
     /// Whether the clip plays `src` (its source, or its cleaned alternate).
     pub fn uses_source(&self, src: SourceId) -> bool {
-        self.source() == Some(src) || self.clean_alt().is_some_and(|k| k.source == src)
+        self.source() == Some(src) || self.clean_alt().is_some_and(|k| k.source == src) || self.processes.iter().any(|p| p.before.uses_source(src))
     }
 
     /// The movie this clip shows (video clips only).
@@ -657,6 +729,16 @@ impl Clip {
         }
         self.gain_env.retain(|&(t, _)| t >= delta);
         self.gain_env.iter_mut().for_each(|(t, _)| *t = t.saturating_sub(delta));
+        // The clip's automation stays on the audio it was written against.
+        for l in &mut self.automation {
+            let def = l.param.range().2;
+            if l.points.iter().any(|q| q.at < delta) && l.points.iter().all(|q| q.at != delta) {
+                let v = l.value_at(delta, def);
+                l.points.insert(0, crate::AutomationPoint::new(delta, v));
+            }
+            l.points.retain(|q| q.at >= delta);
+            l.points.iter_mut().for_each(|q| q.at = q.at.saturating_sub(delta));
+        }
     }
 
     /// Move the end edge to `new_end`.
@@ -693,8 +775,15 @@ impl Clip {
     pub fn sanitize(&mut self) {
         bound(&mut self.start);
         self.length = self.length.clamp(1, MAX_POSITION);
+        if let Some((i, _)) = self.notes.char_indices().nth(crate::MAX_NOTE_CHARS) {
+            self.notes.truncate(i);
+        }
         bound(&mut self.sync_point);
         self.gain_env.iter_mut().for_each(|(at, _)| bound(at));
+        for l in &mut self.automation {
+            l.points.iter_mut().for_each(|q| bound(&mut q.at));
+            l.points.sort_by_key(|q| q.at);
+        }
         match &mut self.content {
             ClipContent::Audio { offset, .. } | ClipContent::Video { offset, .. } => bound(offset),
             ClipContent::Midi { sequence } => bound_sequence(sequence),
@@ -737,6 +826,80 @@ impl Clip {
         self.effects.sort_by(|a, b| a.0.cmp(&b.0));
         self.effects.dedup_by(|a, b| a.0 == b.0);
         self.effects.truncate(MAX_CLIP_EFFECTS);
+        // Clip Effects modules: a bounded chain of unique ids, finite parameters.
+        self.modules.truncate(MAX_CLIP_MODULES);
+        let mut seen: Vec<u32> = Vec::with_capacity(self.modules.len());
+        for m in &mut self.modules {
+            truncate_chars(&mut m.plugin, 128);
+            m.params.retain(|k, v| v.is_finite() && !k.is_empty() && k.len() <= 64);
+            while m.params.len() > MAX_CLIP_EFFECTS {
+                m.params.pop_last();
+            }
+            if m.id == 0 || seen.contains(&m.id) {
+                m.id = seen.iter().copied().max().unwrap_or(0).saturating_add(1).max(1);
+            }
+            seen.push(m.id);
+        }
+        if !self.is_audio() {
+            self.modules.clear();
+        }
+    }
+}
+
+/// The most modules a clip's Clip Effects chain holds.
+pub const MAX_CLIP_MODULES: usize = 8;
+
+/// One module of a clip's Clip Effects chain ([`Clip::modules`]): a built-in effect (its
+/// `soundcraft-dsp` registry id) with the parameters set on it (the rest at their defaults).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ClipModule {
+    /// Stable within the clip (1, 2, …); a split's pieces and copies keep it.
+    #[serde(default)]
+    pub id: u32,
+    pub plugin: String,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub params: std::collections::BTreeMap<String, f32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
+    /// A hosted (CLAP or VST3) module's own state beyond its parameters, as an insert's
+    /// [`crate::Insert::state`] (standard base64): read back from the running instance before a
+    /// save, a bounce or a copy, and restored into the instance made for the clip. Sessions from
+    /// before it have none (parameters only), and load as they did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+impl ClipModule {
+    pub fn new(id: u32, plugin: impl Into<String>) -> ClipModule {
+        ClipModule { id, plugin: plugin.into(), params: std::collections::BTreeMap::new(), bypass: false, state: None }
+    }
+
+    /// The decoded [`ClipModule::state`] (`None` when unset or not valid base64).
+    pub fn state_bytes(&self) -> Option<Vec<u8>> {
+        self.state.as_deref().and_then(crate::b64::decode)
+    }
+
+    /// Stores a plugin state blob (base64-encoded); an empty blob clears it.
+    pub fn set_state_bytes(&mut self, data: &[u8]) {
+        self.state = (!data.is_empty()).then(|| crate::b64::encode(data));
+    }
+}
+
+/// What a clip's own MIDI effects make of it: the events in timeline samples, in order, and a
+/// fingerprint of everything they were made from (the clip, its notes and effects, the tempo).
+#[derive(Debug, Clone, Default)]
+pub struct FxRender {
+    pub key: u64,
+    pub events: Vec<(Samples, [u8; 3])>,
+}
+
+/// Where a clip keeps [`FxRender`]: derived data, left out of comparisons (two are always equal).
+#[derive(Debug, Clone, Default)]
+pub struct MidiFxRender(pub Option<std::sync::Arc<FxRender>>);
+
+impl PartialEq for MidiFxRender {
+    fn eq(&self, _: &Self) -> bool {
+        true
     }
 }
 
@@ -750,6 +913,7 @@ pub(crate) fn bound_sequence(s: &mut Sequence) {
         n.length = n.length.clamp(1, MAX_POSITION);
     }
     s.ctrls.iter_mut().for_each(|c| bound(&mut c.tick));
+    s.sysex.iter_mut().for_each(|x| bound(&mut x.tick));
 }
 
 fn env_value(env: &[(Samples, f32)], at: Samples) -> f32 {
