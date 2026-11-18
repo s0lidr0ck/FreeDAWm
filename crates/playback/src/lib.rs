@@ -5316,6 +5316,42 @@ mod tests {
         assert!(got[0].iter().any(|x| x.abs() > 0.1), "the clip is printed");
     }
 
+    /// The monitor stage (EAR and SIM on) is heard on the device but never printed: a real-time
+    /// bounce's print is still the offline render, sample for sample.
+    #[test]
+    fn a_print_leaves_out_the_monitor_stage() {
+        use soundcraft_dsp::monitor::{Curve, Plan, Sim, ear_curves};
+        let s = clip_session(9600, &[]);
+        let range = Range::new(0, 6000);
+        let ear = ear_curves(&[[100.0, 0.0], [3000.0, 12.0]], &[], 48_000.0);
+        let sim = Sim { curve: Curve::fit(&[], 0.0, 48_000.0).cut(false, 400.0, 48_000.0), width: 0.0 };
+        let tap = Arc::new(print::PrintTap::new(range, None, 2, 48_000));
+        let (st, _shared, tx) = playing(&s, 48_000.0, 512);
+        tx.send(Cmd::Monitor(Arc::new(Plan { rate: 48_000.0, ear: Some(ear), ear_on: true, sim: Some(sim), sim_on: true }))).unwrap();
+        tx.send(Cmd::Print(Some(Arc::clone(&tap)))).unwrap();
+        let mut st = exact(st);
+        let mut got = Vec::new();
+        let mut heard = [Vec::new(), Vec::new()];
+        for _ in 0..20 {
+            let block = callbacks(&mut st, &[480]);
+            for c in 0..2 {
+                heard[c].extend_from_slice(&block[c]);
+            }
+            tap.drain(&mut got);
+        }
+        assert!(tap.is_done());
+        assert_eq!(tap.lost(), 0);
+        let want = soundcraft_mix::render_range(&s, range, 512);
+        let differs = heard[0].iter().zip(&want[0]).skip(2048).any(|(a, b)| (a - b).abs() > 0.01);
+        assert!(differs, "the device hears the stage");
+        for c in 0..2 {
+            assert_eq!(got[c].len(), 6000);
+            for (i, (a, b)) in got[c].iter().zip(&want[c]).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "channel {c}, sample {i}: the print holds no monitor stage");
+            }
+        }
+    }
+
     fn s_without_click(s: &Session) -> Session {
         let mut s = s.clone();
         s.edit.click = false;
