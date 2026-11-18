@@ -358,6 +358,9 @@ pub enum Dialog {
         show_track_names: bool,
         staff_percent: u32,
         part_pages: bool,
+        /// [`soundcraft_engine::score::PAGES`].
+        page: u8,
+        section_breaks: bool,
     },
     /// Transport › Pre/Post-Roll…: on/off and both amounts, in seconds.
     PrePostRoll {
@@ -712,6 +715,8 @@ impl Dialogs {
                     show_track_names: s.show_track_names,
                     staff_percent: s.staff_percent,
                     part_pages: s.part_pages,
+                    page: s.page,
+                    section_breaks: s.section_breaks,
                 }
             }
             "track.rename" => {
@@ -1556,7 +1561,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         take_file_type = Some(file_type.clone());
                     }
                 }
-                Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names, staff_percent, part_pages } => {
+                Dialog::ScoreSetup { title, composer, bars_per_system, show_track_names, staff_percent, part_pages, page, section_breaks } => {
                     egui::Grid::new("score_setup").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                         ui.label("Title");
                         ui.text_edit_singleline(title);
@@ -1570,13 +1575,23 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.label("Staff size");
                         ui.add(egui::DragValue::new(staff_percent).range(70..=150).suffix(" %"));
                         ui.end_row();
+                        ui.label("Page");
+                        let pages = soundcraft_engine::score::PAGES;
+                        egui::ComboBox::from_id_salt("score_page").selected_text(pages.get(usize::from(*page)).map_or("", |p| p.0)).show_ui(ui, |ui| {
+                            for (i, p) in pages.iter().enumerate() {
+                                ui.selectable_value(page, i as u8, p.0);
+                            }
+                        });
+                        ui.end_row();
                     });
                     crate::widgets::checkbox(ui, show_track_names, "Show track names");
                     crate::widgets::checkbox(ui, part_pages, "Print each track as a part on its own page");
+                    crate::widgets::checkbox(ui, section_breaks, "Start a new system at each section");
                     if buttons(ui, "OK", enter) {
+                        let page_name = ["continuous", "a4", "letter"].get(usize::from(*page)).copied().unwrap_or("continuous");
                         action = Some((
                             "file.score_setup".into(),
-                            json!({"title": title, "composer": composer, "bars_per_system": bars_per_system, "show_track_names": show_track_names, "staff_percent": staff_percent, "part_pages": part_pages}),
+                            json!({"title": title, "composer": composer, "bars_per_system": bars_per_system, "show_track_names": show_track_names, "staff_percent": staff_percent, "part_pages": part_pages, "page": page_name, "section_breaks": section_breaks}),
                         ));
                     }
                 }

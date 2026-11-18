@@ -491,6 +491,41 @@ fn staff(app: &mut SoundApp, ui: &mut egui::Ui, cid: ClipId) {
             let x = g.x_of(cursor);
             p.line_segment([pos2(x, y_of(12)), pos2(x, y_of(-12))], Stroke::new(1.0, accent.gamma_multiply(0.6)));
         }
+        // The clip as the printed score lays it out: rests, ties, beams.
+        let items = soundcraft_engine::score::clip_items(s, &clip);
+        let marks = notation(&items);
+        let bass = {
+            let ps: Vec<f32> = items.iter().flat_map(|(_, it)| it.pitches.iter().map(|p| f32::from(*p))).collect();
+            !ps.is_empty() && ps.iter().sum::<f32>() / (ps.len() as f32) < 57.0
+        };
+        let soft = Color32::from_rgb(90, 86, 82);
+        for (tick, units) in &marks.rests {
+            let x = g.x_of(*tick) + 4.0;
+            rest_glyph(&p, pos2(x, y_of(if bass { -6 } else { 6 })), *units, soft);
+        }
+        for (from, to, pitch) in &marks.ties {
+            let (step, _) = spell(*pitch, flats);
+            let (x0, x1, y) = (g.x_of(*from) + 5.0, g.x_of(*to) - 5.0, y_of(step) + if step >= 6 || (-6..0).contains(&step) { -6.0 } else { 6.0 });
+            let down = y > y_of(step);
+            let bow: Vec<Pos2> = (0..=12)
+                .map(|i| {
+                    let t = i as f32 / 12.0;
+                    let lift = (t * std::f32::consts::PI).sin() * 5.0;
+                    pos2(x0 + (x1 - x0) * t, y + if down { lift } else { -lift })
+                })
+                .collect();
+            p.add(Shape::line(bow, Stroke::new(1.2, ink)));
+        }
+        // Heads a tie carries on to (past a bar line): drawn, not picked.
+        for (tick, units, pitch) in &marks.carried {
+            let (step, _) = spell(*pitch, flats);
+            let ticks = i64::from(*units) * TICKS_PER_QUARTER / 4;
+            head(&p, pos2(g.x_of(*tick), y_of(step)), ticks, step, soft, true);
+        }
+        for beam in &marks.beams {
+            draw_beam(&p, &g, beam, flats, ink);
+        }
+        let beamed: Vec<i64> = marks.beams.iter().flat_map(|b| b.iter().map(|m| m.0)).collect();
         // Notes.
         for (i, n) in sequence.notes.iter().enumerate().filter(|(_, n)| n.start >= 0 && n.start < len_ticks) {
             let x = g.x_of(n.start);
@@ -501,7 +536,10 @@ fn staff(app: &mut SoundApp, ui: &mut egui::Ui, cid: ClipId) {
             for l in ledgers(step) {
                 p.line_segment([pos2(x - 7.0, y_of(l)), pos2(x + 7.0, y_of(l))], Stroke::new(1.0, ink));
             }
-            head(&p, pos2(x, y), n.length, step, col);
+            // A note in a beamed group gets its stem from the beam.
+            let quantized = (n.start + TICKS_PER_QUARTER / 8) / (TICKS_PER_QUARTER / 4) * (TICKS_PER_QUARTER / 4);
+            let own_stem = !beamed.iter().any(|t| (*t - quantized).abs() < TICKS_PER_QUARTER / 8);
+            head(&p, pos2(x, y), n.length, step, col, own_stem);
             match acc {
                 1 => {
                     p.text(pos2(x - 12.0, y), Align2::CENTER_CENTER, "♯", regular(12.0), col);
@@ -563,8 +601,133 @@ fn snap_tick(s: &soundcraft_model::Session, g: &ScoreGeometry, x: f32, value: i6
     abs.saturating_sub(g.base_tick).clamp(0, (g.len_ticks - 1).max(0))
 }
 
-/// A note head with its stem and flags, by length.
-fn head(p: &egui::Painter, at: Pos2, length: i64, step: i32, ink: Color32) {
+/// What the score view draws over its heads, from the printed layout ([`soundcraft_engine::score::clip_items`]).
+#[derive(Debug, Default, PartialEq)]
+pub struct Marks {
+    /// Rests: (tick from the clip's start, sixteenths).
+    pub rests: Vec<(i64, u32)>,
+    /// Ties: (from tick, to tick, pitch).
+    pub ties: Vec<(i64, i64, u8)>,
+    /// Heads a tie carries on to: (tick, sixteenths, pitch).
+    pub carried: Vec<(i64, u32, u8)>,
+    /// Beamed groups: eighths and shorter within one beat, each (tick, sixteenths, pitches).
+    pub beams: Vec<Vec<(i64, u32, Vec<u8>)>>,
+}
+
+/// The rests, ties, carried heads and beam groups of a clip's laid-out items.
+pub fn notation(items: &[(i64, soundcraft_engine::score::Item)]) -> Marks {
+    let beat = TICKS_PER_QUARTER;
+    let mut m = Marks::default();
+    for (k, (tick, it)) in items.iter().enumerate() {
+        if it.pitches.is_empty() {
+            m.rests.push((*tick, it.units));
+            continue;
+        }
+        if it.tie_stop {
+            for p in &it.pitches {
+                m.carried.push((*tick, it.units, *p));
+            }
+        }
+        if it.tie_start
+            && let Some((next, _)) = items.get(k + 1)
+        {
+            for p in &it.pitches {
+                m.ties.push((*tick, *next, *p));
+            }
+        }
+    }
+    // Beams: runs of notes of an eighth or shorter (not rests, not carried on by a tie), inside
+    // one beat.
+    let mut run: Vec<(i64, u32, Vec<u8>)> = Vec::new();
+    let flush = |run: &mut Vec<(i64, u32, Vec<u8>)>, beams: &mut Vec<Vec<(i64, u32, Vec<u8>)>>| {
+        if run.len() >= 2 {
+            beams.push(std::mem::take(run));
+        } else {
+            run.clear();
+        }
+    };
+    for (tick, it) in items {
+        let short = !it.pitches.is_empty() && it.units <= 3 && !it.tie_stop;
+        let same_beat = run.first().is_some_and(|f| f.0.div_euclid(beat) == tick.div_euclid(beat));
+        let follows = run.last().is_some_and(|l| l.0 + i64::from(l.1) * beat / 4 == *tick);
+        if !(short && same_beat && follows) {
+            flush(&mut run, &mut m.beams);
+        }
+        if short {
+            run.push((*tick, it.units, it.pitches.clone()));
+        }
+    }
+    flush(&mut run, &mut m.beams);
+    m
+}
+
+/// A rest glyph of `units` sixteenths at `at` (the staff's middle line).
+fn rest_glyph(p: &egui::Painter, at: Pos2, units: u32, ink: Color32) {
+    let (x, y) = (at.x, at.y);
+    match units {
+        16 => {
+            p.rect_filled(Rect::from_min_size(pos2(x - 5.0, y - STEP * 2.0), vec2(10.0, 4.0)), 0.0, ink);
+        }
+        8 | 12 => {
+            p.rect_filled(Rect::from_min_size(pos2(x - 5.0, y - 4.0), vec2(10.0, 4.0)), 0.0, ink);
+        }
+        4 | 6 => {
+            let pts = vec![pos2(x - 2.0, y - 10.0), pos2(x + 3.0, y - 4.0), pos2(x - 2.0, y + 1.0), pos2(x + 3.0, y + 6.0), pos2(x - 1.0, y + 10.0)];
+            p.add(Shape::line(pts, Stroke::new(2.0, ink)));
+        }
+        _ => {
+            p.line_segment([pos2(x + 3.0, y - 5.0), pos2(x - 1.0, y + 8.0)], Stroke::new(1.3, ink));
+            p.circle_filled(pos2(x - 1.5, y - 4.0), 2.2, ink);
+            if units == 1 {
+                p.circle_filled(pos2(x - 3.0, y + 1.0), 2.2, ink);
+            }
+        }
+    }
+    if matches!(units, 3 | 6 | 12) {
+        p.circle_filled(pos2(x + 8.0, y - 2.0), 1.4, ink);
+    }
+}
+
+/// A beamed group: each note's stem to one beam (a second beam under the sixteenths).
+fn draw_beam(p: &egui::Painter, g: &ScoreGeometry, group: &[(i64, u32, Vec<u8>)], flats: bool, ink: Color32) {
+    let steps: Vec<i32> = group.iter().flat_map(|(_, _, ps)| ps.iter().map(|q| spell(*q, flats).0)).collect();
+    let (Some(lo), Some(hi)) = (steps.iter().min().copied(), steps.iter().max().copied()) else { return };
+    // Stems up when the group sits low on its staff.
+    let mid = if (lo + hi) / 2 >= 0 { 6 } else { -6 };
+    let up = (lo + hi) / 2 < mid;
+    let beam_y = if up { g.y_of(hi) - 26.0 } else { g.y_of(lo) + 26.0 };
+    let xs: Vec<f32> = group.iter().map(|(t, _, _)| g.x_of(*t) + if up { 4.5 } else { -4.5 }).collect();
+    for ((_, _, ps), x) in group.iter().zip(&xs) {
+        let ys: Vec<f32> = ps.iter().map(|q| g.y_of(spell(*q, flats).0)).collect();
+        let far = if up { ys.iter().copied().fold(f32::MIN, f32::max) } else { ys.iter().copied().fold(f32::MAX, f32::min) };
+        p.line_segment([pos2(*x, far), pos2(*x, beam_y)], Stroke::new(1.2, ink));
+    }
+    if let (Some(a), Some(b)) = (xs.first(), xs.last()) {
+        p.line_segment([pos2(*a, beam_y), pos2(*b, beam_y)], Stroke::new(3.5, ink));
+    }
+    // The second beam, between neighbouring sixteenths (a lone one gets a stub).
+    let y2 = beam_y + if up { 6.0 } else { -6.0 };
+    for (k, ((_, u, _), x)) in group.iter().zip(&xs).enumerate() {
+        if *u != 1 {
+            continue;
+        }
+        let next = group.get(k + 1).filter(|n| n.1 == 1).and_then(|_| xs.get(k + 1));
+        let prev = k.checked_sub(1).and_then(|j| group.get(j)).filter(|n| n.1 == 1);
+        match next {
+            Some(nx) => {
+                p.line_segment([pos2(*x, y2), pos2(*nx, y2)], Stroke::new(3.5, ink));
+            }
+            None if prev.is_none() => {
+                let dir = if k + 1 < xs.len() { 7.0 } else { -7.0 };
+                p.line_segment([pos2(*x, y2), pos2(*x + dir, y2)], Stroke::new(3.5, ink));
+            }
+            None => {}
+        }
+    }
+}
+
+/// A note head with its stem and flags, by length (`stem`: false when a beam gives it one).
+fn head(p: &egui::Painter, at: Pos2, length: i64, step: i32, ink: Color32, stem: bool) {
     let (x, y) = (at.x, at.y);
     let q = length as f32 / TICKS_PER_QUARTER as f32;
     let hollow = q >= 1.75;
@@ -574,7 +737,7 @@ fn head(p: &egui::Painter, at: Pos2, length: i64, step: i32, ink: Color32) {
     } else {
         p.add(Shape::ellipse_filled(r.center(), r.size() * 0.5, ink));
     }
-    if q < 3.5 {
+    if q < 3.5 && stem {
         // Stems up below the middle line of each staff, down above it.
         let up = if step >= 0 { step < 6 } else { step < -6 };
         let (sx, sy0, sy1): (f32, f32, f32) = if up { (x + 4.5, y, y - 26.0) } else { (x - 4.5, y, y + 26.0) };
@@ -597,6 +760,58 @@ fn head(p: &egui::Painter, at: Pos2, length: i64, step: i32, ink: Color32) {
 #[cfg(test)]
 mod tests {
     use soundcraft_vocal::PitchClassSet;
+
+    fn item(pitches: &[u8], units: u32, tie_start: bool, tie_stop: bool) -> soundcraft_engine::score::Item {
+        soundcraft_engine::score::Item { pitches: pitches.to_vec(), units, tie_start, tie_stop, lyric: None }
+    }
+
+    #[test]
+    fn rests_ties_and_beams_come_from_the_laid_out_items() {
+        const S: i64 = 240; // a sixteenth
+        // Four eighths (two beams of two), a quarter rest, a half tied over the bar.
+        let items = vec![
+            (0, item(&[60], 2, false, false)),
+            (2 * S, item(&[62], 2, false, false)),
+            (4 * S, item(&[64], 2, false, false)),
+            (6 * S, item(&[65], 1, false, false)),
+            (7 * S, item(&[67], 1, false, false)),
+            (8 * S, item(&[], 4, false, false)),
+            (12 * S, item(&[72], 4, true, false)),
+            (16 * S, item(&[72], 4, false, true)),
+        ];
+        let m = super::notation(&items);
+        assert_eq!(m.rests, vec![(8 * S, 4)]);
+        assert_eq!(m.ties, vec![(12 * S, 16 * S, 72)]);
+        assert_eq!(m.carried, vec![(16 * S, 4, 72)]);
+        let groups: Vec<Vec<i64>> = m.beams.iter().map(|b| b.iter().map(|x| x.0).collect()).collect();
+        assert_eq!(groups, vec![vec![0, 2 * S], vec![4 * S, 6 * S, 7 * S]], "beamed by the beat");
+    }
+
+    #[test]
+    fn a_clip_lays_out_as_the_printed_score_does() {
+        use soundcraft_midi::{Note, Sequence};
+        let mut s = soundcraft_model::Session::default();
+        let n = |start: i64, length: i64, pitch: u8| Note {
+            probability: 100,
+            start,
+            length,
+            pitch,
+            velocity: 100,
+            release_velocity: 64,
+            channel: 0,
+            muted: false,
+        };
+        // Two eighths, then a note held across the bar line.
+        let seq = Sequence { notes: vec![n(0, 480, 60), n(480, 480, 62), n(2880, 1920, 64)], ..Sequence::default() };
+        let len = s.tempo.tick_to_samples(3840 * 2, s.sample_rate);
+        let clip = soundcraft_model::Clip::midi(soundcraft_model::ClipId(1), "c", 0, len, seq);
+        let items = soundcraft_engine::score::clip_items(&s, &clip);
+        let m = super::notation(&items);
+        assert_eq!(m.beams.len(), 1);
+        assert_eq!(m.ties.len(), 1, "{items:?}");
+        assert!(m.rests.iter().any(|r| r.0 == 960), "a rest after the eighths: {:?}", m.rests);
+        s.tracks.clear();
+    }
 
     #[test]
     fn diatonic_steps() {

@@ -32,7 +32,17 @@ pub struct ScoreSetup {
     /// The key signature at the start: sharps (above 0) or flats (below 0), and minor or not.
     pub fifths: i32,
     pub minor: bool,
+    /// The page: [`PAGES`] (0: one continuous page as tall as needed, as before; 1: A4; 2: US
+    /// Letter). A sized page starts a new page wherever the next system would not fit.
+    pub page: u8,
+    /// A new system starts at each section of the arrangement (the Band's section lane).
+    pub section_breaks: bool,
+    /// The measures (from 0) where a section starts: filled from the session.
+    pub section_bars: Vec<usize>,
 }
+
+/// The page sizes Print Score offers: name and size in CSS pixels (96 per inch).
+pub const PAGES: [(&str, f64, f64); 3] = [("Continuous", 794.0, 0.0), ("A4", 794.0, 1123.0), ("US Letter", 816.0, 1056.0)];
 
 /// A key's signature: its tonic pitch class and scale (0 major, 1 minor) as sharps (above 0)
 /// or flats (below 0), the way the key is usually written (F# major has six sharps, Db major
@@ -78,6 +88,12 @@ impl ScoreSetup {
             part_pages: s.edit.flag("score.part_pages"),
             fifths: key_fifths(tonic, scale),
             minor: scale == 1,
+            page: {
+                let v = s.edit.value("score.page", 0.0);
+                if v.is_finite() { v.clamp(0.0, (PAGES.len() - 1) as f64) as u8 } else { 0 }
+            },
+            section_breaks: s.edit.flag("score.section_breaks"),
+            section_bars: section_bars(s),
         }
     }
 
@@ -90,7 +106,72 @@ impl ScoreSetup {
         s.edit.set_flag("score.hide_names", !self.show_track_names);
         s.edit.values.insert("score.staff_percent".into(), f64::from(self.staff_percent.clamp(70, 150)));
         s.edit.set_flag("score.part_pages", self.part_pages);
+        s.edit.values.insert("score.page".into(), f64::from(self.page.min(PAGES.len() as u8 - 1)));
+        s.edit.set_flag("score.section_breaks", self.section_breaks);
     }
+}
+
+/// The measures (counted from 0, as [`layout`] numbers them) where a section of the Band's
+/// section lane starts, in order.
+pub fn section_bars(s: &Session) -> Vec<usize> {
+    let mut v: Vec<usize> = s
+        .band
+        .sections
+        .iter()
+        .filter(|b| b.length_ticks > 0 && b.start_tick >= 0)
+        .filter_map(|b| usize::try_from(s.tempo.bar_beat_at_tick(b.start_tick).bar.saturating_sub(1)).ok())
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// The systems of `n` measures: `per` to a system, a new one also at each of `breaks`.
+pub fn systems(n: usize, per: usize, breaks: &[usize]) -> Vec<std::ops::Range<usize>> {
+    let per = per.max(1);
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < n.max(1) {
+        let next_break = breaks.iter().copied().find(|b| *b > start).unwrap_or(usize::MAX);
+        let end = (start + per).min(next_break).min(n.max(1));
+        out.push(start..end);
+        start = end;
+    }
+    out
+}
+
+/// One clip's notes as the printed score lays them out (the song's bars, one voice: rests,
+/// chords, notes split at bar lines and tied): each item with its start in ticks from the clip's
+/// start, inside the clip. The score view draws its rests, ties and beams from these.
+pub fn clip_items(s: &Session, clip: &soundcraft_model::Clip) -> Vec<(i64, Item)> {
+    let ClipContent::Midi { sequence } = &clip.content else { return Vec::new() };
+    let sr = s.sample_rate;
+    let base = s.tempo.samples_to_ticks(clip.start, sr);
+    let end = s.tempo.samples_to_ticks(clip.end(), sr);
+    let mut notes = Vec::new();
+    for n in sequence.notes.iter().filter(|n| !n.muted && n.length > 0) {
+        let st = base.saturating_add(n.start);
+        if st < base || st >= end {
+            continue;
+        }
+        let a = quantize(st);
+        let b = quantize(st.saturating_add(n.length).min(end)).max(a + 1);
+        notes.push((a, b, n.pitch));
+    }
+    let last = notes.iter().map(|x| x.1).max().unwrap_or(0).max(quantize(end));
+    let bars = measure_grid(s, last);
+    let mut out = Vec::new();
+    for ((ms, _, _, _, _, _), m) in bars.iter().zip(fill(&bars, &notes)) {
+        let mut at = *ms;
+        for it in m.items {
+            let tick = at.saturating_mul(UNIT).saturating_sub(base);
+            at = at.saturating_add(i64::from(it.units));
+            if tick >= 0 && tick < end - base {
+                out.push((tick, it));
+            }
+        }
+    }
+    out
 }
 
 /// One measure: its meter and its items (notes, chords or rests), in sixteenths.
@@ -219,7 +300,6 @@ fn split_units(mut units: i64) -> Vec<u32> {
     out
 }
 
-#[cfg(test)]
 fn fill(bars: &[Bar], notes: &[(i64, i64, u8)]) -> Vec<Measure> {
     fill_sung(bars, notes, &[])
 }
@@ -447,37 +527,62 @@ fn staff_step(pitch: u8, bass: bool) -> i32 {
 
 /// An engraved score as a printable SVG page (A4 portrait width, as tall as needed).
 pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
-    const W: f64 = 794.0;
     const MARGIN: f64 = 48.0;
     const SP: f64 = 7.0; // staff space
     const STAFF_GAP: f64 = 70.0;
     const SYSTEM_GAP: f64 = 40.0;
     let n_measures = parts.iter().map(|p| p.measures.len()).max().unwrap_or(0);
     let per = setup.bars_per_system.max(1) as usize;
-    let systems = n_measures.div_ceil(per).max(1);
+    let breaks: &[usize] = if setup.section_breaks { &setup.section_bars } else { &[] };
+    let groups = systems(n_measures, per, breaks);
+    let (_, w, page_h) = PAGES.get(usize::from(setup.page)).copied().unwrap_or(PAGES[0]);
     let label_w = if setup.show_track_names { 70.0 } else { 0.0 };
     let staff_x0 = MARGIN + label_w + 34.0;
-    let staff_x1 = W - MARGIN;
+    let staff_x1 = w - MARGIN;
     let sys_h = parts.len().max(1) as f64 * STAFF_GAP + SYSTEM_GAP;
     let top = 110.0;
-    let h = top + systems as f64 * sys_h + MARGIN;
+    // Where each system goes: down the page, and onto a new page (a sized page) when it would
+    // not fit; the first page under the title.
+    let mut tops = Vec::with_capacity(groups.len());
+    let mut y = top;
+    let mut pages = 1usize;
+    let mut on_page = 0;
+    for _ in &groups {
+        if page_h > 0.0 && on_page > 0 && y + sys_h > pages as f64 * page_h - MARGIN {
+            y = pages as f64 * page_h + MARGIN + 20.0;
+            pages += 1;
+            on_page = 0;
+        }
+        tops.push(y);
+        y += sys_h;
+        on_page += 1;
+    }
+    let h = if page_h > 0.0 { pages as f64 * page_h } else { y + MARGIN };
     let mut o = String::new();
     // A staff size other than 100 % scales the page (the drawing keeps its proportions).
     let k = f64::from(setup.staff_percent.clamp(70, 150)) / 100.0;
     let _ = writeln!(
         o,
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{:.0}\" height=\"{:.0}\" viewBox=\"0 0 {W} {h:.0}\" font-family=\"serif\">",
-        W * k,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{:.0}\" height=\"{:.0}\" viewBox=\"0 0 {w} {h:.0}\" font-family=\"serif\">",
+        w * k,
         h * k
     );
     let _ = writeln!(o, "<rect width=\"100%\" height=\"100%\" fill=\"white\"/>");
-    let _ = writeln!(o, "<text x=\"{}\" y=\"56\" font-size=\"24\" text-anchor=\"middle\">{}</text>", W / 2.0, xml_escape(&setup.title));
+    for k in 1..pages {
+        // Where one page ends and the next begins.
+        let _ = writeln!(
+            o,
+            "<line x1=\"0\" y1=\"{:.0}\" x2=\"{w:.0}\" y2=\"{:.0}\" stroke=\"#bbb\" stroke-dasharray=\"4 4\" class=\"page-break\"/>",
+            k as f64 * page_h,
+            k as f64 * page_h
+        );
+    }
+    let _ = writeln!(o, "<text x=\"{}\" y=\"56\" font-size=\"24\" text-anchor=\"middle\">{}</text>", w / 2.0, xml_escape(&setup.title));
     if !setup.composer.is_empty() {
-        let _ = writeln!(o, "<text x=\"{}\" y=\"84\" font-size=\"13\" text-anchor=\"end\">{}</text>", W - MARGIN, xml_escape(&setup.composer));
+        let _ = writeln!(o, "<text x=\"{}\" y=\"84\" font-size=\"13\" text-anchor=\"end\">{}</text>", w - MARGIN, xml_escape(&setup.composer));
     }
     let bar_w = (staff_x1 - staff_x0) / per as f64;
-    for sys in 0..systems {
-        let y_sys = top + sys as f64 * sys_h;
+    for (sys, (group, y_sys)) in groups.iter().zip(tops.iter().copied()).enumerate() {
         for (pi, p) in parts.iter().enumerate() {
             let y0 = y_sys + pi as f64 * STAFF_GAP; // top line
             let bottom = y0 + 4.0 * SP;
@@ -500,8 +605,7 @@ pub fn svg(parts: &[Part], setup: &ScoreSetup) -> String {
                 bottom + if p.bass { -SP } else { SP * 0.6 },
                 if p.bass { 26 } else { 36 }
             );
-            for k in 0..per {
-                let mi = sys * per + k;
+            for (k, mi) in group.clone().enumerate() {
                 let x0 = staff_x0 + k as f64 * bar_w;
                 let _ = writeln!(
                     o,
@@ -739,6 +843,9 @@ mod tests {
             part_pages: false,
             fifths: 0,
             minor: false,
+            page: 0,
+            section_breaks: false,
+            section_bars: Vec::new(),
         };
         let x = musicxml(std::slice::from_ref(&part), &setup);
         assert_eq!(x.matches("<lyric ").count(), 2);
@@ -777,6 +884,47 @@ mod tests {
         assert_eq!(staff_step(64, false), 0); // E4: bottom treble line
         assert_eq!(staff_step(77, false), 8); // F5: top treble line
         assert_eq!(staff_step(43, true), 0); // G2: bottom bass line
+    }
+
+    #[test]
+    fn pages_and_section_breaks() {
+        assert_eq!(systems(10, 4, &[]), vec![0..4, 4..8, 8..10]);
+        assert_eq!(systems(10, 4, &[3, 6]), vec![0..3, 3..6, 6..10]);
+        assert_eq!(systems(0, 4, &[]), vec![0..1]);
+        let whole = Item { pitches: vec![60], units: 16, tie_start: false, tie_stop: false, lyric: None };
+        let part = Part {
+            name: "P".into(),
+            bass: false,
+            measures: (0..64).map(|_| Measure { numerator: 4, denominator: 4, fifths: 0, minor: false, items: vec![whole.clone()] }).collect(),
+        };
+        let mut setup = ScoreSetup {
+            title: "T".into(),
+            composer: String::new(),
+            bars_per_system: 4,
+            show_track_names: false,
+            staff_percent: 100,
+            part_pages: false,
+            fifths: 0,
+            minor: false,
+            page: 0,
+            section_breaks: false,
+            section_bars: vec![2],
+        };
+        let continuous = svg(std::slice::from_ref(&part), &setup);
+        assert!(!continuous.contains("page-break"), "one page as before");
+        setup.page = 1;
+        let a4 = svg(std::slice::from_ref(&part), &setup);
+        assert!(a4.contains("page-break"), "sixteen systems need more than one A4 page");
+        let height =
+            a4.split("viewBox=\"0 0 ").nth(1).and_then(|r| r.split('"').next()).and_then(|v| v.split(' ').nth(1)).and_then(|h| h.parse::<f64>().ok());
+        assert!(height.is_some_and(|h| h > 1123.0 && (h / 1123.0).fract() < 1e-9), "whole pages tall: {height:?}");
+        setup.section_breaks = true;
+        let broken = svg(std::slice::from_ref(&part), &setup);
+        // A system starts at the section's bar: bar 3's number heads a staff line of its own.
+        assert!(broken.len() > a4.len(), "the section adds a system");
+        let mut s = Session::default();
+        s.band.sections.push(soundcraft_model::SectionBlock { id: 1, start_tick: 4 * 3840, length_ticks: 3840, ..Default::default() });
+        assert_eq!(section_bars(&s), vec![4]);
     }
 
     #[test]

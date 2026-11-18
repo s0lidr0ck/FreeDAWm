@@ -174,7 +174,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Score Setup...",
             ["File"],
             None,
-            "{title?, composer?, bars_per_system?: 1..16, show_track_names?: bool, staff_percent?: 70..150, part_pages?: bool (Print Score writes a page per track)} — returns the current setup",
+            "{title?, composer?, bars_per_system?: 1..16, show_track_names?: bool, staff_percent?: 70..150, part_pages?: bool (Print Score writes a page per track), page?: continuous|a4|letter, section_breaks?: bool (a new system at each section)} — returns the current setup",
             always,
             |e, p| {
                 let mut setup = crate::score::ScoreSetup::from_session(e.session());
@@ -196,9 +196,22 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(b) = p.get("part_pages").and_then(serde_json::Value::as_bool) {
                     setup.part_pages = b;
                 }
+                if let Some(v) = p.get("page") {
+                    let name = v.as_str().map(str::to_ascii_lowercase);
+                    setup.page = match name.as_deref() {
+                        Some("continuous") => 0,
+                        Some("a4") => 1,
+                        Some("letter" | "us letter") => 2,
+                        _ => return Err(bad("file.score_setup", "`page` is continuous, a4 or letter")),
+                    };
+                }
+                if let Some(b) = p.get("section_breaks").and_then(serde_json::Value::as_bool) {
+                    setup.section_breaks = b;
+                }
                 setup.store(e.session_mut());
+                let page = ["continuous", "a4", "letter"].get(usize::from(setup.page)).copied().unwrap_or("continuous");
                 Ok(
-                    json!({"title": setup.title, "composer": setup.composer, "bars_per_system": setup.bars_per_system, "show_track_names": setup.show_track_names, "staff_percent": setup.staff_percent, "part_pages": setup.part_pages}),
+                    json!({"title": setup.title, "composer": setup.composer, "bars_per_system": setup.bars_per_system, "show_track_names": setup.show_track_names, "staff_percent": setup.staff_percent, "part_pages": setup.part_pages, "page": page, "section_breaks": setup.section_breaks}),
                 )
             }
         ),
