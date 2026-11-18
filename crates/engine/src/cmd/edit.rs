@@ -550,7 +550,11 @@ fn clipboard_here(e: &mut Engine, id: &str) -> Result<crate::Clipboard> {
 /// there.
 fn has_anything_to_paste(e: &Engine) -> std::result::Result<(), String> {
     let cb = &e.clipboard;
-    if cb.tracks.is_empty() && cb.clip_gain.is_empty() && cb.clip_effects.is_empty() { Err("the clipboard is empty".into()) } else { Ok(()) }
+    if cb.tracks.is_empty() && cb.clip_gain.is_empty() && cb.clip_effects.is_empty() && cb.clip_modules.is_empty() {
+        Err("the clipboard is empty".into())
+    } else {
+        Ok(())
+    }
 }
 
 fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -560,7 +564,7 @@ fn paste(e: &mut Engine, p: &Value) -> Result<Value> {
         if !e.clipboard.clip_gain.is_empty() {
             return super::edit_more::paste_clip_gain(e, p);
         }
-        if !e.clipboard.clip_effects.is_empty() {
+        if !e.clipboard.clip_effects.is_empty() || !e.clipboard.clip_modules.is_empty() {
             return super::edit_more::paste_clip_effects(e, p);
         }
     }

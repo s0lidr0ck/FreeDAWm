@@ -609,6 +609,10 @@ mod tests {
         assert!(clip(&e).modules.is_empty());
         e.execute("edit.paste_clip_effects", &json!({"clip": c})).unwrap();
         assert_eq!(clip(&e).modules.len(), 2);
+        // Plain Paste puts a clipboard of modules only back too.
+        e.execute("edit.clear_clip_effects", &json!({"clip": c})).unwrap();
+        e.execute("edit.paste", &json!({"clips": [c]})).unwrap();
+        assert_eq!(clip(&e).modules.len(), 2, "Edit › Paste");
         e.execute("clip.module_remove", &json!({"clip": c, "module": 1})).unwrap();
         assert_eq!(clip(&e).modules.len(), 1);
         // Saved and opened again: the chain is kept.
