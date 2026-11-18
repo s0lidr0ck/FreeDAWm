@@ -888,6 +888,8 @@ pub(crate) enum Event {
     /// `channel` is the MIDI channel, 0–15.
     NoteOn {
         time: u32,
+        /// The host's id for this note (`note_id`), so later expressions reach it alone; -1: none.
+        id: i32,
         channel: u8,
         key: u8,
         velocity: f64,
@@ -895,6 +897,8 @@ pub(crate) enum Event {
     /// `velocity` is the release velocity, 0–1.
     NoteOff {
         time: u32,
+        /// The id its note-on carried; -1: none.
+        id: i32,
         channel: u8,
         key: u8,
         velocity: f64,
@@ -903,6 +907,8 @@ pub(crate) enum Event {
     /// with `key` -1, every key sounding on it.
     Expression {
         time: u32,
+        /// The note it is for, by the id its note-on carried; -1: by channel and key alone.
+        id: i32,
         expression: i32,
         channel: u8,
         key: i16,
@@ -987,26 +993,26 @@ impl RawEvent {
                 key: -1,
                 value,
             }),
-            Event::NoteOn { time, channel, key, velocity } => RawEvent::Note(clap_event_note {
+            Event::NoteOn { time, id, channel, key, velocity } => RawEvent::Note(clap_event_note {
                 header: header(size_of::<clap_event_note>(), CLAP_EVENT_NOTE_ON, time),
-                note_id: -1,
+                note_id: id,
                 port_index: 0,
                 channel: i16::from(channel & 0x0F),
                 key: i16::from(key),
                 velocity,
             }),
-            Event::NoteOff { time, channel, key, velocity } => RawEvent::Note(clap_event_note {
+            Event::NoteOff { time, id, channel, key, velocity } => RawEvent::Note(clap_event_note {
                 header: header(size_of::<clap_event_note>(), CLAP_EVENT_NOTE_OFF, time),
-                note_id: -1,
+                note_id: id,
                 port_index: 0,
                 channel: i16::from(channel & 0x0F),
                 key: i16::from(key),
                 velocity,
             }),
-            Event::Expression { time, expression, channel, key, value } => RawEvent::Expression(clap_event_note_expression {
+            Event::Expression { time, id, expression, channel, key, value } => RawEvent::Expression(clap_event_note_expression {
                 header: header(size_of::<clap_event_note_expression>(), CLAP_EVENT_NOTE_EXPRESSION, time),
                 expression_id: expression,
-                note_id: -1,
+                note_id: id,
                 port_index: 0,
                 channel: i16::from(channel & 0x0F),
                 key,
@@ -2641,13 +2647,19 @@ mod tests {
     /// reaches CLAP with its id, channel, key (-1: every key) and value.
     #[test]
     fn note_offs_and_expressions_reach_clap_whole() {
-        let off = RawEvent::from_event(&Event::NoteOff { time: 9, channel: 3, key: 60, velocity: 0.5 }, 4, &[]);
+        let off = RawEvent::from_event(&Event::NoteOff { time: 9, id: 7, channel: 3, key: 60, velocity: 0.5 }, 4, &[]);
         let RawEvent::Note(n) = off else { panic!("a note event") };
-        assert_eq!((n.header.type_, n.header.time, n.channel, n.key, n.velocity), (CLAP_EVENT_NOTE_OFF, 5, 3, 60, 0.5));
-        let ex = RawEvent::from_event(&Event::Expression { time: 2, expression: 2, channel: 1, key: -1, value: -1.5 }, 0, &[]);
+        assert_eq!((n.header.type_, n.header.time, n.channel, n.key, n.velocity, n.note_id), (CLAP_EVENT_NOTE_OFF, 5, 3, 60, 0.5, 7));
+        let on = RawEvent::from_event(&Event::NoteOn { time: 0, id: 7, channel: 3, key: 60, velocity: 1.0 }, 0, &[]);
+        let RawEvent::Note(n) = on else { panic!("a note event") };
+        assert_eq!((n.header.type_, n.note_id), (CLAP_EVENT_NOTE_ON, 7));
+        let ex = RawEvent::from_event(&Event::Expression { time: 2, id: -1, expression: 2, channel: 1, key: -1, value: -1.5 }, 0, &[]);
         let RawEvent::Expression(x) = ex else { panic!("an expression") };
         assert_eq!((x.header.type_, x.header.size as usize), (CLAP_EVENT_NOTE_EXPRESSION, size_of::<clap_event_note_expression>()));
         assert_eq!((x.expression_id, x.channel, x.key, x.note_id, x.value), (2, 1, -1, -1, -1.5));
+        let ex = RawEvent::from_event(&Event::Expression { time: 2, id: 9, expression: 0, channel: 4, key: 62, value: 0.5 }, 0, &[]);
+        let RawEvent::Expression(x) = ex else { panic!("an expression") };
+        assert_eq!((x.note_id, x.channel, x.key), (9, 4, 62), "addressed to one note by its id");
     }
 
     /// A SysEx reaches CLAP as `clap_event_midi_sysex`, pointing at its bytes in the arena.

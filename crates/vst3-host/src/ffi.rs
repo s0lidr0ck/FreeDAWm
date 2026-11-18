@@ -25,11 +25,19 @@ use std::time::Duration;
 use vst3::Steinberg::Vst::{self as sv};
 use vst3::Steinberg::Vst::{
     IAttributeListTrait, IAudioProcessorTrait, IComponentHandlerTrait, IComponentTrait, IConnectionPointTrait, IEditControllerTrait, IEventListTrait,
-    IHostApplicationTrait, IMessageTrait, IMidiMappingTrait, IParamValueQueueTrait, IParameterChangesTrait, IUnitInfoTrait,
+    IHostApplicationTrait, IMessageTrait, IMidiMappingTrait, INoteExpressionControllerTrait, IParamValueQueueTrait, IParameterChangesTrait,
+    IUnitInfoTrait,
 };
 use vst3::Steinberg::{self as sb};
 use vst3::Steinberg::{FUnknown, IBStreamTrait, IPlugFrameTrait, IPlugViewTrait, IPluginBaseTrait, IPluginFactory2Trait, IPluginFactoryTrait};
 use vst3::{Class, ComPtr, ComWrapper, Interface};
+
+/// Most note expressions one channel may report (hostile-input cap).
+const MAX_NOTE_EXPRESSIONS: i32 = 256;
+
+/// The last standard note expression type (`kBrightnessTypeID`); the host sends volume, pan,
+/// tuning, vibrato, expression and brightness.
+pub(crate) const MAX_STANDARD_EXPRESSION: u32 = sv::NoteExpressionTypeIDs_::kBrightnessTypeID;
 
 /// Most classes one factory may report (hostile-input cap).
 const MAX_CLASSES: i32 = 1024;
@@ -1320,8 +1328,10 @@ impl IBStreamTrait for MemoryStream {
 /// the MIDI channel, 0–15.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum NoteEvent {
+    /// `id`: the host's note id (`noteId`), so note expressions reach this note alone.
     On {
         time: u32,
+        id: i32,
         channel: u8,
         key: u8,
         velocity: f32,
@@ -1329,15 +1339,25 @@ pub(crate) enum NoteEvent {
     /// `velocity`: the release velocity, 0–1 (0 when the message had none).
     Off {
         time: u32,
+        id: i32,
         channel: u8,
         key: u8,
         velocity: f32,
     },
     Pressure {
         time: u32,
+        id: i32,
         channel: u8,
         key: u8,
         pressure: f32,
+    },
+    /// A note expression (`kNoteExpressionValueEvent`) of standard type `type_id` (volume, pan,
+    /// tuning, vibrato, expression, brightness) for the note with id `id`; `value` normalized.
+    Expression {
+        time: u32,
+        id: i32,
+        type_id: u32,
+        value: f64,
     },
     /// A System Exclusive message (`F0` … `F7`): `len` bytes at `at` of the block's SysEx
     /// arena, passed to `process` (a `kDataEvent` of type `kMidiSysEx` points into it).
@@ -1351,12 +1371,20 @@ pub(crate) enum NoteEvent {
 impl NoteEvent {
     pub fn time(&self) -> u32 {
         match *self {
-            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } | NoteEvent::SysEx { time, .. } => time,
+            NoteEvent::On { time, .. }
+            | NoteEvent::Off { time, .. }
+            | NoteEvent::Pressure { time, .. }
+            | NoteEvent::Expression { time, .. }
+            | NoteEvent::SysEx { time, .. } => time,
         }
     }
     pub fn set_time(&mut self, t: u32) {
         match self {
-            NoteEvent::On { time, .. } | NoteEvent::Off { time, .. } | NoteEvent::Pressure { time, .. } | NoteEvent::SysEx { time, .. } => *time = t,
+            NoteEvent::On { time, .. }
+            | NoteEvent::Off { time, .. }
+            | NoteEvent::Pressure { time, .. }
+            | NoteEvent::Expression { time, .. }
+            | NoteEvent::SysEx { time, .. } => *time = t,
         }
     }
 
@@ -1370,19 +1398,23 @@ impl NoteEvent {
         e.sampleOffset = i32::try_from(self.time().saturating_sub(offset)).unwrap_or(0);
         e.flags = sv::Event_::EventFlags_::kIsLive as u16;
         match self {
-            NoteEvent::On { channel, key, velocity, .. } => {
+            NoteEvent::On { id, channel, key, velocity, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kNoteOnEvent as u16;
                 e.__field0.noteOn =
-                    sv::NoteOnEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), tuning: 0.0, velocity, length: 0, noteId: -1 };
+                    sv::NoteOnEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), tuning: 0.0, velocity, length: 0, noteId: id };
             }
-            NoteEvent::Off { channel, key, velocity, .. } => {
+            NoteEvent::Off { id, channel, key, velocity, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kNoteOffEvent as u16;
                 e.__field0.noteOff =
-                    sv::NoteOffEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), velocity, noteId: -1, tuning: 0.0 };
+                    sv::NoteOffEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), velocity, noteId: id, tuning: 0.0 };
             }
-            NoteEvent::Pressure { channel, key, pressure, .. } => {
+            NoteEvent::Pressure { id, channel, key, pressure, .. } => {
                 e.r#type = sv::Event_::EventTypes_::kPolyPressureEvent as u16;
-                e.__field0.polyPressure = sv::PolyPressureEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), pressure, noteId: -1 };
+                e.__field0.polyPressure = sv::PolyPressureEvent { channel: i16::from(channel & 0x0F), pitch: i16::from(key), pressure, noteId: id };
+            }
+            NoteEvent::Expression { id, type_id, value, .. } => {
+                e.r#type = sv::Event_::EventTypes_::kNoteExpressionValueEvent as u16;
+                e.__field0.noteExpressionValue = sv::NoteExpressionValueEvent { typeId: type_id, noteId: id, value };
             }
             NoteEvent::SysEx { at, len, .. } => {
                 let start = usize::try_from(at).ok()?;
@@ -1682,6 +1714,27 @@ impl Instance {
                 ok(unsafe { m.getMidiControllerAssignment(0, ch, n, &mut id) }).then_some(id)
             })
             .collect()
+    }
+
+    /// The standard note expressions the controller declares (`INoteExpressionController` on the
+    /// event bus, any channel): a bit per type id, volume (0) to brightness (5). 0 without the
+    /// interface. Main thread only.
+    pub fn note_expression_types(&self) -> u8 {
+        let Some(n) = self.controller.as_ref().and_then(|c| c.cast::<sv::INoteExpressionController>()) else { return 0 };
+        let mut mask = 0u8;
+        for ch in 0..16i16 {
+            // SAFETY: valid note-expression interface of the controller, main thread.
+            let count = unsafe { n.getNoteExpressionCount(0, ch) }.clamp(0, MAX_NOTE_EXPRESSIONS);
+            for i in 0..count {
+                // SAFETY: `NoteExpressionTypeInfo` is plain data; all-zero is valid.
+                let mut info: sv::NoteExpressionTypeInfo = unsafe { std::mem::zeroed() };
+                // SAFETY: index below the count; `info` is writable.
+                if ok(unsafe { n.getNoteExpressionInfo(0, ch, i, &mut info) }) && info.typeId <= MAX_STANDARD_EXPRESSION {
+                    mask |= 1 << info.typeId;
+                }
+            }
+        }
+        mask
     }
 
     /// The program names (`IUnitInfo` program list) of unit `unit`'s list, else of the first list
@@ -3221,15 +3274,19 @@ mod tests {
 
     #[test]
     fn note_events_carry_their_channel() {
-        let on = NoteEvent::On { time: 0, channel: 9, key: 36, velocity: 1.0 }.to_raw(0, &[]).unwrap();
-        let off = NoteEvent::Off { time: 0, channel: 15, key: 36, velocity: 0.5 }.to_raw(0, &[]).unwrap();
-        let pressure = NoteEvent::Pressure { time: 0, channel: 3, key: 36, pressure: 0.5 }.to_raw(0, &[]).unwrap();
+        let on = NoteEvent::On { time: 0, id: 4, channel: 9, key: 36, velocity: 1.0 }.to_raw(0, &[]).unwrap();
+        let off = NoteEvent::Off { time: 0, id: 4, channel: 15, key: 36, velocity: 0.5 }.to_raw(0, &[]).unwrap();
+        let pressure = NoteEvent::Pressure { time: 0, id: 4, channel: 3, key: 36, pressure: 0.5 }.to_raw(0, &[]).unwrap();
+        let expr = NoteEvent::Expression { time: 0, id: 4, type_id: sv::NoteExpressionTypeIDs_::kTuningTypeID, value: 0.6 }.to_raw(0, &[]).unwrap();
         // SAFETY: each union field read is the one its event type wrote.
         unsafe {
-            assert_eq!((on.__field0.noteOn.channel, on.__field0.noteOn.pitch), (9, 36));
-            assert_eq!(off.__field0.noteOff.channel, 15);
+            assert_eq!((on.__field0.noteOn.channel, on.__field0.noteOn.pitch, on.__field0.noteOn.noteId), (9, 36, 4));
+            assert_eq!((off.__field0.noteOff.channel, off.__field0.noteOff.noteId), (15, 4));
             assert_eq!(off.__field0.noteOff.velocity, 0.5, "the release velocity");
-            assert_eq!(pressure.__field0.polyPressure.channel, 3);
+            assert_eq!((pressure.__field0.polyPressure.channel, pressure.__field0.polyPressure.noteId), (3, 4));
+            assert_eq!(expr.r#type, sv::Event_::EventTypes_::kNoteExpressionValueEvent as u16);
+            let x = expr.__field0.noteExpressionValue;
+            assert_eq!((x.typeId, x.noteId, x.value), (sv::NoteExpressionTypeIDs_::kTuningTypeID, 4, 0.6));
         }
         // A SysEx is a data event pointing at its bytes in the arena; out of it, none.
         let arena = [0u8, 0xF0, 0x43, 0xF7];
@@ -3277,7 +3334,7 @@ mod tests {
             assert_ne!(q.getPoint(0, std::ptr::null_mut(), &mut v), sb::kResultOk);
         }
         let el = EventList::new(1);
-        let mut e = NoteEvent::On { time: 5, channel: 0, key: 60, velocity: 1.0 }.to_raw(2, &[]).unwrap();
+        let mut e = NoteEvent::On { time: 5, id: 0, channel: 0, key: 60, velocity: 1.0 }.to_raw(2, &[]).unwrap();
         // SAFETY: as above.
         unsafe {
             assert_eq!(el.addEvent(&mut e), sb::kResultOk);

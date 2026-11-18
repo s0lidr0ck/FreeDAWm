@@ -49,6 +49,8 @@ pub struct ClapPlugin {
     expr: [[f64; EXPRESSIONS]; 16],
     /// Each channel's bend range as RPN 0 last set it: the tuning a bend becomes.
     rpn: BendRanges,
+    /// The id each sounding CLAP note was started with, so its expressions reach it by id.
+    note_ids: NoteIds,
     channels: usize,
     max_block: usize,
     latency: usize,
@@ -92,6 +94,7 @@ impl ClapPlugin {
             held: [0; 128],
             expr: [[f64::NAN; EXPRESSIONS]; 16],
             rpn: BendRanges::default(),
+            note_ids: NoteIds::default(),
             channels: 2,
             max_block: 0,
             latency: 0,
@@ -158,12 +161,13 @@ impl ClapPlugin {
         let vel = velocity.min(127);
         match self.notes {
             NoteMode::Clap => {
-                self.push(Event::NoteOn { time, channel: ch, key: note, velocity: f64::from(vel) / 127.0 });
+                let id = self.note_ids.start(ch, note);
+                self.push(Event::NoteOn { time, id, channel: ch, key: note, velocity: f64::from(vel) / 127.0 });
                 // The channel's bend, pressure and controllers so far apply to the new note too.
                 let state = self.expr.get(usize::from(ch)).copied().unwrap_or([f64::NAN; EXPRESSIONS]);
                 for (expression, value) in (0i32..).zip(state) {
                     if value.is_finite() {
-                        self.push(Event::Expression { time, expression, channel: ch, key: i16::from(note), value });
+                        self.push(Event::Expression { time, id, expression, channel: ch, key: i16::from(note), value });
                     }
                 }
             }
@@ -183,7 +187,10 @@ impl ClapPlugin {
         let ch = ch & 0x0F;
         let time = u32::try_from(offset).unwrap_or(u32::MAX);
         match self.notes {
-            NoteMode::Clap => self.push(Event::NoteOff { time, channel: ch, key: note, velocity: f64::from(release.min(127)) / 127.0 }),
+            NoteMode::Clap => {
+                let id = self.note_ids.end(ch, note);
+                self.push(Event::NoteOff { time, id, channel: ch, key: note, velocity: f64::from(release.min(127)) / 127.0 });
+            }
             NoteMode::Midi => self.push(Event::Midi { time, data: [0x80 | ch, note, release & 0x7F] }),
             NoteMode::None => return,
         }
@@ -280,6 +287,46 @@ impl ClapPlugin {
 
 /// How many CLAP note expressions there are (`CLAP_NOTE_EXPRESSION_VOLUME` … `PRESSURE`).
 const EXPRESSIONS: usize = 7;
+
+/// The CLAP note id of each sounding note, by key and channel (-1: none), given out in turn.
+/// Nothing allocates: one fixed table.
+#[derive(Debug, Clone)]
+pub(crate) struct NoteIds {
+    id: [[i32; 16]; 128],
+    next: i32,
+}
+
+impl Default for NoteIds {
+    fn default() -> Self {
+        NoteIds { id: [[-1; 16]; 128], next: 0 }
+    }
+}
+
+impl NoteIds {
+    /// A new id for a note starting on `ch` at `key` (0 again after the largest).
+    pub(crate) fn start(&mut self, ch: u8, key: u8) -> i32 {
+        let id = self.next;
+        self.next = if self.next == i32::MAX { 0 } else { self.next + 1 };
+        if let Some(slot) = self.id.get_mut(usize::from(key)).and_then(|c| c.get_mut(usize::from(ch & 0x0F))) {
+            *slot = id;
+        }
+        id
+    }
+
+    /// The id of the note sounding on `ch` at `key` (-1: none).
+    pub(crate) fn of(&self, ch: u8, key: u8) -> i32 {
+        self.id.get(usize::from(key)).and_then(|c| c.get(usize::from(ch & 0x0F))).copied().unwrap_or(-1)
+    }
+
+    /// The note on `ch` at `key` ends: its id, now free.
+    pub(crate) fn end(&mut self, ch: u8, key: u8) -> i32 {
+        self.id.get_mut(usize::from(key)).and_then(|c| c.get_mut(usize::from(ch & 0x0F))).map_or(-1, |slot| std::mem::replace(slot, -1))
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.id = [[-1; 16]; 128];
+    }
+}
 
 /// Each channel's pitch-bend range as RPN 0 sets it (MSB semitones, LSB cents), for the tuning a
 /// bend becomes. Nothing allocates: two fixed arrays.
@@ -432,6 +479,7 @@ impl Plugin for ClapPlugin {
         self.queue.retain(|e| matches!(e, Event::Param { .. }));
         self.held = [0; 128];
         self.expr = [[f64::NAN; EXPRESSIONS]; 16];
+        self.note_ids.clear();
     }
 
     fn set_offline(&mut self, offline: bool) {
@@ -535,7 +583,20 @@ impl Plugin for ClapPlugin {
             {
                 *slot = value;
             }
-            self.push(Event::Expression { time, expression, channel, key, value });
+            // Addressed by note id: each note sounding on the channel (one on an MPE member
+            // channel), or the one key of a poly pressure. With none sounding, by channel.
+            let mut sent = false;
+            for k in 0..128u8 {
+                let on = self.held.get(usize::from(k)).is_some_and(|m| m & (1 << channel) != 0);
+                if on && (key < 0 || key == i16::from(k)) {
+                    let id = self.note_ids.of(channel, k);
+                    self.push(Event::Expression { time, id, expression, channel, key: i16::from(k), value });
+                    sent = true;
+                }
+            }
+            if !sent {
+                self.push(Event::Expression { time, id: -1, expression, channel, key, value });
+            }
         }
     }
 
@@ -691,6 +752,25 @@ mod tests {
             r.hear(m);
         }
         assert_eq!(r.bend_range(2), 12.5);
+    }
+
+    /// Note expressions go to a note by the id its note-on carried: each note its own id, freed
+    /// when it ends, and none for a key that is not sounding.
+    #[test]
+    fn each_note_has_its_own_id_until_it_ends() {
+        let mut ids = NoteIds::default();
+        let a = ids.start(1, 60);
+        let b = ids.start(2, 60);
+        assert_ne!(a, b);
+        assert_eq!((ids.of(1, 60), ids.of(2, 60), ids.of(3, 60)), (a, b, -1));
+        assert_eq!(ids.end(1, 60), a);
+        assert_eq!(ids.of(1, 60), -1);
+        assert_eq!(ids.end(1, 60), -1, "ended once");
+        ids.next = i32::MAX;
+        assert_eq!(ids.start(0, 0), i32::MAX);
+        assert_eq!(ids.start(0, 1), 0, "wraps to 0, never negative");
+        ids.clear();
+        assert_eq!(ids.of(2, 60), -1);
     }
 
     #[test]
