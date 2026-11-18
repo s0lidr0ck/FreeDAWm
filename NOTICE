@@ -51,4 +51,9 @@ bundled: the app fetches them from their authors' own pages, and each one's lice
 the app (Setup > ML Models) and listed in ATTRIBUTION.md. Some of them state no licence.
 
 Rust crate dependencies are under their own licenses (see Cargo.lock; `cargo about` or
-`cargo deny check licenses` lists them).
+`cargo deny check licenses` lists them). Most are MIT or Apache-2.0. Those under other
+terms that end up in the app:
+- smartstring (used by rhai, the Script MIDI effect's language): Mozilla Public License 2.0,
+  unmodified; its source is at https://github.com/bodil/smartstring.
+- curve25519-dalek (used by spake2, for pairing): BSD-3-Clause.
+- tiny-keccak (used by rhai): CC0-1.0.
