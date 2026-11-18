@@ -47,6 +47,20 @@ pub(crate) struct PerChannel {
     lfe: u64,
     /// The channels the first instance takes: two, or one for multi-mono ([`PerChannel::mono`]).
     first_width: usize,
+    /// Multi-mono unlinked ([`PerChannel::unlinked`]): a plain id sets the first instance only,
+    /// `c<n>:<id>` sets channel n's.
+    unlinked: bool,
+}
+
+/// A per-channel parameter id (`c1:gain`) split into its channel (1 or more) and the plugin's
+/// own id, as the model writes them (`soundcraft_model::channel_param_id`).
+fn split_channel(id: &str) -> Option<(usize, &str)> {
+    let (n, param) = id.strip_prefix('c')?.split_once(':')?;
+    if n.is_empty() || n.len() > 3 || !n.bytes().all(|b| b.is_ascii_digit()) || param.is_empty() {
+        return None;
+    }
+    let n: usize = n.parse().ok()?;
+    (n >= 1).then_some((n, param))
 }
 
 /// The parameter that links detection across every channel.
@@ -54,13 +68,27 @@ const SUR_LINK: &str = "surLink";
 
 impl PerChannel {
     pub(crate) fn new(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
-        PerChannel { make, first, rest: Vec::new(), state: None, offline: false, link_key: Vec::new(), lfe: 0, first_width: 2 }
+        PerChannel { make, first, rest: Vec::new(), state: None, offline: false, link_key: Vec::new(), lfe: 0, first_width: 2, unlinked: false }
     }
 
     /// Multi-mono: one mono instance per channel, the first included, every one taking the
     /// first's parameters (linked).
     pub(crate) fn mono(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
         PerChannel { first_width: 1, ..PerChannel::new(first, make) }
+    }
+
+    /// Multi-mono unlinked: one mono instance per channel, each with its own parameters (the
+    /// first channel's under the plain ids, channel n's under `c<n>:<id>`).
+    pub(crate) fn unlinked(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Self {
+        PerChannel { unlinked: true, ..PerChannel::mono(first, make) }
+    }
+
+    /// The instance a per-channel id is for (`None`: not one, or no such channel), with the
+    /// plugin's own id.
+    fn channel_of<'a>(&mut self, id: &'a str) -> Option<(&mut Box<dyn Plugin>, &'a str)> {
+        let (n, param) = split_channel(id)?;
+        let i = n.checked_sub(self.first_width)?;
+        self.rest.get_mut(i).map(|p| (p, param))
     }
 
     fn all(&mut self) -> impl Iterator<Item = &mut Box<dyn Plugin>> {
@@ -105,6 +133,13 @@ impl Plugin for PerChannel {
     }
 
     fn set_param(&mut self, id: &str, value: f32) -> bool {
+        if split_channel(id).is_some() {
+            // Another channel's value: its instance only, and only while unlinked.
+            return self.unlinked && self.channel_of(id).is_some_and(|(p, param)| p.set_param(param, value));
+        }
+        if self.unlinked {
+            return self.first.set_param(id, value);
+        }
         let known = self.first.set_param(id, value);
         for p in &mut self.rest {
             p.set_param(id, value);
@@ -113,7 +148,11 @@ impl Plugin for PerChannel {
     }
 
     fn param(&self, id: &str) -> Option<f32> {
-        self.first.param(id)
+        match split_channel(id) {
+            Some((n, param)) if self.unlinked => self.rest.get(n.checked_sub(self.first_width)?)?.param(param),
+            Some(_) => None,
+            None => self.first.param(id),
+        }
     }
 
     fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
@@ -191,7 +230,17 @@ impl Plugin for PerChannel {
     }
 
     fn set_param_automated(&mut self, id: &str, automated: bool) {
-        self.all().for_each(|p| p.set_param_automated(id, automated));
+        if split_channel(id).is_some() {
+            if self.unlinked
+                && let Some((p, param)) = self.channel_of(id)
+            {
+                p.set_param_automated(param, automated);
+            }
+        } else if self.unlinked {
+            self.first.set_param_automated(id, automated);
+        } else {
+            self.all().for_each(|p| p.set_param_automated(id, automated));
+        }
     }
 
     fn note_on(&mut self, offset: usize, note: u8, velocity: u8) {
@@ -392,6 +441,33 @@ mod tests {
         let (l, lfe, _) = run(4, LFE_5_1);
         assert!(l < 0.005, "the others still link: {l}");
         assert!((lfe - 0.01).abs() < 0.002, "the LFE is not turned down by the others: {lfe}");
+    }
+
+    /// Multi-mono unlinked: the plain ids set the first channel, `c1:` ids the second, so two
+    /// identical channels come out different; linked, a `c1:` id changes nothing.
+    #[test]
+    fn unlinked_multi_mono_gives_each_channel_its_own_values() {
+        let frames = 512;
+        let run = |unlinked: bool| {
+            let first = instantiate("fs_sat").unwrap();
+            let mut p = if unlinked { super::super::multi_mono_unlinked(first, instantiate) } else { super::super::multi_mono(first, instantiate) };
+            assert!(p.set_param("drive", 0.5));
+            assert!(p.set_param("output", 1.0));
+            p.prepare(48_000.0, frames, 2);
+            assert_eq!(p.set_param("c1:output", 0.0), unlinked, "a c1 id is taken only unlinked");
+            assert_eq!(p.param("c1:output"), unlinked.then_some(0.0));
+            let mut io = vec![sine(frames, 0.0); 2];
+            for _ in 0..8 {
+                io = vec![sine(frames, 0.0); 2];
+                p.process(&mut io, frames);
+            }
+            (peak(&io[0]), peak(&io[1]))
+        };
+        let (a, b) = run(false);
+        assert_eq!(a, b, "linked: the same on both");
+        let (a2, b2) = run(true);
+        assert_eq!(a2, a, "the first channel as linked");
+        assert!(b2 < 0.5 * a2, "the second channel turned down on its own: {b2} vs {a2}");
     }
 
     #[test]

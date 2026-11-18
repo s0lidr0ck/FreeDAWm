@@ -1897,6 +1897,11 @@ fn param_label(track: &Track, p: &AutoParam) -> String {
         && let Some(ins) = track.module_or_instrument(*module)
         && let Some(info) = crate::mix_window::plugin_info(&ins.plugin)
     {
+        // A multi-mono unlinked channel's own lane names its channel.
+        if let Some((n, own)) = soundcraft_model::split_channel_param(param) {
+            let name = info.param(own).map_or(own, |pi| pi.name);
+            return format!("{} {name} (channel {})", info.name, n + 1);
+        }
         let name = info.param(param).map_or(param.as_str(), |pi| pi.name);
         return format!("{} {name}", info.name);
     }
@@ -3034,7 +3039,7 @@ fn plugin_range(track: &Track, p: &AutoParam) -> (f32, f32) {
     if let AutoParam::Plugin { module, param } = p
         && let Some(ins) = track.module_or_instrument(*module)
         && let Some(info) = crate::mix_window::plugin_info(&ins.plugin)
-        && let Some(pi) = info.param(param)
+        && let Some(pi) = info.param(soundcraft_model::split_channel_param(param).map_or(param.as_str(), |(_, own)| own))
     {
         return (pi.min, pi.max);
     }

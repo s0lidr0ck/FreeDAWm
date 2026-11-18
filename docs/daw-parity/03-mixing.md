@@ -85,7 +85,7 @@ K-system scales, and the master a loudness meter.
 | Key input on the stock compressor, gate and de-esser | ● | ● | ● | ● | **Works**: Comp (every style, its detector measures the key), the gates Lull and Shale, and Rez take a key; the routing side is generic (any plugin whose `PluginInfo::sidechain` is set gets the Sidechain row in its insert header and a delay-compensated key from any track); any track can be keyed from an aux or bus return (it renders after that aux; a key from an aux the track feeds is refused as a loop) |
 | Key input on third-party plug-ins | ● | ● | ● | ● | **Partial**: CLAP plug-ins with a second input port and VST3 plug-ins with an auxiliary audio input bus are keyed (from the insert header, delay-compensated; a VST3's first aux input is activated and fed the key, a mono key on each of its channels); Audio Units are not (macOS only, not attempted here: no Mac to build or test on) |
 | Key aligned by delay compensation | ● | ● | ● | ● | **Works** |
-| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Partial** (2026-11-17): "Multi-Mono" on a chain module's right-click menu (`mix.module_multi_mono`, `Insert::multi_mono`) runs one mono instance per channel of a wider track, built-in or hosted, all linked to the module's parameters, automation and stored state (the instances are made with the module's, off the audio thread, by the stereo-only wrapper `PerChannel` with a first instance of one channel). Left: unlinked mode with a parameter set and lanes per channel, and a channel picker in the plug-in window (about 4–6 h) |
+| Multi-mono or dual-mono processing | ● | ◐ | ● | ◐ | **Works** (2026-11-18): "Multi-Mono" on a chain module's right-click menu (`mix.module_multi_mono`, `Insert::multi_mono`) runs one mono instance per channel of a wider track, built-in or hosted, all linked to the module's parameters, automation and stored state (the instances are made with the module's, off the audio thread, by the stereo-only wrapper `PerChannel` with a first instance of one channel). "Multi-Mono Unlinked" beside it (`linked: false`, `Insert::multi_mono_unlinked`) gives each channel past the first a parameter set of its own, stored with the module's under `c<n>:<param>` (`c1:gain` is the second channel's), starting from the module's values, with lanes of those ids listed per channel in the lane picker; the plug-in window gets a channel picker (`mix.module_channel`: every editor then shows and edits that channel) and a Link button. Linking again keeps the channels' values (not heard) for unlinking later. Left as linked: a hosted plug-in's stored state is the first instance's, and a built-in's derived parameters (Dist's Link) follow the first channel only |
 | Hardware inserts with latency measurement | ● | ● | ● | ● | **Works** in code (2026-11-17, to the design below): Utilities › Hardware Insert (`hw_insert`) sends the track out of an output path and takes it back from an input path, compensated by its round trip; Ping in its drawer measures that round trip on its own paths (`setup.measure_latency` with `insert`) and stores it. Offline it passes through, its latency kept (a real-time bounce prints the gear). Tested with a loopback in code; hearing gear through it and checking the ping lines it up need an interface with a cable or outboard unit from output to input. Not measured, it compensates nothing (the design's fallback to the device estimate is not built), and since 2026-11-17 (bb2fc6e) its slot says "not measured" (dimmed, with the reason on hover) and its drawer says no delay compensation is applied until it is pinged |
 
 ## D. Sends and routing
@@ -158,7 +158,7 @@ K-system scales, and the master a loudness meter.
 | Cut, copy, paste, paste to another parameter | ● | ● | ● | ● | **Works**: curves and the range's edges come along; a paste replaces what was there |
 | Thin, and thin automatically after a pass | ● | ● | ◐ | ● | **Works**: a pass's lanes are thinned when it ends (Setup › Preferences… › Mixing › Thin Automation After Pass) |
 | Automation moves with clips | ● | ● | ● | ● | **Works**; the curve changes shape at the clip edges |
-| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Works** (2026-11-18, to the design below): lanes stored on the clip (`Clip::automation`, saved only when not empty) move, trim, split and copy with it and are heard over its range in playback, bounces and freezes (dB lanes add to the track's, others replace it, a 64-sample ramp at the edges), from flattened lanes the engine makes after each edit (`Track::played`, `clip_automation`). Edit › Automation › Move Track Automation into Clips, Move Clip Automation to Track and Clear Clip Automation. The Edit window draws them (6ca37e7): over each clip with a lane of its own, the track's automation lane shows the lane as it plays there (accent colour, the clip's range shaded) with the clip's points on it; and edits them by mouse there as the track's points are edited: a drag moves a clip's point between its neighbours inside the clip (one undo step), Alt-click deletes it (the lane goes with its last point), and a Pencil click or a Smart/Grabber double-click inside a clip that has a lane of its own for the parameter adds the point to the clip, not the track (on a dB lane the clip stores the difference from the track's line, so the point lands where it is clicked); `clip.automation_point` (`from` moves a point) and `clip.automation_delete`. A clip with no lane yet gets its first points by command or by Move Track Automation into Clips |
+| Automation inside a clip or region | ○ | ◐ | ● | ◐ | **Works** (2026-11-18, to the design below): lanes stored on the clip (`Clip::automation`, saved only when not empty) move, trim, split and copy with it and are heard over its range in playback, bounces and freezes (dB lanes add to the track's, others replace it, a 64-sample ramp at the edges), from flattened lanes the engine makes after each edit (`Track::played`, `clip_automation`). Edit › Automation › Move Track Automation into Clips, Move Clip Automation to Track and Clear Clip Automation. The Edit window draws them (6ca37e7): over each clip with a lane of its own, the track's automation lane shows the lane as it plays there (accent colour, the clip's range shaded) with the clip's points on it; and edits them by mouse there (07767c9) as the track's points are edited: a drag moves a clip's point between its neighbours inside the clip (one undo step), Alt-click deletes it (the lane goes with its last point), and a Pencil click or a Smart/Grabber double-click inside a clip that has a lane of its own for the parameter adds the point to the clip, not the track (on a dB lane the clip stores the difference from the track's line, so the point lands where it is clicked); `clip.automation_point` (`from` moves a point) and `clip.automation_delete`. A clip with no lane yet gets its first points by command or by Move Track Automation into Clips |
 | Several lanes per track, any parameter | ● | ● | ● | ● | **Works** |
 | Show the parameter last touched | ◐ | ● | ● | ● | **Works**: Edit › Automation › Show Last Touched (`automation.show_last_touched`) selects the track whose control (fader, pan, send, mute or plug-in knob) moved last and shows that lane; `automation.last_touched` names it |
 | Convert between clip gain and volume automation | ● | ○ | ○ | ○ | **Works** |
@@ -279,7 +279,7 @@ one a mix engineer would not forgive.
 
 **3. What most have (≈ 40–65 h).** Mixer snapshots (Studio Pro, Cubase), 8–12 (**done**); a listen bus for
 AFL and PFL (all but Logic), 6–10 (**done**, with the control room); post-fader inserts and plug-in deactivation (**done**), 5–8; hardware
-inserts with a latency ping, 6–10 (**done**; hearing it needs hardware); multi-mono processing, 6–10 (**linked done**); write-on-stop and
+inserts with a latency ping, 6–10 (**done**; hearing it needs hardware); multi-mono processing, 6–10 (**done**); write-on-stop and
 preview (Pro Tools, Cubase), 5–8; folders without an audio path, mixer search and spill, 5–8.
 
 ### Design: automation inside a clip (round three, built 2026-11-17 and 2026-11-18)
@@ -333,7 +333,7 @@ Logic's region automation and Studio Pro's part envelopes, for audio and MIDI cl
   to the offline bounce. What needs hardware: outboard gear on a hardware insert or send.
 - **Size.** 4–6 h.
 
-### Design: multi-mono processing (round three, linked mode built 2026-11-17)
+### Design: multi-mono processing (round three, linked mode built 2026-11-17, unlinked 2026-11-18)
 
 - **A slot of instances.** An insert whose plug-in is mono-only on a wider track (or any insert
   with "Multi-mono" chosen) holds one mono instance per channel: `PluginSlot::plugin` becomes the
@@ -344,8 +344,8 @@ Logic's region automation and Studio Pro's part envelopes, for audio and MIDI cl
   others delayed to it in the slot's bypass line.
 - **Linked or not.** `Insert::multi_mono: Option<MultiMono { linked: bool, params: Vec<..> }>`:
   linked (the default), every instance takes the insert's parameters and its automation; unlinked,
-  each channel has its own parameter set (`Insert::channel_params`) and its own lanes
-  (`plugin:m<id>.c<n>:<param>`). The drawer and the plug-in window get a channel picker and a Link
+  each channel has its own parameter set (as built: `c<n>:<param>` ids in `Insert::params`) and its own lanes
+  (`plugin:m<id>:c<n>:<param>`). The drawer and the plug-in window get a channel picker and a Link
   button, as Pro Tools has.
 - **State.** A hosted plug-in's state is saved per instance.
 - **Tests.** A linked multi-mono EQ on a stereo track sounds as the stereo instance on identical
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | multi-mono unlinked: a parameter set and lanes per channel, a channel picker in the plug-in window |
 | 2026-11-18 | minor | a clip's own automation points are added, dragged and deleted by mouse in the Edit window |
 | 2026-11-18 | minor | a bounce can take a hardware output, with its latency |
 | 2026-11-18 | minor | an inactive track frees its plug-ins and makes them again from their stored state when active |

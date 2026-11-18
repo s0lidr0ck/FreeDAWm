@@ -795,6 +795,10 @@ pub(crate) fn canonical_param(plugin: &str, param: &str) -> Option<String> {
     if param == soundcraft_model::BYPASS_PARAM || param == soundcraft_model::MIX_PARAM {
         return Some(param.to_string());
     }
+    // A multi-mono unlinked channel's own value (`c1:gain`): the plugin's id after the channel.
+    if let Some((n, own)) = soundcraft_model::split_channel_param(param) {
+        return canonical_param(plugin, own).map(|id| soundcraft_model::channel_param_id(n, &id));
+    }
     let Some(info) = crate::cmd::clap::plugin_info(plugin) else { return Some(param.to_string()) };
     if info.param(param).is_some() {
         return Some(param.to_string());

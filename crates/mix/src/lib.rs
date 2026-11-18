@@ -153,10 +153,18 @@ pub struct PreparedInstance {
 /// [`instance_ch`]). [`create_instance_for`] makes such an instance one mono instance per channel.
 pub const MULTI_MONO: usize = 1 << 20;
 
+/// With [`MULTI_MONO`]: the instances are unlinked, each channel with its own parameters
+/// ([`soundcraft_model::Insert::multi_mono_unlinked`]).
+pub const MULTI_MONO_UNLINKED: usize = 1 << 21;
+
 /// The channel count an instance for `ins` on a strip of `ch` channels is made, matched and
 /// handed over by: `ch`, with [`MULTI_MONO`] set for a multi-mono insert on a wider strip.
 pub fn instance_ch(ins: &soundcraft_model::Insert, ch: usize) -> usize {
-    if ins.multi_mono && ch > 1 { ch | MULTI_MONO } else { ch }
+    match (ins.multi_mono && ch > 1, ins.multi_mono_unlinked) {
+        (true, true) => ch | MULTI_MONO | MULTI_MONO_UNLINKED,
+        (true, false) => ch | MULTI_MONO,
+        (false, _) => ch,
+    }
 }
 
 /// Every third-party plugin slot (inserts and instruments) of a session, with the channel count
@@ -221,8 +229,11 @@ pub fn create_instance(id: &str, state: Option<&[u8]>, sample_rate: f32, max_blo
 pub fn create_instance_for(id: &str, state: Option<&[u8]>, sample_rate: f32, max_block: usize, ch: usize, offline: bool) -> Option<NewInstance> {
     let mut plugin = create_plugin(id)?;
     let multi = ch & MULTI_MONO != 0;
-    let ch = ch & !MULTI_MONO;
-    if multi {
+    let unlinked = ch & MULTI_MONO_UNLINKED != 0;
+    let ch = ch & !(MULTI_MONO | MULTI_MONO_UNLINKED);
+    if multi && unlinked {
+        plugin = soundcraft_dsp::plugins::multi_mono_unlinked(plugin, create_plugin);
+    } else if multi {
         plugin = soundcraft_dsp::plugins::multi_mono(plugin, create_plugin);
     }
     plugin.set_offline(offline);
@@ -4716,7 +4727,8 @@ fn run_strips<T: Send>(work: &mut [T], f: impl Fn(&mut T) + Sync + Send) {
     work.iter_mut().for_each(f);
 }
 
-fn strip_channels(t: &Track, main_ch: usize) -> usize {
+/// The channels a track's strip carries (the master the main mix's, an instrument at least two).
+pub fn strip_channels(t: &Track, main_ch: usize) -> usize {
     match t.kind {
         TrackKind::Master => main_ch,
         TrackKind::Instrument => t.channels().clamp(2, MAX_CHANNELS),
@@ -6414,7 +6426,13 @@ fn apply_values(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, value: im
         slot.laned.resize(ins.params.len(), false);
         slot.keys = keys;
     }
+    // Another channel's values (`c1:gain`) are only for a module running multi-mono unlinked;
+    // kept otherwise (unlinking again brings them back) but not sent.
+    let channels = ins.multi_mono && ins.multi_mono_unlinked;
     for (((k, v), last), was_laned) in ins.params.iter().zip(slot.applied.iter_mut()).zip(slot.laned.iter_mut()) {
+        if !channels && k.starts_with('c') && soundcraft_model::split_channel_param(k).is_some() {
+            continue;
+        }
         let (val, laned) = value(k, *v);
         if laned != *was_laned {
             slot.plugin.set_param_automated(k, laned);
@@ -7103,7 +7121,7 @@ impl MixEngine {
         let again = |id: &str, ch: usize, plugin: &mut Box<dyn Plugin>| {
             if is_third_party(id) {
                 plugin.set_offline(offline);
-                plugin.prepare(sr, mb, ch & !MULTI_MONO);
+                plugin.prepare(sr, mb, ch & !(MULTI_MONO | MULTI_MONO_UNLINKED));
             } else if id == soundcraft_dsp::plugins::mend::ID {
                 plugin.set_offline(offline);
             }
@@ -8415,6 +8433,44 @@ mod tests {
             let worst = a[c].iter().zip(&b[c]).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
             assert!(worst < 1e-4, "channel {c}: {worst}");
         }
+    }
+
+    /// Multi-mono unlinked: each channel takes its own value (`c1:gain` for the second) and its
+    /// own lane; linked, the `c1:` values are kept but not heard, and the render is the linked
+    /// one's.
+    #[test]
+    fn an_unlinked_multi_mono_insert_gives_each_channel_its_own_values_and_lanes() {
+        let render = |multi: bool, unlinked: bool, lane: bool| {
+            let mut s = Session::default();
+            s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+            let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+            let n = 48_000;
+            let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; n], vec![0.5; n]] };
+            s.pool.insert(SourceId(902), Arc::new(SourceAudio::new(buf)));
+            let id = s.new_clip_id();
+            let tr = s.track_mut(t).unwrap();
+            tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "dc", SourceId(902), 0, 0, n as i64));
+            let mut ins = Insert::new("gain");
+            ins.multi_mono = multi;
+            ins.multi_mono_unlinked = unlinked;
+            ins.params.insert("gain".into(), 0.0);
+            ins.params.insert("c1:gain".into(), -6.0);
+            let m = tr.mixer.add_module(ins, None).unwrap();
+            if lane {
+                let mut l = soundcraft_model::AutomationLane::new(AutoParam::Plugin { module: m, param: "c1:gain".into() });
+                l.set_point(0, -20.0);
+                tr.automation.push(l);
+            }
+            let out = render_range(&s, Range::new(0, n as i64), 512);
+            (out[0][30_000], out[1][30_000])
+        };
+        let plain = render(false, false, false);
+        assert_eq!(render(true, false, false), plain, "linked: the c1 value is not heard");
+        let (l, r) = render(true, true, false);
+        assert!((l - plain.0).abs() < 1e-5, "the first channel as before: {l} vs {}", plain.0);
+        assert!((r / plain.1 - 0.501).abs() < 0.01, "the second at -6 dB: {r} vs {}", plain.1);
+        let (_, r) = render(true, true, true);
+        assert!((r / plain.1 - 0.1).abs() < 0.005, "the second follows its own lane to -20 dB: {r}");
     }
 
     /// A clip's own automation is heard while it plays, in a render as in playback: here its pan

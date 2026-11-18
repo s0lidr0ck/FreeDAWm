@@ -1245,6 +1245,15 @@ pub(crate) fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: 
         {
             run_pick(app, ui, "mix.module_multi_mono", json!({"track": id.0, "module": ins.id.0}));
         }
+        // Unlinked: each channel its own settings and lanes (the plugin window picks the channel).
+        if ui
+            .add(egui::Button::selectable(ins.multi_mono && ins.multi_mono_unlinked, "Multi-Mono Unlinked"))
+            .on_hover_text("One mono instance per channel, each with settings and automation of its own")
+            .clicked()
+        {
+            let linked = ins.multi_mono && ins.multi_mono_unlinked;
+            run_pick(app, ui, "mix.module_multi_mono", json!({"track": id.0, "module": ins.id.0, "linked": linked}));
+        }
         // Wet/dry: the module's output blended with its input (any effect in parallel).
         let mut pct = (ins.mix * 100.0).round();
         let r =

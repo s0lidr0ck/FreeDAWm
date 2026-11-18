@@ -57,9 +57,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Multi-Mono",
             [],
             None,
-            "{track?, module: id, value?: bool} — on a track of more than one channel the module runs one mono instance per channel, linked (every one takes its parameters and automation); toggles when omitted → {multi_mono}",
+            "{track?, module: id, value?: bool, linked?: bool} — on a track of more than one channel the module runs one mono instance per channel, linked (every one takes its parameters and automation) or with `linked: false` unlinked (each channel past the first has its own values and lanes, `c1:<param>` for the second; they start from the module's); toggles when neither is given → {multi_mono, linked}",
             has_selection,
             module_multi_mono
+        ),
+        cmd!(noundo
+            "mix.module_channel",
+            "Edit Channel",
+            [],
+            None,
+            "{track?, module: id, channel: 0-based} — which channel of a multi-mono unlinked module its plugin window shows and edits: mix.module_param and mix.module_params write that channel's values",
+            has_tracks,
+            module_channel
         ),
         cmd!(
             "mix.module_mix",
@@ -249,8 +258,24 @@ pub(super) fn do_param(e: &mut Engine, cmd: &str, t: TrackId, id: ModuleId, p: &
     let value = p.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, "`value` must be a number"))? as f32;
     let ins = find_mut(e, cmd, t, id)?;
     let info = super::clap::plugin_info(&ins.plugin).ok_or_else(|| bad(cmd, "unknown plugin"))?;
-    let pi = info.params.iter().find(|x| x.id == param).ok_or_else(|| bad(cmd, format!("`{}` has no parameter `{param}`", info.id)))?;
+    // Multi-mono unlinked: a `c<n>:` id, or a plain one while the plugin window edits another
+    // channel, is that channel's own value (no derived parameters: they follow the first).
+    let unlinked = ins.multi_mono && ins.multi_mono_unlinked;
+    let (channel, own) = match soundcraft_model::split_channel_param(&param) {
+        Some((n, own)) if unlinked => (n, own.to_string()),
+        Some(_) => return Err(bad(cmd, format!("`{param}` is a channel's value: the module is not multi-mono unlinked"))),
+        None if unlinked => (usize::from(ins.edit_channel), param.clone()),
+        None => (0, param.clone()),
+    };
+    let pi = info.params.iter().find(|x| x.id == own).ok_or_else(|| bad(cmd, format!("`{}` has no parameter `{own}`", info.id)))?;
     let v = value.clamp(pi.min, pi.max);
+    if channel > 0 {
+        let key = soundcraft_model::channel_param_id(channel, &own);
+        ins.params.insert(key.clone(), v);
+        e.automation_changed(t, AutoParam::Plugin { module: id, param: key });
+        return Ok(json!({"value": v, "channel": channel}));
+    }
+    let param = own;
     let before = ins.params.clone();
     ins.params.insert(param.clone(), v);
     derive_params(e, t, id, &before, std::slice::from_ref(&param), ParamEdit::Edit);
@@ -326,6 +351,19 @@ pub(super) fn do_params(e: &mut Engine, cmd: &str, t: TrackId, id: ModuleId, p: 
         Some(_) => return Err(bad(cmd, "`memory` must be an object")),
     };
     let restoring = memory.is_some();
+    // Multi-mono unlinked with the plugin window on another channel: the values (a preset, a
+    // paste, an A/B side) are that channel's.
+    let channel = if ins.multi_mono && ins.multi_mono_unlinked { usize::from(ins.edit_channel) } else { 0 };
+    if channel > 0 {
+        let mut n = 0;
+        for (k, v) in &obj {
+            if let (Some(pi), Some(f)) = (info.params.iter().find(|x| x.id == k.as_str()), v.as_f64().filter(|f| f.is_finite())) {
+                ins.params.insert(soundcraft_model::channel_param_id(channel, k), (f as f32).clamp(pi.min, pi.max));
+                n += 1;
+            }
+        }
+        return Ok(json!({"set": n, "channel": channel}));
+    }
     if let Some(m) = memory {
         ins.memory = m;
     }
@@ -461,9 +499,55 @@ fn module_multi_mono(e: &mut Engine, p: &Value) -> Result<Value> {
     if e.session().track(t).and_then(|tr| tr.mixer.module(id)).is_none() {
         return Err(bad(C, "only a chain module runs multi-mono"));
     }
+    let channels = e.session().track(t).map_or(1, |tr| soundcraft_mix::strip_channels(tr, soundcraft_mix::main_channels(e.session())));
     let ins = find_mut(e, C, t, id)?;
-    ins.multi_mono = p.get("value").and_then(Value::as_bool).unwrap_or(!ins.multi_mono);
-    Ok(json!({"multi_mono": ins.multi_mono}))
+    let linked = p.get("linked").and_then(Value::as_bool);
+    match p.get("value").and_then(Value::as_bool) {
+        Some(v) => ins.multi_mono = v,
+        // Unlinking turns multi-mono on; otherwise a toggle.
+        None if linked == Some(false) => ins.multi_mono = true,
+        None if linked.is_none() => ins.multi_mono = !ins.multi_mono,
+        None => {}
+    }
+    if let Some(l) = linked {
+        let unlinking = !l && !ins.multi_mono_unlinked;
+        ins.multi_mono_unlinked = !l;
+        if unlinking && let Some(info) = super::clap::plugin_info(&ins.plugin) {
+            // Each channel starts from the module's values; one already set (unlinked before)
+            // keeps its own.
+            for pi in info.params.iter().filter(|x| x.id != soundcraft_model::BYPASS_PARAM) {
+                let v = ins.params.get(pi.id).copied().unwrap_or(pi.default);
+                for c in 1..channels {
+                    ins.params.entry(soundcraft_model::channel_param_id(c, pi.id)).or_insert(v);
+                }
+            }
+        }
+        if l {
+            ins.edit_channel = 0;
+        }
+    }
+    if !ins.multi_mono {
+        ins.edit_channel = 0;
+    }
+    Ok(json!({"multi_mono": ins.multi_mono, "linked": !ins.multi_mono_unlinked}))
+}
+
+fn module_channel(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "mix.module_channel";
+    let t = first_track(e, C, p)?;
+    let id = module_id(C, p)?;
+    let channels = e.session().track(t).map_or(1, |tr| soundcraft_mix::strip_channels(tr, soundcraft_mix::main_channels(e.session())));
+    let c = p.get("channel").and_then(Value::as_u64).ok_or_else(|| bad(C, "`channel` (0 for the first) required"))?;
+    let ins = find_mut(e, C, t, id)?;
+    if !(ins.multi_mono && ins.multi_mono_unlinked) {
+        return Err(bad(C, "the module is not multi-mono unlinked"));
+    }
+    let c = usize::try_from(c)
+        .ok()
+        .filter(|c| *c < channels)
+        .ok_or_else(|| bad(C, format!("the track has {channels} channels (0 to {})", channels - 1)))?;
+    ins.edit_channel = u16::try_from(c).unwrap_or(0);
+    Ok(json!({"channel": c}))
 }
 
 fn module_mix(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -653,6 +737,46 @@ mod tests {
         e.execute("edit.undo", &json!({})).unwrap();
         assert!(!e.session().tracks[0].mixer.inserts[0].active);
         assert!(e.execute("mix.module_active", &json!({"track": t, "module": 999})).is_err());
+    }
+
+    /// Multi-mono unlinked: unlinking gives the second channel the module's values under `c1:`
+    /// ids (one undo step); with the plugin window on channel 1 a parameter edit writes that
+    /// channel's value only; a `c1:` lane is a lane like any other; linking again keeps them.
+    #[test]
+    fn an_unlinked_multi_mono_module_keeps_a_value_set_per_channel() {
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"format": "stereo"})).unwrap();
+        let t = e.session().tracks[0].id.0;
+        let m = e.execute("mix.module_add", &json!({"track": t, "plugin": "gain", "params": {"gain": -3.0}})).unwrap()["module"].as_u64().unwrap();
+        let ins = |e: &Engine| e.session().tracks[0].mixer.inserts[0].clone();
+        assert!(e.execute("mix.module_channel", &json!({"track": t, "module": m, "channel": 1})).is_err(), "linked: no channel to pick");
+        let r = e.execute("mix.module_multi_mono", &json!({"track": t, "module": m, "linked": false})).unwrap();
+        assert_eq!((r["multi_mono"].clone(), r["linked"].clone()), (json!(true), json!(false)));
+        assert_eq!(ins(&e).params.get("c1:gain"), Some(&-3.0));
+        e.execute("mix.module_channel", &json!({"track": t, "module": m, "channel": 1})).unwrap();
+        assert!(e.execute("mix.module_channel", &json!({"track": t, "module": m, "channel": 2})).is_err(), "a stereo track has two");
+        e.execute("mix.module_param", &json!({"track": t, "module": m, "param": "gain", "value": -12.0})).unwrap();
+        assert_eq!((ins(&e).params["gain"], ins(&e).params["c1:gain"]), (-3.0, -12.0));
+        e.execute("mix.module_params", &json!({"track": t, "module": m, "params": {"gain": -9.0}})).unwrap();
+        assert_eq!((ins(&e).params["gain"], ins(&e).params["c1:gain"]), (-3.0, -9.0));
+        e.execute("automation.set_point", &json!({"track": t, "param": format!("plugin:m{m}:c1:gain"), "at": 0, "value": -20.0})).unwrap();
+        assert!(
+            e.session().tracks[0]
+                .automation
+                .iter()
+                .any(|l| matches!(&l.param, soundcraft_model::AutoParam::Plugin { param, .. } if param == "c1:gain"))
+        );
+        e.execute("mix.module_multi_mono", &json!({"track": t, "module": m, "linked": true})).unwrap();
+        assert!(ins(&e).multi_mono && !ins(&e).multi_mono_unlinked && ins(&e).edit_channel == 0);
+        assert_eq!(ins(&e).params["c1:gain"], -9.0, "kept for unlinking again");
+        assert!(e.execute("mix.module_param", &json!({"track": t, "module": m, "param": "c1:gain", "value": 0.0})).is_err());
+        // Saved and loaded, unlinked comes back; the edited channel does not.
+        e.execute("mix.module_multi_mono", &json!({"track": t, "module": m, "linked": false})).unwrap();
+        assert_eq!(ins(&e).params["c1:gain"], -9.0, "its own value again, not the module's");
+        let back: soundcraft_model::Session = serde_json::from_str(&serde_json::to_string(e.session()).unwrap()).unwrap();
+        assert!(back.tracks[0].mixer.inserts[0].multi_mono_unlinked);
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(!ins(&e).multi_mono_unlinked);
     }
 
     #[test]
