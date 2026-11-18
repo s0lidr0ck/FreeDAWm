@@ -18,12 +18,16 @@
 //!   it, the switch lane: a cell per bar of the clip showing the variation that bar plays; click a
 //!   cell to pick another (or the clip's own).
 //!
+//! * A Step Sequence (a melodic pattern, `pattern.new_sequence`) shows each lit step's note on
+//!   it; dragging a lit step up or down changes its note a semitone at a time (velocity: keys
+//!   1–4 and the details). The details add Pitch for it, and Gate for every pattern.
+//!
 //! Every edit is a `pattern.*` command, so it undoes and scripts like any other.
 
 use crate::SoundApp;
 use crate::theme::{bold, regular};
 use crate::widgets::{self, KnobStyle};
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use soundcraft_dsp::{ParamInfo, Taper, Unit};
 use soundcraft_midi::pattern::{Condition, Direction, Lane, MAX_VARIATIONS, Pattern, Rate, Step, variation_name};
@@ -131,6 +135,8 @@ enum Drag {
     Paint { lane: usize, from: usize, to: usize, on: bool },
     /// Dragging a step's velocity from `start`.
     Velocity { lane: usize, step: usize, start: u8 },
+    /// Dragging a melodic step's note from `start`.
+    Pitch { lane: usize, step: usize, start: u8 },
 }
 
 /// The grid's per-editor state.
@@ -159,7 +165,10 @@ struct Look {
     choke: Option<u8>,
 }
 
-fn lane_look(juke: Option<&Insert>, note: u8) -> Look {
+fn lane_look(juke: Option<&Insert>, note: u8, melodic: bool) -> Look {
+    if melodic {
+        return Look { name: format!("Notes from {}", soundcraft_midi::note_name(note)), color: AMBER, choke: None };
+    }
     if let Some(ins) = juke
         && let Some(pad) = crate::juke_window::pad_for_note(ins, note)
     {
@@ -405,14 +414,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui, r: Rect, track: TrackId, cid: ClipI
         let cols = Columns::new(Rect::from_min_max(pos2(steps_x, area.min.y), pos2(area.max.x - 12.0, area.max.y)), columns, beat);
         for (i, lane) in pattern.lanes.iter().enumerate() {
             let row = Rect::from_min_size(pos2(area.min.x, area.min.y + i as f32 * lane_h), vec2(area.width(), lane_h - 6.0));
-            let look = lane_look(juke.as_ref(), lane.note);
+            let look = lane_look(juke.as_ref(), lane.note, pattern.melodic);
             lane_header(ui, Rect::from_min_size(row.min, vec2(HEADER_W, row.height())), cid, i, lane, &look, &mut out);
-            lane_steps(ui, row.y_range(), &cols, cid, i, lane, &look, playhead.get(i).copied().flatten(), &mut st, &mut out);
+            let ph = playhead.get(i).copied().flatten();
+            lane_steps(ui, row.y_range(), &cols, cid, i, lane, &look, ph, pattern.melodic, &mut st, &mut out);
         }
         // Add a lane: the next pad's note not in the pattern yet.
         let add = Rect::from_min_size(pos2(area.min.x, area.min.y + n as f32 * lane_h), vec2(HEADER_W, 26.0));
         let used: Vec<u8> = pattern.lanes.iter().map(|l| l.note).collect();
         let next = match &juke {
+            _ if pattern.melodic => used.last().map(|n| n.saturating_add(12).min(127)).filter(|n| !used.contains(n)).or(Some(60)),
             Some(ins) => (0..soundcraft_dsp::plugins::juke::PADS).map(|p| crate::juke_window::pad_note(ins, p)).find(|n| !used.contains(n)),
             None => (36..=81).find(|n| !used.contains(n)),
         };
@@ -424,7 +435,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui, r: Rect, track: TrackId, cid: ClipI
     ui.painter().text(
         pos2(r.min.x + 12.0, r.max.y - HINT_H * 0.5),
         Align2::LEFT_CENTER,
-        "Click: on/off · drag across: paint · drag up/down: velocity · keys 1–4: Full/75/50/25 · right-click: the step's details",
+        if pattern.melodic {
+            "Click: on/off · drag across: paint · drag a lit step up/down: its note · keys 1–4: velocity · right-click: the step's details"
+        } else {
+            "Click: on/off · drag across: paint · drag up/down: velocity · keys 1–4: Full/75/50/25 · right-click: the step's details"
+        },
         regular(10.5),
         DIM,
     );
@@ -732,6 +747,7 @@ fn lane_steps(
     lane: &Lane,
     look: &Look,
     playhead: Option<usize>,
+    melodic: bool,
     st: &mut State,
     out: &mut Out,
 ) {
@@ -757,6 +773,10 @@ fn lane_steps(
             _ => step.on,
         };
         draw_step(&p, cell, step, on, color, ghost);
+        if melodic && on && cell.width() >= 18.0 {
+            let name = soundcraft_midi::note_name(step.pitch.unwrap_or(lane.note));
+            p.with_clip_rect(cell).text(pos2(cell.center().x, cell.max.y - 4.0), Align2::CENTER_BOTTOM, name, bold(10.0), DARK);
+        }
         if !ghost && playhead == Some(step_i) {
             p.rect_stroke(cell.expand(1.5), 6.0, Stroke::new(2.0, CREAM), StrokeKind::Outside);
         }
@@ -787,10 +807,24 @@ fn lane_steps(
                 } else if total.y.abs() > 6.0
                     && let Some(s) = lane.steps.get(step).filter(|s| s.on)
                 {
-                    st.drag = Some(Drag::Velocity { lane: l, step, start: s.velocity });
+                    st.drag = Some(if melodic {
+                        Drag::Pitch { lane: l, step, start: s.pitch.unwrap_or(lane.note) }
+                    } else {
+                        Drag::Velocity { lane: l, step, start: s.velocity }
+                    });
                 }
             }
             Some(Drag::Paint { lane: l, from, on, .. }) if l == lane_i => st.drag = Some(Drag::Paint { lane: l, from, to: col, on }),
+            Some(Drag::Pitch { lane: l, step, start }) if l == lane_i => {
+                let n = (f32::from(start) - total.y / 6.0).round().clamp(0.0, 127.0) as u8;
+                if lane.steps.get(step).is_some_and(|s| s.pitch.unwrap_or(lane.note) != n) {
+                    out.merged(
+                        "pattern.step",
+                        json!({"clip": cid.0, "lane": lane_i, "step": step, "pitch": n}),
+                        format!("pattern_pitch:{}:{lane_i}:{step}", cid.0),
+                    );
+                }
+            }
             Some(Drag::Velocity { lane: l, step, start }) if l == lane_i => {
                 let v = (f32::from(start) - total.y * 0.5).round().clamp(1.0, 127.0) as u8;
                 if lane.steps.get(step).is_some_and(|s| s.velocity != v) {
@@ -814,7 +848,7 @@ fn lane_steps(
                 );
             }
             Some(Drag::Pressed { lane: l, step, on }) if l == lane_i => toggle(out, cid, lane_i, step, on, velocity),
-            other => st.drag = other.filter(|d| !matches!(d, Drag::Velocity { lane: l, .. } if *l == lane_i)),
+            other => st.drag = other.filter(|d| !matches!(d, Drag::Velocity { lane: l, .. } | Drag::Pitch { lane: l, .. } if *l == lane_i)),
         }
     }
     if resp.clicked()
@@ -936,7 +970,7 @@ fn details_popover(ui: &mut Ui, cid: ClipId, pattern: &Pattern, juke: Option<&In
         return;
     };
     let Some(anchor) = st.anchor else { return };
-    let look = lane_look(juke, lane.note);
+    let look = lane_look(juke, lane.note, pattern.melodic);
     let key = |what: &str| format!("pattern_step:{}:{lane_i}:{step_i}:{what}", cid.0);
     let base = json!({"clip": cid.0, "lane": lane_i, "step": step_i});
     let with = |k: &str, v: Value| {
@@ -948,127 +982,133 @@ fn details_popover(ui: &mut Ui, cid: ClipId, pattern: &Pattern, juke: Option<&In
     let beat = (spb / 4).max(1);
     let (bar, beat_n) = (step_i / spb + 1, (step_i % spb) / beat + 1);
     let screen = ui.ctx().content_rect();
-    const POP: Vec2 = vec2(300.0, 290.0);
-    let below = anchor.max.y + 6.0 + POP.y < screen.max.y;
+    let pop = vec2(300.0, if pattern.melodic { 366.0 } else { 328.0 });
+    let below = anchor.max.y + 6.0 + pop.y < screen.max.y;
     let (pivot, at) =
         if below { (Align2::LEFT_TOP, anchor.left_bottom() + vec2(0.0, 6.0)) } else { (Align2::LEFT_BOTTOM, anchor.left_top() - vec2(0.0, 6.0)) };
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
-    let area =
-        egui::Area::new(egui::Id::new(("step-popover", cid.0))).order(egui::Order::Foreground).pivot(pivot).fixed_pos(at).constrain(true).show(
-            ui.ctx(),
-            |ui| {
-                egui::Frame::new()
-                    .fill(GROUND)
-                    .stroke(Stroke::new(1.0, WELL))
-                    .corner_radius(10.0)
-                    .shadow(egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(140) })
-                    .show(ui, |ui| {
-                        ui.set_width(POP.x);
-                        ui.spacing_mut().item_spacing = vec2(6.0, 8.0);
-                        // The band: lane and step, on/off, close.
-                        let (band, _) = ui.allocate_exact_size(vec2(POP.x, 36.0), Sense::hover());
-                        let p = ui.painter();
-                        p.rect_filled(band, egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 }, look.color);
-                        let t = p.text(
-                            pos2(band.min.x + 12.0, band.center().y),
-                            Align2::LEFT_CENTER,
-                            format!("{} · step {}", look.name, step_i + 1),
-                            bold(13.0),
-                            DARK,
-                        );
-                        p.text(
-                            pos2(t.max.x + 8.0, band.center().y),
-                            Align2::LEFT_CENTER,
-                            format!("bar {bar}, beat {beat_n}"),
-                            regular(11.0),
-                            DARK.gamma_multiply(0.7),
-                        );
-                        let x_r = Rect::from_center_size(pos2(band.max.x - 18.0, band.center().y), vec2(22.0, 22.0));
-                        let resp = ui.interact(x_r, egui::Id::new(("step-popover-close", cid.0)), Sense::click()).on_hover_text("Close (Esc)");
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close the step details"));
-                        let p = ui.painter();
-                        if resp.hovered() {
-                            p.rect_filled(x_r, 4.0, Color32::from_black_alpha(30));
+    let area = egui::Area::new(egui::Id::new(("step-popover", cid.0)))
+        .order(egui::Order::Foreground)
+        .pivot(pivot)
+        .fixed_pos(at)
+        .constrain(true)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::new()
+                .fill(GROUND)
+                .stroke(Stroke::new(1.0, WELL))
+                .corner_radius(10.0)
+                .shadow(egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(140) })
+                .show(ui, |ui| {
+                    ui.set_width(pop.x);
+                    ui.spacing_mut().item_spacing = vec2(6.0, 8.0);
+                    // The band: lane and step, on/off, close.
+                    let (band, _) = ui.allocate_exact_size(vec2(pop.x, 36.0), Sense::hover());
+                    let p = ui.painter();
+                    p.rect_filled(band, egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 }, look.color);
+                    let t = p.text(
+                        pos2(band.min.x + 12.0, band.center().y),
+                        Align2::LEFT_CENTER,
+                        format!("{} · step {}", look.name, step_i + 1),
+                        bold(13.0),
+                        DARK,
+                    );
+                    p.text(
+                        pos2(t.max.x + 8.0, band.center().y),
+                        Align2::LEFT_CENTER,
+                        format!("bar {bar}, beat {beat_n}"),
+                        regular(11.0),
+                        DARK.gamma_multiply(0.7),
+                    );
+                    let x_r = Rect::from_center_size(pos2(band.max.x - 18.0, band.center().y), vec2(22.0, 22.0));
+                    let resp = ui.interact(x_r, egui::Id::new(("step-popover-close", cid.0)), Sense::click()).on_hover_text("Close (Esc)");
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close the step details"));
+                    let p = ui.painter();
+                    if resp.hovered() {
+                        p.rect_filled(x_r, 4.0, Color32::from_black_alpha(30));
+                    }
+                    let c = x_r.center();
+                    for d in [vec2(5.0, 5.0), vec2(5.0, -5.0)] {
+                        p.line_segment([c - d, c + d], Stroke::new(1.8, DARK));
+                    }
+                    if resp.clicked() {
+                        close = true;
+                    }
+                    let on_r = Rect::from_min_size(pos2(x_r.min.x - 46.0, band.center().y - 11.0), vec2(40.0, 22.0));
+                    let label = if step.on { "On" } else { "Off" };
+                    let resp = ui.put(
+                        on_r,
+                        egui::Button::new(egui::RichText::new(label).font(bold(11.0)).color(if step.on { CREAM } else { DARK }))
+                            .fill(if step.on { DARK } else { Color32::from_black_alpha(30) })
+                            .corner_radius(11.0),
+                    );
+                    if resp.on_hover_text("Turn the step on or off").clicked() {
+                        out.run("pattern.step", with("on", json!(!step.on)));
+                    }
+                    ui.add_space(2.0);
+                    egui::Frame::new().inner_margin(egui::Margin { left: 12, right: 12, top: 0, bottom: 12 }).show(ui, |ui| {
+                        let pitch = step.pitch.unwrap_or(lane.note);
+                        let mut sliders: Vec<(&str, &str, i32, i32, i32, i32, String)> = vec![
+                            ("Velocity", "velocity", i32::from(step.velocity), 1, 127, 1, step.velocity.to_string()),
+                            ("Probability", "probability", i32::from(step.probability), 0, 100, 0, format!("{}%", step.probability)),
+                            ("Nudge", "offset", i32::from(step.offset), -50, 50, 0, format!("{:+}%", step.offset)),
+                            ("Gate", "gate", i32::from(step.gate), 1, i32::from(soundcraft_midi::pattern::MAX_GATE), 1, format!("{}%", step.gate)),
+                        ];
+                        if pattern.melodic {
+                            sliders.insert(0, ("Pitch", "pitch", i32::from(pitch), 0, 127, 0, soundcraft_midi::note_name(pitch)));
                         }
-                        let c = x_r.center();
-                        for d in [vec2(5.0, 5.0), vec2(5.0, -5.0)] {
-                            p.line_segment([c - d, c + d], Stroke::new(1.8, DARK));
-                        }
-                        if resp.clicked() {
-                            close = true;
-                        }
-                        let on_r = Rect::from_min_size(pos2(x_r.min.x - 46.0, band.center().y - 11.0), vec2(40.0, 22.0));
-                        let label = if step.on { "On" } else { "Off" };
-                        let resp = ui.put(
-                            on_r,
-                            egui::Button::new(egui::RichText::new(label).font(bold(11.0)).color(if step.on { CREAM } else { DARK }))
-                                .fill(if step.on { DARK } else { Color32::from_black_alpha(30) })
-                                .corner_radius(11.0),
-                        );
-                        if resp.on_hover_text("Turn the step on or off").clicked() {
-                            out.run("pattern.step", with("on", json!(!step.on)));
-                        }
-                        ui.add_space(2.0);
-                        egui::Frame::new().inner_margin(egui::Margin { left: 12, right: 12, top: 0, bottom: 12 }).show(ui, |ui| {
-                            let sliders: [(&str, &str, i32, i32, i32, i32, String); 3] = [
-                                ("Velocity", "velocity", i32::from(step.velocity), 1, 127, 1, step.velocity.to_string()),
-                                ("Probability", "probability", i32::from(step.probability), 0, 100, 0, format!("{}%", step.probability)),
-                                ("Nudge", "offset", i32::from(step.offset), -50, 50, 0, format!("{:+}%", step.offset)),
-                            ];
-                            for (label, k, v, lo, hi, from, shown) in sliders {
-                                if let Some(nv) = slider_row(ui, label, v, lo, hi, from, &shown) {
-                                    let mut p = with(k, json!(nv));
-                                    if !step.on {
-                                        p["on"] = json!(true);
-                                    }
-                                    out.merged("pattern.step", p, key(k));
+                        for (label, k, v, lo, hi, from, shown) in sliders {
+                            if let Some(nv) = slider_row(ui, label, v, lo, hi, from, &shown) {
+                                let mut p = with(k, json!(nv));
+                                if !step.on {
+                                    p["on"] = json!(true);
                                 }
+                                out.merged("pattern.step", p, key(k));
                             }
-                            ui.horizontal(|ui| {
-                                row_label(ui, "Roll");
-                                let items: Vec<(String, f32)> = (1..=4).map(|n| (n.to_string(), 30.0)).collect();
-                                let (r, _) = ui.allocate_exact_size(vec2(segmented_w(&items), 28.0), Sense::hover());
-                                if let Some(i) = segmented(
-                                    ui,
-                                    r,
-                                    egui::Id::new(("roll", cid.0)),
-                                    &items,
-                                    Some(usize::from(step.roll.clamp(1, 4) - 1)),
-                                    "Hits the step plays, evenly spaced",
-                                ) {
-                                    out.run("pattern.step", with("roll", json!(i + 1)));
+                        }
+                        ui.horizontal(|ui| {
+                            row_label(ui, "Roll");
+                            let items: Vec<(String, f32)> = (1..=4).map(|n| (n.to_string(), 30.0)).collect();
+                            let (r, _) = ui.allocate_exact_size(vec2(segmented_w(&items), 28.0), Sense::hover());
+                            if let Some(i) = segmented(
+                                ui,
+                                r,
+                                egui::Id::new(("roll", cid.0)),
+                                &items,
+                                Some(usize::from(step.roll.clamp(1, 4) - 1)),
+                                "Hits the step plays, evenly spaced",
+                            ) {
+                                out.run("pattern.step", with("roll", json!(i + 1)));
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            row_label(ui, "Hit");
+                            if pill(ui, "Accent", step.accent).on_hover_text("Adds the pattern's accent to the velocity").clicked() {
+                                out.run("pattern.step", with("accent", json!(!step.accent)));
+                            }
+                            if pill(ui, "Flam", step.flam).on_hover_text("A quieter grace hit just before").clicked() {
+                                out.run("pattern.step", with("flam", json!(!step.flam)));
+                            }
+                        });
+                        ui.horizontal_top(|ui| {
+                            row_label(ui, "Plays");
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                                let mut choices: Vec<(Condition, String)> = PLAYS.iter().map(|(c, l)| (*c, (*l).to_string())).collect();
+                                if !PLAYS.iter().any(|(c, _)| *c == step.condition) {
+                                    choices.push((step.condition, condition_badge(step.condition).unwrap_or_default()));
                                 }
-                            });
-                            ui.horizontal(|ui| {
-                                row_label(ui, "Hit");
-                                if pill(ui, "Accent", step.accent).on_hover_text("Adds the pattern's accent to the velocity").clicked() {
-                                    out.run("pattern.step", with("accent", json!(!step.accent)));
-                                }
-                                if pill(ui, "Flam", step.flam).on_hover_text("A quieter grace hit just before").clicked() {
-                                    out.run("pattern.step", with("flam", json!(!step.flam)));
-                                }
-                            });
-                            ui.horizontal_top(|ui| {
-                                row_label(ui, "Plays");
-                                ui.vertical(|ui| {
-                                    ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                                    let mut choices: Vec<(Condition, String)> = PLAYS.iter().map(|(c, l)| (*c, (*l).to_string())).collect();
-                                    if !PLAYS.iter().any(|(c, _)| *c == step.condition) {
-                                        choices.push((step.condition, condition_badge(step.condition).unwrap_or_default()));
-                                    }
-                                    ui.horizontal_wrapped(|ui| {
-                                        for (c, label) in choices {
-                                            if pill(ui, &label, step.condition == c).clicked() && step.condition != c {
-                                                out.run("pattern.step", with("condition", condition_arg(c)));
-                                            }
+                                ui.horizontal_wrapped(|ui| {
+                                    for (c, label) in choices {
+                                        if pill(ui, &label, step.condition == c).clicked() && step.condition != c {
+                                            out.run("pattern.step", with("condition", condition_arg(c)));
                                         }
-                                    });
+                                    }
                                 });
                             });
                         });
                     });
-            },
-        );
+                });
+        });
     let outside =
         ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p) && !anchor.contains(p)));
     if close || outside {

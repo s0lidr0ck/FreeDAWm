@@ -193,6 +193,33 @@ pub fn apply_default(app: &mut SoundApp, track: TrackId, module: ModuleId) -> Op
 struct Ab {
     on_b: bool,
     other: Option<Map<String, Value>>,
+    /// A hosted plug-in's other side: its whole state (CLAP state; VST3 component and controller
+    /// state), base64 as `Insert::state` holds it.
+    other_state: Option<String>,
+}
+
+/// A hosted plug-in's state now: read from the running instance (what was set in its own
+/// editor), else the state the module stores.
+fn hosted_state_now(app: &SoundApp, track: TrackId, ins: &Insert) -> Option<String> {
+    let live = app.player.as_ref().and_then(|p| p.capture_state(track, soundcraft_mix::SlotKey::Module(ins.id)));
+    live.filter(|b| !b.is_empty()).map(|b| soundcraft_model::b64::encode(&b)).or_else(|| ins.state.clone())
+}
+
+/// [`ab_toggle`] for a hosted plug-in: A and B are its state chunks, read from the live instance
+/// and loaded back into it (the instance is made again from the state, as a hosted preset is).
+/// One undo step. `Err` when the plug-in has no state to compare yet.
+pub fn ab_toggle_hosted(app: &mut SoundApp, ctx: &egui::Context, track: TrackId, ins: &Insert) -> Result<(), String> {
+    let key = ab_key(track, ins.id);
+    let mut ab = ctx.data(|d| d.get_temp::<Ab>(key)).unwrap_or_default();
+    let now = hosted_state_now(app, track, ins).ok_or("The plug-in has no settings to compare yet (it is not loaded)")?;
+    if let Some(other) = ab.other_state.take() {
+        let name = if ins.preset.trim().is_empty() { if ab.on_b { "A" } else { "B" }.to_string() } else { ins.preset.clone() };
+        app.run("mix.module_preset", json!({"track": track.0, "module": ins.id.0, "preset": name, "state": other}))?;
+    }
+    ab.other_state = Some(now);
+    ab.on_b = !ab.on_b;
+    ctx.data_mut(|d| d.insert_temp(key, ab));
+    Ok(())
 }
 
 fn ab_key(track: TrackId, module: ModuleId) -> egui::Id {
@@ -347,6 +374,42 @@ mod tests {
         ab_toggle(&mut app, &ctx, t, &i, info);
         assert_eq!(app_ins(&app).params.get("harmonics").copied(), Some(90.0));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A hosted plug-in's A and B are its whole state: B starts as a copy of A, a change made
+    /// there (in its editor, here stored as a hosted preset does) is kept as B, and each flip is
+    /// one undo step that makes the instance again from the other state. With no state at all
+    /// there is nothing to compare.
+    #[test]
+    fn ab_flips_a_hosted_plugins_state() {
+        let mut engine = Engine::new(soundcraft_model::Session::default());
+        engine.execute("track.new", &json!({"name": "Bass"})).unwrap();
+        let t = engine.session().tracks[0].id;
+        let m = engine.session_mut().track_mut(t).unwrap().mixer.add_module(Insert::new("vst3:0123456789ABCDEF0123456789ABCDEF"), None).unwrap();
+        let mut app = SoundApp::new(engine, None, crate::Services::default());
+        let ctx = egui::Context::default();
+        let ins = |app: &SoundApp| app.engine.session().tracks[0].mixer.inserts[0].clone();
+        let state = |app: &SoundApp| ins(app).state_bytes();
+        let i = ins(&app);
+        assert!(ab_toggle_hosted(&mut app, &ctx, t, &i).is_err(), "no state: nothing to compare");
+        app.run("mix.module_state", json!({"track": t.0, "module": m.0, "state": soundcraft_model::b64::encode(b"A-side")})).unwrap();
+        let i = ins(&app);
+        ab_toggle_hosted(&mut app, &ctx, t, &i).unwrap();
+        assert!(on_b(&ctx, t, m));
+        assert_eq!(state(&app).as_deref(), Some(&b"A-side"[..]), "B starts as a copy");
+        app.run("mix.module_preset", json!({"track": t.0, "module": m.0, "preset": "Bright", "state": soundcraft_model::b64::encode(b"B-side")}))
+            .unwrap();
+        let load_b = ins(&app).state_load;
+        let i = ins(&app);
+        ab_toggle_hosted(&mut app, &ctx, t, &i).unwrap();
+        assert!(!on_b(&ctx, t, m));
+        assert_eq!(state(&app).as_deref(), Some(&b"A-side"[..]));
+        assert_ne!(ins(&app).state_load, load_b, "the instance is made again from A");
+        let i = ins(&app);
+        ab_toggle_hosted(&mut app, &ctx, t, &i).unwrap();
+        assert_eq!(state(&app).as_deref(), Some(&b"B-side"[..]));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(state(&app).as_deref(), Some(&b"A-side"[..]), "one undo step per flip");
     }
 
     /// The parity list's "copy settings to another instance" from a narrow drawer or plug-in

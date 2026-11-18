@@ -393,6 +393,7 @@ Track > Clear All Clip Indicators = Track > Clear All Clip Indicators
 Clip > ## Create
 Clip > New MIDI Clip
 Clip > New Pattern = @pattern.new
+Clip > New Step Sequence = @pattern.new_sequence
 Clip > Convert Pattern to MIDI = @pattern.to_midi
 Clip > Capture = Clip > Capture...
 Clip > ---

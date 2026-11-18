@@ -730,6 +730,24 @@ pub const MAX_MODULES: usize = 32;
 /// Most knobs a module can pin to its strip face.
 const MAX_KNOBS: usize = 4;
 
+/// The id under which channel `channel` (0-based, 1 or more) of a multi-mono unlinked module keeps
+/// parameter `param` ([`Insert::multi_mono_unlinked`]): `c1:gain`. Channel 0 is `param` itself.
+pub fn channel_param_id(channel: usize, param: &str) -> String {
+    if channel == 0 { param.to_string() } else { format!("c{channel}:{param}") }
+}
+
+/// A per-channel parameter id split into its channel (1 or more) and the plugin's own id; `None`
+/// for a plain id.
+pub fn split_channel_param(id: &str) -> Option<(usize, &str)> {
+    let rest = id.strip_prefix('c')?;
+    let (n, param) = rest.split_once(':')?;
+    if n.is_empty() || n.len() > 3 || !n.bytes().all(|b| b.is_ascii_digit()) || param.is_empty() {
+        return None;
+    }
+    let n: usize = n.parse().ok()?;
+    (n >= 1).then_some((n, param))
+}
+
 /// How wide the channel strips are drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum StripSize {
@@ -815,6 +833,16 @@ pub struct Insert {
     /// plug-ins. Its stored state is the first instance's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub multi_mono: bool,
+    /// Multi-mono unlinked: each channel past the first has its own parameter set, stored in
+    /// `params` under [`channel_param_id`] (`c1:gain` is the second channel's Gain) with lanes of
+    /// those ids; the plain ids are the first channel's. Only read while `multi_mono` is on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_mono_unlinked: bool,
+    /// The channel the module's plugin window edits while it runs multi-mono unlinked (0: the
+    /// first, whose values are the plain ids): `mix.module_param` writes that channel's values.
+    /// Not saved; not part of what the module sounds like.
+    #[serde(skip)]
+    pub edit_channel: u16,
     /// The insert's wet/dry mix, 0 (its input only) to 1 (its output only, the default): the
     /// mixer blends the module's output with its input, delayed by its latency, so any effect
     /// can be used in parallel. Clamped by the mixer.
@@ -1081,6 +1109,8 @@ impl Insert {
             link_group: None,
             post_fader: false,
             multi_mono: false,
+            multi_mono_unlinked: false,
+            edit_channel: 0,
             mix: 1.0,
             state_load: 0,
             foreign: None,

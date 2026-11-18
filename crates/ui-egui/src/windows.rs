@@ -635,7 +635,7 @@ fn workspace(app: &mut SoundApp, ctx: &egui::Context) {
                     crate::audition::file(app, &path);
                 }
                 if !is_dir && is_midi_file(&name) && r.clicked() && !r.double_clicked() {
-                    // A MIDI file is heard on the synth at the session tempo.
+                    // A MIDI file is heard at the session tempo, on the selected track's instrument.
                     crate::audition::midi_file(app, &path);
                 }
                 if r.double_clicked() {
@@ -1511,14 +1511,21 @@ fn clip_modules(app: &mut SoundApp, ui: &mut egui::Ui, cid: soundcraft_model::Cl
                     }
                 }
             });
+            // Hosted CLAP and VST3 effects, by vendor (as the insert menu lists them).
+            ui.menu_button("Plug-in…", |ui| {
+                if let Some(id) = crate::mix_window::hosted_menus(ui, false) {
+                    let _ = app.run("clip.module_add", json!({"clips": [cid.0], "plugin": id}));
+                    ui.close();
+                }
+            });
         });
     });
     if mods.is_empty() {
-        ui.weak("Any built-in effect can go on the clip, after the EQ and dynamics.");
+        ui.weak("Any built-in effect, or a CLAP or VST3 effect, can go on the clip, after the EQ and dynamics.");
     }
     let n = mods.len();
     for (i, m) in mods.iter().enumerate() {
-        let Some(info) = soundcraft_dsp::plugin_info(&m.plugin) else { continue };
+        let Some(info) = soundcraft_mix::clip_module_plugin(&m.plugin) else { continue };
         egui::CollapsingHeader::new(info.name).id_salt(("clip_module", cid.0, m.id)).default_open(n == 1).show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.selectable_label(m.bypass, "Bypass").clicked() {

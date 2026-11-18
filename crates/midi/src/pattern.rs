@@ -21,6 +21,12 @@ pub const STEPS_PER_BAR: [u8; 5] = [8, 12, 16, 24, 32];
 pub const MAX_ROLL: u8 = 4;
 /// The MIDI channel pattern notes are written on (channel 10, drums).
 pub const CHANNEL: u8 = 9;
+/// The channel a melodic pattern's notes are written on (channel 1).
+pub const MELODIC_CHANNEL: u8 = 0;
+/// A step's longest gate, in percent of the step (200: it runs into the next step's length).
+pub const MAX_GATE: u8 = 200;
+/// The gate a step plays when none is set: half the step (a hit's length).
+pub const DEFAULT_GATE: u8 = 50;
 /// Most variations (A–H) a pattern holds, `lanes` (A) among them.
 pub const MAX_VARIATIONS: usize = 8;
 /// Most bars the switch lane names a variation for.
@@ -98,11 +104,32 @@ pub struct Step {
     /// A quieter grace hit just before the step.
     pub flam: bool,
     pub condition: Condition,
+    /// The note this step plays in place of its lane's (a melodic pattern's steps each hold one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<u8>,
+    /// How long the note sounds, in percent of the step (or of a roll's hit): 1–[`MAX_GATE`].
+    #[serde(skip_serializing_if = "is_default_gate")]
+    pub gate: u8,
+}
+
+fn is_default_gate(g: &u8) -> bool {
+    *g == DEFAULT_GATE
 }
 
 impl Default for Step {
     fn default() -> Step {
-        Step { on: false, velocity: 100, accent: false, probability: 100, offset: 0, roll: 1, flam: false, condition: Condition::Always }
+        Step {
+            on: false,
+            velocity: 100,
+            accent: false,
+            probability: 100,
+            offset: 0,
+            roll: 1,
+            flam: false,
+            condition: Condition::Always,
+            pitch: None,
+            gate: DEFAULT_GATE,
+        }
     }
 }
 
@@ -117,6 +144,8 @@ impl Step {
         self.probability = self.probability.min(100);
         self.offset = self.offset.clamp(-50, 50);
         self.roll = self.roll.clamp(1, MAX_ROLL);
+        self.pitch = self.pitch.map(|p| p.min(127));
+        self.gate = self.gate.clamp(1, MAX_GATE);
         if let Condition::Every { nth, of } = &mut self.condition {
             *of = (*of).clamp(1, 16);
             *nth = (*nth).clamp(1, *of);
@@ -167,6 +196,10 @@ pub struct Pattern {
     pub seed: u64,
     /// Fill bars come every this many bars (the last of each group); 0: none.
     pub fill_every: u8,
+    /// A melodic pattern (a Step Sequence clip): its notes go out on channel 1 for any instrument
+    /// rather than on the drum channel, and its steps hold pitches.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub melodic: bool,
     /// Variation A's lanes (a pattern without variations has only these).
     pub lanes: Vec<Lane>,
     /// Variations B–H, each a full grid of its own lanes (at most [`MAX_VARIATIONS`] − 1).
@@ -194,6 +227,7 @@ impl Default for Pattern {
             humanize: 0,
             seed: 1,
             fill_every: 0,
+            melodic: false,
             lanes: Vec::new(),
             variations: Vec::new(),
             play: 0,
@@ -341,6 +375,7 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
     let grid = at.ticks_per_bar as f64 / f64::from(p.steps_per_bar);
     let flam_ticks = f64::from(PPQ) / 16.0;
     let humanize = f64::from(p.humanize) / 100.0;
+    let channel = if p.melodic { MELODIC_CHANNEL } else { CHANNEL };
     // Only the variations some bar plays are expanded; each keeps the hits of the bars it plays.
     let several = p.variation_count() > 1;
     let lanes = (0..p.variation_count()).flat_map(|v| p.lanes_of(v).into_iter().flatten().enumerate().map(move |(li, l)| (v, li, l)));
@@ -393,23 +428,17 @@ pub fn expand(pattern: &Pattern, at: &Expand) -> Sequence {
                 let jitter_v = humanize * human.next_signed() * 12.0;
                 let t = start + swing + nudge + f64::from(h) * sub + jitter_t - at.phase as f64;
                 let vel = (f64::from(base_vel) + jitter_v).round().clamp(1.0, 127.0) as u8;
-                let length = (sub / 2.0).max(1.0).round() as i64;
+                // The default gate keeps the arithmetic of patterns made before gates existed.
+                let held = if step.gate == DEFAULT_GATE { sub / 2.0 } else { sub * f64::from(step.gate) / 100.0 };
+                let length = held.max(1.0).round() as i64;
+                let pitch = step.pitch.unwrap_or(lane.note);
                 let mut push = |t: f64, velocity: u8| -> bool {
                     let tick = t.round() as i64;
                     if (0..at.length).contains(&tick) {
                         if seq.notes.len() >= at.max_notes {
                             return false;
                         }
-                        seq.notes.push(Note {
-                            probability: 100,
-                            pitch: lane.note,
-                            velocity,
-                            muted: false,
-                            release_velocity: 64,
-                            channel: CHANNEL,
-                            start: tick,
-                            length,
-                        });
+                        seq.notes.push(Note { probability: 100, pitch, velocity, muted: false, release_velocity: 64, channel, start: tick, length });
                     }
                     true
                 };
@@ -561,6 +590,25 @@ mod tests {
     }
 
     #[test]
+    fn melodic_steps_hold_their_pitch_and_gate_on_channel_one() {
+        let mut lane = Lane::new(60, 4);
+        lane.steps[0] = Step { pitch: Some(64), gate: 100, ..Step::hit(90) };
+        lane.steps[1] = Step::hit(80);
+        lane.steps[2] = Step { pitch: Some(67), gate: 25, ..Step::hit(70) };
+        let p = Pattern { melodic: true, lanes: vec![lane], ..Pattern::default() };
+        let seq = expand(&p, &at(1));
+        let got: Vec<(i64, u8, i64, u8)> = seq.notes.iter().map(|n| (n.start, n.pitch, n.length, n.channel)).collect();
+        let step = BAR / 16;
+        assert_eq!(got[..3], [(0, 64, step, 0), (step, 60, step / 2, 0), (2 * step, 67, step / 4, 0)]);
+        assert_eq!(got.len(), 12, "the four-step row loops over the bar");
+        // A drum pattern's steps sound as before: half a step on channel 10.
+        let drums = expand(&four_on_the_floor(), &at(1));
+        assert!(drums.notes.iter().all(|n| n.length == BAR / 32 && n.channel == CHANNEL));
+        let json = serde_json::to_string(&four_on_the_floor()).unwrap_or_default();
+        assert!(!json.contains("gate") && !json.contains("pitch") && !json.contains("melodic"), "the saved form of a drum pattern is unchanged");
+    }
+
+    #[test]
     fn hostile_variations_are_sanitized() {
         let mut p = four_on_the_floor();
         p.variations = vec![vec![Lane { steps: Vec::new(), ..Lane::default() }]; 20];
@@ -589,8 +637,19 @@ mod tests {
     fn hostile_patterns_are_sanitized() {
         let mut p = Pattern { steps_per_bar: 7, shuffle: 255, humanize: 255, ..Pattern::default() };
         p.lanes = vec![Lane { note: 200, steps: Vec::new(), ..Lane::default() }; 40];
-        p.lanes[0].steps =
-            vec![Step { velocity: 0, probability: 255, offset: -128, roll: 0, condition: Condition::Every { nth: 9, of: 0 }, ..Step::hit(1) }; 100];
+        p.lanes[0].steps = vec![
+            Step {
+                velocity: 0,
+                probability: 255,
+                offset: -128,
+                roll: 0,
+                condition: Condition::Every { nth: 9, of: 0 },
+                pitch: Some(200),
+                gate: 0,
+                ..Step::hit(1)
+            };
+            100
+        ];
         let seq = expand(&p, &at(2));
         assert!(seq.notes.iter().all(|n| n.pitch <= 127 && (1..=127).contains(&n.velocity) && (0..2 * BAR).contains(&n.start)));
     }
@@ -616,6 +675,8 @@ mod tests {
                 roll,
                 flam,
                 condition: Condition::Always,
+                pitch: None,
+                gate: DEFAULT_GATE,
             },
         )
     }

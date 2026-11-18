@@ -23,7 +23,7 @@ const fn preset(group: &'static str, name: &'static str, desc: &'static str, set
 // Waves: 0 saw, 1 square, 2 sine, 3 triangle.
 
 /// The presets, in menu order.
-pub static SYNTH_PRESETS: [SynthPreset; 12] = [
+pub static SYNTH_PRESETS: [SynthPreset; 15] = [
     preset(
         "Bass",
         "Round Bass",
@@ -240,6 +240,62 @@ pub static SYNTH_PRESETS: [SynthPreset; 12] = [
             ("amp_sustain", 100.0),
             ("amp_release", 600.0),
             ("velocity", 0.0),
+            ("level", -10.0),
+        ],
+    ),
+    preset(
+        "Lead",
+        "Wide Stack Lead",
+        "Seven detuned saws spread across the sides, a bright filter and a little glide: a big trance-style lead.",
+        &[
+            ("unison", 6.0),
+            ("unison_detune", 28.0),
+            ("unison_spread", 85.0),
+            ("osc2_detune", 0.0),
+            ("cutoff", 5200.0),
+            ("resonance", 15.0),
+            ("filter_env_amount", 20.0),
+            ("amp_sustain", 90.0),
+            ("amp_release", 350.0),
+            ("glide", 30.0),
+            ("level", -10.0),
+        ],
+    ),
+    preset(
+        "Lead",
+        "Sync Lead",
+        "Oscillator 2 hard-synced a fifth and an octave up, its tone swept by the filter envelope: a biting lead.",
+        &[
+            ("osc_sync", 1.0),
+            ("osc_mix", 80.0),
+            ("osc2_semitones", 19.0),
+            ("osc2_detune", 0.0),
+            ("cutoff", 1800.0),
+            ("resonance", 25.0),
+            ("filter_env_amount", 55.0),
+            ("filter_decay", 600.0),
+            ("filter_sustain", 35.0),
+            ("amp_sustain", 85.0),
+            ("mod_wheel", 25.0),
+            ("level", -8.0),
+        ],
+    ),
+    preset(
+        "Pad",
+        "Wide Unison Pad",
+        "Four gently detuned copies of saw and triangle across the whole stereo field, slow to open and close.",
+        &[
+            ("unison", 3.0),
+            ("unison_detune", 14.0),
+            ("unison_spread", 100.0),
+            ("osc2_wave", 3.0),
+            ("osc2_semitones", 12.0),
+            ("cutoff", 1400.0),
+            ("filter_env_amount", 25.0),
+            ("filter_attack", 1200.0),
+            ("amp_attack", 900.0),
+            ("amp_sustain", 90.0),
+            ("amp_release", 1800.0),
             ("level", -10.0),
         ],
     ),

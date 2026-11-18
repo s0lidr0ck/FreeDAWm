@@ -719,6 +719,7 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         }) else {
             continue;
         };
+        let ins = edited_channel_view(ins);
         let hosted = soundcraft_mix::is_third_party(&ins.plugin);
         // A hosted plugin not described (yet) still gets its window, for its editor and picture.
         let info = crate::mix_window::plugin_info(&ins.plugin);
@@ -741,6 +742,48 @@ pub(crate) fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
         }
     }
     app.ui.plugin_windows = keep;
+}
+
+/// What a plugin window shows of a module: for one running multi-mono unlinked with its window
+/// on another channel ([`soundcraft_model::Insert::edit_channel`]), that channel's own values in
+/// place of the first's, so every editor shows the channel it edits (its edits go there too:
+/// `mix.module_param` writes the edited channel).
+pub(crate) fn edited_channel_view(mut ins: soundcraft_model::Insert) -> soundcraft_model::Insert {
+    let ch = usize::from(ins.edit_channel);
+    if ins.multi_mono && ins.multi_mono_unlinked && ch > 0 {
+        let own: Vec<(String, f32)> = ins
+            .params
+            .iter()
+            .filter_map(|(k, v)| soundcraft_model::split_channel_param(k).filter(|(n, _)| *n == ch).map(|(_, p)| (p.to_string(), *v)))
+            .collect();
+        ins.params.extend(own);
+    }
+    ins
+}
+
+/// The channel picker of a multi-mono unlinked module's window: which channel it shows and
+/// edits, and Link to give every channel the module's settings again.
+fn channel_picker(app: &mut SoundApp, ui: &mut Ui, tid: soundcraft_model::TrackId, ins: &soundcraft_model::Insert) {
+    let s = app.engine.session();
+    let Some(t) = s.track(tid) else { return };
+    let channels = soundcraft_mix::strip_channels(t, soundcraft_mix::main_channels(s));
+    if !(ins.multi_mono && ins.multi_mono_unlinked) || channels < 2 {
+        return;
+    }
+    let format = t.format;
+    let name = |c: usize| format!("Channel {} ({})", c + 1, format.channel_label(c));
+    let mut pick = usize::from(ins.edit_channel);
+    egui::ComboBox::from_id_salt(("mm-channel", tid.0, ins.id.0)).selected_text(name(pick)).show_ui(ui, |ui| {
+        for c in 0..channels {
+            ui.selectable_value(&mut pick, c, name(c));
+        }
+    });
+    if pick != usize::from(ins.edit_channel) {
+        let _ = app.run("mix.module_channel", json!({"track": tid.0, "module": ins.id.0, "channel": pick}));
+    }
+    if ui.button("Link").on_hover_text("Multi-mono linked: every channel takes these settings").clicked() {
+        let _ = app.run("mix.module_multi_mono", json!({"track": tid.0, "module": ins.id.0, "linked": true}));
+    }
 }
 
 /// Moves every following plugin window ([`crate::UiState::following_plugins`]) to the track
@@ -982,6 +1025,9 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
             }
             ui.menu_button("Presets ▾", |ui| preset_menu(app, ui, tid, module, info, ins));
         }
+        if !instrument {
+            channel_picker(app, ui, tid, ins);
+        }
         // A built-in instrument's factory presets (the Subtractive Synth's).
         if instrument
             && let Some(info) = info
@@ -1011,6 +1057,21 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
                 .on_disabled_hover_text("Open the plugin's editor first");
             if resp.clicked() {
                 crate::browser::thumbs::capture_now(app, (tid, key));
+            }
+            // A/B of the plug-in's whole state, beside its editor (an inserted one's preset menu
+            // has it too).
+            if !instrument {
+                let b = crate::preset_house::on_b(ui.ctx(), tid, module);
+                let resp = ui.button(if b { "B" } else { "A" }).on_hover_text(if b {
+                    "Comparing: B. Click to go back to A"
+                } else {
+                    "Compare: click to switch to B (a copy of these settings the first time)"
+                });
+                if resp.clicked()
+                    && let Err(e) = crate::preset_house::ab_toggle_hosted(app, ui.ctx(), tid, ins)
+                {
+                    app.ui.status = e;
+                }
             }
         }
     });
@@ -1049,6 +1110,18 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
     }
     if info.id == "eq_7band" || info.id == "eq_1band" {
         eq_curve(ui, info.id, ins);
+    }
+    if instrument && info.id == crate::synth_panel::SYNTH {
+        // The synth's panel: its filter and envelopes drawn, over the controls.
+        let r = ui.scope(|ui| {
+            if frozen {
+                ui.disable();
+            }
+            crate::synth_panel::draw(app, ui, tid, ins);
+        });
+        if frozen {
+            r.response.on_disabled_hover_text(read_only.as_str());
+        }
     }
     // What the drawer offers, by the drawer's names (a FireStation engine's own
     // bypass and a model's unused switches are not here).
@@ -1348,7 +1421,13 @@ fn preset_housekeeping(
     // A/B compare.
     let b = ph::on_b(ui.ctx(), tid, ins.id);
     if ui.button(if b { "Compare: Back to A" } else { "Compare: Switch to B" }).on_hover_text("Two settings to flip between").clicked() {
-        ph::ab_toggle(app, ui.ctx(), tid, ins, info);
+        if soundcraft_mix::is_third_party(&ins.plugin) {
+            if let Err(e) = ph::ab_toggle_hosted(app, ui.ctx(), tid, ins) {
+                app.ui.status = e;
+            }
+        } else {
+            ph::ab_toggle(app, ui.ctx(), tid, ins, info);
+        }
         ui.close();
     }
     // Copy and paste settings between instances of the plug-in, on any track.
@@ -1445,6 +1524,29 @@ mod tests {
     use soundcraft_engine::Engine;
     use soundcraft_mix::SlotKey;
     use soundcraft_model::ModuleId;
+
+    /// Multi-mono unlinked: the plugin window shows the channel it edits, and a parameter set
+    /// from it (as every editor sets one) lands on that channel; the lane picker lists the
+    /// other channel's lanes.
+    #[test]
+    fn a_multi_mono_unlinked_window_shows_and_edits_its_channel() {
+        let mut engine = Engine::new(soundcraft_model::Session::default());
+        engine.execute("track.new", &json!({"name": "A", "format": "stereo"})).unwrap();
+        let mut app = SoundApp::new(engine, None, crate::Services::default());
+        let t = app.engine.session().tracks[0].id;
+        let m = app.run("mix.module_add", json!({"track": t.0, "plugin": "gain", "params": {"gain": -3.0}})).unwrap()["module"].as_u64().unwrap();
+        app.run("mix.module_multi_mono", json!({"track": t.0, "module": m, "linked": false})).unwrap();
+        app.run("mix.module_channel", json!({"track": t.0, "module": m, "channel": 1})).unwrap();
+        app.run("mix.module_param", json!({"track": t.0, "module": m, "param": "gain", "value": -10.0})).unwrap();
+        let ins = app.engine.session().tracks[0].mixer.inserts[0].clone();
+        assert_eq!(ins.params["gain"], -3.0, "the first channel keeps its value");
+        assert_eq!(edited_channel_view(ins.clone()).params["gain"], -10.0, "the window shows channel 2's");
+        let first = soundcraft_model::Insert { edit_channel: 0, ..ins };
+        assert_eq!(edited_channel_view(first).params["gain"], -3.0);
+        let s = app.engine.session();
+        let lanes = crate::auto_lanes::choices(s, &s.tracks[0]);
+        assert!(lanes.iter().any(|c| matches!(&c.param, soundcraft_model::AutoParam::Plugin { param, .. } if param == "c1:gain")));
+    }
 
     /// The parity list's "follow the selected track": a plug-in window with Follow on moves to
     /// the same plug-in on the track selected next, keeping its pin; a track without it leaves

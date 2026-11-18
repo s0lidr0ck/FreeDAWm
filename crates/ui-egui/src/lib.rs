@@ -119,6 +119,7 @@ pub mod step_input;
 pub mod stretch_worker;
 pub mod surfaces;
 pub mod swale_ui;
+pub mod synth_panel;
 pub mod teleprompter;
 pub mod tempo_markers;
 pub mod tempo_ui;

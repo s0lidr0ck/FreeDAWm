@@ -29,13 +29,22 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             new_pattern
         ),
+        cmd!(
+            "pattern.new_sequence",
+            "New Step Sequence",
+            [],
+            None,
+            "{track?, start? (default: the selection's start; snapped back to its bar), bars?: 1-64 (default 1), steps?: 8|12|16|24|32 (default 16), note?: 0-127 (default 60)} -> {clip, start, length}: a melodic step pattern for any instrument: one row whose steps each hold a pitch (the row's note until set), on channel 1",
+            always,
+            new_sequence
+        ),
         cmd!(query "pattern.get", "Get Pattern", [], None, "{clip} -> {pattern, phase}", always, get),
         cmd!(
             "pattern.step",
             "Edit Step",
             [],
             None,
-            "{clip, variation?: A-H (default A), lane, step, on?, toggle?, velocity?: 1-127, accent?, probability?: 0-100, offset?: -50-50, roll?: 1-4, flam?, condition?: always|first|not_first|fill|not_fill|\"n:m\"} -> {step}",
+            "{clip, variation?: A-H (default A), lane, step, on?, toggle?, velocity?: 1-127, accent?, probability?: 0-100, offset?: -50-50, roll?: 1-4, flam?, condition?: always|first|not_first|fill|not_fill|\"n:m\", pitch?: 0-127 or null (the lane's note), gate?: 1-200 (% of the step)} -> {step}",
             always,
             step
         ),
@@ -100,7 +109,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Pattern Settings",
             [],
             None,
-            "{clip, steps_per_bar?: 8|12|16|24|32, shuffle?: 0-100, accent?: 0-127, humanize?: 0-100, fill_every?: 0-16} -> {pattern}",
+            "{clip, steps_per_bar?: 8|12|16|24|32, shuffle?: 0-100, accent?: 0-127, humanize?: 0-100, fill_every?: 0-16, melodic?: notes on channel 1 for any instrument (else the drum channel)} -> {pattern}",
             always,
             settings
         ),
@@ -251,6 +260,30 @@ fn new_pattern(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clip": clip_id.0, "start": start, "length": length}))
 }
 
+fn new_sequence(e: &mut Engine, p: &Value) -> Result<Value> {
+    let id = "pattern.new_sequence";
+    let track = tracks_required(e, id, p)?.first().copied().ok_or_else(|| bad(id, "no track"))?;
+    if !matches!(e.session().track(track).map(|t| t.kind), Some(TrackKind::Instrument | TrackKind::Midi)) {
+        return Err(bad(id, "step sequences go on instrument and MIDI tracks"));
+    }
+    let bars = ranged(p, "bars", 1, MAX_NEW_BARS, id)?.unwrap_or(1);
+    let steps = match ranged(p, "steps", 1, 32, id)? {
+        None => 16,
+        Some(n) if STEPS_PER_BAR.contains(&(n as u8)) => n as u8,
+        Some(_) => return Err(bad(id, "`steps` must be 8, 12, 16, 24 or 32")),
+    };
+    let note = ranged(p, "note", 0, 127, id)?.unwrap_or(60) as u8;
+    let at = position_param(e, id, p, "start")?.unwrap_or(e.session().edit.selection.start);
+    let (clip_id, start, length) = place_pattern(e, track, at, bars, steps, &[note])?;
+    if let Some(clip) = e.session_mut().find_clip_mut(clip_id) {
+        clip.name = "Step Sequence".into();
+        if let Some(pc) = clip.pattern.as_mut() {
+            pc.pattern.melodic = true;
+        }
+    }
+    Ok(json!({"clip": clip_id.0, "start": start, "length": length}))
+}
+
 /// Puts a new pattern clip of `bars` bars on `track`, from the bar `at` is in: `steps` per bar, a
 /// lane per note. Returns the clip, its start and its length.
 pub(crate) fn place_pattern(e: &mut Engine, track: TrackId, at: Samples, bars: i64, steps: u8, notes: &[u8]) -> Result<(ClipId, Samples, Samples)> {
@@ -296,6 +329,13 @@ fn step(e: &mut Engine, p: &Value) -> Result<Value> {
     let roll = ranged(p, "roll", 1, i64::from(MAX_ROLL), id)?;
     let flam = flag(p, "flam", id)?;
     let cond = p.get("condition").map(|v| condition(v, id)).transpose()?;
+    let gate = ranged(p, "gate", 1, i64::from(soundcraft_midi::pattern::MAX_GATE), id)?;
+    // `pitch`: a note, or null for the lane's.
+    let pitch = match p.get("pitch") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(_) => Some(ranged(p, "pitch", 0, 127, id)?.map(|n| n as u8)),
+    };
     let lane = lane_mut(pattern_mut(e, clip, id)?, p, id)?;
     let len = lane.steps.len();
     let s = lane.steps.get_mut(i).ok_or_else(|| bad(id, format!("step {i} is out of range (the lane has {len})")))?;
@@ -325,6 +365,12 @@ fn step(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     if let Some(c) = cond {
         s.condition = c;
+    }
+    if let Some(g) = gate {
+        s.gate = g as u8;
+    }
+    if let Some(v) = pitch {
+        s.pitch = v;
     }
     Ok(json!({"step": *s}))
 }
@@ -518,7 +564,11 @@ fn settings(e: &mut Engine, p: &Value) -> Result<Value> {
     let accent = ranged(p, "accent", 0, 127, id)?;
     let humanize = ranged(p, "humanize", 0, 100, id)?;
     let fill_every = ranged(p, "fill_every", 0, 16, id)?;
+    let melodic = flag(p, "melodic", id)?;
     let pat = pattern_mut(e, clip, id)?;
+    if let Some(v) = melodic {
+        pat.melodic = v;
+    }
     if let Some(v) = spb {
         pat.steps_per_bar = v as u8;
     }
@@ -624,6 +674,8 @@ mod tests {
     use soundcraft_model::ClipContent;
 
     const BAR: i64 = 4 * PPQ as i64;
+    /// Samples well past a bar at any tempo a new session starts at.
+    const BAR_SAMPLES_HINT: i64 = 48_000 * 4;
 
     fn engine() -> (Engine, u64) {
         let mut e = Engine::default();
@@ -880,6 +932,38 @@ mod tests {
         let pat = &clip.pattern.as_ref().unwrap().pattern;
         assert!(pat.variations[0].iter().any(|l| l.note == 42 && l.steps[0].on), "the hat went into B");
         assert!(pat.lanes.iter().all(|l| l.note != 42 || !l.steps[0].on), "A is untouched");
+    }
+
+    #[test]
+    fn a_step_sequence_holds_a_pitch_per_step_and_plays_on_any_instrument() {
+        let (mut e, t) = engine();
+        let v = e.execute("pattern.new_sequence", &json!({"track": t, "start": 0, "steps": 8})).unwrap();
+        let c = v["clip"].as_u64().unwrap();
+        let pc = pattern_clip(&e, ClipId(c), "t").unwrap();
+        assert!(pc.pattern.melodic);
+        assert_eq!(pc.pattern.lanes.iter().map(|l| l.note).collect::<Vec<_>>(), vec![60]);
+        e.execute("pattern.step", &json!({"clip": c, "lane": 0, "step": 0, "on": true})).unwrap();
+        e.execute("pattern.step", &json!({"clip": c, "lane": 0, "step": 2, "on": true, "pitch": 63, "gate": 100})).unwrap();
+        e.execute("pattern.step", &json!({"clip": c, "lane": 0, "step": 4, "on": true, "pitch": 67})).unwrap();
+        let seq = match &e.session().find_clip(ClipId(c)).unwrap().1.content {
+            ClipContent::Midi { sequence } => sequence.clone(),
+            _ => panic!("a MIDI clip"),
+        };
+        let step = BAR / 8;
+        let got: Vec<(i64, u8, i64, u8)> = seq.notes.iter().map(|n| (n.start, n.pitch, n.length, n.channel)).collect();
+        assert_eq!(got, vec![(0, 60, step / 2, 0), (2 * step, 63, step, 0), (4 * step, 67, step / 2, 0)]);
+        // Back to the lane's note; out-of-range values refused.
+        e.execute("pattern.step", &json!({"clip": c, "lane": 0, "step": 4, "pitch": null})).unwrap();
+        assert_eq!(pattern_clip(&e, ClipId(c), "t").unwrap().pattern.lanes[0].steps[4].pitch, None);
+        assert!(e.execute("pattern.step", &json!({"clip": c, "lane": 0, "step": 4, "pitch": 128})).is_err());
+        assert!(e.execute("pattern.step", &json!({"clip": c, "lane": 0, "step": 4, "gate": 0})).is_err());
+        // Turn into Notes keeps them, as for drums.
+        e.execute("pattern.to_midi", &json!({"clip": c})).unwrap();
+        assert_eq!(notes(&e, c).len(), 3);
+        // A drum pattern can be switched to melodic and back.
+        let d = new_clip(&mut e, t, json!({"start": 4 * BAR_SAMPLES_HINT}));
+        e.execute("pattern.settings", &json!({"clip": d, "melodic": true})).unwrap();
+        assert!(pattern_clip(&e, ClipId(d), "t").unwrap().pattern.melodic);
     }
 
     #[test]

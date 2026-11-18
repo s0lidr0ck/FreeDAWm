@@ -153,10 +153,18 @@ pub struct PreparedInstance {
 /// [`instance_ch`]). [`create_instance_for`] makes such an instance one mono instance per channel.
 pub const MULTI_MONO: usize = 1 << 20;
 
+/// With [`MULTI_MONO`]: the instances are unlinked, each channel with its own parameters
+/// ([`soundcraft_model::Insert::multi_mono_unlinked`]).
+pub const MULTI_MONO_UNLINKED: usize = 1 << 21;
+
 /// The channel count an instance for `ins` on a strip of `ch` channels is made, matched and
 /// handed over by: `ch`, with [`MULTI_MONO`] set for a multi-mono insert on a wider strip.
 pub fn instance_ch(ins: &soundcraft_model::Insert, ch: usize) -> usize {
-    if ins.multi_mono && ch > 1 { ch | MULTI_MONO } else { ch }
+    match (ins.multi_mono && ch > 1, ins.multi_mono_unlinked) {
+        (true, true) => ch | MULTI_MONO | MULTI_MONO_UNLINKED,
+        (true, false) => ch | MULTI_MONO,
+        (false, _) => ch,
+    }
 }
 
 /// Every third-party plugin slot (inserts and instruments) of a session, with the channel count
@@ -221,8 +229,11 @@ pub fn create_instance(id: &str, state: Option<&[u8]>, sample_rate: f32, max_blo
 pub fn create_instance_for(id: &str, state: Option<&[u8]>, sample_rate: f32, max_block: usize, ch: usize, offline: bool) -> Option<NewInstance> {
     let mut plugin = create_plugin(id)?;
     let multi = ch & MULTI_MONO != 0;
-    let ch = ch & !MULTI_MONO;
-    if multi {
+    let unlinked = ch & MULTI_MONO_UNLINKED != 0;
+    let ch = ch & !(MULTI_MONO | MULTI_MONO_UNLINKED);
+    if multi && unlinked {
+        plugin = soundcraft_dsp::plugins::multi_mono_unlinked(plugin, create_plugin);
+    } else if multi {
         plugin = soundcraft_dsp::plugins::multi_mono(plugin, create_plugin);
     }
     plugin.set_offline(offline);
@@ -584,6 +595,9 @@ struct Strip {
     /// change lets go of the notes only of the tracks that left; the others' held notes follow
     /// their new index. Capacity reserved in `sync`.
     routed_src: Vec<(u8, TrackId)>,
+    /// The zone each MIDI track playing this instrument plays it through (layers and splits,
+    /// `track_midi::Zone`), by source index; a source not listed takes everything.
+    routed_zone: Vec<(u8, track_midi::Zone)>,
     /// The instrument's next block starts somewhere new: send it the controllers in effect there.
     chase: bool,
     /// Counts the passes the clips have played from somewhere new (each start, locate or loop
@@ -754,6 +768,23 @@ impl StripMidi {
     }
 
     /// Adds source `src`'s events (in its order).
+    /// [`StripMidi::add`] through a layer's or split's zone: only what it takes.
+    fn add_zoned(&mut self, src: u8, out: &MidiOut, zone: Option<track_midi::Zone>) {
+        let Some(zone) = zone else {
+            self.add(src, out);
+            return;
+        };
+        for e in out.events().iter().filter(|e| zone.passes(e.msg)) {
+            match self.events.get_mut(self.len) {
+                Some(slot) => {
+                    *slot = StripMidiEvent { offset: e.offset, msg: e.msg, src, seq: self.len as u16 };
+                    self.len += 1;
+                }
+                None => self.dropped = self.dropped.saturating_add(1),
+            }
+        }
+    }
+
     fn add(&mut self, src: u8, out: &MidiOut) {
         for e in out.events() {
             match self.events.get_mut(self.len) {
@@ -800,6 +831,8 @@ struct ClipFx {
     sr: f32,
     ch: usize,
     mods: ClipMods,
+    /// Hosted modules made here are for an offline render.
+    offline: bool,
 }
 
 /// The instances of a clip's Clip Effects modules: a fixed array, so seating and moving them
@@ -843,6 +876,7 @@ impl Strip {
             midi_in: Box::new(StripMidi::new()),
             midi_held: Vec::with_capacity(MIDI_HELD),
             routed_src: Vec::new(),
+            routed_zone: Vec::new(),
             chase: true,
             pass: 0,
             muted: false,
@@ -1786,7 +1820,14 @@ impl MixEngine {
             self.retired_analysis.extend(m.analysis.drain(..).map(|(_, a)| a));
         }
         out.extend(self.adopt.drain().map(|(_, p)| p.plugin));
-        out.extend(self.adopt_clip.drain().flat_map(|(_, p)| p.eq.into_iter().chain(p.comp)));
+        out.extend(self.adopt_clip.drain().flat_map(|(_, p)| p.eq.into_iter().chain(p.comp).chain(p.mods.into_iter().flatten().map(|(_, m)| m))));
+        // Clip Effects modules too (a hosted one is dropped where the host drops these).
+        for st in self.strips.values_mut() {
+            for fx in st.clip_fx.values_mut() {
+                out.extend(fx.eq.take().into_iter().chain(fx.comp.take()));
+                out.extend(fx.mods.iter_mut().filter_map(Option::take).map(|m| m.plugin));
+            }
+        }
         out.extend(self.parked.drain().map(|(_, p)| p.plugin));
         self.retired_links.extend(self.links.drain(..).map(|g| g.slab));
         self.synced = (usize::MAX, usize::MAX, usize::MAX);
@@ -2027,7 +2068,9 @@ impl MixEngine {
                 strip.pre = reserved(ch, mb);
             }
             let host = self.builtins.then_some(&mut self.adopt_clip);
-            sync_clip_fx(strip, t, cx.sr, mb, cx.retired, host, cx.made);
+            // Hosted clip modules are made here only by an offline engine (no realtime host).
+            let hosted = !cx.external && !self.builtins;
+            sync_clip_fx(strip, t, cx.sr, mb, cx.retired, host, cx.made, (hosted, cx.offline));
             // Sidechain keys: one per keyed module, keeping a module's lines (and their history).
             strip.level = plan.level.get(ti).copied().unwrap_or(0);
             // Module MIDI inputs: the accepted sources, and room for the list (`process_strip`
@@ -2047,11 +2090,17 @@ impl MixEngine {
                 s.tracks
                     .iter()
                     .enumerate()
-                    .filter(|(_, x)| x.instrument.as_ref().and_then(track_midi::target_of) == Some(t.id))
+                    .filter(|(_, x)| x.instrument.as_ref().and_then(|i| track_midi::zone_for(i, t.id)).is_some())
                     .filter(|(_, x)| plan.midi_ok(t.id, ModuleRef { track: x.id, module: sidechain::INSTRUMENT_OUT }))
                     .enumerate()
                     .filter_map(|(j, (si, _))| Some((u8::try_from(ROUTED_MIDI + j).ok()?, si, sidechain::INSTRUMENT_OUT))),
             );
+            // Each routed source's zone: only the layers and splits that limit what they take.
+            strip.routed_zone.clear();
+            strip.routed_zone.extend(strip.midi_src.iter().filter(|x| usize::from(x.0) >= ROUTED_MIDI).filter_map(|&(k, si, _)| {
+                let zone = s.tracks.get(si)?.instrument.as_ref().and_then(|i| track_midi::zone_for(i, t.id))?;
+                (!zone.is_all()).then_some((k, zone))
+            }));
             strip.routed_src.reserve(strip.midi_src.len());
             strip.inst_outs.sync(t, self.max_block);
             strip.module_in.reserve(sources.len());
@@ -2482,7 +2531,7 @@ impl MixEngine {
                     if let Some((_, src)) = done.iter().find(|(i, x)| *i == si && x.stamp == block)
                         && let Some(out) = src.module_midi(m)
                     {
-                        st.midi_in.add(k, out);
+                        st.midi_in.add_zoned(k, out, st.routed_zone.iter().find(|z| z.0 == k).map(|z| z.1));
                     }
                 }
                 st.midi_in.sort();
@@ -4354,7 +4403,7 @@ impl ClipFx {
     const EQ: &'static str = "eq_7band";
     const COMP: &'static str = "compressor";
     fn new(sr: f32, ch: usize) -> ClipFx {
-        ClipFx { eq: None, comp: None, gain_db: 0.0, sr, ch, mods: Default::default() }
+        ClipFx { eq: None, comp: None, gain_db: 0.0, sr, ch, mods: Default::default(), offline: false }
     }
     /// Clear filter, detector and lookahead history (transport stop / locate).
     fn reset(&mut self) {
@@ -4366,6 +4415,10 @@ impl ClipFx {
         }
     }
     fn make(&self, id: &str) -> Option<Box<dyn Plugin>> {
+        // A hosted CLAP or VST3 module (expensive: never on the audio thread, see `make_modules`).
+        if is_third_party(id) {
+            return create_instance_for(id, None, self.sr, 16_384, self.ch.max(1), self.offline).map(|n| n.plugin);
+        }
         soundcraft_dsp::create(id).map(|mut p| {
             p.prepare(self.sr, 16_384, self.ch.max(1));
             p
@@ -4387,11 +4440,14 @@ impl ClipFx {
         }
     }
     /// Makes the chain's modules this chain lacks (after `arrange`); allocates. Returns how many.
-    fn make_modules(&mut self, chain: &[soundcraft_model::ClipModule]) -> u64 {
+    /// Makes the modules `chain` needs that are not seated; hosted ones only when `hosted` (an
+    /// offline engine: a realtime host makes them on its control thread, `BuiltinPrep`).
+    fn make_modules(&mut self, chain: &[soundcraft_model::ClipModule], hosted: bool) -> u64 {
         let mut made = 0;
         for (i, c) in chain.iter().enumerate().take(soundcraft_model::MAX_CLIP_MODULES) {
             if self.mods.get(i).is_some_and(Option::is_none)
                 && clip_module_plugin(&c.plugin).is_some()
+                && (hosted || !is_third_party(&c.plugin))
                 && let Some(plugin) = self.make(&c.plugin)
                 && let Some(slot) = self.mods.get_mut(i)
             {
@@ -4404,9 +4460,11 @@ impl ClipFx {
     /// Whether every module of `chain` that can be made sits in its slot, and nothing else.
     fn modules_ready(&self, chain: &[soundcraft_model::ClipModule]) -> bool {
         let n = chain.len().min(soundcraft_model::MAX_CLIP_MODULES);
+        // A hosted module not made (not handed over yet, or it failed to load) passes the clip
+        // through rather than holding back the clip's other effects.
         chain.iter().take(n).zip(self.mods.iter()).all(|(c, m)| match m {
             Some(m) => m.is(c),
-            None => clip_module_plugin(&c.plugin).is_none(),
+            None => clip_module_plugin(&c.plugin).is_none() || is_third_party(&c.plugin),
         }) && self.mods.iter().skip(n).all(Option::is_none)
     }
     /// The latency of the modules heard (samples), as `configure_modules` last set them.
@@ -4528,6 +4586,10 @@ impl ClipFx {
 /// instrument, a meter, a capture or a generator). `None` for anything else, hosted plug-ins
 /// included.
 pub fn clip_module_plugin(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
+    // A hosted CLAP or VST3 effect (its parameters from the scan; Audio Units stay on tracks).
+    if id.starts_with(soundcraft_clap_host::ID_PREFIX) || id.starts_with(soundcraft_vst3_host::ID_PREFIX) {
+        return hosted_plugin_info(id).or_else(|| test_plugin_info(id)).filter(|i| !i.is_instrument && i.id == id);
+    }
     soundcraft_dsp::plugin_info(id).filter(|i| {
         i.listed() && !i.is_instrument && !soundcraft_dsp::is_generator(id) && !soundcraft_dsp::METER_PLUGINS.contains(&id) && id != "imprint"
     })
@@ -4548,6 +4610,7 @@ fn sync_clip_fx(
     retired: &mut Vec<Box<dyn Plugin>>,
     mut host: Option<&mut HashMap<(TrackId, u64), PreparedClipFx>>,
     made: &mut u64,
+    (hosted, offline): (bool, bool),
 ) {
     let ch = strip.buf.len();
     let live = || t.heard_clips().iter().filter(|c| c.is_audio()).filter_map(|c| clip_fx_params(c).map(|p| (c.id.0, p, c.live_modules())));
@@ -4563,6 +4626,7 @@ fn sync_clip_fx(
     for (id, params, chain) in live() {
         any = true;
         let fx = strip.clip_fx.entry(id).or_insert_with(|| ClipFx::new(sr, ch));
+        fx.offline = offline;
         fx.arrange(chain, retired);
         if let Some(mut p) = host.as_deref_mut().and_then(|a| a.remove(&(t.id, id))) {
             if p.ch == ch {
@@ -4572,7 +4636,7 @@ fn sync_clip_fx(
                 retired.extend(p.mods.iter_mut().filter_map(Option::take).map(|(_, m)| m));
             }
         }
-        let n = fx.prepare_modules(params, retired).saturating_add(fx.make_modules(chain));
+        let n = fx.prepare_modules(params, retired).saturating_add(fx.make_modules(chain, hosted));
         // Their parameters now, so the latency the clip is read ahead by is known before it plays.
         fx.configure_modules(chain);
         if host.is_some() {
@@ -4716,7 +4780,8 @@ fn run_strips<T: Send>(work: &mut [T], f: impl Fn(&mut T) + Sync + Send) {
     work.iter_mut().for_each(f);
 }
 
-fn strip_channels(t: &Track, main_ch: usize) -> usize {
+/// The channels a track's strip carries (the master the main mix's, an instrument at least two).
+pub fn strip_channels(t: &Track, main_ch: usize) -> usize {
     match t.kind {
         TrackKind::Master => main_ch,
         TrackKind::Instrument => t.channels().clamp(2, MAX_CHANNELS),
@@ -6272,7 +6337,7 @@ fn late_midi_in(st: &mut Strip, s: &Session, strips: &HashMap<TrackId, Strip>, b
         if let Some(src) = s.tracks.get(si).and_then(|x| strips.get(&x.id)).filter(|x| x.stamp == block)
             && let Some(out) = src.module_midi(m)
         {
-            st.midi_in.add(k, out);
+            st.midi_in.add_zoned(k, out, st.routed_zone.iter().find(|z| z.0 == k).map(|z| z.1));
         }
     }
     st.midi_in.sort();
@@ -6435,7 +6500,13 @@ fn apply_values(slot: &mut PluginSlot, ins: &soundcraft_model::Insert, value: im
         slot.laned.resize(ins.params.len(), false);
         slot.keys = keys;
     }
+    // Another channel's values (`c1:gain`) are only for a module running multi-mono unlinked;
+    // kept otherwise (unlinking again brings them back) but not sent.
+    let channels = ins.multi_mono && ins.multi_mono_unlinked;
     for (((k, v), last), was_laned) in ins.params.iter().zip(slot.applied.iter_mut()).zip(slot.laned.iter_mut()) {
+        if !channels && k.starts_with('c') && soundcraft_model::split_channel_param(k).is_some() {
+            continue;
+        }
         let (val, laned) = value(k, *v);
         if laned != *was_laned {
             slot.plugin.set_param_automated(k, laned);
@@ -7124,7 +7195,7 @@ impl MixEngine {
         let again = |id: &str, ch: usize, plugin: &mut Box<dyn Plugin>| {
             if is_third_party(id) {
                 plugin.set_offline(offline);
-                plugin.prepare(sr, mb, ch & !MULTI_MONO);
+                plugin.prepare(sr, mb, ch & !(MULTI_MONO | MULTI_MONO_UNLINKED));
             } else if id == soundcraft_dsp::plugins::mend::ID {
                 plugin.set_offline(offline);
             }
@@ -7356,7 +7427,9 @@ fn render_clips_with(s: &Session, track: TrackId, range: Range, heard: bool) -> 
             let mut fx = ClipFx::new(s.sample_rate.as_f64() as f32, out.len());
             let chain = c.live_modules();
             fx.prepare_modules(params.clone(), &mut Vec::new());
-            fx.make_modules(chain);
+            // An offline render: hosted modules are made here too, in offline mode.
+            fx.offline = true;
+            fx.make_modules(chain, true);
             fx.configure(params);
             fx.configure_modules(chain);
             fx
@@ -7650,6 +7723,13 @@ pub use soundcraft_plugin_bridge as plugin_bridge;
 pub fn hosted_plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
     soundcraft_plugin_bridge::plugin_info(id)
         .unwrap_or_else(|| soundcraft_clap_host::plugin_info(id).or_else(|| soundcraft_vst3_host::plugin_info(id)))
+}
+
+/// The description of a plugin the test factory makes ([`set_test_plugin_factory`]); `None`
+/// without one (always, outside tests).
+fn test_plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
+    let f = (*TEST_FACTORY.read().unwrap_or_else(std::sync::PoisonError::into_inner))?;
+    f(id).map(|p| p.info())
 }
 
 /// A built-in plugin, else a hosted CLAP plugin (`clap:<id>`).
@@ -8438,6 +8518,44 @@ mod tests {
         }
     }
 
+    /// Multi-mono unlinked: each channel takes its own value (`c1:gain` for the second) and its
+    /// own lane; linked, the `c1:` values are kept but not heard, and the render is the linked
+    /// one's.
+    #[test]
+    fn an_unlinked_multi_mono_insert_gives_each_channel_its_own_values_and_lanes() {
+        let render = |multi: bool, unlinked: bool, lane: bool| {
+            let mut s = Session::default();
+            s.edit.values.insert("playback.auto_fade_ms".into(), 0.0);
+            let t = s.add_track(TrackKind::Audio, ChannelFormat::Stereo, None);
+            let n = 48_000;
+            let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.5; n], vec![0.5; n]] };
+            s.pool.insert(SourceId(902), Arc::new(SourceAudio::new(buf)));
+            let id = s.new_clip_id();
+            let tr = s.track_mut(t).unwrap();
+            tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "dc", SourceId(902), 0, 0, n as i64));
+            let mut ins = Insert::new("gain");
+            ins.multi_mono = multi;
+            ins.multi_mono_unlinked = unlinked;
+            ins.params.insert("gain".into(), 0.0);
+            ins.params.insert("c1:gain".into(), -6.0);
+            let m = tr.mixer.add_module(ins, None).unwrap();
+            if lane {
+                let mut l = soundcraft_model::AutomationLane::new(AutoParam::Plugin { module: m, param: "c1:gain".into() });
+                l.set_point(0, -20.0);
+                tr.automation.push(l);
+            }
+            let out = render_range(&s, Range::new(0, n as i64), 512);
+            (out[0][30_000], out[1][30_000])
+        };
+        let plain = render(false, false, false);
+        assert_eq!(render(true, false, false), plain, "linked: the c1 value is not heard");
+        let (l, r) = render(true, true, false);
+        assert!((l - plain.0).abs() < 1e-5, "the first channel as before: {l} vs {}", plain.0);
+        assert!((r / plain.1 - 0.501).abs() < 0.01, "the second at -6 dB: {r} vs {}", plain.1);
+        let (_, r) = render(true, true, true);
+        assert!((r / plain.1 - 0.1).abs() < 0.005, "the second follows its own lane to -20 dB: {r}");
+    }
+
     /// A clip's own automation is heard while it plays, in a render as in playback: here its pan
     /// lane hard left over the clip, the track's lane centred outside it.
     #[test]
@@ -8530,6 +8648,79 @@ mod tests {
         assert!(cue(&mut eng, &s, 6 * 512).0.abs() < 1e-6, "muted");
         s.edit.set_flag(PRE_SENDS_IGNORE_MUTE, true);
         assert!((cue(&mut eng, &s, 7 * 512).0 - 0.5).abs() < 1e-3, "the pre-fader send ignores the mute");
+    }
+
+    /// A hosted plug-in standing in for a CLAP effect: the built-in gain under a `clap:` id.
+    struct ClipGain(Box<dyn Plugin>);
+
+    static CLIP_GAIN: std::sync::OnceLock<soundcraft_dsp::PluginInfo> = std::sync::OnceLock::new();
+
+    impl Plugin for ClipGain {
+        fn info(&self) -> &'static soundcraft_dsp::PluginInfo {
+            CLIP_GAIN.get_or_init(|| soundcraft_dsp::PluginInfo { id: "clap:test.clipgain", ..self.0.info().clone() })
+        }
+        fn prepare(&mut self, sr: f32, mb: usize, ch: usize) {
+            self.0.prepare(sr, mb, ch);
+        }
+        fn reset(&mut self) {
+            self.0.reset();
+        }
+        fn set_param(&mut self, id: &str, v: f32) -> bool {
+            self.0.set_param(id, v)
+        }
+        fn param(&self, id: &str) -> Option<f32> {
+            self.0.param(id)
+        }
+        fn process(&mut self, io: &mut [Vec<f32>], frames: usize) {
+            self.0.process(io, frames);
+        }
+    }
+
+    fn clip_gain_factory(id: &str) -> Option<Box<dyn Plugin>> {
+        (id == "clap:test.clipgain").then(|| Box::new(ClipGain(soundcraft_dsp::create("gain").unwrap())) as Box<dyn Plugin>)
+    }
+
+    /// A hosted (CLAP) effect on a clip: made from the session with its saved parameters, heard
+    /// as the same built-in effect on the clip is; a realtime engine never makes it on the audio
+    /// thread (the host's `BuiltinPrep` does, and hands it over); one not handed over passes the
+    /// clip through with its other effects still heard.
+    #[test]
+    fn a_hosted_effect_on_a_clip_plays_with_its_saved_parameters() {
+        set_test_plugin_factory(Some(clip_gain_factory));
+        assert!(clip_module_plugin("clap:test.clipgain").is_some());
+        assert!(clip_module_plugin("clap:test.nothing").is_none());
+        let with = |plugin: &str| {
+            let (mut s, t) = session_with_dc(0.5, 48_000);
+            s.edit.click = false;
+            let c = s.track_mut(t).unwrap().playlist_mut().unwrap().clips.first_mut().unwrap();
+            let mut m = soundcraft_model::ClipModule::new(1, plugin);
+            m.params.insert("gain".into(), -6.0);
+            c.modules.push(m);
+            (s, t)
+        };
+        let (hosted, t) = with("clap:test.clipgain");
+        let (builtin, _) = with("gain");
+        let range = Range::new(0, 4096);
+        let heard = render_range(&hosted, range, 512);
+        assert_eq!(heard, render_range(&builtin, range, 512), "as the built-in gain on the clip");
+        let (plain, _) = session_with_dc(0.5, 48_000);
+        let dry = render_range(&plain, range, 512);
+        assert!((heard[0][2000] / dry[0][2000] - 0.501).abs() < 0.01, "{} vs {}", heard[0][2000], dry[0][2000]);
+        // A realtime engine: not made on the audio thread; the clip plays through meanwhile.
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.set_external_instances(true);
+        eng.set_prepared_builtins(true);
+        let mut out = vec![vec![0.0f32; 512]; 2];
+        eng.render(&hosted, 0, 512, &mut out);
+        assert!(eng.strips[&t].clip_fx.values().all(|fx| fx.mods.iter().all(Option::is_none)), "not made on the audio thread");
+        // The host's control thread makes it and hands it over.
+        let mut prep = BuiltinPrep::default();
+        let p = prep.prepare(&hosted, 512);
+        assert!(p.clip_fx.iter().any(|c| c.mods.iter().flatten().any(|(_, m)| m.info().id == "clap:test.clipgain")));
+        eng.adopt_prepared(p);
+        eng.render(&hosted, 512, 512, &mut out);
+        assert!(eng.strips[&t].clip_fx.values().any(|fx| fx.mods.iter().flatten().any(|m| m.plugin.info().id == "clap:test.clipgain")), "seated");
+        assert!(eng.drain_plugins().iter().any(|p| p.info().id == "clap:test.clipgain"), "drained with the rest");
     }
 
     /// A bounce can take a hardware output: what is routed there, lined up with the timeline as

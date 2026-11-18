@@ -118,6 +118,12 @@ pub fn multi_mono(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugi
     Box::new(per_channel::PerChannel::mono(first, make))
 }
 
+/// `first` run multi-mono unlinked: one mono instance per channel, the first taking the plain
+/// parameter ids and channel n (1 or more) those named `c<n>:<id>`.
+pub fn multi_mono_unlinked(first: Box<dyn Plugin>, make: fn(&str) -> Option<Box<dyn Plugin>>) -> Box<dyn Plugin> {
+    Box::new(per_channel::PerChannel::unlinked(first, make))
+}
+
 /// One instance of a plugin by id, never wrapped.
 fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
     Some(match id {

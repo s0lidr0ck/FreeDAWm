@@ -103,7 +103,8 @@ fn sized_strip(s: &Session, t: &Track, ch: usize, mb: usize, room: usize) -> Str
         st.keys.push(k);
     }
     let sources = t.mixer.input.module_sources().len();
-    let routed = s.tracks.iter().filter(|x| x.instrument.as_ref().and_then(crate::track_midi::target_of) == Some(t.id)).count();
+    let routed = s.tracks.iter().filter(|x| x.instrument.as_ref().and_then(|i| crate::track_midi::zone_for(i, t.id)).is_some()).count();
+    st.routed_zone.reserve(routed);
     st.midi_src.reserve(sources + routed);
     st.routed_src.reserve(sources + routed);
     st.module_in.reserve(sources);
