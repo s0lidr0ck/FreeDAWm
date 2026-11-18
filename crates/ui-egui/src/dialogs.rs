@@ -298,6 +298,8 @@ pub enum Dialog {
         value: f64,
         suffix: String,
     },
+    /// Track › Rename Selected Tracks…: by a pattern, by find and replace, or by trimming.
+    RenameSelected(RenameSelected),
     TempoChange {
         at: Samples,
         bpm: f64,
@@ -468,6 +470,7 @@ impl Dialogs {
             Dialog::ClearClips { .. } => "clear_clips",
             Dialog::PathPrompt { .. } => "path",
             Dialog::Number { .. } => "number",
+            Dialog::RenameSelected(_) => "rename_selected",
             Dialog::TempoChange { .. } => "tempo_change",
             Dialog::KeyPicker { .. } => "key_picker",
             Dialog::ChordPicker(_) => "chord_picker",
@@ -616,13 +619,7 @@ impl Dialogs {
             // Not a path: the words to find (the prompt is the same one-line field).
             "lyrics.find" => Dialog::PathPrompt { cmd: id.into(), title: "Find in Transcript".into(), path: String::new(), key: "text".into() },
             "file.import_midi" => Dialog::PathPrompt { cmd: id.into(), title: "Import MIDI".into(), path: home, key: "path".into() },
-            // Not a path: the pattern the selected tracks are named by.
-            "track.rename_selected" => Dialog::PathPrompt {
-                cmd: id.into(),
-                title: "Rename Selected Tracks (* is the name, # the number)".into(),
-                path: "* #".into(),
-                key: "pattern".into(),
-            },
+            "track.rename_selected" => Dialog::RenameSelected(RenameSelected::default()),
             "file.import_musicxml" => Dialog::PathPrompt { cmd: id.into(), title: "Import MusicXML".into(), path: home, key: "path".into() },
             "session.open" => Dialog::PathPrompt { cmd: id.into(), title: "Open Session".into(), path: home, key: "path".into() },
             "session.save" if e.path.is_some() => return false,
@@ -961,6 +958,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::PointValue { .. } => "Set Point Value",
         Dialog::ClearClips { .. } => "Clear",
         Dialog::PathPrompt { title, .. } | Dialog::Number { title, .. } => title.as_str(),
+        Dialog::RenameSelected(_) => "Rename Selected Tracks",
         Dialog::TempoChange { .. } => "Tempo Change (BPM)",
         Dialog::KeyPicker { edit: true, .. } => "Edit Key",
         Dialog::KeyPicker { .. } => "Key Change",
@@ -1399,6 +1397,12 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                             let _ = std::fs::create_dir_all(dir);
                         }
                         action = Some((cmd.clone(), v));
+                    }
+                }
+                Dialog::RenameSelected(r) => {
+                    r.body(ui);
+                    if buttons(ui, "OK", enter) {
+                        action = Some(("track.rename_selected".into(), r.params()));
                     }
                 }
                 Dialog::Number { cmd, key, value, suffix, .. } => {
@@ -2326,9 +2330,91 @@ fn bounce_range_choice(app: &SoundApp, ui: &mut egui::Ui, range: &mut BounceRang
     });
 }
 
+/// Rename Selected Tracks' fields: how (0 a pattern, 1 find and replace, 2 trim) and each
+/// way's values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenameSelected {
+    pub mode: u8,
+    pub pattern: String,
+    pub start: u32,
+    pub find: String,
+    pub replace: String,
+    pub trim_start: u32,
+    pub trim_end: u32,
+}
+
+impl Default for RenameSelected {
+    fn default() -> Self {
+        RenameSelected { mode: 0, pattern: "* #".into(), start: 1, find: String::new(), replace: String::new(), trim_start: 0, trim_end: 0 }
+    }
+}
+
+impl RenameSelected {
+    fn body(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.mode, 0, "Pattern");
+            ui.selectable_value(&mut self.mode, 1, "Find and Replace");
+            ui.selectable_value(&mut self.mode, 2, "Trim");
+        });
+        egui::Grid::new("rename_selected").num_columns(2).show(ui, |ui| match self.mode {
+            1 => {
+                ui.label("Find");
+                ui.text_edit_singleline(&mut self.find);
+                ui.end_row();
+                ui.label("Replace with");
+                ui.text_edit_singleline(&mut self.replace);
+                ui.end_row();
+            }
+            2 => {
+                ui.label("Characters off the start");
+                ui.add(egui::DragValue::new(&mut self.trim_start).range(0..=64));
+                ui.end_row();
+                ui.label("Characters off the end");
+                ui.add(egui::DragValue::new(&mut self.trim_end).range(0..=64));
+                ui.end_row();
+            }
+            _ => {
+                ui.label("Name (* the name, # the number)");
+                ui.text_edit_singleline(&mut self.pattern);
+                ui.end_row();
+                ui.label("First number");
+                ui.add(egui::DragValue::new(&mut self.start).range(0..=9999));
+                ui.end_row();
+            }
+        });
+    }
+
+    /// The `track.rename_selected` parameters for the chosen way.
+    pub fn params(&self) -> Value {
+        match self.mode {
+            1 => json!({"find": self.find, "replace": self.replace}),
+            2 => json!({"trim_start": self.trim_start, "trim_end": self.trim_end}),
+            _ => json!({"pattern": self.pattern, "start": self.start}),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rename Selected Tracks: the dialog opens on Pattern and each way gives the command its
+    /// own parameters.
+    #[test]
+    fn rename_selected_gives_each_way_its_parameters() {
+        let mut d = Dialogs::default();
+        assert!(d.open_for_command(&Engine::default(), "track.rename_selected"));
+        let Some(Dialog::RenameSelected(r)) = &d.open else { panic!("the rename dialog") };
+        assert_eq!(r.params(), json!({"pattern": "* #", "start": 1}));
+        let mut r = r.clone();
+        r.mode = 1;
+        r.find = "DI".into();
+        r.replace = "Amp".into();
+        assert_eq!(r.params(), json!({"find": "DI", "replace": "Amp"}));
+        r.mode = 2;
+        r.trim_start = 3;
+        assert_eq!(r.params(), json!({"trim_start": 3, "trim_end": 0}));
+    }
 
     /// Session Data's choice: new tracks add nothing to the command; onto existing tracks it
     /// names the ticked parts, which the engine takes.

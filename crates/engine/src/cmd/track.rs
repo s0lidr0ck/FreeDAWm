@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Rename Selected Tracks...",
             ["Track"],
             None,
-            "{pattern, start?: number (1), tracks?} — renames the selected tracks in track order by one pattern: `*` is a track's name, `#` the running number (`##` pads it to two digits); without a `#` the number goes at the end → {names}",
+            "{pattern, start?: number (1), tracks?} | {find, replace?: \"\", tracks?} | {trim_start?: n, trim_end?: n, tracks?} — renames the selected tracks in track order: by one pattern (`*` is a track's name, `#` the running number, `##` pads it to two digits; without a `#` the number goes at the end), by replacing every `find` in each name with `replace`, or by trimming characters off each name's start and end → {names}",
             has_selection,
             rename_selected
         ),
@@ -907,14 +907,55 @@ pub fn batch_name(pattern: &str, old: &str, n: u64) -> String {
     out.trim().chars().take(64).collect()
 }
 
-/// Track › Rename Selected Tracks…: every target track named by one pattern and a running
-/// number ([`batch_name`]), in track order. One undo step; refused (nothing renamed) when a new
-/// name would be empty or taken by another track.
+/// A name with every `find` replaced by `with` (Pro Tools' batch rename Replace), trimmed and
+/// cut to 64 characters as a typed name is. An empty `find` leaves it as it was.
+pub fn replaced_name(old: &str, find: &str, with: &str) -> String {
+    if find.is_empty() {
+        return old.to_string();
+    }
+    old.replace(find, with).trim().chars().take(64).collect()
+}
+
+/// A name with `start` characters taken off its start and `end` off its end (batch rename
+/// Trim); empty when that is all of it.
+pub fn trimmed_name(old: &str, start: usize, end: usize) -> String {
+    let n = old.chars().count();
+    let keep = n.saturating_sub(start).saturating_sub(end);
+    old.chars().skip(start).take(keep).collect::<String>().trim().to_string()
+}
+
+/// How Rename Selected Tracks names each track.
+#[derive(Clone, Copy)]
+enum Renaming<'a> {
+    Pattern(&'a str, u64),
+    Replace(&'a str, &'a str),
+    Trim(usize, usize),
+}
+
+/// Track › Rename Selected Tracks…: every target track named, in track order, by one pattern and
+/// a running number ([`batch_name`]), by find and replace ([`replaced_name`]) or by trimming
+/// characters off its ends ([`trimmed_name`]). One undo step; refused (nothing renamed) when a
+/// new name would be empty or taken by another track.
 fn rename_selected(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "track.rename_selected";
-    let pattern =
-        str_param(p, "pattern").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(C, "`pattern` required (`*` the name, `#` the number)"))?;
-    let start = p.get("start").and_then(Value::as_u64).unwrap_or(1);
+    let count = |k: &str| p.get(k).and_then(Value::as_u64).map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let how = if let Some(find) = str_param(p, "find") {
+        if find.is_empty() {
+            return Err(bad(C, "`find`: the text to replace"));
+        }
+        Renaming::Replace(find, str_param(p, "replace").unwrap_or(""))
+    } else if count("trim_start").is_some() || count("trim_end").is_some() {
+        let (a, b) = (count("trim_start").unwrap_or(0), count("trim_end").unwrap_or(0));
+        if a == 0 && b == 0 {
+            return Err(bad(C, "trim at least one character"));
+        }
+        Renaming::Trim(a, b)
+    } else {
+        let pattern = str_param(p, "pattern")
+            .filter(|x| !x.trim().is_empty())
+            .ok_or_else(|| bad(C, "`pattern` required (`*` the name, `#` the number), or `find`, or `trim_start`/`trim_end`"))?;
+        Renaming::Pattern(pattern, p.get("start").and_then(Value::as_u64).unwrap_or(1))
+    };
     let targets = if p.get("tracks").is_some() { tracks_required(e, C, p)? } else { e.target_tracks() };
     let s = e.session();
     let order: Vec<TrackId> = s
@@ -930,7 +971,11 @@ fn rename_selected(e: &mut Engine, p: &Value) -> Result<Value> {
     let mut names: Vec<(TrackId, String)> = Vec::new();
     for (i, id) in order.iter().enumerate() {
         let old = s.track(*id).map(|t| t.name.as_str()).unwrap_or_default();
-        let name = batch_name(pattern, old, start.saturating_add(i as u64));
+        let name = match how {
+            Renaming::Pattern(pattern, start) => batch_name(pattern, old, start.saturating_add(i as u64)),
+            Renaming::Replace(find, with) => replaced_name(old, find, with),
+            Renaming::Trim(a, b) => trimmed_name(old, a, b),
+        };
         if name.is_empty() {
             return Err(bad(C, format!("the pattern leaves track {} without a name", i + 1)));
         }
@@ -1565,6 +1610,45 @@ mod tests {
         assert_eq!(names(&e), ["Gtr 5", "B", "Gtr 6", "Gtr 1"]);
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(names(&e), ["A", "B", "C", "Gtr 1"]);
+    }
+
+    #[test]
+    fn replace_and_trim_names() {
+        assert_eq!(replaced_name("Gtr DI 1", "DI", "Amp"), "Gtr Amp 1");
+        assert_eq!(replaced_name("aaa", "a", "b"), "bbb");
+        assert_eq!(replaced_name("Gtr", "", "x"), "Gtr");
+        assert_eq!(replaced_name("Kick In", " In", ""), "Kick");
+        assert_eq!(trimmed_name("01 Kick", 3, 0), "Kick");
+        assert_eq!(trimmed_name("Kick.wav", 0, 4), "Kick");
+        assert_eq!(trimmed_name("Ünï", 1, 1), "n", "characters, not bytes");
+        assert_eq!(trimmed_name("ab", 1, 5), "");
+    }
+
+    /// Rename Selected Tracks' other modes: find and replace in each selected name, and trim
+    /// characters off their ends; one undo step each, and nothing when a name would clash or
+    /// end up empty.
+    #[test]
+    fn the_selected_tracks_are_renamed_by_find_and_replace_or_trimmed() {
+        let mut e = Engine::default();
+        for n in ["01 Kick DI", "02 Snare DI", "03 Bass DI", "Kick"] {
+            e.execute("track.new", &json!({"name": n})).unwrap();
+        }
+        let ids: Vec<TrackId> = e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).map(|t| t.id).collect();
+        let names = |e: &Engine| e.session().tracks.iter().filter(|t| t.kind != TrackKind::Master).map(|t| t.name.clone()).collect::<Vec<_>>();
+        e.execute("edit.select", &json!({"tracks": [ids[0].0, ids[1].0, ids[2].0]})).unwrap();
+        let undo = e.undo_history().len();
+        e.execute("track.rename_selected", &json!({"find": " DI", "replace": ""})).unwrap();
+        assert_eq!(names(&e), ["01 Kick", "02 Snare", "03 Bass", "Kick"]);
+        assert_eq!(e.undo_history().len(), undo + 1);
+        assert!(e.execute("track.rename_selected", &json!({"trim_start": 3})).is_err(), "Kick is another track's");
+        assert_eq!(names(&e), ["01 Kick", "02 Snare", "03 Bass", "Kick"]);
+        e.execute("edit.select", &json!({"tracks": [ids[1].0, ids[2].0]})).unwrap();
+        e.execute("track.rename_selected", &json!({"trim_start": 3})).unwrap();
+        assert_eq!(names(&e), ["01 Kick", "Snare", "Bass", "Kick"]);
+        assert!(e.execute("track.rename_selected", &json!({"trim_end": 9})).is_err(), "a name would be empty");
+        assert!(e.execute("track.rename_selected", &json!({"find": ""})).is_err());
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(names(&e), ["01 Kick", "02 Snare", "03 Bass", "Kick"]);
     }
 
     #[test]
