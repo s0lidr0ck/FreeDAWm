@@ -3147,34 +3147,62 @@ impl MixEngine {
             };
             let apos = back(if pre_fader { strip.pre_at } else { strip.post_at });
             let follows = as_output || (snd.surround.is_none() && snd.follow_main_pan);
-            // An automated send changes on the timeline's PAN_STEP grid, as the pan does: any
-            // block size (playback or bounce) sends the same.
+            // An automated send is read by the timeline, so any block size (playback or bounce)
+            // sends the same: its mute on the PAN_STEP grid, its level sample by sample, and its
+            // pan routing at the grid's points with each gain glided in a straight line between
+            // them (see `apply_matrix_ramp`). A flat lane gives what the grid gave before.
+            let gridded = is_automated_send(t, i, as_output);
             let mut start = 0;
             while start < frames {
                 let (at, end) = if as_output { pan_segment(t, apos, start, frames) } else { send_segment(t, i, apos, start, frames) };
+                let here = apos.saturating_add(start as i64);
                 let span = start..end;
                 start = end;
                 if !as_output && send_muted(t, i, snd.mute, at) {
                     continue;
                 }
-                let gain = if as_output { 1.0 } else { db_to_gain(send_level(t, i, snd.level_db, at)) };
-                if gain <= 0.0 {
-                    continue;
-                }
+                let nd = dst_buf.len();
+                let level = |pos: Samples| if as_output { 1.0 } else { db_to_gain(send_level(t, i, snd.level_db, pos)) };
+                let gain = level(at);
                 // Mono sends use the send's own pan; a stereo send's pan balances it (see
                 // `stereo_send_pans`). A send whose pan follows the main pan takes the track's.
-                let stereo = if snd.pan_follows_main || as_output {
-                    [pan_at(t, 0, at), pan_at(t, 1, at)]
-                } else {
-                    let p = send_pan(t, i, snd.pan, at);
-                    if src.len() == 1 { [p, 0.0] } else { stereo_send_pans(p) }
+                let routing = |pos: Samples| {
+                    let stereo = if snd.pan_follows_main || as_output {
+                        [pan_at(t, 0, pos), pan_at(t, 1, pos)]
+                    } else {
+                        let p = send_pan(t, i, snd.pan, pos);
+                        if src.len() == 1 { [p, 0.0] } else { stereo_send_pans(p) }
+                    };
+                    // A send following the main pan follows its surround lanes too.
+                    let main_sp = if follows { surround_at(t, pos) } else { None };
+                    let surround = if as_output { main_sp.as_ref() } else { snd.surround.as_ref().or(main_sp.as_ref()) };
+                    build_matrix(src_fmt, src.len(), dst_fmt, nd, &PanSpec { stereo, surround }, law)
                 };
-                // A send following the main pan follows its surround lanes too.
-                let main_sp = if follows { surround_at(t, at) } else { None };
-                let surround = if as_output { main_sp.as_ref() } else { snd.surround.as_ref().or(main_sp.as_ref()) };
-                let m = build_matrix(src_fmt, src.len(), dst_fmt, dst_buf.len(), &PanSpec { stereo, surround }, law);
+                let m = routing(at);
+                // On the grid (an automated send): the level of every sample and the routing at
+                // the next grid point; where either moves, the span glides.
+                let mut gains = [gain; PAN_STEP as usize];
+                let mut moves = false;
+                let k = u8::try_from(i).unwrap_or(0);
+                let to = at.saturating_add(PAN_STEP);
+                if gridded && model.is_none() && !as_output && lanes_move(t, at, to, |p| *p == AutoParam::SendLevel(k)) {
+                    for (j, g) in gains.iter_mut().enumerate().take(span.len()) {
+                        *g = level(here.saturating_add(j as i64));
+                        moves |= *g != gain;
+                    }
+                }
+                let routed = |p: &AutoParam| *p == AutoParam::SendPan(k) || is_pan_param(p);
+                let next = if gridded && model.is_none() && lanes_move(t, at, to, routed) { routing(to) } else { m };
+                moves |= next != m;
+                if !moves && gain <= 0.0 {
+                    continue;
+                }
                 match (model, strip.sum_state.way(i)) {
                     (Some(sm), Some(mem)) => summing::add_span(src, span, dst_buf, &m, gain, sm, (t.id, sr), mem),
+                    _ if moves => {
+                        let phase = usize::try_from(here.saturating_sub(at)).unwrap_or(0);
+                        apply_matrix_ramp(src, span, dst_buf, (&m, &next), &gains, phase);
+                    }
                     _ => apply_matrix_span(src, span, dst_buf, &m, gain),
                 }
             }
@@ -3224,17 +3252,35 @@ impl MixEngine {
         // The pan reads where its audio is on the timeline: behind by the strip's delay and the
         // extra wait of a direct output.
         let apos = back(strip.post_at.saturating_add(extra));
-        let mut start = 0;
-        while start < frames {
-            let (at, end) = pan_segment(t, apos, start, frames);
+        // An automated pan (pan, width, balance or surround lanes) is read at the timeline's
+        // PAN_STEP grid points and each routing gain glides in a straight line between them, so a
+        // lane that bends inside a block moves the image sample by sample and any block size pans
+        // the same; a flat lane gives what the grid gave before.
+        let nd = dst.len();
+        let routing = |at: Samples| {
             let sp = surround_at(t, at);
             let spec = PanSpec { stereo: [pan_at(t, 0, at), pan_at(t, 1, at)], surround: sp.as_ref() };
-            let mut m = build_matrix(src_fmt, src.len(), dst_fmt, dst.len(), &spec, law);
+            let mut m = build_matrix(src_fmt, src.len(), dst_fmt, nd, &spec, law);
             if src.len() == 2 {
                 shape_stereo(&mut m, shape_at(t, AutoParam::Width, t.mixer.width, at), shape_at(t, AutoParam::Balance, t.mixer.balance, at));
             }
+            m
+        };
+        let gridded = pan_automated(t);
+        let mut start = 0;
+        while start < frames {
+            let (at, end) = pan_segment(t, apos, start, frames);
+            let here = apos.saturating_add(start as i64);
+            let m = routing(at);
+            let to = at.saturating_add(PAN_STEP);
+            let next = if gridded && model.is_none() && lanes_move(t, at, to, is_pan_param) { routing(to) } else { m };
             match (model, strip.sum_state.way(soundcraft_model::SEND_SLOTS)) {
                 (Some(sm), Some(mem)) => summing::add_span(src, start..end, dst, &m, 1.0, sm, (t.id, sr), mem),
+                _ if next != m => {
+                    let gains = [1.0f32; PAN_STEP as usize];
+                    let phase = usize::try_from(here.saturating_sub(at)).unwrap_or(0);
+                    apply_matrix_ramp(src, start..end, dst, (&m, &next), &gains, phase);
+                }
                 _ => apply_matrix_span(src, start..end, dst, &m, 1.0),
             }
             start = end;
@@ -6652,19 +6698,54 @@ const PAN_STEP: Samples = 64;
 /// The position to read the pan at for the frames from `start` of the block at `pos`, and the end
 /// of the frames that share it. Without pan automation the whole block shares one pan.
 fn pan_segment(t: &Track, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
-    let automated = t.mixer.automation_mode.reads()
-        && t.played_lanes().iter().any(|l| {
-            matches!(l.param, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance | AutoParam::Surround(_))
-                && !l.points.is_empty()
-                && !l.suspended
-        });
-    if !automated {
+    if !pan_automated(t) {
         return (pos, frames);
     }
     let here = pos.saturating_add(start as i64);
     let at = here.div_euclid(PAN_STEP).saturating_mul(PAN_STEP);
     let left = usize::try_from(at.saturating_add(PAN_STEP).saturating_sub(here)).unwrap_or(1).max(1);
     (at, start.saturating_add(left).min(frames))
+}
+
+/// A lane of the pan: pan, width, balance or the surround panner.
+fn is_pan_param(p: &AutoParam) -> bool {
+    matches!(p, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance | AutoParam::Surround(_))
+}
+
+/// Whether a played lane `which` picks moves between the grid points `from` and `to`: a point
+/// strictly between them, or a different value at each. No allocation.
+fn lanes_move(t: &Track, from: Samples, to: Samples, which: impl Fn(&AutoParam) -> bool) -> bool {
+    t.mixer.automation_mode.reads()
+        && t.played_lanes().iter().filter(|l| which(&l.param) && !l.points.is_empty() && !l.suspended).any(|l| {
+            let i = l.points.partition_point(|p| p.at <= from);
+            l.points.get(i).is_some_and(|p| p.at < to) || l.value_at(from, 0.0) != l.value_at(to, 0.0)
+        })
+}
+
+/// Whether the track's pan is read from lanes (pan, width, balance or surround with points, while
+/// the track reads automation): it then steps on the [`PAN_STEP`] grid.
+fn pan_automated(t: &Track) -> bool {
+    t.mixer.automation_mode.reads()
+        && t.played_lanes().iter().any(|l| {
+            matches!(l.param, AutoParam::Pan(_) | AutoParam::Width | AutoParam::Balance | AutoParam::Surround(_))
+                && !l.points.is_empty()
+                && !l.suspended
+        })
+}
+
+/// Whether send `i` (or the direct output, `as_output`, which follows the pan) is read from
+/// lanes, so it steps on the [`PAN_STEP`] grid.
+fn is_automated_send(t: &Track, i: usize, as_output: bool) -> bool {
+    if as_output {
+        return pan_automated(t);
+    }
+    let k = u8::try_from(i).unwrap_or(0);
+    t.mixer.automation_mode.reads()
+        && t.played_lanes().iter().any(|l| {
+            matches!(l.param, AutoParam::SendLevel(x) | AutoParam::SendPan(x) | AutoParam::SendMute(x) if x == k)
+                && !l.points.is_empty()
+                && !l.suspended
+        })
 }
 
 /// A stereo track's width or balance (`p`) at `pos`: its lane when automation reads, else the
@@ -6680,14 +6761,7 @@ fn shape_at(t: &Track, p: AutoParam, base: f32, pos: Samples) -> f32 {
 /// at and where the stretch ends. An automated send (level, pan or mute lane) steps on the
 /// [`PAN_STEP`] grid; one without lanes takes the whole block, read at its start.
 fn send_segment(t: &Track, i: usize, pos: Samples, start: usize, frames: usize) -> (Samples, usize) {
-    let k = u8::try_from(i).unwrap_or(0);
-    let automated = t.mixer.automation_mode.reads()
-        && t.played_lanes().iter().any(|l| {
-            matches!(l.param, AutoParam::SendLevel(x) | AutoParam::SendPan(x) | AutoParam::SendMute(x) if x == k)
-                && !l.points.is_empty()
-                && !l.suspended
-        });
-    if !automated {
+    if !is_automated_send(t, i, false) {
         return (pos.saturating_add(start as i64), frames);
     }
     let here = pos.saturating_add(start as i64);
@@ -7054,6 +7128,41 @@ fn apply_matrix_span(src: &[Vec<f32>], span: std::ops::Range<usize>, dst: &mut [
             let mut acc = 0.0f32;
             for &(s, g) in taps {
                 acc += src.get(s).and_then(|c| c.get(i)).copied().unwrap_or(0.0) * gain * g;
+            }
+            *o += acc;
+        }
+    }
+}
+
+/// [`apply_matrix_span`] with the routing gliding from `m.0` (at the grid point `phase` frames
+/// before `span.start`) to `m.1` (at the next grid point, [`PAN_STEP`] later) in a straight line,
+/// and a gain of its own for each frame of the span (`gains[j]` for frame `span.start + j`, at
+/// most `PAN_STEP` of them). No allocation.
+fn apply_matrix_ramp(src: &[Vec<f32>], span: std::ops::Range<usize>, dst: &mut [Vec<f32>], m: (&Matrix, &Matrix), gains: &[f32], phase: usize) {
+    let ns = src.len().min(MAX_CHANNELS);
+    let step = 1.0 / PAN_STEP as f32;
+    for (d, out) in dst.iter_mut().enumerate().take(MAX_CHANNELS) {
+        let mut idx = [(0usize, 0.0f32, 0.0f32); MAX_CHANNELS];
+        let mut k = 0;
+        for (s, (a, b)) in m.0.iter().zip(m.1.iter()).enumerate().take(ns) {
+            let (ga, gb) = (a.get(d).copied().unwrap_or(0.0), b.get(d).copied().unwrap_or(0.0));
+            if (ga != 0.0 || gb != 0.0)
+                && let Some(slot) = idx.get_mut(k)
+            {
+                *slot = (s, ga, gb - ga);
+                k += 1;
+            }
+        }
+        let taps = idx.get(..k).unwrap_or(&[]);
+        if taps.is_empty() {
+            continue;
+        }
+        for (j, (i, o)) in out.iter_mut().enumerate().take(span.end).skip(span.start).enumerate() {
+            let w = (phase + j) as f32 * step;
+            let gain = gains.get(j).copied().unwrap_or(0.0);
+            let mut acc = 0.0f32;
+            for &(s, g, dg) in taps {
+                acc += src.get(s).and_then(|c| c.get(i)).copied().unwrap_or(0.0) * gain * (g + dg * w);
             }
             *o += acc;
         }
@@ -13135,5 +13244,137 @@ mod tests {
         off.mixer.automation_mode = soundcraft_model::AutomationMode::Off;
         assert!(!send_muted(&off, 1, false, 100));
         assert_eq!(send_pan(&off, 1, 0.2, 100), 0.2);
+    }
+
+    /// The main mix rendered `chunk` frames at a time (any size, not only powers of two).
+    fn render_chunked(s: &Session, len: usize, chunk: usize) -> Vec<Vec<f32>> {
+        let mut eng = MixEngine::new(48_000.0, 1024);
+        let mut out = vec![Vec::new(); 2];
+        let mut pos = 0;
+        while pos < len {
+            let n = chunk.min(len - pos);
+            let mut buf = vec![vec![0.0f32; n]; 2];
+            eng.render(s, pos as i64, n, &mut buf);
+            for (o, b) in out.iter_mut().zip(&buf) {
+                o.extend_from_slice(b);
+            }
+            pos += n;
+        }
+        out
+    }
+
+    /// A mono DC track whose send A feeds a stereo aux on the main mix, the track itself not on
+    /// the main mix: what is heard is the send.
+    fn session_with_send(level_db: f32) -> (Session, TrackId) {
+        let (mut s, t) = session_with_dc(0.5, 8192);
+        let bus = s.add_bus("fx", ChannelFormat::Stereo);
+        let aux = s.add_track(TrackKind::Aux, ChannelFormat::Stereo, None);
+        s.track_mut(aux).unwrap().mixer.input = Route::Bus(bus);
+        let tr = s.track_mut(t).unwrap();
+        tr.mixer.output = Route::None;
+        tr.mixer.sends[0] = Some(soundcraft_model::SendSlot { level_db, ..soundcraft_model::SendSlot::new(Route::Bus(bus)) });
+        (s, t)
+    }
+
+    /// Sample-accurate pan and sends ("Sample-accurate, or at least block-independent"): a pan
+    /// lane that bends inside a block moves the image every sample (no 64-sample steps), and any
+    /// block size renders it to the bit.
+    #[test]
+    fn a_bending_pan_lane_glides_sample_by_sample_at_any_block_size() {
+        let (mut s, t) = session_with_dc(0.5, 8192);
+        let tr = s.track_mut(t).unwrap();
+        tr.lane_mut(&AutoParam::Pan(0)).set_point(0, -1.0);
+        tr.lane_mut(&AutoParam::Pan(0)).set_point(4096, 1.0);
+        let want = render_chunked(&s, 6000, 1024);
+        for chunk in [64, 100, 256, 512, 777] {
+            assert_eq!(render_chunked(&s, 6000, chunk), want, "{chunk}-frame blocks");
+        }
+        let l = &want[0][100..4000];
+        assert!(l.windows(2).all(|w| w[1] < w[0]), "the left side falls every sample");
+        // At a grid point it is the pan read there.
+        let tr = s.track(t).unwrap();
+        let (gl, _) = gains(pan_at(tr, 0, 1280), PanLaw::Minus3);
+        assert!((want[0][1280] - 0.5 * gl).abs() < 1e-6, "{} vs {}", want[0][1280], 0.5 * gl);
+    }
+
+    #[test]
+    fn a_bending_send_level_glides_sample_by_sample_at_any_block_size() {
+        let (mut s, t) = session_with_send(-60.0);
+        let tr = s.track_mut(t).unwrap();
+        tr.lane_mut(&AutoParam::SendLevel(0)).set_point(0, -60.0);
+        tr.lane_mut(&AutoParam::SendLevel(0)).set_point(4096, 0.0);
+        tr.lane_mut(&AutoParam::SendPan(0)).set_point(0, -1.0);
+        tr.lane_mut(&AutoParam::SendPan(0)).set_point(4096, 0.5);
+        let want = render_chunked(&s, 6000, 1024);
+        for chunk in [64, 100, 333, 1000] {
+            assert_eq!(render_chunked(&s, 6000, chunk), want, "{chunk}-frame blocks");
+        }
+        let r = &want[1][200..4000];
+        assert!(r.windows(2).all(|w| w[1] > w[0]), "the right side rises every sample");
+        assert!(want[1][5000] > 0.1, "the send is heard");
+    }
+
+    /// Flat lanes (and no lanes) mix exactly as the stored values do, as they did on the grid.
+    #[test]
+    fn flat_pan_and_send_lanes_mix_as_the_stored_values() {
+        let (mut plain, t) = session_with_send(-6.0);
+        plain.track_mut(t).unwrap().mixer.sends[0].as_mut().unwrap().pan = 0.3;
+        let want = render_chunked(&plain, 6000, 256);
+        let mut laned = plain.clone();
+        let tr = laned.track_mut(t).unwrap();
+        for (p, v) in [(AutoParam::SendLevel(0), -6.0), (AutoParam::SendPan(0), 0.3)] {
+            tr.lane_mut(&p).set_point(0, v);
+            tr.lane_mut(&p).set_point(5000, v);
+        }
+        assert_eq!(render_chunked(&laned, 6000, 256), want, "a flat send");
+        let (mut plain, t) = session_with_dc(0.5, 8192);
+        plain.track_mut(t).unwrap().mixer.pan = vec![0.3];
+        let want = render_chunked(&plain, 6000, 256);
+        let mut laned = plain.clone();
+        let tr = laned.track_mut(t).unwrap();
+        tr.lane_mut(&AutoParam::Pan(0)).set_point(0, 0.3);
+        tr.lane_mut(&AutoParam::Pan(0)).set_point(5000, 0.3);
+        assert_eq!(render_chunked(&laned, 6000, 256), want, "a flat pan");
+    }
+
+    /// What the glide costs: 16 mono tracks, each with a send, rendered with bending pan and send
+    /// lanes, flat ones and none (`cargo test -p soundcraft-mix --release -- --ignored
+    /// cost_of_gliding --nocapture`).
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn cost_of_gliding_pans_and_sends() {
+        let make = |lanes: Option<bool>| {
+            let (mut s, _) = session_with_send(-6.0);
+            let bus = s.busses[0].id;
+            let src = SourceId(900);
+            for _ in 0..15 {
+                let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+                let id = s.new_clip_id();
+                let tr = s.track_mut(t).unwrap();
+                tr.playlist_mut().unwrap().clips.push(Clip::audio(id, "dc", src, 0, 0, 8192));
+                tr.mixer.sends[0] = Some(soundcraft_model::SendSlot { level_db: -6.0, ..soundcraft_model::SendSlot::new(Route::Bus(bus)) });
+            }
+            for tr in s.tracks.iter_mut().filter(|t| t.kind == TrackKind::Audio) {
+                if let Some(bend) = lanes {
+                    for (p, a, b) in [(AutoParam::Pan(0), -1.0, 1.0), (AutoParam::SendLevel(0), -30.0, 0.0), (AutoParam::SendPan(0), 1.0, -1.0)] {
+                        tr.lane_mut(&p).set_point(0, a);
+                        tr.lane_mut(&p).set_point(8192, if bend { b } else { a });
+                    }
+                }
+            }
+            s
+        };
+        for (name, lanes) in [("no lanes", None), ("flat lanes", Some(false)), ("bending lanes", Some(true))] {
+            let s = make(lanes);
+            let mut eng = MixEngine::new(48_000.0, 256);
+            let mut buf = vec![vec![0.0f32; 256]; 2];
+            let t0 = std::time::Instant::now();
+            for _ in 0..20 {
+                for b in 0..32 {
+                    eng.render(&s, b * 256, 256, &mut buf);
+                }
+            }
+            eprintln!("{name}: {:.1} µs per 256-frame block", t0.elapsed().as_secs_f64() * 1e6 / 640.0);
+        }
     }
 }
