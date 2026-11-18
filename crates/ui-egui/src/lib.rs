@@ -3356,8 +3356,11 @@ impl SoundApp {
                 // A Trim-mode fader let go: the trim lane plays again.
                 self.engine.automation_trim(track, None);
             }
-            // Keep a running automation pass merged until playback stops.
-            if !ctx.egui_wants_keyboard_input() && !self.engine.automation_pass_writing() {
+            // Keep a running automation pass merged until playback stops, and a run of Tap Tempo
+            // taps (clicks, each with the button let go in between) merged until it pauses.
+            let now = ctx.input(|i| i.time);
+            let tapping = self.ops.tap_times.last().is_some_and(|t| now - t < soundcraft_engine::cmd::tap_tempo::TAP_RESET_SECONDS);
+            if !ctx.egui_wants_keyboard_input() && !self.engine.automation_pass_writing() && !tapping {
                 self.engine.end_merge();
             }
         }

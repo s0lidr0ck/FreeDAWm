@@ -563,11 +563,13 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                 let extra = ui_aliases();
                 for root in tree() {
                     ui.menu_button(&root.label, |ui| {
-                        menu_items(app, ui, &root.children, &extra);
-                        if root.label == "Process" {
-                            ui.separator();
-                            ui.label(egui::RichText::new("Processes selected clips offline").small().color(t.text_dim));
-                        }
+                        scrolling(ui, |ui| {
+                            menu_items(app, ui, &root.children, &extra);
+                            if root.label == "Process" {
+                                ui.separator();
+                                ui.label(egui::RichText::new("Processes selected clips offline").small().color(t.text_dim));
+                            }
+                        });
                     });
                 }
                 let title = format!(
@@ -577,11 +579,109 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     if app.ui.window == MainWindow::Edit || app.ui.mix_separate { "Edit" } else { "Mix" }
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    menu_search(app, ui);
                     ui.label(egui::RichText::new(title).color(t.text_dim));
                 });
             });
         },
     );
+}
+
+/// A menu taller than the room under it scrolls instead of running off the bottom of the window.
+fn scrolling(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let room = (ui.ctx().content_rect().bottom() - ui.cursor().top() - 12.0).max(120.0);
+    egui::ScrollArea::vertical().max_height(room).show(ui, add);
+}
+
+/// The most matches the menu bar's search lists.
+const SEARCH_SHOWN: usize = 14;
+
+/// The menu items matching every word of `query` (in the item's whole menu path, any case), as
+/// (label, path, command); items whose label starts with the query come first.
+pub fn search_hits(query: &str, extra: &[(&str, &str)]) -> Vec<(String, String, String)> {
+    let words: Vec<String> = query.to_lowercase().split_whitespace().map(str::to_owned).collect();
+    let mut out = Vec::new();
+    if words.is_empty() {
+        return out;
+    }
+    search_walk(&tree(), &words, extra, &mut out);
+    let q = words.join(" ");
+    out.sort_by_key(|h| !h.0.to_lowercase().starts_with(&q));
+    out
+}
+
+fn search_walk(nodes: &[MenuNode], words: &[String], extra: &[(&str, &str)], out: &mut Vec<(String, String, String)>) {
+    for n in nodes {
+        if !n.children.is_empty() {
+            search_walk(&n.children, words, extra, out);
+            continue;
+        }
+        if n.kind != MenuKind::Item {
+            continue;
+        }
+        let hay = n.path.to_lowercase();
+        if words.iter().all(|w| hay.contains(w.as_str()))
+            && let Some(id) = command_for_path(&n.path, extra)
+        {
+            out.push((n.label.clone(), n.path.clone(), id));
+        }
+    }
+}
+
+/// The search field at the right of the menu bar: type a few letters of any menu item, pick it
+/// from the list under the field (Enter takes the first one that can run, Esc clears). Each
+/// match shows the menu it lives in, and one that cannot run now says why when hovered.
+fn menu_search(app: &mut SoundApp, ui: &mut egui::Ui) {
+    let id = egui::Id::new("menu_bar_search");
+    let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let resp = ui
+        .add(egui::TextEdit::singleline(&mut text).id(id.with("field")).hint_text("Search menus").desired_width(170.0))
+        .on_hover_text("Find any menu item by name");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search menus"));
+    let mut done = false;
+    if !text.trim().is_empty() {
+        let extra = ui_aliases();
+        let hits = search_hits(&text, &extra);
+        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let mut first = true;
+        let list = egui::Area::new(id.with("hits"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(resp.rect.right_bottom() + egui::vec2(0.0, 4.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(340.0);
+                    if hits.is_empty() {
+                        ui.label("No menu item matches");
+                    }
+                    for (label, path, cmd) in hits.iter().take(SEARCH_SHOWN) {
+                        let (enabled, _) = item_state(app, path, Some(cmd));
+                        let menu = path.rsplit_once(" > ").map_or("", |(m, _)| m).replace(" > ", " \u{203a} ");
+                        let mut r = ui.add_enabled(enabled, egui::Button::new(label.as_str()).shortcut_text(menu));
+                        if let Some(why) = disabled_reason(app, Some(cmd)) {
+                            r = r.on_disabled_hover_text(why);
+                        }
+                        if !done && (r.clicked() || (enter && enabled && first)) {
+                            invoke_menu(app, cmd, path);
+                            done = true;
+                        }
+                        first &= !enabled;
+                    }
+                    if hits.len() > SEARCH_SHOWN {
+                        ui.label(egui::RichText::new(format!("{} more: keep typing", hits.len() - SEARCH_SHOWN)).small());
+                    }
+                });
+            });
+        let away = resp.clicked_elsewhere() && list.response.clicked_elsewhere();
+        if away || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            done = true;
+        }
+    }
+    if done {
+        text.clear();
+        resp.surrender_focus();
+    }
+    ui.data_mut(|d| d.insert_temp(id, text));
 }
 
 /// Track › Instrument: the instrument picker for the selected instrument track (#374).
@@ -635,7 +735,7 @@ pub(crate) fn tick_label(ui: &egui::Ui, label: &str, checked: bool, reserve: boo
 fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str, &str)], reserve: bool) {
     if !n.children.is_empty() {
         ui.menu_button(tick_label(ui, &n.label, false, reserve), |ui| {
-            menu_items(app, ui, &n.children, extra);
+            scrolling(ui, |ui| menu_items(app, ui, &n.children, extra));
         });
         return;
     }
@@ -1933,6 +2033,22 @@ pub fn parity() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_menu_search_finds_items_by_any_words_of_their_path() {
+        let extra = ui_aliases();
+        let studio = search_hits("studio", &extra);
+        assert!(studio.iter().any(|h| h.1 == "Window > Studio"), "{studio:?}");
+        assert!(studio.iter().any(|h| h.0 == "Vocal Studio"));
+        // Words match anywhere in the path, in any order and case; a label that starts with
+        // the query comes first.
+        assert!(search_hits("WINDOW stud", &extra).iter().all(|h| h.1.starts_with("Window")));
+        assert_eq!(search_hits("studio", &extra)[0].0, "Studio");
+        assert!(search_hits("", &extra).is_empty() && search_hits("   ", &extra).is_empty());
+        assert!(search_hits("no such menu item anywhere", &extra).is_empty());
+        // Every hit runs a command, and headings and separators are never hits.
+        assert!(search_hits("e", &extra).iter().all(|h| !h.2.is_empty() && !h.0.is_empty()));
+    }
     use crate::{Services, SoundApp};
 
     /// Every command a "changed nothing" reason is written for exists, and the message names the

@@ -28,7 +28,7 @@ const ROWS: [(&str, usize); 12] = [
     ("Transport", 28),
     ("Options", 14),
     ("Setup", 12),
-    ("Window", 51),
+    ("Window", 38),
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).
@@ -270,11 +270,11 @@ fn rows_kind(n: &MenuNode) -> bool {
 #[test]
 fn shown_paths_resolve_like_catalog_paths() {
     let extra = menus::ui_aliases();
-    assert_eq!(menus::source_path("Window > Search"), "Window > Pro Tools Search");
-    assert_eq!(menus::command_for_path("Window > Search", &extra).as_deref(), Some("window.search"));
+    assert_eq!(menus::source_path("Window > Panels & Browsers > Search"), "Window > Pro Tools Search");
+    assert_eq!(menus::command_for_path("Window > Panels & Browsers > Search", &extra).as_deref(), Some("window.search"));
     assert_eq!(menus::command_for_path("Track > Rename...", &extra).as_deref(), Some("track.rename"));
     assert_eq!(menus::command_for_path("File > Export > Stems...", &extra).as_deref(), Some("file.bounce_stems"));
-    assert_eq!(menus::menu_location("window.track_list").as_deref(), Some("Window"));
+    assert_eq!(menus::menu_location("window.track_list").as_deref(), Some("Window \u{203a} Panels & Browsers"));
     assert_eq!(menus::menu_location("track.freeze").as_deref(), Some("Track"));
     assert_eq!(menus::menu_location("ui.ml.separate").as_deref(), Some("AI"));
     // Shortcuts stay next to their items.

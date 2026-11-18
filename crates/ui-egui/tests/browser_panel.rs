@@ -54,8 +54,17 @@ fn toggle_shows_and_hides_panel() {
     assert!(h.state().ui.docking.layout.contains(&Panel::Browser));
     assert!(has(&h, Role::Tab, "Plugin Browser"));
     // The menu item shows as checked while the panel is open.
+    // The item sits in Window › Panels & Browsers; its path is still the command's own.
     let path = "Window > Plugin Browser";
-    assert!(soundcraft_ui_egui::menus::tree().iter().any(|n| n.label == "Window" && n.children.iter().any(|c| c.path == path)));
+    fn paths(nodes: &[soundcraft_ui_egui::menus::MenuNode], out: &mut Vec<String>) {
+        for n in nodes {
+            out.push(n.path.clone());
+            paths(&n.children, out);
+        }
+    }
+    let mut all = Vec::new();
+    paths(&soundcraft_ui_egui::menus::tree(), &mut all);
+    assert!(all.iter().any(|p| p == path), "{:?}", all.iter().filter(|p| p.contains("Browser")).collect::<Vec<_>>());
     assert!(soundcraft_ui_egui::menus::item_state(h.state(), path, Some("window.plugin_browser")).1);
     h.state_mut().run("window.plugin_browser", json!({})).unwrap();
     h.run_steps(4);

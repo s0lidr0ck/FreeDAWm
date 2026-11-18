@@ -717,31 +717,27 @@ Window > ## Monitoring
 Window > Hearing Test... = @window.hearing_test
 Window > Ear Profile... = @window.ear_profile
 Window > ---
-Window > ## Panels & browsers
-Window > Clip List
-Window > Track List = View > Other Displays > Track List
-Window > Clip Effects
-Window > Plugin Browser
-Window > Workspace Browser = Window > New Workspace > Default
-Window > Undo History
-Window > Session Overview = View > Other Displays > Universe
-Window > Search = Window > Pro Tools Search
-Window > Color Palette
-Window > UI Customization
-Window > Metadata Inspector
-Window > ---
-Window > ## Video
-Window > Video
-Window > Video Universe
-Window > ---
 Window > ## Band & capture
 Window > Studio
 Window > Scout
 Window > ---
-Window > ## System
-Window > Task Manager
-Window > Disk Usage
-Window > System Usage
+Window > ## More windows
+Window > Panels & Browsers > Clip List = Window > Clip List
+Window > Panels & Browsers > Track List = View > Other Displays > Track List
+Window > Panels & Browsers > Clip Effects = Window > Clip Effects
+Window > Panels & Browsers > Plugin Browser = Window > Plugin Browser
+Window > Panels & Browsers > Workspace Browser = Window > New Workspace > Default
+Window > Panels & Browsers > Undo History = Window > Undo History
+Window > Panels & Browsers > Session Overview = View > Other Displays > Universe
+Window > Panels & Browsers > Search = Window > Pro Tools Search
+Window > Panels & Browsers > Color Palette = Window > Color Palette
+Window > Panels & Browsers > UI Customization = Window > UI Customization
+Window > Panels & Browsers > Metadata Inspector = Window > Metadata Inspector
+Window > Video > Video Window = Window > Video
+Window > Video > Video Universe = Window > Video Universe
+Window > System > Task Manager = Window > Task Manager
+Window > System > Disk Usage = Window > Disk Usage
+Window > System > System Usage = Window > System Usage
 Window > ---
 Window > ## Layout
 Window > Configurations > Window Configuration List

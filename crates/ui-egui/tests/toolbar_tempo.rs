@@ -9,19 +9,26 @@ struct Rig {
     ctx: egui::Context,
     app: SoundApp,
     shapes: Vec<ClippedShape>,
+    /// The time the next frames run at, in seconds (taps are told apart by it).
+    time: f64,
 }
 
 impl Rig {
     fn new() -> Rig {
         let mut engine = soundcraft_engine::Engine::default();
         engine.execute("track.new", &json!({})).unwrap();
-        let mut r = Rig { ctx: egui::Context::default(), app: SoundApp::new(engine, None, Services::default()), shapes: Vec::new() };
+        let mut r = Rig { ctx: egui::Context::default(), app: SoundApp::new(engine, None, Services::default()), shapes: Vec::new(), time: 0.0 };
         r.frames(4);
         r
     }
 
     fn frame(&mut self, events: Vec<Event>) {
-        let raw = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1000.0))), events, ..Default::default() };
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1000.0))),
+            events,
+            time: Some(self.time),
+            ..Default::default()
+        };
         let mut out = self.ctx.run_ui(raw, |ui| {
             self.app.logic(ui.ctx());
             self.app.ui(ui);
@@ -120,4 +127,32 @@ fn tap_tempo_sets_the_tempo_as_one_undo_step() {
     assert_eq!(r.bpm(0), 150.0);
     assert_eq!(r.app.engine.undo_history().len(), steps + 2);
     assert_eq!(r.app.ops.tempo_start, 150.0);
+}
+
+#[test]
+fn clicking_the_word_tempo_taps_the_tempo() {
+    let mut r = Rig::new();
+    let word = r
+        .shapes
+        .iter()
+        .find_map(|c| match &c.shape {
+            Shape::Text(t) if t.galley.text() == "Tempo" => Some(t.galley.rect.translate(t.pos.to_vec2()).center()),
+            _ => None,
+        })
+        .expect("the word Tempo is in the toolbar");
+    let steps = r.app.engine.undo_history().len();
+    // Four clicks half a second apart: 120 bpm becomes... 120; so tap at 0.4 s for 150 bpm.
+    for k in 0..4 {
+        r.time = 30.0 + 0.4 * k as f64;
+        r.button(word, true);
+        r.button(word, false);
+    }
+    assert!((r.bpm(0) - 150.0).abs() < 0.01, "bpm {}", r.bpm(0));
+    assert_eq!(r.app.engine.undo_history().len(), steps + 1, "one run of taps, one undo step");
+    // The tempo value beside it still types.
+    r.time = 40.0;
+    r.frames(2);
+    let at = r.field(150.0);
+    r.type_into(at, "98.5");
+    assert_eq!(r.bpm(0), 98.5);
 }
