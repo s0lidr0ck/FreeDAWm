@@ -1047,6 +1047,21 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
             if resp.clicked() {
                 crate::browser::thumbs::capture_now(app, (tid, key));
             }
+            // A/B of the plug-in's whole state, beside its editor (an inserted one's preset menu
+            // has it too).
+            if !instrument {
+                let b = crate::preset_house::on_b(ui.ctx(), tid, module);
+                let resp = ui.button(if b { "B" } else { "A" }).on_hover_text(if b {
+                    "Comparing: B. Click to go back to A"
+                } else {
+                    "Compare: click to switch to B (a copy of these settings the first time)"
+                });
+                if resp.clicked()
+                    && let Err(e) = crate::preset_house::ab_toggle_hosted(app, ui.ctx(), tid, ins)
+                {
+                    app.ui.status = e;
+                }
+            }
         }
     });
     let Some(info) = info.filter(|_| !(instrument && hosted)) else {
@@ -1373,7 +1388,13 @@ fn preset_housekeeping(
     // A/B compare.
     let b = ph::on_b(ui.ctx(), tid, ins.id);
     if ui.button(if b { "Compare: Back to A" } else { "Compare: Switch to B" }).on_hover_text("Two settings to flip between").clicked() {
-        ph::ab_toggle(app, ui.ctx(), tid, ins, info);
+        if soundcraft_mix::is_third_party(&ins.plugin) {
+            if let Err(e) = ph::ab_toggle_hosted(app, ui.ctx(), tid, ins) {
+                app.ui.status = e;
+            }
+        } else {
+            ph::ab_toggle(app, ui.ctx(), tid, ins, info);
+        }
         ui.close();
     }
     // Copy and paste settings between instances of the plug-in, on any track.
