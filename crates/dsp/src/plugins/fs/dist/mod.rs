@@ -136,6 +136,10 @@ pub static DIST_PARAMS: [ParamInfo; NUM_PARAMS] = [
     fs_choice("bdMode", "BD Mode", 0.0, G, &["Stock", "Phat"]),
     fs_choice("dpDiode", "D+ Diode", 0.0, G, &["Germanium", "Silicon", "LED"]),
     fs_choice("ocdMode", "OCD Mode", 0.0, G, &["HP", "LP"]),
+    // FreeDAWm's addition (not in the C++): the circuits at 8x, for the hard clippers (RAT, Big
+    // Muff, Fuzz Face) at full drive, whose harmonics reach far enough to fold back at 4x. Twice
+    // the processor cost; off by default, so a saved session sounds as it did.
+    fs_choice("oversample", "Oversampling", 0.0, G, &["4x", "8x"]),
 ];
 
 pub static DIST_INFO: PluginInfo = PluginInfo {

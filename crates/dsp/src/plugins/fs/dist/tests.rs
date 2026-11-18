@@ -41,7 +41,9 @@ fn rms(x: &[f32]) -> f32 {
 
 #[test]
 fn table_matches_the_cpp_order_and_defaults() {
-    assert_eq!(DIST_PARAMS.len(), 54);
+    assert_eq!(DIST_PARAMS.len(), 55);
+    assert_eq!(DIST_PARAMS[54].id, "oversample", "FreeDAWm's addition, after the C++'s");
+    assert_eq!(DIST_PARAMS[54].default, 0.0, "4x unless chosen");
     let ids: Vec<&str> = DIST_PARAMS.iter().map(|p| p.id).collect();
     assert_eq!(ids[..7], ["drive", "tone", "level", "circuit", "bypass", "trim", "link"]);
     assert_eq!(ids[7..9], ["tsLo", "tsHi"]);
@@ -751,3 +753,82 @@ fn a_reset_with_a_laned_drive_follows_the_lane() {
     block(&mut s);
     assert_eq!(s.param("level"), Some(0.1));
 }
+
+/// The share of `y`'s power (one period of `n` samples of a tone at bin `k0`, after the circuit
+/// settled) outside the tone's harmonics and DC: what folded back, in dB.
+fn aliasing_db(y: &[f32], k0: usize) -> f64 {
+    use rustfft::{FftPlanner, num_complex::Complex};
+    let n = y.len();
+    let mut buf: Vec<Complex<f64>> = y.iter().map(|v| Complex::new(f64::from(*v), 0.0)).collect();
+    FftPlanner::new().plan_fft_forward(n).process(&mut buf);
+    let (mut total, mut alias) = (0.0f64, 0.0f64);
+    for (b, c) in buf.iter().enumerate().take(n / 2).skip(1) {
+        let p = c.norm_sqr();
+        total += p;
+        if b % k0 != 0 {
+            alias += p;
+        }
+    }
+    10.0 * (alias / total.max(1e-30)).max(1e-30).log10()
+}
+
+/// The hard clippers at full drive alias at 4x; at 8x (`oversample`) what folds back is
+/// measurably less. A 3.66 kHz tone (exactly 5 000 cycles in 65 536 samples, so every harmonic
+/// and every fold lands on a bin of its own) is driven through each.
+#[test]
+fn eight_times_oversampling_folds_back_less_from_the_hard_clippers() {
+    const N: usize = 65_536;
+    const K0: usize = 5_000;
+    for (circuit, name) in [(1.0, "RAT"), (2.0, "Big Muff"), (3.0, "Fuzz Face")] {
+        let render = |os8: bool| {
+            let mut d = Dist::new();
+            d.set_param("circuit", circuit);
+            d.set_param("drive", 1.0);
+            d.set_param("oversample", if os8 { 1.0 } else { 0.0 });
+            d.prepare(48_000.0, 512, 2);
+            // Two seconds for the coupling capacitors to settle (the Muff's drift is slow).
+            let settle = 96_000;
+            let x: Vec<f32> = (0..settle + N).map(|i| 0.5 * (std::f64::consts::TAU * K0 as f64 * i as f64 / N as f64).sin() as f32).collect();
+            let mut io = vec![x.clone(), x];
+            run(&mut d, &mut io, 512);
+            assert!(all_finite(&io));
+            (io[0][settle..].to_vec(), d.latency())
+        };
+        let (four, lat4) = render(false);
+        let (eight, lat8) = render(true);
+        let (a4, a8) = (aliasing_db(&four, K0), aliasing_db(&eight, K0));
+        println!("{name}: aliasing {a4:.1} dB at 4x, {a8:.1} dB at 8x (latency {lat4} / {lat8})");
+        assert!(a8 < a4 - 6.0, "{name}: 8x folds back less ({a4:.1} -> {a8:.1} dB)");
+        assert_eq!((lat4, lat8), (5, 6), "the extra stage's delay is reported");
+        assert!(rms(&eight) > 0.5 * rms(&four) && rms(&eight) < 2.0 * rms(&four), "{name}: the same pedal, about as loud");
+    }
+}
+
+/// Saved sessions play as before: a Dist that never heard of `oversample` and one told 4x
+/// render the same samples; and after a stretch at 8x, back at 4x and reset, it renders what a
+/// Dist that stayed at 4x renders after the same reset.
+#[test]
+fn four_times_is_the_dist_as_it_was() {
+    let render = |set: Option<f32>, before: Option<f32>| {
+        let mut d = Dist::new();
+        d.set_param("circuit", 1.0);
+        d.set_param("drive", 0.9);
+        if let Some(v) = set {
+            d.set_param("oversample", v);
+        }
+        d.prepare(48_000.0, 512, 2);
+        let mut io = vec![sine(24_000, 0.4), sine(24_000, 0.3)];
+        if let Some(v) = before {
+            // Something played first (at 4x or at 8x), then back to 4x and the transport reset.
+            d.set_param("oversample", v);
+            run(&mut d, &mut io.clone(), 512);
+            d.set_param("oversample", 0.0);
+            d.reset();
+        }
+        run(&mut d, &mut io, 512);
+        io
+    };
+    assert_eq!(render(None, None), render(Some(0.0), None));
+    assert_eq!(render(None, Some(0.0)), render(None, Some(1.0)), "8x on and off, then a reset: as if it had stayed at 4x");
+}
+
