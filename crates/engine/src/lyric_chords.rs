@@ -183,10 +183,9 @@ fn chord_row(line: &str) -> Option<Vec<(usize, String)>> {
         return None;
     }
     let mut out = Vec::new();
-    let mut col = 0usize;
     let mut start: Option<usize> = None;
     let mut word = String::new();
-    for c in line.chars().chain(std::iter::once(' ')) {
+    for (col, c) in line.chars().chain(std::iter::once(' ')).enumerate() {
         if c.is_whitespace() {
             if let Some(s) = start.take() {
                 if !is_chord_name(&word) {
@@ -198,7 +197,6 @@ fn chord_row(line: &str) -> Option<Vec<(usize, String)>> {
             start.get_or_insert(col);
             word.push(c);
         }
-        col += 1;
     }
     match out.as_slice() {
         [] => None,
