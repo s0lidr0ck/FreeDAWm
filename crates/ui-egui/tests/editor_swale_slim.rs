@@ -1,4 +1,4 @@
-//! Swale's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, a stage dial,
+//! Swale's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, a stage dial,
 //! the contextual curve-row controls and Sens / Rate, and More (Swale's own `showMore`, per module
 //! and shared with the full editor).
 

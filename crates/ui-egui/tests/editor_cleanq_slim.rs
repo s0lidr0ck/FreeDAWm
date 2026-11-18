@@ -1,4 +1,4 @@
-//! CleanQ's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, the bar on two
+//! CleanQ's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, the bar on two
 //! rows, the band chips and the docked card (the floating card's controls and commands), the
 //! dynamics and the Ceiling strip only when they apply, More per module, and the full editor.
 

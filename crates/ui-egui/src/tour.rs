@@ -1,5 +1,5 @@
 //! A short first-run tour: a few cards, one at a time, on where things are. The desktop app opens
-//! it once, on the first start with no settings saved yet; Window › More › Tour of FreeDAWm opens
+//! it once, on the first start with no settings saved yet; FreeDAWm › Tour of FreeDAWm opens
 //! it again. It only shows text and changes nothing; Skip or the last card's Done closes it.
 
 use crate::SoundApp;
@@ -10,7 +10,7 @@ use egui::{Align2, vec2};
 pub const STEPS: &[(&str, &str)] = &[
     (
         "Welcome to FreeDAWm",
-        "A few cards on where things are. Nothing here changes your session; Skip closes the tour, and Window › More › Tour of FreeDAWm opens it again.",
+        "A few cards on where things are. Nothing here changes your session; Skip closes the tour, and FreeDAWm › Tour of FreeDAWm opens it again.",
     ),
     (
         "Tracks and the Edit window",

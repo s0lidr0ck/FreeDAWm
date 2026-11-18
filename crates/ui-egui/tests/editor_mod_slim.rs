@@ -1,4 +1,4 @@
-//! ModEngine's slim editor (View > Mix Window Views > Slim Plugin Editors): its width and header,
+//! ModEngine's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width and header,
 //! a dial as one undo step, the circuit menu with the editor's Undo, Link and the calibration
 //! wizard, and More per module with the switch rows sending the full editor's commands.
 

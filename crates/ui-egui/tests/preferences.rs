@@ -74,6 +74,57 @@ fn its_controls_run_the_menu_commands() {
     assert_ne!(h.state().ui.narrow_mix, before);
 }
 
+/// The ten set-once settings that left the Options menu (2026-11 layout): each Preferences control
+/// changes what its old menu item changed, through the same command. One app clicks the control,
+/// a twin runs the old item (`invoke_menu` with the path it ran); their sessions then match, and
+/// the old item's check mark reads the new state.
+#[test]
+fn the_settings_that_left_the_options_menu_work_from_preferences() {
+    // (tab, control, command, the old menu item's path)
+    const MOVED: [(&str, &str, &str, &str); 10] = [
+        ("operation", "Feedback Protection", "options.feedback_protection", "Options > Recording > Feedback Protection"),
+        ("editing", "Automatic Edge Fades", "options.auto_fades", "Options > Automatic Edge Fades"),
+        ("editing", "Imported Loops Follow Tempo and Key", "options.loops_follow", "Options > More > Imported Loops Follow Tempo and Key"),
+        ("editing", "Edit/Tool Mode Keyboard Lock", "options.keyboard_lock", "Options > Edit/Tool Mode Keyboard Lock"),
+        ("mixing", "Pre-Fader Metering", "options.pre_fader_metering", "Options > Pre-Fader Metering"),
+        ("mixing", "Pre-Fader Sends Ignore Mute", "mix.pre_sends_ignore_mute", "Options > More > Pre-Fader Sends Ignore Mute"),
+        ("mixing", "Thin Automation After Pass", "automation.thin_after_pass", "Options > More > Thin Automation After Pass"),
+        ("mixing", "Suspend Plug-ins on Silence", "options.suspend_on_silence", "Options > More > Suspend Plug-ins on Silence"),
+        ("mixing", "-6 dB", "mix.pan_law", "Options > More > Pan Law > -6 dB"),
+        ("mixing", "Unity (0 dB)", "mix.default_send_level", "Options > More > Default Send Level > 0 dB"),
+    ];
+    let ids: Vec<&str> = MOVED.iter().map(|m| m.2).collect();
+    let mut want = soundcraft_ui_egui::preferences::FROM_OPTIONS.to_vec();
+    let mut got = ids.clone();
+    want.sort_unstable();
+    got.sort_unstable();
+    assert_eq!(got, want, "every moved setting is tried");
+    for (tab, label, id, old) in MOVED {
+        let open = |tab: &str| {
+            let mut a = app();
+            // The radio choices start away from the one clicked.
+            a.run("mix.pan_law", json!({"law": -3})).unwrap();
+            a.run("mix.default_send_level", json!({"db": -144.0})).unwrap();
+            a.run("window.preferences", json!({"tab": tab})).unwrap();
+            harness(a)
+        };
+        let (mut prefs, mut menu) = (open(tab), open(tab));
+        let before = menus::item_state(prefs.state(), old, Some(id)).1;
+        prefs.query_all_by_label(label).next().unwrap_or_else(|| panic!("no control {label}")).click();
+        steps(&mut prefs);
+        menus::invoke_menu(menu.state_mut(), id, old);
+        steps(&mut menu);
+        let after = menus::item_state(prefs.state(), old, Some(id)).1;
+        assert_eq!(after, menus::item_state(menu.state(), old, Some(id)).1, "{label}: Preferences and the old item agree");
+        if label.ends_with("dB)") || label.ends_with(" dB") {
+            assert!(!before && after, "{label}: chosen");
+        } else {
+            assert_ne!(before, after, "{label}: toggled");
+        }
+        assert!(*prefs.state().engine.session() == *menu.state().engine.session(), "{label}: the same change as the old menu item");
+    }
+}
+
 #[test]
 fn plug_ins_in_their_own_process_is_this_computers_setting_off_by_default() {
     let mut a = app();

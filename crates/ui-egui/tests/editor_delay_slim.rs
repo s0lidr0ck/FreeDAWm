@@ -1,4 +1,4 @@
-//! DelayEngine's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, the style
+//! DelayEngine's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, the style
 //! menu, the main dials, the contextual Heads, the More section with the drawer's tabs, and two
 //! Delays keeping their own More.
 

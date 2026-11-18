@@ -1,4 +1,4 @@
-//! Event › More MIDI › Step Input: notes entered one step at a time from a MIDI keyboard (any
+//! Event › Step Input: notes entered one step at a time from a MIDI keyboard (any
 //! input the target track listens to) with the transport stopped, at the insertion point on the
 //! MIDI editor's clip (or the selected MIDI or instrument track): each key, or chord (keys held
 //! together, entered when the last is let go), is a note of the chosen length, then the insertion
@@ -108,7 +108,7 @@ fn enter(app: &mut SoundApp, track: TrackId, mut extra: serde_json::Value) {
     }
 }
 
-/// Event › More MIDI › Step Input… (and the MIDI editor's Step button): opens or closes the
+/// Event › Step Input… (and the MIDI editor's Step button): opens or closes the
 /// window.
 pub fn toggle(app: &mut SoundApp) {
     app.step.open = !app.step.open;

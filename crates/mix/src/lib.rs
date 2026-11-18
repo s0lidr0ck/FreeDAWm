@@ -701,7 +701,7 @@ const TAIL_QUIET_SECS: f64 = 0.05;
 /// Below this peak a release counts as silent.
 const TAIL_SILENCE: f32 = 1e-5;
 
-/// Options › More › Suspend Plug-ins on Silence: an insert whose input and output have both been
+/// Setup › Preferences… › Mixing › Suspend Plug-ins on Silence: an insert whose input and output have both been
 /// silent (below [`TAIL_SILENCE`]) for [`SUSPEND_AFTER_SECS`] is not run while its input stays
 /// silent, so it costs nothing; the first sound in wakes it in the same block. Off by default
 /// (a suspended module's state, a compressor's release, holds where it was).
@@ -2291,7 +2291,7 @@ impl MixEngine {
     }
 
     /// Feedback protection's length in frames ([`FEEDBACK_SECONDS`]); 0 offline or when
-    /// Options › Recording › Feedback Protection is off.
+    /// Setup › Preferences… › Operation › Feedback Protection is off.
     fn feedback_frames(&self, s: &Session) -> usize {
         if self.offline || s.edit.flag(NO_FEEDBACK_PROTECTION) { 0 } else { (self.sample_rate * FEEDBACK_SECONDS).max(1.0) as usize }
     }
@@ -3018,7 +3018,7 @@ impl MixEngine {
         // `process_strip`): the post-fader buffer `post_at` samples back, the pre-fader copy
         // `pre_at`.
         let back = |d: usize| pos.saturating_sub(i64::try_from(d).unwrap_or(0));
-        // Options › More › Pre-Fader Sends Ignore Mute: a muted (or solo-muted) track's pre-fader
+        // Setup › Preferences… › Mixing › Pre-Fader Sends Ignore Mute: a muted (or solo-muted) track's pre-fader
         // sends still play, as cue mixes want.
         let pre_ignores_mute = s.edit.flag(PRE_SENDS_IGNORE_MUTE);
         for (i, snd) in t.mixer.sends.iter().enumerate() {
@@ -3131,7 +3131,7 @@ impl MixEngine {
     }
 }
 
-/// The `Session::edit` flag of Options › More › Pre-Fader Sends Ignore Mute.
+/// The `Session::edit` flag of Setup › Preferences… › Mixing › Pre-Fader Sends Ignore Mute.
 pub const PRE_SENDS_IGNORE_MUTE: &str = "mix.pre_sends_ignore_mute";
 
 /// The live path for low-latency monitoring (`options.low_latency_monitoring`), filled by
@@ -4903,7 +4903,7 @@ fn feedback_guard(strip: &mut Strip, frames: usize, limit: usize) {
 /// recording. A track set to On or Off keeps its own setting.
 pub const INPUT_ONLY_MONITORING: &str = "options.input_only_monitoring";
 
-/// The automatic edge fades' length when Options › Automatic Edge Fades has none set, ms.
+/// The automatic edge fades' length when Setup › Preferences… › Editing › Automatic Edge Fades has none set, ms.
 pub const AUTO_FADE_MS: f64 = 1.0;
 
 /// The automatic edge fades' length in frames at `s`'s rate; 0 when they are off

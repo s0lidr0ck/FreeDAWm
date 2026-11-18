@@ -245,7 +245,7 @@ pub struct UiState {
     pub show_audio_health: bool,
     pub show_about: bool,
     pub show_midi_editor: bool,
-    /// The Vocal Editor (AI › Tune Vocal…); plan 3 draws it.
+    /// The Vocal Editor (AI › Tune Vocal › Open…); plan 3 draws it.
     pub show_vocal_editor: bool,
     /// The Vocal Editor's Preview toggle: a clicked or edited note plays once (`vocal.preview`).
     #[serde(default = "default_true", rename = "vocal.preview")]
@@ -1042,7 +1042,7 @@ pub struct SoundApp {
     /// the take started: what it counts beyond is this take's loss, reported at Stop.
     pub(crate) midi_rec_lost_at: u64,
     /// What was played on the MIDI inputs during the playback under way (or the last one), not
-    /// recorded: Event › More MIDI › Capture MIDI makes a take of it (`midi_devices::capture`).
+    /// recorded: Event › Capture MIDI makes a take of it (`midi_devices::capture`).
     pub(crate) midi_capture: Vec<soundcraft_playback::midi_in::RecordedMidi>,
     /// Wait for Note: Record was pressed and the take starts at the first note played (the
     /// length of `midi_capture` when it was last looked at; see `wait_note`).
@@ -1086,7 +1086,7 @@ pub struct SoundApp {
     pub typing: musical_typing::TypingState,
     /// Chord Pads' window and the pad held.
     pub pads: chord_pads::PadState,
-    /// Event › More MIDI › Step Input: its window and the chord being played.
+    /// Event › Step Input: its window and the chord being played.
     pub step: step_input::StepInput,
     /// Input capture, opened on first record.
     pub recorder: Option<soundcraft_playback::record::Recorder>,

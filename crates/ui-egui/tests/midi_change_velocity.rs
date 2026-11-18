@@ -1,4 +1,4 @@
-//! Event › More MIDI › Change Velocity…: a dialog with set, add, scale and ramp, acting on the
+//! Event › Change Velocity…: a dialog with set, add, scale and ramp, acting on the
 //! notes selected in the MIDI Editor, else on the selected MIDI clips.
 
 use serde_json::json;
@@ -30,7 +30,7 @@ fn run(app: &mut SoundApp, d: &VelocityDialog) {
 #[test]
 fn the_menu_item_opens_the_dialog() {
     let (mut app, _) = app_with_clip();
-    menus::invoke_menu(&mut app, "event.change_velocity", "Event > More MIDI > Change Velocity...");
+    menus::invoke_menu(&mut app, "event.change_velocity", "Event > Change Velocity...");
     assert!(matches!(app.dialogs.open, Some(Dialog::ChangeVelocity(_))));
 }
 

@@ -302,7 +302,7 @@ pub enum Dialog {
     Spot(crate::spot::Spot),
     /// Edit › Fades › Create… (`fade_dialog`).
     Fades(crate::fade_dialog::FadeDialog),
-    /// Event › More MIDI › Change Velocity…: the selected notes in the MIDI Editor, else the
+    /// Event › Change Velocity…: the selected notes in the MIDI Editor, else the
     /// selected MIDI clips.
     ChangeVelocity(VelocityDialog),
     /// Clip › Quantize Audio…: how far towards the grid, and the swing.
@@ -343,7 +343,7 @@ pub enum Dialog {
         staff_percent: u32,
         part_pages: bool,
     },
-    /// Options › Pre/Post-Roll…: on/off and both amounts, in seconds.
+    /// Transport › Pre/Post-Roll…: on/off and both amounts, in seconds.
     PrePostRoll {
         on: bool,
         pre: f64,
@@ -509,7 +509,7 @@ impl Dialogs {
         true
     }
 
-    /// Options › Pre/Post-Roll…, filled in from the session.
+    /// Transport › Pre/Post-Roll…, filled in from the session.
     pub fn open_pre_post_roll(&mut self, e: &Engine) {
         let ed = &e.session().edit;
         let sr = e.session().sample_rate;
@@ -638,7 +638,7 @@ impl Dialogs {
                     suffix: "×".into(),
                 }
             }
-            // Track › More › Write Trim Automation…: a relative volume trim over the selection.
+            // Track › Automation › Write Trim Automation…: a relative volume trim over the selection.
             "track.trim_automation_write" => Dialog::Number {
                 cmd: id.into(),
                 title: "Write Trim Automation over the selection".into(),

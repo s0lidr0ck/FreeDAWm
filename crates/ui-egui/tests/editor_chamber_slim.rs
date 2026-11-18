@@ -1,4 +1,4 @@
-//! ChamberMade's slim editor (View > Mix Window Views > Slim Plugin Editors): its width and
+//! ChamberMade's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width and
 //! header, the one display (plan or echogram) per module, the plan's Add rows and the inspector
 //! following them, Mix as one undo step, and More (the plugin's own) per module.
 

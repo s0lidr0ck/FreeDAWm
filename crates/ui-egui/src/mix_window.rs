@@ -15,7 +15,7 @@ use soundcraft_playback::MeterSnapshot;
 pub(crate) const OBJECT_HOVER: &str = "Marks the track as an immersive object or as bed. A mark only: objects are not rendered yet, so the track plays through its panner into the bed either way.";
 
 /// A strip's width: Wide 150, Slim 80; `Auto` follows the Mix window's global toggle
-/// (`global_wide`, wide unless View › Narrow Mix / Slim Strips is on).
+/// (`global_wide`, wide unless View › Channel Width › Narrow Mix / Slim Strips is on).
 pub fn strip_width(size: StripSize, global_wide: bool) -> f32 {
     if strip_is_wide(size, global_wide) { 150.0 } else { 80.0 }
 }

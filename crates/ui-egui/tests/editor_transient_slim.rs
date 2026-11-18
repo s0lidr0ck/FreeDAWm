@@ -1,4 +1,4 @@
-//! Transient's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its header,
+//! Transient's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its header,
 //! the Source menu, the knobs and Focus selectors, and its More section.
 
 mod editor_support;

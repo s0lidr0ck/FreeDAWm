@@ -1,4 +1,4 @@
-//! Reverb's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, a dial drag,
+//! Reverb's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, a dial drag,
 //! the machine menu, the era row and Interval only where they apply, the tabs (per module), and
 //! the full editor.
 

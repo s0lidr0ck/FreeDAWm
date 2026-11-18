@@ -1,4 +1,4 @@
-//! FilterEngine's slim editor (View > Mix Window Views > Slim Plugin Editors): its width and
+//! FilterEngine's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width and
 //! header, a main dial as one undo step, the circuit menu with the editor's Undo, the switch rows
 //! and the modulation panel following the circuit and the source, and More per module.
 

@@ -347,7 +347,7 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
 /// ones would hold up the import; Detect Tempo does them).
 pub const DETECT_MAX_SECS: f64 = 30.0;
 
-/// Options › More › Imported Loops Follow Tempo and Key (`import.loops_follow`, on in new
+/// Setup › Preferences… › Editing › Imported Loops Follow Tempo and Key (`import.loops_follow`, on in new
 /// sessions): a file that says its tempo (an `acid` chunk, "120bpm" in its name) is stretched to
 /// the session tempo with its pitch kept, and one that says its key is transposed (by at most a
 /// tritone) to the session's key when the session sets one. The tempo is recorded on the clip

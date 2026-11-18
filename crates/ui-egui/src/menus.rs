@@ -369,7 +369,7 @@ pub fn layout() -> &'static [Line] {
     LINES.get_or_init(|| MENUBAR.lines().filter_map(parse_line).collect())
 }
 
-/// The catalog or UI path a shown menu path runs through (`Window > More > Search` →
+/// The catalog or UI path a shown menu path runs through (`Window > Search` →
 /// `Window > Pro Tools Search`); any other path is returned as it is.
 pub fn source_path(path: &str) -> &str {
     layout()
@@ -384,7 +384,7 @@ pub fn source_path(path: &str) -> &str {
 
 /// Why the menu item at `path` is greyed out as "coming soon", if it is: `path` is its shown path,
 /// or a catalog path in the same menu with the same label (Event › MIDI Operations › Change
-/// Velocity… is shown as Event › More MIDI › Change Velocity…).
+/// Velocity… is shown as Event › Change Velocity…).
 pub fn soon_reason(path: &str) -> Option<&'static str> {
     fn ends(p: &str) -> (Option<&str>, Option<&str>) {
         (p.split(" > ").next(), p.rsplit(" > ").next())
@@ -411,7 +411,17 @@ pub fn menu_location(id: &str) -> Option<String> {
         }
         map
     });
-    places.get(id).cloned()
+    places.get(id).cloned().or_else(|| {
+        // Off the generated menus: the hand-built FreeDAWm menu, and the Options settings that
+        // moved to Setup › Preferences….
+        if crate::preferences::FROM_OPTIONS.contains(&id) {
+            Some("Setup › Preferences…".into())
+        } else if matches!(id, "window.tour" | "window.about" | "window.session_info" | "window.audio_health") {
+            Some("FreeDAWm".into())
+        } else {
+            None
+        }
+    })
 }
 
 fn collect_places(n: &MenuNode, extra: &[(&str, &str)], out: &mut Vec<(String, String)>) {
@@ -539,6 +549,9 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                 brand(ui, &mut |ui| {
                     if ui.button("About FreeDAWm").clicked() {
                         app.ui.show_about = true;
+                    }
+                    if ui.button("Tour of FreeDAWm").clicked() {
+                        let _ = app.run("window.tour", json!({}));
                     }
                     if ui.button("Session Info").clicked() {
                         app.ui.show_session_info = true;
@@ -882,6 +895,13 @@ fn checked_state(app: &SoundApp, path: &str, id: Option<&str>) -> bool {
     toggle_state(app, path, id).unwrap_or(false)
 }
 
+/// Whether the item for `id` (run through `path`; only its last part counts for a choice such as
+/// Pan Law's "-3 dB") shows a check mark: what Preferences reads for the settings that left the
+/// Options menu.
+pub fn is_checked(app: &SoundApp, path: &str, id: &str) -> bool {
+    checked_state(app, path, Some(id))
+}
+
 /// Whether the item for `id` (run through `path`) is a toggle that can show a check mark, and so
 /// takes the menu's check-mark column.
 pub fn is_toggle(app: &SoundApp, path: &str, id: Option<&str>) -> bool {
@@ -1080,8 +1100,9 @@ fn mix_section_id(label: &str) -> &'static str {
     }
 }
 
-/// Parameters implied by the menu item a command was reached through.
-fn params_for(path: &str, id: &str) -> Value {
+/// Parameters implied by the menu item a command was reached through (Preferences' radio
+/// choices pass a path whose last part is the item's label, as the menu did).
+pub fn params_for(path: &str, id: &str) -> Value {
     let leaf = path.rsplit(" > ").next().unwrap_or("");
     match id {
         "view.ruler" => json!({"ruler": ruler_id(leaf)}),
@@ -1196,7 +1217,7 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
         }
         return;
     }
-    // Options › Pre/Post-Roll… sets the amounts too (its shortcut, Cmd+K, only toggles).
+    // Transport › Pre/Post-Roll… sets the amounts too (its shortcut, Cmd+K, only toggles).
     if id == "options.pre_post_roll" {
         app.dialogs.open_pre_post_roll(&app.engine);
         return;

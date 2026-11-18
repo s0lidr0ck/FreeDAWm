@@ -1,4 +1,4 @@
-//! Sprawl's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its header,
+//! Sprawl's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its header,
 //! the bands' gestures, the main dials and its More section.
 
 mod editor_support;

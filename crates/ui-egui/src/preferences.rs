@@ -3,6 +3,10 @@
 //! runs the command its menu item runs (or sets the same UI state the Appearance window does), so
 //! the menus, the toolbar and this window always agree. Settings saved with the session are under
 //! "This session"; the rest belong to this computer (`ui.json`).
+//!
+//! The Options settings people set once and leave ([`FROM_OPTIONS`]) are only here: they left the
+//! Options menu, and each control runs the command its menu item ran (same id, so shortcuts,
+//! scripts and saved sessions are unchanged) and reads its state the way the item's check mark did.
 
 use crate::SoundApp;
 use crate::theme::{Tokens, bold, regular};
@@ -12,6 +16,24 @@ use serde_json::{Value, json};
 /// The tabs, in order: (id, label).
 pub const TABS: [(&str, &str); 5] =
     [("display", "Display"), ("operation", "Operation"), ("editing", "Editing"), ("mixing", "Mixing"), ("metering", "Metering")];
+
+/// The commands whose Options menu items moved here (2026-11 menu layout).
+pub const FROM_OPTIONS: [&str; 10] = [
+    "options.feedback_protection",
+    "options.auto_fades",
+    "options.loops_follow",
+    "options.keyboard_lock",
+    "options.pre_fader_metering",
+    "mix.pre_sends_ignore_mute",
+    "automation.thin_after_pass",
+    "options.suspend_on_silence",
+    "mix.pan_law",
+    "mix.default_send_level",
+];
+
+/// The radio choices' menu-style paths start here: their last part is the menu item's label
+/// ("-3 dB", "Silent"), which [`crate::menus::params_for`] and the check-mark rule read.
+const CHOICE_PATH: &str = "Setup > Preferences";
 
 /// Peak hold at or above this many seconds holds until cleared (a click on the meter).
 pub const HOLD_UNTIL_CLEARED: f32 = 1000.0;
@@ -153,6 +175,26 @@ fn flag(app: &mut SoundApp, ui: &mut Ui, label: &str, cmd: &str, on: bool, tip: 
     }
 }
 
+/// A checkbox for a setting that was an Options menu toggle: on as the item's check mark was.
+fn menu_flag(app: &mut SoundApp, ui: &mut Ui, label: &str, cmd: &str, tip: &str) {
+    let on = crate::menus::is_checked(app, "", cmd);
+    flag(app, ui, label, cmd, on, tip);
+}
+
+/// Radio buttons for a setting that was an Options submenu of choices: (shown, the item's label).
+/// A click runs the command with the parameters the item ran it with.
+fn menu_choice(app: &mut SoundApp, ui: &mut Ui, row: &str, cmd: &str, choices: &[(&str, &str)]) {
+    ui.horizontal(|ui| {
+        ui.label(row);
+        for (shown, leaf) in choices {
+            let path = format!("{CHOICE_PATH} > {row} > {leaf}");
+            if ui.radio(crate::menus::is_checked(app, &path, cmd), *shown).clicked() {
+                report(app, cmd, crate::menus::params_for(&path, cmd));
+            }
+        }
+    });
+}
+
 fn report(app: &mut SoundApp, cmd: &str, params: Value) {
     if let Err(e) = app.run(cmd, params) {
         app.ui.status = e;
@@ -246,6 +288,14 @@ fn operation(app: &mut SoundApp, ui: &mut Ui) {
             report(app, "options.scrolling", json!({"mode": mode}));
         }
     });
+    heading(ui, "THIS SESSION: RECORDING");
+    menu_flag(
+        app,
+        ui,
+        "Feedback Protection",
+        "options.feedback_protection",
+        "A monitored input clipping for a second is taken for feedback and silenced",
+    );
     heading(ui, "THIS COMPUTER: PROJECT FILES");
     let on = app.ui.copy_imported_audio;
     flag(
@@ -265,6 +315,15 @@ fn editing(app: &mut SoundApp, ui: &mut Ui) {
     flag(app, ui, "Automation Follows Edit", "options.automation_follows_edit", e.automation_follows_edit, "Moving clips carries their automation");
     flag(app, ui, "Mirrored MIDI Editing", "options.mirrored_midi", e.mirrored_midi, "Editing a MIDI clip edits its copies too");
     flag(app, ui, "Show grid lines", "view.grid_lines", e.grid_lines, "");
+    menu_flag(app, ui, "Automatic Edge Fades", "options.auto_fades", "A short fade on clip edges that face silence, so cuts never click");
+    menu_flag(
+        app,
+        ui,
+        "Imported Loops Follow Tempo and Key",
+        "options.loops_follow",
+        "A loop that says its tempo is stretched to the session's as it is imported",
+    );
+    menu_flag(app, ui, "Edit/Tool Mode Keyboard Lock", "options.keyboard_lock", "The keys that change the edit mode and the tool are ignored");
 }
 
 fn mixing(app: &mut SoundApp, ui: &mut Ui) {
@@ -284,6 +343,12 @@ fn mixing(app: &mut SoundApp, ui: &mut Ui) {
     if crate::widgets::checkbox(ui, &mut v, "X-OR solo (a new solo cancels the previous one)").changed() {
         report(app, "options.solo_mode", json!({"mode": "sip", "xor": v}));
     }
+    menu_flag(app, ui, "Pre-Fader Metering", "options.pre_fader_metering", "Track meters show the level before the fader");
+    menu_flag(app, ui, "Pre-Fader Sends Ignore Mute", "mix.pre_sends_ignore_mute", "A muted track's pre-fader sends still play (cue mixes)");
+    menu_flag(app, ui, "Thin Automation After Pass", "automation.thin_after_pass", "Thin the lanes a writing pass wrote when it ends");
+    menu_flag(app, ui, "Suspend Plug-ins on Silence", "options.suspend_on_silence", "Inserts whose input and output stay silent are not run");
+    menu_choice(app, ui, "Pan Law", "mix.pan_law", &[("0 dB", "0 dB"), ("-3 dB", "-3 dB"), ("-4.5 dB", "-4.5 dB"), ("-6 dB", "-6 dB")]);
+    menu_choice(app, ui, "Default Send Level", "mix.default_send_level", &[("Silent", "Silent"), ("Unity (0 dB)", "0 dB")]);
     heading(ui, "THIS COMPUTER");
     let narrow = app.ui.narrow_mix;
     flag(app, ui, "Narrow Mix", "window.narrow_mix", narrow, "Narrow strips in the Mix window");

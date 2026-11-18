@@ -1,4 +1,4 @@
-//! Vint's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, a faceplate knob
+//! Vint's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, a faceplate knob
 //! drag on two circuits as one undo step, the circuit menu's pick, and every circuit drawn.
 
 mod editor_support;

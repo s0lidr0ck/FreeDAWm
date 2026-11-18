@@ -1,4 +1,4 @@
-//! Twine's slim editor (View > Mix Window Views > Slim Plugin Editors): its width, its dials,
+//! Twine's slim editor (View > Plug-in Editors > Slim Plugin Editors): its width, its dials,
 //! the crossovers only in Multiband, the More section (per module) and the VST's own Undo.
 
 mod editor_support;

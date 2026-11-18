@@ -218,7 +218,7 @@ fn the_wide_editor_flag_is_a_command() {
     use soundcraft_ui_egui::menus;
     let path = "View > Mix Window Views > Plugin Editors as in the VST";
     let view = menus::tree().into_iter().find(|n| n.label == "View").unwrap();
-    let views = view.children.iter().find(|n| n.label == "Mix Window Views").unwrap();
+    let views = view.children.iter().find(|n| n.label == "Plug-in Editors").unwrap();
     assert!(views.children.iter().any(|n| n.path == path));
     let id = menus::command_for_path(path, &menus::ui_aliases()).unwrap();
     assert_eq!(id, "ui.mix.wide_editors");

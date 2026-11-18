@@ -103,7 +103,7 @@ pub(crate) fn collect_capture(app: &mut SoundApp) {
     }
 }
 
-/// Event › More MIDI › Capture MIDI: what was played on the MIDI inputs without recording becomes
+/// Event › Capture MIDI: what was played on the MIDI inputs without recording becomes
 /// a take on the record-armed MIDI and instrument tracks (or, with none armed, the selected ones),
 /// placed as a recorded take is (latency, input filter, record mode, input quantize). What was
 /// played last counts: during the playback under way (or the last one), over the loop when it
@@ -258,7 +258,7 @@ pub(crate) fn loop_undo_applies(app: &SoundApp) -> bool {
     app.engine.transport.recording && app.midi_loop_preview.as_ref().is_some_and(|p| p.shown() > 0)
 }
 
-/// Event › More MIDI › Undo Last Pass (and Undo while loop recording): the last finished loop
+/// Event › Undo Last Pass (and Undo while loop recording): the last finished loop
 /// pass still in is left out of what plays and of the take; the loop runs on.
 pub(crate) fn undo_last_pass(app: &mut SoundApp) -> Result<serde_json::Value, String> {
     if !app.engine.transport.recording {
@@ -275,7 +275,7 @@ pub(crate) fn undo_last_pass(app: &mut SoundApp) -> Result<serde_json::Value, St
     Ok(serde_json::json!({"pass": pass}))
 }
 
-/// Event › More MIDI › Erase Held Notes (while loop recording MIDI): the keys held now are taken
+/// Event › Erase Held Notes (while loop recording MIDI): the keys held now are taken
 /// out of the take so far, every note of theirs in the finished passes and the one under way
 /// (the held keys too: they are not recorded), and what plays follows. Keys are told apart by
 /// channel and pitch. The take spilled for crash recovery still has them.

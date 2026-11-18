@@ -1,4 +1,4 @@
-//! Options › More › Pan Law: how loud a mono source panned to the centre of a stereo (or wider)
+//! Setup › Preferences… › Mixing › Pan Law: how loud a mono source panned to the centre of a stereo (or wider)
 //! output plays, as each of the four reference DAWs lets you choose. The mix reads it every block
 //! (`soundcraft_mix::session_pan_law`).
 

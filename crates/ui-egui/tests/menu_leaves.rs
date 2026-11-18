@@ -92,7 +92,7 @@ fn state(app: &SoundApp, label: &str) -> Result<(), String> {
 #[test]
 fn a_failing_menu_command_says_why_in_the_status_line() {
     let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
-    menus::invoke_menu(&mut app, "ui.capture_midi", "Event > More MIDI > Capture MIDI");
+    menus::invoke_menu(&mut app, "ui.capture_midi", "Event > Capture MIDI");
     assert!(app.ui.status.starts_with("Nothing was played to capture"), "{}", app.ui.status);
     assert_eq!(menus::readable_error("bad parameters for `edit.space_clips`: select two or more clips"), "Select two or more clips");
     assert_eq!(menus::readable_error("`edit.cut` is not available: make an edit selection first"), "Make an edit selection first");
@@ -219,7 +219,7 @@ fn the_ui_layer_items_are_clickable_in_their_context() {
         "Plugin Editors Larger",
         "Plugin Editors Smaller",
         "Capture MIDI",
-        "Tune Vocal…",
+        "Tune Vocal > Open…",
         "MIDI Cleanup…",
     ] {
         assert_eq!(state(&app, label), Ok(()), "{label}");

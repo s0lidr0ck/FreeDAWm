@@ -157,7 +157,7 @@ fn held_fast_forward_winds_faster_and_a_click_jumps_a_second() {
 #[test]
 fn varispeed_is_set_from_its_dialog_and_turned_off_at_one() {
     let mut r = Rig::new();
-    soundcraft_ui_egui::menus::invoke_menu(&mut r.app, "transport.varispeed", "Options > More > Varispeed...");
+    soundcraft_ui_egui::menus::invoke_menu(&mut r.app, "transport.varispeed", "Transport > Varispeed...");
     assert!(matches!(r.app.dialogs.open, Some(soundcraft_ui_egui::dialogs::Dialog::Number { .. })), "the menu item opens its dialog");
     r.app.dialogs.open = None;
     r.app.run("transport.varispeed", json!({"speed": 0.8})).unwrap();
