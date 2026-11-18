@@ -43,6 +43,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("midi", 0),
     ("video", 0),
     ("plugin-scan", 0),
+    ("ara-host", 0),
     ("sysmem", 0),
     ("dsp", 1),
     ("ml", 1),
