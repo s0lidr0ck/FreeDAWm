@@ -604,3 +604,33 @@ fn the_wordmark_is_four_fifths_of_the_menu_text_height() {
     let file = h.get_by_role_and_label(egui::accesskit::Role::Button, "File").rect();
     assert!((wordmark.center().y - file.center().y).abs() < 1.0, "{wordmark:?} vs {file:?}");
 }
+
+/// Clip › Elastic Properties… asks for the stretch ratio (it ran with none, 1.0, and did nothing):
+/// OK stretches the selected clip, in one undo step, and the dialog opens on the ratio it has.
+#[test]
+fn elastic_properties_asks_for_the_stretch_and_ok_applies_it() {
+    const PATH: &str = "Clip > Elastic Properties";
+    let mut app = demo_app();
+    let kick = app.engine.session().track_by_name("Kick").unwrap().clips()[0].clone();
+    app.engine.execute("edit.select", &json!({"clips": [kick.id.0]})).unwrap();
+    let id = menus::command_for_path(PATH, &menus::ui_aliases()).unwrap();
+    assert_eq!(id, "clip.elastic_properties");
+    assert!(menus::item_state(&app, PATH, Some(&id)).0);
+    menus::invoke_menu(&mut app, &id, PATH);
+    let Some(soundcraft_ui_egui::dialogs::Dialog::Number { value, key, .. }) = &mut app.dialogs.open else {
+        panic!("Elastic Properties… did not open its dialog");
+    };
+    assert_eq!((key.as_str(), *value), ("ratio", 1.0), "starts at the clip's ratio");
+    *value = 2.0;
+    let steps = app.engine.undo_history().len();
+    let mut h = harness(app);
+    click_ok(&mut h);
+    let app = h.state_mut();
+    let now = app.engine.session().find_clip(kick.id).unwrap().1.clone();
+    assert_eq!(now.length, kick.length * 2, "twice as long");
+    assert_eq!(app.engine.undo_history().len(), steps + 1, "one undo step");
+    // Opened again, it shows the ratio the clip has now.
+    menus::invoke_menu(app, &id, PATH);
+    let Some(soundcraft_ui_egui::dialogs::Dialog::Number { value, .. }) = &app.dialogs.open else { panic!("no dialog") };
+    assert_eq!(*value, 2.0);
+}

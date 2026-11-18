@@ -278,6 +278,7 @@ const DIALOG_COMMANDS: &[&str] = &[
     "transport.varispeed",
     "clip.transpose",
     "clip.loop_in_place",
+    "clip.elastic_properties",
     "lyrics.find",
     "track.new",
     "file.bounce_mix",

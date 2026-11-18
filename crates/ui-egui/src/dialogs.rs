@@ -618,6 +618,26 @@ impl Dialogs {
                 value: 0.0,
                 suffix: "st".into(),
             },
+            // Clip › Elastic Properties…: the stretch of the first clip it acts on (rendered
+            // pitch-keeping on an Elastic track, varispeed elsewhere), to set a new one.
+            "clip.elastic_properties" => {
+                let s = e.session();
+                let first = soundcraft_engine::cmd::clip_ids_param(e, &json!({})).first().and_then(|id| s.find_clip(*id).map(|(_, c)| c.clone()));
+                let ratio = first
+                    .map(|c| {
+                        let rendered = s.edit.values.get(&format!("elastic.{}.ratio", c.id.0)).copied();
+                        rendered.unwrap_or(c.stretch)
+                    })
+                    .filter(|r| r.is_finite() && *r > 0.0)
+                    .unwrap_or(1.0);
+                Dialog::Number {
+                    cmd: id.into(),
+                    title: "Elastic Properties: stretch ratio (1 is the original length)".into(),
+                    key: "ratio".into(),
+                    value: ratio,
+                    suffix: "×".into(),
+                }
+            }
             "clip.loop_in_place" => {
                 Dialog::Number { cmd: id.into(), title: "Loop in Place".into(), key: "count".into(), value: 4.0, suffix: "times".into() }
             }
