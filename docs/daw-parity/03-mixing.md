@@ -228,7 +228,7 @@ Atmos renderer, so this has moved from a post-production extra to common ground.
 | Module graphs and gain reduction on the strip | ◐ | ● | ● | ● | **Works**: live graphs on every built-in module tile |
 | Find and filter tracks in the mixer | ● | ● | ● | ● | **Works**: a Find field above the Mix window's strips keeps those whose name holds the text (this window's view: not saved, not undone) |
 | Spill a folder, VCA or bus | ● | ◐ | ○ | ◐ | **Works**: Spill in a VCA's, folder's or aux's strip menu shows only it and what it controls or sums (a VCA's members, nested VCAs' too; a folder's tracks at every depth, closed or not; what feeds an aux's bus by output or send), Unspill above the strips puts the rest back |
-| Several mixer windows | ○ | ● | ● | ● | **Partial**: one, detachable. Left: more Mix windows, each with its own find filter, spill and shown sections (the Mix window keeps that state once today), about 6–10 h |
+| Several mixer windows | ○ | ● | ● | ● | **Works** (2026-11-18): Window › New Mix Window… opens up to three more Mix windows (`window.new_mix`), each in its own native window ("Mix 2", "Mix 3", …), with its own find filter and spill (kept per window) and its own shown sections (its Sections menu; it starts with the first window's). The first Mix window, in the main window or Mix in Separate Window, keeps View › Mix Window Views. They are views only: not saved, closed with the app. Shared by all: strip width and the docked drawers' layout |
 
 ## Bugs found on the way
 
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | several Mix windows, each with its own find, spill and sections |
 | 2026-11-18 | minor | Import Session Data onto existing tracks of the same name, choosing the parts that come |
 | 2026-11-18 | minor | A/B compare for hosted plug-ins from their state |
 | 2026-11-18 | minor | multi-mono unlinked: a parameter set and lanes per channel, a channel picker in the plug-in window |

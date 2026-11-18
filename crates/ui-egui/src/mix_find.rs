@@ -16,17 +16,20 @@ pub struct MixFind {
     pub spill: Option<TrackId>,
 }
 
-fn id() -> egui::Id {
-    egui::Id::new("mix_find")
+/// Where a Mix window keeps its find and spill: the first Mix window's (in the main window or
+/// in its separate one) is one; each more Mix window ([`crate::mix_more`], its own viewport) has
+/// its own.
+fn id(vp: egui::ViewportId) -> egui::Id {
+    if vp == egui::ViewportId::ROOT || vp == crate::window_sync::mix_viewport() { egui::Id::new("mix_find") } else { egui::Id::new(("mix_find", vp)) }
 }
 
-/// The Mix window's find and spill now.
+/// The find and spill of the Mix window being drawn now.
 pub fn get(ctx: &egui::Context) -> MixFind {
-    ctx.data(|d| d.get_temp(id())).unwrap_or_default()
+    ctx.data(|d| d.get_temp(id(ctx.viewport_id()))).unwrap_or_default()
 }
 
 fn set(ctx: &egui::Context, f: MixFind) {
-    ctx.data_mut(|d| d.insert_temp(id(), f));
+    ctx.data_mut(|d| d.insert_temp(id(ctx.viewport_id()), f));
 }
 
 /// Shows only `track` and what it controls or sums (see [`spill_members`]).
@@ -135,6 +138,13 @@ pub fn bar(app: &SoundApp, ui: &mut Ui) {
 mod tests {
     use super::*;
     use soundcraft_model::{ChannelFormat, SendSlot};
+
+    #[test]
+    fn each_more_mix_window_keeps_its_own_find() {
+        assert_eq!(id(egui::ViewportId::ROOT), id(crate::window_sync::mix_viewport()), "the first Mix window, embedded or separate");
+        assert_ne!(id(crate::mix_more::viewport(2)), id(egui::ViewportId::ROOT));
+        assert_ne!(id(crate::mix_more::viewport(2)), id(crate::mix_more::viewport(3)));
+    }
 
     #[test]
     fn find_and_spill_narrow_the_strips() {

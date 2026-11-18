@@ -680,6 +680,7 @@ Window > ## Main windows
 Window > Mix
 Window > Edit
 Window > Mix in Separate Window = @window.mix_separate
+Window > New Mix Window... = @window.new_mix
 Window > Vocal Editor in Separate Window = @window.vocal_separate
 Window > Teleprompter in Separate Window = @window.teleprompter_separate
 Window > MIDI Editor in Separate Window = @window.midi_editor_separate

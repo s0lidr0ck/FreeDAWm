@@ -68,6 +68,7 @@ pub mod midi_learn;
 pub mod midi_sync_in;
 pub mod midi_wide_lanes;
 pub mod mix_find;
+pub mod mix_more;
 pub mod mix_window;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ml_audition;
@@ -379,6 +380,10 @@ pub struct UiState {
     /// The Mix window lives in its own native window (Window › Mix in Separate Window); the main
     /// window then always shows Edit.
     pub mix_separate: bool,
+    /// More Mix windows (Window › New Mix Window…), each with its own find, spill and sections
+    /// ([`mix_more`]). Not kept: they close with the app.
+    #[serde(skip)]
+    pub more_mix: Vec<mix_more::MoreMix>,
     /// The Vocal Editor lives in its own native window (Window › Vocal Editor in Separate
     /// Window, `vocal.separate`); closing that window docks it back.
     #[serde(default, rename = "vocal.separate")]
@@ -661,6 +666,7 @@ impl Default for UiState {
             audio: soundcraft_playback::AudioConfig::default(),
             record_offsets: std::collections::BTreeMap::new(),
             mix_separate: false,
+            more_mix: Vec::new(),
             vocal_separate: false,
             midi_editor_separate: false,
             midi_editor_window: None,
@@ -3437,6 +3443,7 @@ impl SoundApp {
         if self.ui.mix_separate {
             mix_window::show_separate(self, &ctx);
         }
+        mix_more::show(self, &ctx);
         if self.ui.vocal_separate && self.ui.show_vocal_editor {
             vocal_editor::window::show_separate(self, &ctx);
         }

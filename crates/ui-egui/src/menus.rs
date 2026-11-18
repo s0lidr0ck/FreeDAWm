@@ -19,6 +19,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
     ("window.toggle_mix_edit", "Toggle Mix/Edit", "", Some("Cmd+=")),
     ("window.mix_separate", "Mix in Separate Window", "", None),
+    ("window.new_mix", "New Mix Window...", "", None),
     ("window.vocal_separate", "Vocal Editor in Separate Window", "", None),
     ("window.midi_editor_separate", "MIDI Editor in Separate Window", "", None),
     // Window › Sync: what the Edit and Mix windows share (`window_sync`).
@@ -1393,6 +1394,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.capture_midi" {
         return Some(crate::midi_devices::capture(app));
+    }
+    if id == "window.new_mix" {
+        return Some(crate::mix_more::open(app));
     }
     if id == "window.step_input" {
         crate::step_input::toggle(app);
