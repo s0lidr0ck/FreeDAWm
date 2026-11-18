@@ -427,6 +427,15 @@ fn to_track_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId) {
                 }
             }
         });
+        let mut on_target = app.engine.session().track(id).is_some_and(|t| t.midi_record_on_target);
+        if ui
+            .checkbox(&mut on_target, "Record on the Target")
+            .on_hover_text("A take on this track goes onto the tracks it plays, as each heard them (after this track's MIDI effects, each layer's range, the channel); off, it stays here as played")
+            .changed()
+            && let Err(e) = app.run("track.midi_record_on_target", json!({"tracks": [id.0], "value": on_target}))
+        {
+            app.ui.status = e;
+        }
         if ui.button("Not on Another Track").clicked() {
             if let Err(e) = app.run("mix.midi_to_track", json!({"track": id.0, "target": null})) {
                 app.ui.status = e;

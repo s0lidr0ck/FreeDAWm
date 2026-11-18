@@ -38,6 +38,15 @@ pub fn specs() -> Vec<CommandSpec> {
             set_layers
         ),
         cmd!(
+            "track.midi_record_on_target",
+            "Record on the Target",
+            [],
+            None,
+            "{tracks?, value?: bool (default: toggle the first)} — a take on these tracks, when they play other tracks' instruments (Play Instrument On, Layers & Splits), goes onto those tracks as each heard it (after this track's MIDI effects, each layer's key and velocity range, the route's channel) instead of staying on this track → {value}",
+            has_selection,
+            set_record_on_target
+        ),
+        cmd!(
             "mix.midi_output",
             "MIDI Output",
             [],
@@ -47,6 +56,25 @@ pub fn specs() -> Vec<CommandSpec> {
             set_output
         ),
     ]
+}
+
+fn set_record_on_target(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "track.midi_record_on_target";
+    let tracks = tracks_required(e, C, p)?;
+    if let Some(t) = tracks.iter().filter_map(|t| e.session().track(*t)).find(|t| !t.kind.is_midi()) {
+        return Err(bad(C, format!("`{}` is not an instrument or MIDI track", t.name)));
+    }
+    let now = tracks.first().and_then(|t| e.session().track(*t)).is_some_and(|t| t.midi_record_on_target);
+    let value = match p.get("value") {
+        None | Some(Value::Null) => !now,
+        Some(v) => v.as_bool().ok_or_else(|| bad(C, "`value` is true or false"))?,
+    };
+    for t in &tracks {
+        if let Some(tr) = e.session_mut().track_mut(*t) {
+            tr.midi_record_on_target = value;
+        }
+    }
+    Ok(json!({"value": value}))
 }
 
 /// The track a MIDI to Track instrument plays (`None`: the instrument is something else).

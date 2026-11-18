@@ -310,6 +310,13 @@ pub struct Track {
     /// instead of the keys as played (off, the default).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub midi_fx_record: bool,
+    /// The output menu's Play Instrument On › Record on the Target: with the track playing
+    /// other tracks' instruments (MIDI to Track, or Layers & Splits), a take on it goes onto those
+    /// tracks instead, as what each one heard: the keys through this track's MIDI effects, each
+    /// layer's key and velocity range, and the route's channel (off, the default: the take stays
+    /// on this track, as the keys were played).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub midi_record_on_target: bool,
     /// The MPE zone its instrument is set up for (the input menu's MPE Zone): the MPE
     /// Configuration Message and pitch-bend ranges are sent to it (`None`: not MPE, nothing sent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -404,6 +411,7 @@ impl Track {
             midi_scripts: Vec::new(),
             modulators: Vec::new(),
             midi_fx_record: false,
+            midi_record_on_target: false,
             mpe: None,
             articulations: None,
             instrument_outs: Vec::new(),

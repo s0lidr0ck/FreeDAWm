@@ -131,7 +131,7 @@ sustain pedal and pitch bend, the drum instruments notes only.
 | Choose the mode | ● | ● | ● | ● | **Works**: the MIDI Merge switch, its right-click menu (Replace, Merge, New Playlist, Keep Takes as Lanes), `options.midi_record_mode` |
 | The existing part is heard while you record over it | ● | ● | ● | ● | **Works**, which makes replace surprising: you hear the old part, then lose it under the whole take |
 | MIDI and audio recorded in one pass | ● | ● | ● | ● | **Works**, one undo step |
-| Record the output of another track or a MIDI plug-in | ● | ● | ● | ● | **Works** for MIDI effects (Record Effects' Output, H) and a chain module's MIDI output (the drum gate's triggers). **Partial**: a MIDI to Track source's notes are recorded on the source track, not printed on the target |
+| Record the output of another track or a MIDI plug-in | ● | ● | ● | ● | **Works** for MIDI effects (Record Effects' Output, H) and a chain module's MIDI output (the drum gate's triggers). A MIDI to Track source (Play Instrument On, or Layers & Splits) prints onto its targets with the output menu's Play Instrument On › **Record on the Target** (`track.midi_record_on_target`, off by default, saved with the track): a take on the source goes onto each target track instead, as that target heard it: the keys through the source's MIDI effects (a Script effect too), each layer's key and velocity range, the route's channel; the clip keeps the target's own MIDI effects playing over it, and the take follows the record mode on the target (merge, replace, lanes, playlists), one undo step. SysEx stays off the targets (the route does not pass it). Off, the take stays on the source as played. Test `record_on_the_target_prints_each_layers_part_on_its_track` |
 | One undo for the pass | ● | ● | ● | ● | **Works** (`07fac63`): what Stop places (audio takes, modules' MIDI, MIDI takes) is one Record step (`Engine::join_undo_since`) |
 | The take survives a crash | ◐ | ◐ | ◐ | ◐ | **Works**: what a take hears is spilled to the autosave folder as it comes (`recording-midi.jsonl`), and recovery places it as Stop would have, with the audio takes |
 
@@ -538,3 +538,4 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 | 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |
 | 2026-11-18 | minor | A Script MIDI effect joins the list (section 8, Scripter) |
 | 2026-11-18 | minor | Sampler row and the instruments paragraph: Pantry, the multisampler, is on this branch |
+| 2026-11-18 | minor | Record on the Target: a MIDI to Track source's take printed onto the tracks it plays |
