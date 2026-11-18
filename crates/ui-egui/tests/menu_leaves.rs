@@ -99,6 +99,113 @@ fn a_failing_menu_command_says_why_in_the_status_line() {
     assert_eq!(menus::readable_error("APPDATA is not set"), "APPDATA is not set");
 }
 
+/// The items the menu audit found failing silently when their context was missing: each is greyed
+/// out with a reason, or clicked anyway it changes something or says why in the status line (and
+/// leaves no empty undo step).
+#[test]
+fn an_item_without_its_context_never_fails_silently() {
+    const SILENT: &[&str] = &[
+        "edit.clear_clip_gain",
+        "edit.clear_clip_effects",
+        "edit.clear_all_automation",
+        "edit.clear_pan_automation",
+        "edit.clear_plugin_automation",
+        "edit.move_selection_left",
+        "edit.halve_selection",
+        "edit.double_selection",
+        "edit.extend_up_to_members",
+        "edit.extend_down_to_members",
+        "edit.remove_selection_top",
+        "edit.remove_selection_bottom",
+        "edit.extend_to_start",
+        "edit.nudge_start_earlier",
+        "edit.nudge_start_later",
+        "edit.nudge_end_earlier",
+        "edit.select_track_clips",
+        "edit.select_muted_clips",
+        "edit.heal",
+        "edit.fades_delete",
+        "edit.trim_to_close_gaps",
+        "edit.automation_trim_to_all",
+        "edit.automation_glide_to_all",
+        "automation.thin",
+        "automation.thin_all",
+        "automation.volume_to_clip_gain",
+        "edit.automation_coalesce_clip_gain_to_volume",
+        "clip.automation_from_track",
+        "clip.automation_to_track",
+        "clip.automation_clear",
+        "edit.snap_next",
+        "edit.snap_previous",
+        "edit.space_clips",
+        "track.split_into_mono",
+        "track.bypass_inserts_fj",
+        "track.bypass_reverb",
+        "track.bypass_delay",
+        "track.bypass_modulation",
+        "track.mute_sends_fj",
+        "track.show_target_playlist",
+        "track.toggle_recent_playlist",
+        "track.write_midi_rtp",
+        "track.set_record_to_input_only",
+        "track.coalesce_trim",
+        "clip.send_to_back",
+        "clip.ungroup",
+        "clip.ungroup_all",
+        "clip.quantize_to_grid",
+        "clip.remove_warp",
+        "event.remove_duplicate_notes",
+        "event.restore_performance",
+        "ui.mix.width.slim",
+        "ui.mix.width.wide",
+    ];
+    let extra = menus::ui_aliases();
+    let leaves = all_leaves();
+    let demo = || SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
+    let mut keys = demo();
+    keys.run("edit.select", json!({"tracks": ["Keys"], "start": {"seconds": 12.0}, "end": {"seconds": 14.0}})).unwrap();
+    let mut kick = demo();
+    kick.run("edit.select", json!({"tracks": ["Kick"], "start": {"seconds": 12.0}})).unwrap();
+    let mut problems = Vec::new();
+    for (name, mut app) in [("no selection", demo()), ("Keys range", keys), ("Kick clip", kick)] {
+        for id in SILENT {
+            let (shown, path) = leaves
+                .iter()
+                .find(|(_, p)| menus::command_for_path(p, &extra).as_deref() == Some(id))
+                .unwrap_or_else(|| panic!("no menu item runs {id}"));
+            if menus::availability(&app, id).is_err() {
+                continue;
+            }
+            app.ui.status.clear();
+            let before = app.engine.session_arc();
+            let steps = app.engine.undo_history().len();
+            menus::invoke_menu(&mut app, id, path);
+            let changed = *before != *app.engine.session();
+            if !changed && app.ui.status.is_empty() {
+                problems.push(format!("{shown} ({name}): changed nothing and said nothing"));
+            }
+            if !changed && app.engine.undo_history().len() != steps {
+                problems.push(format!("{shown} ({name}): changed nothing but made an undo step"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+
+    // With its context the edit acts, and nothing is said against it: Clear Special › Clip Gain.
+    let mut app = demo();
+    let clip = app.engine.session().track_by_name("Kick").unwrap().clips()[0].clone();
+    app.run("clip.gain", json!({"clip": clip.id.0, "db": -6.0})).unwrap();
+    app.run("edit.select", json!({"tracks": ["Kick"], "start": clip.start, "end": clip.end()})).unwrap();
+    app.ui.status.clear();
+    menus::invoke_menu(&mut app, "edit.clear_clip_gain", "Edit > Clear Special > Clip Gain");
+    assert_eq!(app.engine.session().find_clip(clip.id).unwrap().1.gain_db, 0.0);
+    assert!(!app.ui.status.contains("changed nothing"), "{}", app.ui.status);
+    // Without it, the status line says what it needs.
+    menus::invoke_menu(&mut app, "edit.clear_clip_gain", "Edit > Clear Special > Clip Gain");
+    assert_eq!(app.ui.status, "Clear Special › Clip Gain changed nothing: select clips with clip gain");
+    assert_eq!(app.engine.undo_label(), Some("Clip Gain"), "the empty step is gone; the clearing one stays");
+}
+
 /// The twelve UI-layer items the audit found always greyed out: clickable where they can act,
 /// greyed out with a reason where they need something first.
 #[test]

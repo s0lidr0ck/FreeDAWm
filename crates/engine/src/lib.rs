@@ -764,6 +764,19 @@ impl Engine {
     /// Stale MIDI Cleanup previews are refreshed first, so an edit made outside `execute` (a UI
     /// gesture, a background ML result such as Detect Chords) plays the cleaned notes of the
     /// chords and notes it left, and Undo/Redo bring back a step with its matching preview.
+    /// Drops the newest undo step when undoing it would change nothing (the document it holds
+    /// equals the current one): a command that found nothing to act on still made a step. True
+    /// when one was dropped. The menu bar calls it after such a command, so Undo is not offered
+    /// for a click that did nothing.
+    pub fn drop_empty_step(&mut self) -> bool {
+        if self.undo.last().is_some_and(|h| *h.doc == *self.doc) {
+            self.undo.pop();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn push_undo(&mut self, label: &str, before: Arc<Session>) {
         if Arc::ptr_eq(&before, &self.doc) {
             return;

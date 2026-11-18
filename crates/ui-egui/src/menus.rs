@@ -1224,11 +1224,106 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
         return;
     }
     let params = params_for(path, id);
+    // An edit that may find nothing to act on is watched: the session before it, and the status.
+    let watched = watches_for_no_change(id).then(|| (app.engine.session_arc(), app.ui.status.clone()));
     // A command clicked in a menu always answers in the status line when it fails: engine errors
     // set it already, a UI-layer command's error only comes back here.
-    if let Err(e) = crate::dialogs::run_or_ask(app, id, params) {
-        app.ui.status = readable_error(&e);
+    match crate::dialogs::run_or_ask(app, id, params) {
+        Err(e) => app.ui.status = readable_error(&e),
+        // It ran, said nothing, started no job and left the session as it was: say why, and
+        // drop the empty undo step it made.
+        Ok(_) => {
+            if let Some((before, status)) = watched
+                && app.ui.status == status
+                && app.dialogs.open.is_none()
+                && !(app.rendering() || app.open.is_some() || app.split.is_some())
+                && *before == *app.engine.session()
+            {
+                app.engine.drop_empty_step();
+                app.ui.status = nothing_changed(path, id);
+            }
+        }
     }
+}
+
+/// What an edit clicked in a menu needs when it changed nothing (command id → the context it acts
+/// on). Undoable commands not listed get a general reason; the selection moves listed here are
+/// not undoable but act on the session's selection, so they are watched too.
+const NEEDS: &[(&str, &str)] = &[
+    ("edit.move_selection_left", "make an edit selection first (it moves by its own length)"),
+    ("edit.move_selection_right", "make an edit selection first (it moves by its own length)"),
+    ("edit.halve_selection", "make an edit selection first"),
+    ("edit.double_selection", "make an edit selection first"),
+    ("edit.remove_selection_top", "select two or more tracks first"),
+    ("edit.remove_selection_bottom", "select two or more tracks first"),
+    ("edit.extend_up_to_members", "select a folder track or one of its members"),
+    ("edit.extend_down_to_members", "select a folder track"),
+    ("edit.extend_to_start", "make an edit selection that starts after the session start"),
+    ("edit.nudge_start_earlier", "make an edit selection first"),
+    ("edit.nudge_start_later", "make an edit selection first"),
+    ("edit.nudge_end_earlier", "make an edit selection first"),
+    ("edit.select_track_clips", "the selected tracks have no clips, or they are all selected already"),
+    ("edit.select_muted_clips", "no clip is muted on the selected tracks"),
+    ("edit.heal", "select across a separation between pieces of the same clip"),
+    ("edit.fades_delete", "select clips with fades or crossfades"),
+    ("edit.clear_clip_gain", "select clips with clip gain"),
+    ("edit.clear_clip_effects", "select clips with clip effects"),
+    ("edit.clear_all_automation", "select a range with automation on the selected tracks"),
+    ("edit.clear_pan_automation", "select a range with pan automation"),
+    ("edit.clear_plugin_automation", "select a range with plug-in automation"),
+    ("edit.trim_to_close_gaps", "select clips with gaps between them"),
+    ("edit.automation_trim_to_all", "select a range on tracks with automation"),
+    ("edit.automation_glide_to_all", "select a range on tracks with automation"),
+    ("automation.thin", "select a range with automation to thin"),
+    ("automation.thin_all", "the session has no automation to thin"),
+    ("automation.volume_to_clip_gain", "select a range with volume automation"),
+    ("edit.automation_coalesce_clip_gain_to_volume", "select clips with clip gain"),
+    ("clip.automation_from_track", "select clips on tracks with automation"),
+    ("clip.automation_to_track", "select clips with their own automation"),
+    ("clip.automation_clear", "select clips with their own automation"),
+    ("edit.snap_next", "select a clip with a gap after it"),
+    ("edit.snap_previous", "select a clip with a gap before it"),
+    ("track.split_into_mono", "select a stereo or multichannel audio track"),
+    ("track.bypass_inserts", "select tracks with inserts"),
+    ("track.bypass_inserts_ae", "select tracks with inserts in slots A-E"),
+    ("track.bypass_inserts_fj", "select tracks with inserts in slots F-J"),
+    ("track.bypass_eq", "select tracks with an EQ insert"),
+    ("track.bypass_dynamics", "select tracks with a dynamics insert"),
+    ("track.bypass_reverb", "select tracks with a reverb insert"),
+    ("track.bypass_delay", "select tracks with a delay insert"),
+    ("track.bypass_modulation", "select tracks with a modulation insert"),
+    ("track.mute_sends_ae", "select tracks with sends A-E"),
+    ("track.mute_sends_fj", "select tracks with sends F-J"),
+    ("track.show_target_playlist", "designate a target playlist first (Track › Designate as Target Playlist)"),
+    ("track.toggle_recent_playlist", "show a target playlist first (Track › Show Target Playlist)"),
+    ("track.write_midi_rtp", "set MIDI real-time properties on the track first"),
+    ("track.set_record_to_input_only", "record-arm tracks first"),
+    ("track.coalesce_trim", "the selected tracks have no trim automation"),
+    ("track.clear_trim_automation", "the selected tracks have no trim automation"),
+    ("clip.send_to_back", "select clips that overlap others"),
+    ("clip.bring_to_front", "select clips that overlap others"),
+    ("clip.ungroup", "select a clip group"),
+    ("clip.ungroup_all", "the session has no clip groups"),
+    ("clip.quantize_to_grid", "select clips that are off the grid"),
+    ("clip.remove_warp", "select a warped clip"),
+    ("clip.remove_pitch_shift", "select a clip stretched with varispeed"),
+    ("event.remove_duplicate_notes", "the selected MIDI has no duplicate notes"),
+    ("event.restore_performance", "nothing to restore: Flatten Performance first"),
+];
+
+/// Whether a menu click on `id` is watched for changing nothing ([`NEEDS`]): undoable engine edits
+/// (their effect is the session, so an unchanged session means they did nothing) and the listed
+/// selection moves.
+fn watches_for_no_change(id: &str) -> bool {
+    NEEDS.iter().any(|(i, _)| *i == id) || soundcraft_engine::find_command(id).is_some_and(|c| c.undoable && !c.view)
+}
+
+/// The status line after a menu edit that changed nothing: the item, and what it needs.
+fn nothing_changed(path: &str, id: &str) -> String {
+    let item = path.split_once(" > ").map_or(path, |(_, rest)| rest).replace(" > ", " › ");
+    let item = item.trim_end_matches("...").trim_end_matches('…');
+    let need = NEEDS.iter().find(|(i, _)| *i == id).map_or("there is nothing in the selection for it to act on", |(_, n)| n);
+    format!("{item} changed nothing: {need}")
 }
 
 /// An error as the status line shows it: the engine's "bad parameters for `edit.space_clips`:
@@ -1817,6 +1912,25 @@ pub fn parity() -> Value {
 mod tests {
     use super::*;
     use crate::{Services, SoundApp};
+
+    /// Every command a "changed nothing" reason is written for exists, and the message names the
+    /// item as shown, without its menu.
+    #[test]
+    fn the_reasons_for_changing_nothing_name_real_commands() {
+        for (id, need) in NEEDS {
+            assert!(soundcraft_engine::find_command(id).is_some(), "{id} is not a command");
+            assert!(!need.is_empty() && watches_for_no_change(id));
+        }
+        assert_eq!(
+            nothing_changed("Edit > Heal Separation", "edit.heal"),
+            "Heal Separation changed nothing: select across a separation between pieces of the same clip"
+        );
+        assert_eq!(
+            nothing_changed("Edit > Clear Special > Clip Gain", "edit.clear_clip_gain"),
+            "Clear Special › Clip Gain changed nothing: select clips with clip gain"
+        );
+        assert!(!watches_for_no_change("edit.copy"), "a copy changes the clipboard, not the session");
+    }
 
     #[test]
     fn mix_view_aliases_are_allocated_once() {
