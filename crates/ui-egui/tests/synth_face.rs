@@ -64,11 +64,25 @@ fn press_drag_release(h: &mut Harness<'_, SoundApp>, from: Pos2, to: Pos2) {
 #[test]
 fn every_parameter_is_on_the_panel() {
     for plugin in ["subtractive_synth", "wavetable_synth", "fm_synth"] {
-        let (h, _) = harness(plugin);
+        let (mut h, _) = harness(plugin);
         let info = soundcraft_dsp::plugin_info(plugin).unwrap();
-        for p in info.params {
+        // Steeple shows one operator's controls at a time: its OP keys bring each one up.
+        let op_of = |id: &str| id.strip_prefix("op").and_then(|r| r.chars().next()).and_then(|c| c.to_digit(10));
+        for p in info.params.iter().filter(|p| op_of(p.id).is_none()) {
             // `get_by_label` fails on none and on more than one.
             let _ = h.get_by_label(p.name);
+        }
+        for k in 1..=4 {
+            let mine: Vec<_> = info.params.iter().filter(|p| op_of(p.id) == Some(k)).collect();
+            if mine.is_empty() {
+                continue;
+            }
+            h.get_by_label(&format!("OP {k}")).click();
+            step(&mut h);
+            step(&mut h);
+            for p in mine {
+                let _ = h.get_by_label(p.name);
+            }
         }
         // The sources to patch with, and the panel's own switches.
         for s in ["Amp Env", "Env 2", "LFO", "Velocity", "Mod Wheel", "Key", "Random", "Surprise", "Front", "Back", "Pin", "Follow"] {
@@ -150,6 +164,27 @@ fn surprise_is_one_step_and_back_shows_the_cables() {
     step(&mut h);
     step(&mut h);
     let _ = h.get_by_label("Cutoff");
+}
+
+/// On the Back, a cable dragged from a source's output to a socket patches it, and pulled off
+/// the socket into the panel removes it (each one undo step).
+#[test]
+fn on_the_back_a_cable_patches_and_pulling_it_out_removes_it() {
+    let (mut h, t) = harness("subtractive_synth");
+    h.get_by_label("Back").click();
+    step(&mut h);
+    step(&mut h);
+    let (from, to) = (centre(&h, "LFO out"), centre(&h, "Cutoff socket"));
+    press_drag_release(&mut h, from, to);
+    assert_eq!(slots(&h, t), vec![("lfo".to_string(), "cutoff".to_string(), 0.25)]);
+    for _ in 0..30 {
+        step(&mut h);
+    }
+    let away = to + vec2(0.0, -60.0);
+    press_drag_release(&mut h, to, away);
+    assert!(slots(&h, t).is_empty(), "pulled out");
+    h.state_mut().engine.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(slots(&h, t).len(), 1, "the pull is one undo step");
 }
 
 /// The preset display's next button loads the first factory preset and shows its name.

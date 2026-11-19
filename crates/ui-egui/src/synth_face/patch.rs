@@ -101,6 +101,8 @@ pub struct State {
     pub rename: Option<(usize, String)>,
     /// The source chip hovered last frame (its targets light up).
     pub hover_source: Option<usize>,
+    /// The Back's input jack whose amount knob shows.
+    pub amount_at: Option<String>,
 }
 
 fn state_id(track: TrackId) -> Id {
@@ -214,10 +216,31 @@ pub fn set_arc_amount(app: &mut SoundApp, track: TrackId, ins: &Insert, kind: Ar
 /// A cable from `a` to `b` hanging with a sag (and a sway `sway` points, swinging), with a shadow
 /// and plugs at both ends.
 pub fn cable(p: &Painter, a: Pos2, b: Pos2, colour: Color32, sway: f32) {
-    let sag = 50.0 + (b.y - a.y).abs() * 0.25 + (b.x - a.x).abs() * 0.08 + sway;
+    for sh in cable_shapes(a, b, colour, sway) {
+        p.add(sh);
+    }
+    for e in [a, b] {
+        p.circle_filled(e, 4.5, colour.lerp_to_gamma(Color32::BLACK, 0.3));
+        p.circle_filled(e, 2.8, colour);
+    }
+}
+
+/// [`cable`]'s rope without its plugs, as shapes: shadow, body, highlight.
+pub fn cable_shapes(a: Pos2, b: Pos2, colour: Color32, sway: f32) -> Vec<Shape> {
+    let d = a.distance(b);
+    let sag = 18.0 + d * 0.18 + sway;
     let dx = (b.x - a.x) * 0.3;
-    let c1 = a + vec2(dx, sag);
-    let c2 = b + vec2(-dx, sag);
+    // The rope hangs below the higher end and leaves the lower end gently, so a cable running up
+    // the panel does not dip under its own jack first.
+    let (sa, sb) = if a.y > b.y + 20.0 {
+        (sag * 0.25, sag)
+    } else if b.y > a.y + 20.0 {
+        (sag, sag * 0.25)
+    } else {
+        (sag, sag)
+    };
+    let c1 = a + vec2(dx, sa);
+    let c2 = b + vec2(-dx, sb);
     let pts: Vec<Pos2> = (0..=40)
         .map(|i| {
             let t = i as f32 / 40.0;
@@ -226,13 +249,11 @@ pub fn cable(p: &Painter, a: Pos2, b: Pos2, colour: Color32, sway: f32) {
             v.to_pos2()
         })
         .collect();
-    p.add(Shape::line(pts.iter().map(|q| *q + vec2(0.0, 3.0)).collect(), Stroke::new(7.0, kit::alpha(Color32::BLACK, 0.45))));
-    p.add(Shape::line(pts.clone(), Stroke::new(5.0, colour)));
-    p.add(Shape::line(pts.iter().map(|q| *q - vec2(0.0, 1.2)).collect(), Stroke::new(1.2, kit::alpha(Color32::WHITE, 0.25))));
-    for e in [a, b] {
-        p.circle_filled(e, 5.5, colour.lerp_to_gamma(Color32::BLACK, 0.3));
-        p.circle_filled(e, 3.0, colour);
-    }
+    vec![
+        Shape::line(pts.iter().map(|q| *q + vec2(0.0, 2.5)).collect(), Stroke::new(5.5, kit::alpha(Color32::BLACK, 0.45))),
+        Shape::line(pts.clone(), Stroke::new(3.8, colour)),
+        Shape::line(pts.iter().map(|q| *q - vec2(0.0, 1.0)).collect(), Stroke::new(1.0, kit::alpha(Color32::WHITE, 0.25))),
+    ]
 }
 
 /// How far the cables swing now, `t` seconds after they were moved (none with Reduce motion).
@@ -244,104 +265,9 @@ pub fn sway(now: f64, moved_at: f64, reduce_motion: bool) -> f32 {
     16.0 * (std::f32::consts::TAU * 1.4 * t).sin() * (-t * 2.6).exp()
 }
 
-/// A jack on the Back: the nut, the socket ringed in `ring`, the hole.
-fn jack(p: &Painter, c: Pos2, ring: Color32) {
-    p.circle_filled(c, 12.0, Color32::from_rgb(0x8d, 0x8a, 0x84));
-    p.circle_filled(c, 9.0, Color32::from_rgb(0x2a, 0x29, 0x26));
-    p.circle_stroke(c, 9.0, Stroke::new(2.0, ring));
-    p.circle_filled(c, 4.0, Color32::from_rgb(5, 5, 5));
-}
-
 /// The foreground painter for what is dragged (over every window).
 fn top_painter(ui: &Ui, track: TrackId) -> Painter {
     ui.ctx().layer_painter(LayerId::new(Order::Tooltip, Id::new(("synth-face-drag", track.0))))
-}
-
-/// The sources (and their hint) as chips in `r`: dragging one starts a patch; hovering one lights
-/// what it drives. Returns the hovered source.
-pub fn sources(ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State) -> Option<usize> {
-    let face = cx.face;
-    let p = ui.painter().clone();
-    kit::section(&p, r, "Sources", "drag one onto a knob", face);
-    let inner = Rect::from_min_max(r.min + vec2(12.0, 16.0), r.max - vec2(12.0, 8.0));
-    let mut hovered = None;
-    let widths: Vec<f32> = SOURCES.iter().map(|s| kit::chip_width(&p, s.name)).collect();
-    let line_h = 28.0;
-    let gap = 6.0;
-    let total: f32 = widths.iter().sum::<f32>() + gap * (widths.len().saturating_sub(1)) as f32;
-    // One line when they fit, centred in the frame.
-    let (mut x, mut y) = if total <= inner.width() {
-        (inner.left() + (inner.width() - total) * 0.5, inner.center().y - line_h * 0.5 - 4.0)
-    } else {
-        (inner.left(), inner.top() + 4.0)
-    };
-    for (i, s) in SOURCES.iter().enumerate() {
-        let w = widths[i];
-        if x + w > inner.right() {
-            x = inner.left();
-            y += line_h + 8.0;
-        }
-        let cr = Rect::from_min_size(pos2(x, y), vec2(w, line_h - 4.0));
-        let resp = kit::chip(ui, cr, (cx.track.0, "src", i), s.name, source_colour(i), face);
-        if resp.hovered() {
-            hovered = Some(i);
-        }
-        if resp.drag_started() {
-            st.drag = Some((Drag::Source(i), pos2(cr.left() + 13.0, cr.center().y)));
-        }
-        let _ = resp.on_hover_text(format!("{}: drag onto a knob to have it move that knob", s.name));
-        x += w + gap;
-    }
-    hovered
-}
-
-/// The four macro knobs in section `r`: the knob sets the macro (an ordinary, automatable
-/// parameter); its name under it is a handle: drag it onto a knob to give the macro that target,
-/// double-click it to rename the macro.
-pub fn macros(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State) {
-    let face = cx.face;
-    let p = ui.painter().clone();
-    kit::section(&p, r, "Macros", "one knob, many targets", face);
-    let cells = kit::section_cells(r, 4);
-    let caps = (face.accent.lerp_to_gamma(Color32::WHITE, 0.15), face.accent.lerp_to_gamma(Color32::BLACK, 0.45), face.on_accent);
-    for (m, cell) in cells.iter().enumerate() {
-        let name = cx.ins.modulation.macro_name(m);
-        let param = sm::MACRO_PARAMS[m];
-        kit::knob_ex(app, ui, cx, *cell, param, &name, Some(caps));
-        let label = Rect::from_min_size(pos2(cell.left() - 4.0, cell.top() + kit::KNOB + 1.0), vec2(cell.width() + 8.0, 14.0));
-        let hid = Id::new(("synth-macro-name", cx.track.0, m));
-        if let Some((rm, text)) = st.rename.as_mut().filter(|(rm, _)| *rm == m) {
-            let mut t = text.clone();
-            let edit = ui.put(label.expand2(vec2(10.0, 2.0)), egui::TextEdit::singleline(&mut t).id(hid.with("edit")).char_limit(24));
-            edit.request_focus();
-            let done = ui.input(|i| i.key_pressed(egui::Key::Enter)) || edit.lost_focus();
-            let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            *text = t;
-            if cancel {
-                st.rename = None;
-            } else if done {
-                let name = text.trim().to_string();
-                let idx = *rm;
-                st.rename = None;
-                run(app, "mix.macro_name", json!({"track": cx.track.0, "macro": idx + 1, "name": name}));
-            }
-            continue;
-        }
-        let resp = ui.interact(label, hid, Sense::click_and_drag());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Macro {} handle", m + 1)));
-        if resp.hovered() {
-            ui.ctx().set_cursor_icon(CursorIcon::Grab);
-            p.rect_stroke(label, 3.0, Stroke::new(1.0, kit::alpha(face.accent, 0.6)), egui::StrokeKind::Inside);
-        }
-        if resp.drag_started() {
-            st.drag = Some((Drag::Macro(m), label.center()));
-        }
-        if resp.double_clicked() {
-            st.rename = Some((m, name.clone()));
-        }
-        let n = cx.ins.modulation.macros.get(m).map_or(0, |x| x.targets.len());
-        let _ = resp.on_hover_text(format!("{name}: {n} target(s). Drag onto a knob to add one; double-click to rename"));
-    }
 }
 
 /// Where a dragged source or macro is dropped on the Front: the knob under the pointer takes it.
@@ -384,112 +310,191 @@ pub fn front_drop(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, st: &mut State) {
     }
 }
 
-/// The Back of the panel in `r`: source jacks on the left, a jack for every destination on the
-/// right, the patch as hanging cables between them. Drag from a source jack to a destination to
-/// patch; drag a cable's end to another destination to re-patch, or away from every jack to pull
-/// it out.
-pub fn back(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State, reduce_motion: bool) {
+/// The sources (and their hint) as chips in `r`, left-aligned: dragging one starts a patch;
+/// hovering one lights what it drives (the Front; on the Back each source's output sits on its
+/// own module, [`kit::outputs_on`]). Returns the hovered source.
+pub fn sources(ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State) -> Option<usize> {
+    let face = cx.face;
     let p = ui.painter().clone();
-    p.rect_filled(r, 5.0, Color32::from_rgb(0x1b, 0x1a, 0x18));
-    let mut y = r.top() + 1.0;
-    while y < r.bottom() {
-        p.hline(r.left() + 1.0..=r.right() - 1.0, y, Stroke::new(2.0, Color32::from_rgb(0x1f, 0x1e, 0x1b)));
-        y += 4.0;
-    }
-    kit::well(&p, r, &kit::Face { well: Color32::TRANSPARENT, ..*cx.face }, 5.0);
-    let head = |x: f32, text: &str, align: Align2| {
-        crate::editor_kit::look::tracked_text(
-            &p,
-            Rect::from_min_size(pos2(x, r.top() + 10.0), vec2(0.0, 14.0)),
-            align,
-            text,
-            10.0,
-            0.2,
-            true,
-            true,
-            Color32::from_rgb(0x7d, 0x77, 0x6e),
-        );
-    };
-    let label = Color32::from_rgb(0xb8, 0xb1, 0xa6);
-    head(r.left() + 26.0, "Sources out", Align2::LEFT_CENTER);
-    head(r.right() - 26.0, "Mod in", Align2::RIGHT_CENTER);
-    // Source jacks: the seven sources, then the four macros.
-    let n_src = SOURCES.len() + 4;
-    let top = r.top() + 44.0;
-    let step = ((r.height() - 64.0) / (n_src - 1) as f32).min(52.0);
-    let src_at = |i: usize| pos2(r.left() + 38.0, top + step * i as f32);
-    let mut jacks_src: Vec<(Drag, Pos2)> = Vec::new();
-    // The jacks' names, printed over the cables on a dark plate so a cable never hides one.
-    let mut labels: Vec<(Pos2, Align2, String)> = Vec::new();
+    kit::section(&p, r, "Sources", "drag one onto a knob", face);
+    let inner = Rect::from_min_max(r.min + vec2(8.0, 13.0), r.max - vec2(8.0, 4.0));
+    let mut hovered = None;
+    let widths: Vec<f32> = SOURCES.iter().map(|s| kit::chip_width(&p, s.name)).collect();
+    let (line_h, gap) = (20.0, 5.0);
+    let lines = if widths.iter().sum::<f32>() + gap * (widths.len() as f32 - 1.0) <= inner.width() { 1.0 } else { 2.0 };
+    let top = inner.center().y - (lines * line_h + (lines - 1.0) * 6.0) * 0.5;
+    let (mut x, mut y) = (inner.left(), top);
     for (i, s) in SOURCES.iter().enumerate() {
-        let c = src_at(i);
-        jack(&p, c, source_colour(i));
-        labels.push((c + vec2(20.0, 0.0), Align2::LEFT_CENTER, s.name.to_uppercase()));
-        jacks_src.push((Drag::Source(i), c));
+        let w = widths[i];
+        if (lines > 1.0 && i == SOURCES.len().div_ceil(2)) || x + w > inner.right() + 0.5 {
+            x = inner.left();
+            y += line_h + 6.0;
+        }
+        let cr = Rect::from_min_size(pos2(x, y), vec2(w, line_h));
+        let resp = kit::chip(ui, cr, (cx.track.0, "src", i), s.name, source_colour(i), face);
+        if resp.hovered() {
+            hovered = Some(i);
+        }
+        if resp.drag_started() {
+            st.drag = Some((Drag::Source(i), pos2(cr.left() + 11.0, cr.center().y)));
+        }
+        let _ = resp.on_hover_text(format!("{}: drag onto a knob to have it move that knob", s.name));
+        x += w + gap;
     }
-    for m in 0..4 {
-        let c = src_at(SOURCES.len() + m);
-        jack(&p, c, cx.face.accent);
-        labels.push((c + vec2(20.0, 0.0), Align2::LEFT_CENTER, cx.ins.modulation.macro_name(m).to_uppercase()));
-        jacks_src.push((Drag::Macro(m), c));
+    hovered
+}
+
+/// The four macro knobs in section `r`: the knob sets the macro (an ordinary, automatable
+/// parameter); its name under it is a handle: drag it onto a knob to give the macro that target,
+/// double-click it to rename the macro. On the Back each macro is an output jack.
+pub fn macros(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State) {
+    let face = cx.face;
+    let p = ui.painter().clone();
+    kit::section(&p, r, "Macros", if cx.back { "outputs" } else { "" }, face);
+    let cells = kit::section_cells(r, 4);
+    let caps = (face.accent.lerp_to_gamma(Color32::WHITE, 0.15), face.accent.lerp_to_gamma(Color32::BLACK, 0.45), face.on_accent);
+    for (m, cell) in cells.iter().enumerate() {
+        let name = cx.ins.modulation.macro_name(m);
+        if cx.back {
+            let c = pos2(cell.center().x, cell.top() + kit::KNOB * 0.5 + 1.0);
+            kit::output_jack(&p, c, face.accent);
+            let lr = Rect::from_min_size(pos2(cell.left() - 8.0, cell.top() + kit::KNOB + 2.0), vec2(cell.width() + 16.0, 12.0));
+            let w = crate::editor_kit::look::tracked_width(&p, &name, 9.5, 0.02, true);
+            p.rect_filled(Rect::from_center_size(lr.center(), vec2(w + 6.0, 12.0)), 2.0, kit::alpha(face.panel_at(0.5), 0.92));
+            crate::editor_kit::look::tracked_text(&p, lr, Align2::CENTER_CENTER, &name, 9.5, 0.02, true, true, face.ink);
+            cx.outputs.borrow_mut().push((SOURCES.len() + m, c));
+            continue;
+        }
+        let param = sm::MACRO_PARAMS[m];
+        kit::knob_ex(app, ui, cx, *cell, param, &name, Some(caps));
+        let label = Rect::from_min_size(pos2(cell.left() - 4.0, cell.top() + kit::KNOB + 2.0), vec2(cell.width() + 8.0, 12.0));
+        let hid = Id::new(("synth-macro-name", cx.track.0, m));
+        if let Some((rm, text)) = st.rename.as_mut().filter(|(rm, _)| *rm == m) {
+            let mut t = text.clone();
+            let edit = ui.put(label.expand2(vec2(10.0, 2.0)), egui::TextEdit::singleline(&mut t).id(hid.with("edit")).char_limit(24));
+            edit.request_focus();
+            let done = ui.input(|i| i.key_pressed(egui::Key::Enter)) || edit.lost_focus();
+            let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            *text = t;
+            if cancel {
+                st.rename = None;
+            } else if done {
+                let name = text.trim().to_string();
+                let idx = *rm;
+                st.rename = None;
+                run(app, "mix.macro_name", json!({"track": cx.track.0, "macro": idx + 1, "name": name}));
+            }
+            continue;
+        }
+        let resp = ui.interact(label, hid, Sense::click_and_drag());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Macro {} handle", m + 1)));
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::Grab);
+            p.rect_stroke(label, 3.0, Stroke::new(1.0, kit::alpha(face.accent, 0.6)), egui::StrokeKind::Inside);
+        }
+        if resp.drag_started() {
+            st.drag = Some((Drag::Macro(m), label.center()));
+        }
+        if resp.double_clicked() {
+            st.rename = Some((m, name.clone()));
+        }
+        let n = cx.ins.modulation.macros.get(m).map_or(0, |x| x.targets.len());
+        let _ = resp.on_hover_text(format!("{name}: {n} target(s). Drag onto a knob to add one; double-click to rename"));
     }
-    // Destination jacks: two columns from the right.
-    let ds = dests(&cx.ins.plugin);
-    let per_col = ds.len().div_ceil(2).max(1);
-    let dstep = ((r.height() - 64.0) / (per_col.max(2) - 1) as f32).min(52.0);
-    let dest_at = |i: usize| {
-        let col = i / per_col;
-        pos2(r.right() - 38.0 - col as f32 * 230.0, top + dstep * (i % per_col) as f32)
+}
+
+/// What patches a destination on the Back: its cables, each `(arc index, source position)`.
+fn cables_into<'a>(cx: &'a Ctx, kinds: &'a [ArcKind], dest: &'a str) -> impl Iterator<Item = (usize, Option<Pos2>)> + 'a {
+    cx.arcs.iter().enumerate().filter(move |(_, a)| a.dest == dest).map(move |(i, _)| (i, output_of(cx, kinds.get(i).copied())))
+}
+
+/// Where the output jack of what drew an arc is.
+fn output_of(cx: &Ctx, kind: Option<ArcKind>) -> Option<Pos2> {
+    let idx = match kind? {
+        ArcKind::Slot(i) => sm::source_index(&cx.ins.modulation.slots.get(i)?.source)?,
+        ArcKind::Macro(m, _) => SOURCES.len() + m,
     };
-    for (i, d) in ds.iter().enumerate() {
-        let c = dest_at(i);
-        jack(&p, c, Color32::from_rgb(0x5c, 0x59, 0x52));
-        labels.push((c - vec2(20.0, 0.0), Align2::RIGHT_CENTER, dest_name(&cx.ins.plugin, d).to_uppercase()));
+    cx.outputs.borrow().iter().find(|(k, _)| *k == idx).map(|(_, c)| *c)
+}
+
+/// The Back's cables and gestures, over the layout the panel drew with its jacks (the inputs in
+/// `cx.centres`, the outputs in `cx.outputs`). The cables go into `slot` (drawn under every jack
+/// and label), their plugs over the jacks. Drag from an output jack to an input to patch; drag a
+/// cable's end off its jack to another to re-patch, or away from every jack to pull it out; hover
+/// a jack for what is patched there, and turn the small amount knob that appears beside it.
+pub fn back(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect, st: &mut State, reduce_motion: bool, slot: egui::layers::ShapeIdx) {
+    let p = ui.painter().clone();
+    let (_, kinds) = arcs(cx.ins, cx.face);
+    // The sockets on the panel; `@opN` marks where operator N's controls are when they are not
+    // shown (Steeple shows one operator at a time): its cables end there.
+    let all: Vec<(String, Pos2)> = cx.centres.borrow().clone();
+    let inputs: Vec<(String, Pos2)> = all.iter().filter(|(d, _)| !d.starts_with('@')).cloned().collect();
+    let mut ends: Vec<(String, Pos2)> = inputs.clone();
+    for a in cx.arcs {
+        if ends.iter().any(|(d, _)| *d == a.dest) {
+            continue;
+        }
+        let op = a.dest.strip_prefix("op").and_then(|r| r.chars().next()).filter(char::is_ascii_digit);
+        if let Some(n) = op
+            && let Some((_, c)) = all.iter().find(|(d, _)| *d == format!("@op{n}"))
+        {
+            ends.push((a.dest.clone(), *c));
+        }
     }
-    let dest_pos = |d: &str| ds.iter().position(|x| *x == d).map(dest_at);
+    let outputs: Vec<(usize, Pos2)> = cx.outputs.borrow().clone();
     let now = ui.input(|i| i.time);
     let sw = sway(now, st.moved_at, reduce_motion);
     if sw != 0.0 {
         ui.ctx().request_repaint();
     }
-    // The cables, the one being dragged left out (it follows the pointer).
     let dragged = st.drag.map(|(d, _)| d);
-    let mut cable_ends: Vec<(Drag, Pos2, Pos2, Color32)> = Vec::new();
-    for (i, s) in cx.ins.modulation.slots.iter().enumerate() {
-        let (Some(si), Some(b)) = (sm::source_index(&s.source), dest_pos(&s.dest)) else { continue };
-        cable_ends.push((Drag::Cable(i), src_at(si), b, source_colour(si)));
-    }
-    for (m, mac) in cx.ins.modulation.macros.iter().enumerate().take(4) {
-        for (t, tg) in mac.targets.iter().enumerate() {
-            if let Some(b) = dest_pos(&tg.dest) {
-                cable_ends.push((Drag::MacroCable(m, t), src_at(SOURCES.len() + m), b, cx.face.accent));
+    let drag_of = |k: ArcKind| match k {
+        ArcKind::Slot(i) => Drag::Cable(i),
+        ArcKind::Macro(m, t) => Drag::MacroCable(m, t),
+    };
+    // The cables, fanned a little where several go into one jack.
+    let mut shapes = Vec::new();
+    let mut plugs = Vec::new();
+    for (dest, b) in &ends {
+        let into: Vec<(usize, Option<Pos2>)> = cables_into(cx, &kinds, dest).collect();
+        let n = into.len();
+        for (k, (arc, from)) in into.into_iter().enumerate() {
+            let (Some(a), Some(kind)) = (from, kinds.get(arc).copied()) else { continue };
+            if Some(drag_of(kind)) == dragged {
+                continue;
             }
+            let fan = (k as f32 - (n as f32 - 1.0) * 0.5) * 5.0;
+            let end = *b + vec2(fan, 0.0);
+            let colour = cx.arcs.get(arc).map_or(Color32::WHITE, |x| x.colour);
+            let phase = if arc % 2 == 0 { 1.0 } else { -0.7 };
+            shapes.extend(cable_shapes(a, end, colour, sw * phase));
+            plugs.push((a, colour));
+            plugs.push((end, colour));
         }
     }
-    for (k, (d, a, b, c)) in cable_ends.iter().enumerate() {
-        if Some(*d) != dragged {
-            // Each cable swings a little out of step with the next.
-            let phase = if k % 2 == 0 { 1.0 } else { -0.7 };
-            cable(&p, *a, *b, *c, sw * phase);
-        }
+    p.set(slot, Shape::Vec(shapes));
+    for (c, colour) in plugs {
+        p.circle_filled(c, 4.5, colour.lerp_to_gamma(Color32::BLACK, 0.35));
+        p.circle_filled(c, 2.8, colour);
     }
-    for (at, align, text) in labels {
-        let g = p.layout_no_wrap(text, kit_font(), label);
-        let r = align.anchor_size(at, g.size());
-        p.rect_filled(r.expand2(vec2(4.0, 1.0)), 3.0, kit::alpha(Color32::from_rgb(0x1b, 0x1a, 0x18), 0.85));
-        p.galley(r.min, g, label);
-    }
-    // Gestures: press on a source jack (a new cable) or on a destination jack holding a cable.
-    let resp = ui.interact(r, Id::new(("synth-back", cx.track.0)), Sense::drag());
+    // Gestures over the whole back.
+    let resp = ui.interact(area, Id::new(("synth-back", cx.track.0)), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Patch cables"));
-    let pointer = ui.input(|i| i.pointer.interact_pos());
+    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let near_input =
+        |at: Pos2| inputs.iter().filter(|(_, c)| c.distance(at) < 12.0).min_by(|a, b| a.1.distance(at).total_cmp(&b.1.distance(at))).cloned();
+    let near_output = |at: Pos2| outputs.iter().find(|(_, c)| c.distance(at) < 12.0).copied();
     if resp.drag_started()
         && let Some(at) = ui.input(|i| i.pointer.press_origin())
     {
-        if let Some((d, c)) = jacks_src.iter().find(|(_, c)| c.distance(at) < 14.0) {
-            st.drag = Some((*d, *c));
-        } else if let Some((d, a, _, _)) = cable_ends.iter().rev().find(|(_, _, b, _)| b.distance(at) < 14.0) {
-            st.drag = Some((*d, *a));
+        if let Some((k, c)) = near_output(at) {
+            let d = if k < SOURCES.len() { Drag::Source(k) } else { Drag::Macro(k - SOURCES.len()) };
+            st.drag = Some((d, c));
+        } else if let Some((dest, _)) = near_input(at)
+            && let Some((arc, Some(from))) = cables_into(cx, &kinds, &dest).last()
+            && let Some(kind) = kinds.get(arc).copied()
+        {
+            st.drag = Some((drag_of(kind), from));
         }
     }
     if let (Some((d, from)), Some(at)) = (st.drag, pointer) {
@@ -504,12 +509,12 @@ pub fn back(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State, 
     if resp.drag_stopped()
         && let Some((d, _)) = st.drag.take()
     {
-        let target = pointer.and_then(|at| ds.iter().enumerate().find(|(i, _)| dest_at(*i).distance(at) < 16.0).map(|(_, x)| *x));
+        let target = pointer.and_then(near_input).map(|(dest, _)| dest);
         let changed = match target {
             Some(dest) => {
                 let check = match d {
-                    Drag::Source(i) => sm::check_slot(&cx.ins.plugin, SOURCES[i].id, dest).err(),
-                    Drag::Cable(slot) => cx.ins.modulation.slots.get(slot).and_then(|s| sm::check_slot(&cx.ins.plugin, &s.source, dest).err()),
+                    Drag::Source(i) => sm::check_slot(&cx.ins.plugin, SOURCES[i].id, &dest).err(),
+                    Drag::Cable(slot) => cx.ins.modulation.slots.get(slot).and_then(|s| sm::check_slot(&cx.ins.plugin, &s.source, &dest).err()),
                     _ => None,
                 };
                 match check {
@@ -517,7 +522,7 @@ pub fn back(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State, 
                         app.ui.status = e;
                         false
                     }
-                    None => drop_on(app, cx.track, cx.ins, d, dest),
+                    None => drop_on(app, cx.track, cx.ins, d, &dest),
                 }
             }
             None => pull_out(app, cx.track, cx.ins, d),
@@ -526,8 +531,74 @@ pub fn back(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State, 
             st.moved_at = now;
         }
     }
+    // Hover: what is patched at a jack, and the amount knob beside a patched input.
+    let hovered_input = pointer.and_then(near_input);
+    if st.drag.is_none() {
+        if let Some((dest, _)) = &hovered_input {
+            let name = dest_name(&cx.ins.plugin, dest);
+            let list: Vec<String> = cx.arcs.iter().filter(|a| &a.dest == dest).map(|a| format!("{} {:+.0}%", a.name, a.amount * 100.0)).collect();
+            let text = if list.is_empty() {
+                format!("{name}: drag a source's cable here")
+            } else {
+                format!("{name}: {} · drag a cable's end away to pull it out", list.join(", "))
+            };
+            let _ = resp.clone().on_hover_text_at_pointer(text);
+            if !list.is_empty() {
+                st.amount_at = Some(dest.clone());
+            }
+        } else if let Some((k, _)) = pointer.and_then(near_output) {
+            let name = if k < SOURCES.len() { SOURCES[k].name.to_string() } else { cx.ins.modulation.macro_name(k - SOURCES.len()) };
+            let _ = resp.clone().on_hover_text_at_pointer(format!("{name}: drag from here to a socket"));
+        }
+    }
+    amount_knob(app, ui, cx, &kinds, &inputs, st, pointer);
 }
 
-fn kit_font() -> egui::FontId {
-    crate::theme::bold(10.5)
+/// The small knob beside a patched input on the Back that sets its last cable's amount (one undo
+/// step per drag). It stays while the pointer is on the jack or the knob.
+fn amount_knob(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, kinds: &[ArcKind], inputs: &[(String, Pos2)], st: &mut State, pointer: Option<Pos2>) {
+    let Some(dest) = st.amount_at.clone() else { return };
+    let Some(&(_, c)) = inputs.iter().find(|(d, _)| *d == dest).map(|x| x as &(String, Pos2)) else {
+        st.amount_at = None;
+        return;
+    };
+    let Some(arc) = cx.arcs.iter().rposition(|a| a.dest == dest) else {
+        st.amount_at = None;
+        return;
+    };
+    let kr = Rect::from_center_size(c + vec2(19.0, -12.0), vec2(16.0, 16.0));
+    let id = Id::new(("synth-back-amount", cx.track.0));
+    let busy = ui.ctx().is_being_dragged(id.with("dial"));
+    let stays = busy || pointer.is_some_and(|q| q.distance(c) < 13.0 || kr.expand(4.0).contains(q));
+    if !stays {
+        st.amount_at = None;
+        return;
+    }
+    let amount = cx.arcs[arc].amount;
+    let opts = crate::editor_kit::controls::DialOpts { label: "Amount", default: 0.5, ..Default::default() };
+    let out = crate::editor_kit::controls::dial_input(ui, kr, id.with("dial"), (amount + 1.0) * 0.5, &opts);
+    if let Some(v) = out.value
+        && let Some(k) = kinds.get(arc).copied()
+    {
+        set_arc_amount(app, cx.track, cx.ins, k, (v * 2.0 - 1.0).clamp(-1.0, 1.0), "back-amount");
+    }
+    if out.ended {
+        app.engine.end_merge();
+    }
+    let p = ui.painter();
+    let colour = cx.arcs[arc].colour;
+    p.circle_filled(kr.center(), 8.5, Color32::from_rgb(0x1e, 0x1d, 0x1b));
+    p.circle_stroke(kr.center(), 8.5, Stroke::new(1.0, kit::alpha(Color32::WHITE, 0.4)));
+    let a0 = -std::f32::consts::FRAC_PI_2;
+    let a1 = a0 + std::f32::consts::PI * 0.9 * amount;
+    let n = 16;
+    let arc_pts: Vec<Pos2> = (0..=n)
+        .map(|i| {
+            let a = a0 + (a1 - a0) * i as f32 / n as f32;
+            kr.center() + 6.0 * vec2(a.cos(), a.sin())
+        })
+        .collect();
+    p.add(Shape::line(arc_pts, Stroke::new(2.5, colour)));
+    p.text(kr.center() + vec2(0.0, 13.0), Align2::CENTER_TOP, format!("{:+.0}%", amount * 100.0), crate::theme::mono(9.0), cx.face.ink);
+    let _ = out.response.on_hover_text("Amount: drag up or down");
 }

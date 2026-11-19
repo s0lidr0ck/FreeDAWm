@@ -14,30 +14,34 @@ use soundcraft_dsp::plugins::wavetable::tables;
 /// The wavetable synth's plugin id.
 pub const ID: &str = "wavetable_synth";
 
-const DISPLAY_H: f32 = 176.0;
+const DISPLAY_H: f32 = 116.0;
 
 /// The front's height: the displays and three rows of sections.
-pub const BODY_H: f32 = DISPLAY_H + 18.0 + 3.0 * (kit::SECTION_H + 16.0);
+pub const BODY_H: f32 = DISPLAY_H + 10.0 + 3.0 * (kit::SECTION_H + kit::GAP);
 
 /// Draws Cicada's front (its displays and sections) into `area`.
 pub fn body(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect) {
     let face = cx.face;
     let p = ui.painter().clone();
     let disp = Rect::from_min_size(area.min, vec2(area.width(), DISPLAY_H));
-    let parts = kit::row(disp, &[Share::Knobs(1), Share::Fixed(270.0)]);
-    if let [wave, envs] = parts.as_slice() {
+    let parts = kit::row(disp, &[Share::Knobs(1), Share::Fixed(190.0)]);
+    if cx.back {
+        for (r, tag) in parts.iter().zip(["Wavetable", "Envelopes"]) {
+            kit::rear_plate(&p, *r, tag, face);
+        }
+    } else if let [wave, envs] = parts.as_slice() {
         draw_table(app, ui, *wave, cx);
         draw_envelopes(&p, *envs, cx);
     }
 
     let row_h = kit::SECTION_H;
-    let mut y = disp.bottom() + 18.0;
+    let mut y = disp.bottom() + 10.0;
     let mut next_row = |shares: &[Share]| {
         let rr = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), row_h));
-        y += row_h + 16.0;
+        y += row_h + kit::GAP;
         kit::row(rr, shares)
     };
-    let fw = 4.0 * 34.0 + 16.0;
+    let fw = kit::ENV_W;
     let (env1, env2) = (kit::SOURCE_COLOURS[0], kit::SOURCE_COLOURS[1]);
 
     let r1 = next_row(&[Share::Knobs(4), Share::Knobs(2), Share::Knobs(3), Share::Knobs(2), Share::Fixed(fw)]);
@@ -45,13 +49,13 @@ pub fn body(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect) {
         section(&p, *table, "Table", &table_name(cx), face);
         let c = section_cells(*table, 4);
         kit::knob(app, ui, cx, c[0], "table", "Table");
-        kit::knob(app, ui, cx, c[1], "position", "Position");
+        kit::knob(app, ui, cx, c[1], "position", "Pos");
         kit::knob(app, ui, cx, c[2], "osc_pitch", "Pitch");
         kit::knob(app, ui, cx, c[3], "osc_fine", "Fine");
         section(&p, *warp, "Warp", &kit::short_value_of(cx, "warp_mode"), face);
         let c = section_cells(*warp, 2);
         kit::knob(app, ui, cx, c[0], "warp_mode", "Mode");
-        kit::knob(app, ui, cx, c[1], "warp_amount", "Amount");
+        kit::knob(app, ui, cx, c[1], "warp_amount", "Amt");
         let voices = cx.param_info("unison").map(|i| i.format(cx.value("unison"))).unwrap_or_default();
         section(&p, *uni, "Unison", if voices == "Off" { "off" } else { "" }, face);
         let c = section_cells(*uni, 3);
@@ -64,6 +68,7 @@ pub fn body(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect) {
         kit::knob(app, ui, cx, c[1], "noise_level", "Noise");
         section(&p, *amp, "Amp Env", "", face);
         adsr(app, ui, cx, *amp, ["amp_attack", "amp_decay", "amp_sustain", "amp_release"], env1);
+        kit::outputs_on(ui, cx, *amp, &[0]);
     }
 
     let r2 = next_row(&[Share::Knobs(5), Share::Knobs(5), Share::Fixed(fw)]);
@@ -78,6 +83,7 @@ pub fn body(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect) {
         kit::knob(app, ui, cx, c[4], "key_track", "Key Trk");
         let shape = kit::short_value_of(cx, "lfo_wave");
         section(&p, *lfo, "LFO", &shape, face);
+        kit::outputs_on(ui, cx, *lfo, &[2]);
         let c = section_cells(*lfo, 5);
         kit::knob(app, ui, cx, c[0], "lfo_wave", "Shape");
         kit::knob(app, ui, cx, c[1], "lfo_rate", "Rate");
@@ -86,6 +92,7 @@ pub fn body(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect) {
         kit::knob(app, ui, cx, c[4], "lfo_amp", "Level");
         section(&p, *e2, "Env 2", "", face);
         adsr(app, ui, cx, *e2, ["env2_attack", "env2_decay", "env2_sustain", "env2_release"], env2);
+        kit::outputs_on(ui, cx, *e2, &[1]);
     }
 
     let r3 = next_row(&[Share::Knobs(4), Share::Knobs(4), Share::Knobs(2)]);
@@ -94,9 +101,10 @@ pub fn body(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect) {
         let c = section_cells(*pm, 4);
         kit::knob(app, ui, cx, c[0], "env2_position", "Env 2");
         kit::knob(app, ui, cx, c[1], "lfo_position", "LFO");
-        kit::knob(app, ui, cx, c[2], "velocity_position", "Velocity");
+        kit::knob(app, ui, cx, c[2], "velocity_position", "Vel");
         kit::knob(app, ui, cx, c[3], "wheel_position", "Wheel");
         section(&p, *play, "Play", "", face);
+        kit::outputs_on(ui, cx, *play, &[3, 4, 5, 6]);
         let c = section_cells(*play, 4);
         kit::knob(app, ui, cx, c[0], "glide", "Glide");
         kit::knob(app, ui, cx, c[1], "bend_range", "Bend");
@@ -131,9 +139,9 @@ fn draw_table(app: &mut SoundApp, ui: &mut Ui, r: Rect, cx: &Ctx) {
     let bank = cx.value("table").round().clamp(0.0, (tables::BANKS.len() - 1) as f32) as usize;
     let pos = (cx.value("position") / 100.0).clamp(0.0, 1.0);
     const LAYERS: usize = 10;
-    let (dx, dyy) = (13.0, 10.5);
-    let w = r.width() - 60.0 - dx * (LAYERS - 1) as f32;
-    let amp = 26.0;
+    let (dx, dyy) = (10.0, 6.5);
+    let w = r.width() - 40.0 - dx * (LAYERS - 1) as f32;
+    let amp = 18.0;
     let mut y = vec![0.0f32; 192];
     let current = ((pos * (LAYERS - 1) as f32).round() as usize).min(LAYERS - 1);
     // An imported table plays instead of the bank (see `wavetable_import`).
@@ -147,8 +155,8 @@ fn draw_table(app: &mut SoundApp, ui: &mut Ui, r: Rect, cx: &Ctx) {
             Some(t) => t.draw(wave_pos, &mut y),
             None => tables::draw(bank, wave_pos, &mut y),
         }
-        let ox = r.left() + 30.0 + dx * i as f32;
-        let oy = r.bottom() - 40.0 - dyy * i as f32;
+        let ox = r.left() + 20.0 + dx * i as f32;
+        let oy = r.bottom() - 28.0 - dyy * i as f32;
         let pts: Vec<Pos2> =
             y.iter().enumerate().map(|(k, v)| pos2(ox + w * k as f32 / (y.len() - 1) as f32, oy - v.clamp(-1.2, 1.2) * amp)).collect();
         if here {
@@ -202,9 +210,9 @@ fn draw_table(app: &mut SoundApp, ui: &mut Ui, r: Rect, cx: &Ctx) {
 /// The amp envelope over envelope 2, each to its own scale.
 fn draw_envelopes(p: &egui::Painter, r: Rect, cx: &Ctx) {
     kit::display(p, r, "Envelopes", cx.face);
-    let h = (r.height() - 44.0) / 2.0;
-    let a = Rect::from_min_size(pos2(r.left() + 12.0, r.top() + 24.0), vec2(r.width() - 24.0, h - 4.0));
-    let b = Rect::from_min_size(pos2(r.left() + 12.0, a.bottom() + 12.0), vec2(r.width() - 24.0, h - 4.0));
+    let h = (r.height() - 30.0) / 2.0;
+    let a = Rect::from_min_size(pos2(r.left() + 10.0, r.top() + 20.0), vec2(r.width() - 20.0, h - 3.0));
+    let b = Rect::from_min_size(pos2(r.left() + 10.0, a.bottom() + 6.0), vec2(r.width() - 20.0, h - 3.0));
     super::burley::draw_adsr(p, a, cx, "amp", kit::SOURCE_COLOURS[0]);
     super::burley::draw_adsr(p, b, cx, "env2", kit::SOURCE_COLOURS[1]);
 }

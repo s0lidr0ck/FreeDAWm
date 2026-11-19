@@ -47,6 +47,10 @@ pub struct Face {
     pub on_accent: Color32,
     /// The end cheeks' wood, dark and light.
     pub wood: (Color32, Color32),
+    /// The rear plate's colour (the Back), as stops top to bottom.
+    pub rear: &'static [(f32, Color32)],
+    /// Print on a small plate of the panel's colour (the Back, where cables pass under it).
+    pub plates: bool,
 }
 
 impl Face {
@@ -92,7 +96,7 @@ pub fn alpha(c: Color32, a: f32) -> Color32 {
 // ------------------------------------------------------------------------------- the unit
 
 /// The width of an end cheek.
-pub const CHEEK: f32 = 26.0;
+pub const CHEEK: f32 = 18.0;
 
 /// A rectangle filled with `stops` across it: vertical bands left to right when `across`, else
 /// horizontal bands top to bottom.
@@ -170,7 +174,7 @@ pub fn unit(p: &Painter, r: Rect, face: &Face) -> Rect {
     p.hline(panel.x_range(), panel.bottom() - 0.5, Stroke::new(1.0, alpha(Color32::BLACK, 0.2)));
     cheek(p, left, face, true);
     cheek(p, right, face, false);
-    Rect::from_min_max(panel.min + vec2(16.0, 14.0), panel.max - vec2(16.0, 16.0))
+    Rect::from_min_max(panel.min + vec2(10.0, 8.0), panel.max - vec2(10.0, 8.0))
 }
 
 /// The lamp beside the name: the accent, glowing.
@@ -185,10 +189,10 @@ pub fn lamp(p: &Painter, c: Pos2, face: &Face) {
 
 /// The name badge: the name large and letter-spaced, the kind under it. Returns its width.
 pub fn badge(p: &Painter, left_centre: Pos2, name: &str, kind: &str, face: &Face) -> f32 {
-    let row = Rect::from_min_size(pos2(left_centre.x, left_centre.y - 15.0), vec2(400.0, 20.0));
-    let w1 = tracked_text(p, row, Align2::LEFT_CENTER, name, 21.0, 0.14, true, true, face.ink).width();
-    let row2 = Rect::from_min_size(pos2(left_centre.x + 1.0, left_centre.y + 7.0), vec2(400.0, 12.0));
-    let w2 = tracked_text(p, row2, Align2::LEFT_CENTER, kind, 8.5, 0.3, true, true, face.ink2).width();
+    let row = Rect::from_min_size(pos2(left_centre.x, left_centre.y - 12.0), vec2(400.0, 16.0));
+    let w1 = tracked_text(p, row, Align2::LEFT_CENTER, name, 16.0, 0.14, true, true, face.ink).width();
+    let row2 = Rect::from_min_size(pos2(left_centre.x + 1.0, left_centre.y + 4.0), vec2(400.0, 10.0));
+    let w2 = tracked_text(p, row2, Align2::LEFT_CENTER, kind, 7.5, 0.22, true, true, face.ink2).width();
     w1.max(w2)
 }
 
@@ -225,8 +229,8 @@ pub fn lcd(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug, t
         p.text(rr.center(), Align2::CENTER_CENTER, glyph, mono(11.0), alpha(face.well_ink, a));
         resp.on_hover_text(label).clicked()
     };
-    let left = Rect::from_min_size(r.min, vec2(26.0, r.height()));
-    let right = Rect::from_min_max(pos2(r.right() - 26.0, r.top()), r.max);
+    let left = Rect::from_min_size(r.min, vec2(20.0, r.height()));
+    let right = Rect::from_min_max(pos2(r.right() - 20.0, r.top()), r.max);
     let mut out =
         LcdOut { prev: arrow(ui, left, "prev", "◀", "Previous preset"), next: arrow(ui, right, "next", "▶", "Next preset"), name: None };
     let mid = Rect::from_min_max(pos2(left.right(), r.top()), pos2(right.left(), r.bottom()));
@@ -234,8 +238,8 @@ pub fn lcd(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug, t
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Presets"));
     let glow = if resp.hovered() { face.glow } else { face.well_ink };
     // The display's own glow behind the lettering.
-    p.text(mid.center() + vec2(0.0, 0.5), Align2::CENTER_CENTER, text, mono(12.5), alpha(glow, 0.25));
-    p.text(mid.center(), Align2::CENTER_CENTER, text, mono(12.5), glow);
+    p.text(mid.center() + vec2(0.0, 0.5), Align2::CENTER_CENTER, text, mono(11.0), alpha(glow, 0.25));
+    p.text(mid.center(), Align2::CENTER_CENTER, text, mono(11.0), glow);
     out.name = Some(resp.on_hover_text("Presets: choose one"));
     out
 }
@@ -264,7 +268,7 @@ pub fn button(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug
     p.rect_stroke(body, cr(4.0), Stroke::new(1.0, face.line), StrokeKind::Inside);
     p.hline(body.left() + 3.0..=body.right() - 3.0, body.top() + 1.0, Stroke::new(1.0, alpha(Color32::WHITE, 0.25)));
     let ink = if on { face.on_accent } else { face.ink };
-    tracked_text(p, body, Align2::CENTER_CENTER, text, 10.0, 0.12, true, true, ink);
+    tracked_text(p, body, Align2::CENTER_CENTER, text, 9.5, 0.1, true, true, ink);
     if resp.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
@@ -297,7 +301,7 @@ pub fn small_key_width(p: &Painter, text: &str) -> f32 {
 
 /// The width a [`button`] needs for `text`.
 pub fn button_width(p: &Painter, text: &str) -> f32 {
-    tracked_width(p, text, 10.0, 0.12, true) + 22.0
+    tracked_width(p, text, 9.5, 0.1, true) + 16.0
 }
 
 // ------------------------------------------------------------------------------- sections
@@ -326,8 +330,8 @@ pub fn section(p: &Painter, r: Rect, title: &str, note: &str, face: &Face) {
     let label_y = r.top();
     let x0 = r.left() + 10.0;
     let lr = Rect::from_min_size(pos2(x0 + 6.0, label_y - 8.0), vec2(600.0, 16.0));
-    let w1 = tracked_width(p, title, 10.5, 0.18, true);
-    let w2 = if note.is_empty() { 0.0 } else { 6.0 + p.layout_no_wrap(note.to_string(), bold(10.0), face.ink2).size().x };
+    let w1 = tracked_width(p, title, 10.0, 0.14, true);
+    let w2 = if note.is_empty() { 0.0 } else { 6.0 + p.layout_no_wrap(note.to_string(), bold(9.5), face.ink2).size().x };
     let gap_end = x0 + 6.0 + w1 + w2 + 6.0;
     // The outline, from just after the label clockwise back to just before it.
     let rad = 6.0;
@@ -335,9 +339,16 @@ pub fn section(p: &Painter, r: Rect, title: &str, note: &str, face: &Face) {
     pts.extend(rounded_outline(r, rad));
     pts.push(pos2(x0, r.top()));
     p.add(Shape::line(pts, Stroke::new(1.5, face.line)));
-    tracked_text(p, lr, Align2::LEFT_CENTER, title, 10.5, 0.18, true, true, face.ink);
+    if face.plates {
+        p.rect_filled(
+            Rect::from_min_max(pos2(x0 + 2.0, label_y - 7.0), pos2(gap_end - 2.0, label_y + 7.0)),
+            cr(2.0),
+            alpha(face.panel_at(0.5), 0.95),
+        );
+    }
+    tracked_text(p, lr, Align2::LEFT_CENTER, title, 10.0, 0.14, true, true, face.ink);
     if !note.is_empty() {
-        p.text(pos2(x0 + 6.0 + w1 + 6.0, lr.center().y), Align2::LEFT_CENTER, note, bold(10.0), face.ink2);
+        p.text(pos2(x0 + 6.0 + w1 + 6.0, lr.center().y), Align2::LEFT_CENTER, note, bold(9.5), face.ink2);
     }
 }
 
@@ -347,15 +358,15 @@ pub fn section(p: &Painter, r: Rect, title: &str, note: &str, face: &Face) {
 pub fn display(p: &Painter, r: Rect, tag: &str, face: &Face) {
     well(p, r, face, 5.0);
     let inner = r.shrink(1.0);
-    let mut x = inner.left() + 40.0;
+    let mut x = inner.left() + 32.0;
     while x < inner.right() {
         p.vline(x, inner.y_range(), Stroke::new(1.0, face.grid));
-        x += 40.0;
+        x += 32.0;
     }
-    let mut y = inner.top() + 30.0;
+    let mut y = inner.top() + 24.0;
     while y < inner.bottom() {
         p.hline(inner.x_range(), y, Stroke::new(1.0, face.grid));
-        y += 30.0;
+        y += 24.0;
     }
     if !tag.is_empty() {
         tracked_text(
@@ -399,8 +410,14 @@ pub struct Ctx<'a> {
     pub patchable: &'a dyn Fn(&str) -> bool,
     /// What a gesture on an arc does (`None`: the knobs carry no patching).
     pub patching: Option<&'a dyn Patching>,
-    /// Every knob's centre as drawn this frame, by parameter (where a dragged source lands).
+    /// Every knob's centre as drawn this frame, by parameter (where a dragged source lands; on
+    /// the Back, every input jack's).
     pub centres: &'a RefCell<Vec<(String, Pos2)>>,
+    /// The Back: the same layout with a jack where each control that takes modulation is.
+    pub back: bool,
+    /// The Back's output jacks as drawn this frame: source index ([`SOURCE_COLOURS`] order, then
+    /// the macros from 7) and centre.
+    pub outputs: &'a RefCell<Vec<(usize, Pos2)>>,
 }
 
 /// One arc on a knob: the range a source (or a macro) moves it over, relative to where the knob
@@ -480,9 +497,9 @@ pub fn set_param(app: &mut SoundApp, track: TrackId, param: &str, value: f32, ge
 }
 
 /// The knob's size (its cap, ticks and arc), points.
-pub const KNOB: f32 = 46.0;
+pub const KNOB: f32 = 34.0;
 /// A knob's cell: the knob, its label and value.
-pub const KNOB_CELL: Pos2 = pos2(58.0, 78.0);
+pub const KNOB_CELL: Pos2 = pos2(46.0, 60.0);
 
 const A0: f32 = PI * 0.75;
 const SWEEP: f32 = PI * 1.5;
@@ -559,8 +576,11 @@ pub fn knob(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, cell: Rect, id: &str, lab
 /// [`knob`] with its own cap colours (the macros' accent caps).
 pub fn knob_ex(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, cell: Rect, id: &str, label: &str, cap: Option<(Color32, Color32, Color32)>) -> KnobOut {
     let face = cx.face;
-    let centre = pos2(cell.center().x, cell.top() + KNOB * 0.5 + 2.0);
+    let centre = pos2(cell.center().x, cell.top() + KNOB * 0.5 + 1.0);
     let krect = Rect::from_center_size(centre, vec2(KNOB, KNOB));
+    if cx.back {
+        return back_control(ui, cx, cell, centre, id, label);
+    }
     let Some(info) = cx.param_info(id) else {
         let resp = ui.interact(krect, Id::new(("synth-knob-missing", id)), Sense::hover());
         return KnobOut { response: resp, centre };
@@ -634,10 +654,10 @@ pub fn knob_ex(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, cell: Rect, id: &str, 
     let p = ui.painter();
     let grow = if lit { 1.08 } else { 1.0 };
     paint_knob(p, centre, KNOB * grow, shown, face, caps, &arcs, steps, false);
-    let lr = Rect::from_min_size(pos2(cell.left() - 6.0, krect.bottom() + 1.0), vec2(cell.width() + 12.0, 14.0));
-    tracked_text(p, lr, Align2::CENTER_CENTER, label, 9.5, 0.1, true, true, face.ink);
+    let lr = label_row(cell, krect.bottom());
+    tracked_text(p, lr, Align2::CENTER_CENTER, label, 10.0, 0.04, true, true, face.ink);
     let shown_text = if out.value.is_some() { short_value(info, info.from_normalized(shown)) } else { value_text.clone() };
-    p.text(pos2(cell.center().x, lr.bottom() + 1.0), Align2::CENTER_TOP, shown_text, mono(9.5), face.ink2);
+    p.text(pos2(cell.center().x, lr.bottom() - 1.0), Align2::CENTER_TOP, shown_text, mono(9.5), face.ink2);
     let full = if arcs.is_empty() {
         format!("{}: {}", info.name, info.format(v))
     } else {
@@ -665,9 +685,9 @@ pub enum Share {
 }
 
 /// The gap between sections in a row.
-pub const GAP: f32 = 12.0;
+pub const GAP: f32 = 8.0;
 /// A section's height for one row of knobs: the frame's top margin, the cells, the bottom margin.
-pub const SECTION_H: f32 = 14.0 + 78.0 + 8.0;
+pub const SECTION_H: f32 = 12.0 + 60.0 + 4.0;
 
 /// Splits row `r` into its sections' rectangles, `GAP` apart.
 pub fn row(r: Rect, shares: &[Share]) -> Vec<Rect> {
@@ -692,13 +712,13 @@ pub fn row(r: Rect, shares: &[Share]) -> Vec<Rect> {
 
 /// The knob cells inside section `s` (its frame margins left out).
 pub fn section_cells(s: Rect, n: usize) -> Vec<Rect> {
-    cells(Rect::from_min_max(s.min + vec2(4.0, 14.0), s.max - vec2(4.0, 6.0)), n)
+    cells(Rect::from_min_max(s.min + vec2(3.0, 12.0), s.max - vec2(3.0, 4.0)), n)
 }
 
 /// Four ADSR faders inside section `s` for the parameters `ids` (attack, decay, sustain,
 /// release), their caps lined in `colour`.
 pub fn adsr(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, s: Rect, ids: [&str; 4], colour: Color32) {
-    let inner = Rect::from_min_max(s.min + vec2(8.0, 12.0), s.max - vec2(8.0, 4.0));
+    let inner = Rect::from_min_max(s.min + vec2(6.0, 12.0), s.max - vec2(6.0, 3.0));
     let w = inner.width() / 4.0;
     for (i, (id, label)) in ids.iter().zip(["A", "D", "S", "R"]).enumerate() {
         let r = Rect::from_min_size(pos2(inner.left() + w * i as f32 + (w - FADER.x) * 0.5, inner.top()), vec2(FADER.x, inner.height()));
@@ -711,7 +731,10 @@ pub fn adsr(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, s: Rect, ids: [&str; 4], 
 pub fn switch(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, cell: Rect, id: &str, label: &str) -> Response {
     let face = cx.face;
     let on = cx.value(id) >= 0.5;
-    let key = Rect::from_center_size(pos2(cell.center().x, cell.top() + KNOB * 0.5 + 2.0), vec2(26.0, 18.0));
+    let key = Rect::from_center_size(pos2(cell.center().x, cell.top() + KNOB * 0.5 + 1.0), vec2(22.0, 14.0));
+    if cx.back {
+        return back_control(ui, cx, cell, key.center(), id, label).response;
+    }
     let resp = ui.interact(key, Id::new(("synth-switch", cx.track.0, id)), Sense::click());
     let name = cx.param_info(id).map_or(label, |i| i.name);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, name));
@@ -729,9 +752,9 @@ pub fn switch(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, cell: Rect, id: &str, l
     if on {
         p.rect_filled(led.expand(2.0), cr(3.0), alpha(face.accent, 0.2));
     }
-    let lr = Rect::from_min_size(pos2(cell.left() - 6.0, cell.top() + KNOB + 3.0), vec2(cell.width() + 12.0, 14.0));
-    tracked_text(p, lr, Align2::CENTER_CENTER, label, 9.5, 0.1, true, true, face.ink);
-    p.text(pos2(cell.center().x, lr.bottom() + 1.0), Align2::CENTER_TOP, if on { "On" } else { "Off" }, mono(9.5), face.ink2);
+    let lr = label_row(cell, cell.top() + KNOB + 1.0);
+    tracked_text(p, lr, Align2::CENTER_CENTER, label, 10.0, 0.04, true, true, face.ink);
+    p.text(pos2(cell.center().x, lr.bottom() - 1.0), Align2::CENTER_TOP, if on { "On" } else { "Off" }, mono(9.5), face.ink2);
     resp.on_hover_text(format!("{}: {}", cx.param_info(id).map_or(label, |i| i.name), if on { "On" } else { "Off" }))
 }
 
@@ -744,15 +767,18 @@ struct FaderDrag {
 }
 
 /// The height of a fader's slot and label.
-pub const FADER: Pos2 = pos2(30.0, 92.0);
+pub const FADER: Pos2 = pos2(22.0, 60.0);
 
 /// An envelope fader in `r` for `id`: a slot with printed ticks and a cap with a line in
 /// `colour`; dragging moves the cap with the pointer (Shift for fine), double-click returns to
 /// the default, Ctrl+click (Cmd+click) types a value, one undo step per gesture.
 pub fn fader(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, id: &str, label: &str, colour: Color32) -> Response {
     let face = cx.face;
-    let slot = Rect::from_min_max(pos2(r.center().x - 2.0, r.top() + 6.0), pos2(r.center().x + 2.0, r.bottom() - 22.0));
-    let travel = (slot.height() - 12.0).max(10.0);
+    let slot = Rect::from_min_max(pos2(r.center().x - 2.0, r.top() + 4.0), pos2(r.center().x + 2.0, r.bottom() - 15.0));
+    let travel = (slot.height() - 10.0).max(10.0);
+    if cx.back {
+        return back_control(ui, cx, r, pos2(r.center().x, r.top() + 22.0), id, label).response;
+    }
     let Some(info) = cx.param_info(id) else { return ui.interact(r, Id::new(("synth-fader-missing", id)), Sense::hover()) };
     let v = cx.value(id);
     let v01 = info.to_normalized(v);
@@ -803,16 +829,16 @@ pub fn fader(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, id: &str, label
     let p = ui.painter();
     p.rect_filled(slot, cr(2.0), alpha(Color32::BLACK, 0.45));
     for i in 0..5 {
-        let y = slot.top() + 6.0 + travel * i as f32 / 4.0;
-        p.hline(r.left() + 2.0..=r.left() + 7.0, y, Stroke::new(1.0, alpha(face.ink, 0.6)));
+        let y = slot.top() + 5.0 + travel * i as f32 / 4.0;
+        p.hline(r.left()..=r.left() + 4.0, y, Stroke::new(1.0, alpha(face.ink, 0.6)));
     }
-    let y = slot.bottom() - 6.0 - travel * shown;
-    let cap = Rect::from_center_size(pos2(r.center().x, y), vec2(20.0, 12.0));
+    let y = slot.bottom() - 5.0 - travel * shown;
+    let cap = Rect::from_center_size(pos2(r.center().x, y), vec2(16.0, 10.0));
     p.rect_filled(cap.translate(vec2(0.0, 1.5)), cr(2.0), face.cap_lo);
     p.rect_filled(cap, cr(2.0), face.cap_hi);
     p.hline(cap.left() + 1.0..=cap.right() - 1.0, cap.center().y, Stroke::new(2.0, colour));
-    let lr = Rect::from_min_size(pos2(r.left() - 4.0, slot.bottom() + 3.0), vec2(r.width() + 8.0, 12.0));
-    tracked_text(p, lr, Align2::CENTER_CENTER, label, 10.0, 0.1, true, true, face.ink);
+    let lr = Rect::from_min_size(pos2(r.left() - 4.0, slot.bottom() + 2.0), vec2(r.width() + 8.0, 12.0));
+    tracked_text(p, lr, Align2::CENTER_CENTER, label, 10.0, 0.04, true, true, face.ink);
     resp.on_hover_text(format!("{}: {}", info.name, info.format(v)))
 }
 
@@ -831,15 +857,152 @@ pub fn chip(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug, 
         p.rect_stroke(r.expand(2.0), cr(5.0), Stroke::new(2.0, colour), StrokeKind::Inside);
         ui.ctx().set_cursor_icon(if resp.dragged() { CursorIcon::Grabbing } else { CursorIcon::Grab });
     }
-    let jack = pos2(r.left() + 13.0, r.center().y);
-    p.circle_filled(jack, 6.5, Color32::from_rgb(0x16, 0x13, 0x0f));
-    p.circle_stroke(jack, 5.0, Stroke::new(3.0, colour));
-    p.circle_stroke(jack, 6.5, Stroke::new(1.0, alpha(Color32::BLACK, 0.3)));
-    tracked_text(p, Rect::from_min_max(pos2(jack.x + 10.0, r.top()), r.max), Align2::LEFT_CENTER, text, 9.0, 0.08, true, true, face.ink);
+    let jack = pos2(r.left() + 11.0, r.center().y);
+    p.circle_filled(jack, 5.5, Color32::from_rgb(0x16, 0x13, 0x0f));
+    p.circle_stroke(jack, 4.2, Stroke::new(2.6, colour));
+    p.circle_stroke(jack, 5.5, Stroke::new(1.0, alpha(Color32::BLACK, 0.3)));
+    tracked_text(p, Rect::from_min_max(pos2(jack.x + 9.0, r.top()), r.max), Align2::LEFT_CENTER, text, 9.5, 0.05, true, true, face.ink);
     resp
 }
 
 /// The width a [`chip`] needs for `text`.
 pub fn chip_width(p: &Painter, text: &str) -> f32 {
-    tracked_width(p, text, 9.0, 0.08, true) + 30.0
+    tracked_width(p, text, 9.5, 0.05, true) + 26.0
+}
+
+/// The label row under a control whose body ends at `bottom`.
+fn label_row(cell: Rect, bottom: f32) -> Rect {
+    Rect::from_min_size(pos2(cell.left() - 8.0, bottom + 1.0), vec2(cell.width() + 16.0, 12.0))
+}
+
+/// The Back's face: the same instrument's rear plate, darker, with light print.
+pub fn rear(face: &Face) -> Face {
+    Face {
+        panel: face.rear,
+        brushed: false,
+        ink: Color32::from_rgb(0xe8, 0xe2, 0xd6),
+        ink2: Color32::from_rgb(0x9c, 0x95, 0x8a),
+        line: Color32::from_rgb(0x55, 0x51, 0x4b),
+        key: Color32::from_rgb(0x3a, 0x37, 0x33),
+        on_accent: face.on_accent,
+        plates: true,
+        ..*face
+    }
+}
+
+/// An input jack on the Back (a socket a cable plugs into).
+pub fn input_jack(p: &Painter, c: Pos2, lit: bool) {
+    p.circle_filled(c + vec2(0.0, 1.0), 9.5, alpha(Color32::BLACK, 0.4));
+    p.circle_filled(c, 9.5, Color32::from_rgb(0x9a, 0x96, 0x8e));
+    p.circle_stroke(c, 9.0, Stroke::new(1.0, alpha(Color32::WHITE, 0.25)));
+    p.circle_filled(c, 6.5, Color32::from_rgb(0x1e, 0x1d, 0x1b));
+    p.circle_filled(c, 2.6, Color32::from_rgb(4, 4, 4));
+    if lit {
+        p.circle_stroke(c, 12.0, Stroke::new(2.0, alpha(Color32::WHITE, 0.5)));
+    }
+}
+
+/// An output jack on the Back, ringed in its source's colour.
+pub fn output_jack(p: &Painter, c: Pos2, colour: Color32) {
+    p.circle_filled(c + vec2(0.0, 1.0), 9.5, alpha(Color32::BLACK, 0.4));
+    // A coloured bezel round the nut marks an output.
+    p.circle_filled(c, 9.5, colour.lerp_to_gamma(Color32::BLACK, 0.25));
+    p.circle_filled(c, 8.0, Color32::from_rgb(0x9a, 0x96, 0x8e));
+    p.circle_filled(c, 6.8, Color32::from_rgb(0x1e, 0x1d, 0x1b));
+    p.circle_stroke(c, 6.0, Stroke::new(2.0, colour));
+    p.circle_filled(c, 2.6, Color32::from_rgb(4, 4, 4));
+}
+
+/// A blank on the Back where a control that takes no modulation is: a small capped plate.
+fn blank(p: &Painter, c: Pos2, face: &Face) {
+    p.circle_filled(c, 6.0, alpha(face.line, 0.7));
+    p.circle_filled(c, 3.0, alpha(Color32::BLACK, 0.35));
+}
+
+/// A control as the Back shows it: an input jack (it takes modulation) or a blank, with its label.
+fn back_control(ui: &mut Ui, cx: &Ctx, cell: Rect, centre: Pos2, id: &str, label: &str) -> KnobOut {
+    let p = ui.painter();
+    let takes = (cx.patchable)(id);
+    if takes {
+        input_jack(p, centre, cx.lit.iter().any(|d| d == id));
+        cx.centres.borrow_mut().push((id.to_string(), centre));
+    } else {
+        blank(p, centre, cx.face);
+    }
+    let lr = label_row(cell, cell.top() + KNOB + 1.0);
+    let ink = if takes { cx.face.ink } else { cx.face.ink2 };
+    // A plate under the name, so a cable passing never hides it.
+    let w = tracked_width(p, label, 10.0, 0.04, true);
+    p.rect_filled(Rect::from_center_size(lr.center(), vec2(w + 6.0, 12.0)), cr(2.0), alpha(cx.face.panel_at(0.5), 0.92));
+    tracked_text(p, lr, Align2::CENTER_CENTER, label, 10.0, 0.04, true, true, ink);
+    let response = ui.interact(Rect::from_center_size(centre, vec2(2.0, 2.0)), Id::new(("synth-back-jack", cx.track.0, id)), Sense::hover());
+    if takes {
+        let name = cx.param_info(id).map_or(label, |i| i.name);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, format!("{name} socket")));
+    }
+    KnobOut { response, centre }
+}
+
+/// A display as the Back shows it: a plain rear plate with the display's name and four screws.
+pub fn rear_plate(p: &Painter, r: Rect, tag: &str, face: &Face) {
+    p.rect_filled(r, cr(5.0), alpha(Color32::BLACK, 0.25));
+    p.rect_stroke(r, cr(5.0), Stroke::new(1.0, alpha(face.line, 0.9)), StrokeKind::Inside);
+    for c in [r.left_top() + vec2(8.0, 8.0), r.right_top() + vec2(-8.0, 8.0), r.left_bottom() + vec2(8.0, -8.0), r.right_bottom() + vec2(-8.0, -8.0)]
+    {
+        p.circle_filled(c, 3.0, alpha(face.ink2, 0.6));
+        p.line_segment([c - vec2(2.0, 0.0), c + vec2(2.0, 0.0)], Stroke::new(1.0, alpha(Color32::BLACK, 0.6)));
+    }
+    tracked_text(
+        p,
+        Rect::from_center_size(r.center(), vec2(r.width(), 14.0)),
+        Align2::CENTER_CENTER,
+        tag,
+        9.5,
+        0.2,
+        true,
+        true,
+        alpha(face.ink2, 0.8),
+    );
+}
+
+/// The width of an envelope's section (four faders, and room on its frame for its output).
+pub const ENV_W: f32 = 136.0;
+
+/// The short tags printed beside the sources' output jacks on the Back, in source order.
+pub const OUT_TAGS: [&str; 7] = ["AMP", "ENV 2", "LFO", "VEL", "WHL", "KEY", "RND"];
+
+/// The Back's output jacks of the sources `which` ([`SOURCE_COLOURS`] order) on section `s`:
+/// set into the top of its frame at the right end, right to left, each a socket ringed in its
+/// source's colour with its tag beside it, so outputs always sit where the eye learns to look.
+/// Nothing on the Front. Each is registered in [`Ctx::outputs`].
+pub fn outputs_on(ui: &mut Ui, cx: &Ctx, s: Rect, which: &[usize]) {
+    if !cx.back {
+        return;
+    }
+    let p = ui.painter().clone();
+    let mut x = s.right() - 10.0;
+    for &i in which.iter().rev() {
+        let c = pos2(x - 8.0, s.top());
+        let tag = OUT_TAGS.get(i).copied().unwrap_or("");
+        let w = tracked_width(&p, tag, 8.5, 0.06, true);
+        let plate = Rect::from_min_max(pos2(c.x - 11.0 - w - 2.0, c.y - 6.5), pos2(c.x + 10.0, c.y + 6.5));
+        p.rect_filled(plate, cr(3.0), alpha(cx.face.panel_at(0.5), 0.95));
+        output_jack(&p, c, SOURCE_COLOURS.get(i).copied().unwrap_or(Color32::WHITE));
+        tracked_text(
+            &p,
+            Rect::from_min_max(pos2(plate.left() + 2.0, c.y - 6.0), pos2(c.x - 10.0, c.y + 6.0)),
+            Align2::RIGHT_CENTER,
+            tag,
+            8.5,
+            0.06,
+            true,
+            true,
+            cx.face.ink,
+        );
+        cx.outputs.borrow_mut().push((i, c));
+        let name = soundcraft_dsp::plugins::synth_mod::SOURCES.get(i).map_or(tag, |s| s.name);
+        let r = ui.interact(Rect::from_center_size(c, vec2(2.0, 2.0)), Id::new(("synth-back-out", cx.track.0, i)), Sense::hover());
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, format!("{name} out")));
+        x = plate.left() - 2.0;
+    }
 }

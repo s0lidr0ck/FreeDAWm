@@ -42,6 +42,8 @@ pub const BURLEY: Face = Face {
     accent: c(0xd9641e),
     on_accent: c(0xfff6e8),
     wood: (c(0x4a2c17), c(0x7a4b28)),
+    rear: &[(0.0, c(0x3b332a)), (1.0, c(0x332c24))],
+    plates: false,
 };
 
 /// Cicada: a dark green-charcoal panel, a large green display, a green accent.
@@ -61,7 +63,9 @@ pub const CICADA: Face = Face {
     pointer: c(0xf2f7ee),
     accent: c(0x86e07e),
     on_accent: c(0x0d130d),
-    wood: (c(0x2a211a), c(0x4a3a2c)),
+    wood: (c(0x5e412b), c(0x8e6a48)),
+    rear: &[(0.0, c(0x191c1a)), (1.0, c(0x141715))],
+    plates: false,
 };
 
 /// Steeple: a galvanised steel-grey panel, pine cheeks, a blue display and accent.
@@ -82,6 +86,8 @@ pub const STEEPLE: Face = Face {
     accent: c(0x1f6fb5),
     on_accent: c(0xf0f7ff),
     wood: (c(0x8a6a3e), c(0xc39a5e)),
+    rear: &[(0.0, c(0x34393d)), (1.0, c(0x2c3135))],
+    plates: false,
 };
 
 /// Which synth a panel is, and how its front is drawn.
@@ -104,10 +110,10 @@ pub const SYNTHS: [Synth; 3] = [
 ];
 
 /// The panels' width.
-pub const WIDTH: f32 = 1000.0;
-/// The panel's outer margins (top and bottom inside the unit), the gap under the top bar.
-const MARGINS: f32 = 30.0;
-const UNDER_TOP: f32 = 14.0;
+pub const WIDTH: f32 = 760.0;
+/// The panel's margins (top and bottom inside the unit), the gap under the top bar.
+const MARGINS: f32 = 16.0;
+const UNDER_TOP: f32 = 8.0;
 
 fn synth(plugin: &str) -> Option<&'static Synth> {
     SYNTHS.iter().find(|s| s.id == plugin)
@@ -115,7 +121,7 @@ fn synth(plugin: &str) -> Option<&'static Synth> {
 
 /// The size `plugin`'s panel is drawn at, when it has one.
 pub fn size(plugin: &str) -> Option<Vec2> {
-    synth(plugin).map(|s| vec2(WIDTH, MARGINS + TOP_H + UNDER_TOP + s.body_h + kit::SECTION_H + 4.0))
+    synth(plugin).map(|s| vec2(WIDTH, MARGINS + TOP_H + UNDER_TOP + s.body_h + kit::SECTION_H + 2.0))
 }
 
 /// Draws `ins` (the instrument of `track`) as its panel, inside a scroll area as large as the
@@ -141,11 +147,15 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, froze
 /// sources, and the patching gestures across them.
 fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synth, r: Rect) {
     let Some(info) = soundcraft_dsp::plugin_info(s.id) else { return };
-    let face = s.face;
+    let mut st = patch::state(ui.ctx(), track);
+    // The Back is the rear of the same instrument: the same layout on a darker plate.
+    let rear = kit::rear(s.face);
+    let face = if st.back { &rear } else { s.face };
     let p = ui.painter().clone();
     let inner = kit::unit(&p, r, face);
-    let mut st = patch::state(ui.ctx(), track);
-    let (arcs, kinds) = patch::arcs(ins, face);
+    // The Back's cables go here, under every jack and label drawn after.
+    let cable_slot = p.add(egui::Shape::Noop);
+    let (arcs, kinds) = patch::arcs(ins, s.face);
     let hooks = patch::Hooks { track, ins, kinds: &kinds };
     let dests = patch::dests(s.id);
     let patchable = |d: &str| dests.contains(&d);
@@ -165,7 +175,20 @@ fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synt
         _ => Vec::new(),
     };
     let centres = RefCell::new(Vec::new());
-    let cx = kit::Ctx { track, ins, info, face, arcs: &arcs, lit: &lit, patchable: &patchable, patching: Some(&hooks), centres: &centres };
+    let outputs = RefCell::new(Vec::new());
+    let cx = kit::Ctx {
+        track,
+        ins,
+        info,
+        face,
+        arcs: &arcs,
+        lit: &lit,
+        patchable: &patchable,
+        patching: Some(&hooks),
+        centres: &centres,
+        back: st.back,
+        outputs: &outputs,
+    };
     let top = Rect::from_min_size(inner.min, vec2(inner.width(), TOP_H));
     let clicked = top_bar(app, ui, &cx, top, s.name, s.kind, &[("Surprise", false), ("Front", !st.back), ("Back", st.back)]);
     match clicked {
@@ -173,7 +196,6 @@ fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synt
             if let Err(e) = app.run("mix.mod_surprise", json!({"track": track.0})) {
                 app.ui.status = e;
             }
-            st.back = false;
             st.moved_at = ui.input(|i| i.time);
         }
         Some(1) => st.back = false,
@@ -181,18 +203,23 @@ fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synt
         _ => {}
     }
     let area = Rect::from_min_max(pos2(inner.left(), top.bottom() + UNDER_TOP), inner.max);
-    if st.back {
-        let reduce = app.extra.reduce_motion;
-        patch::back(app, ui, &cx, area, &mut st, reduce);
+    let body = Rect::from_min_size(area.min, vec2(area.width(), s.body_h));
+    (s.body)(app, ui, &cx, body);
+    let row = Rect::from_min_max(pos2(area.left(), area.bottom() - kit::SECTION_H), area.max);
+    if cx.back {
+        // On the Back the sources' outputs sit on their modules: the macros take the row.
+        patch::macros(app, ui, &cx, row, &mut st);
     } else {
-        let body = Rect::from_min_size(area.min, vec2(area.width(), s.body_h));
-        (s.body)(app, ui, &cx, body);
-        let row = Rect::from_min_max(pos2(area.left(), area.bottom() - kit::SECTION_H), area.max);
-        let parts = kit::row(row, &[kit::Share::Fixed(320.0), kit::Share::Knobs(1)]);
+        let parts = kit::row(row, &[kit::Share::Fixed(4.0 * 60.0 + 16.0), kit::Share::Knobs(1)]);
         if let [m, src] = parts.as_slice() {
             patch::macros(app, ui, &cx, *m, &mut st);
             st.hover_source = patch::sources(ui, &cx, *src, &mut st);
         }
+    }
+    if cx.back {
+        let reduce = app.extra.reduce_motion;
+        patch::back(app, ui, &cx, area, &mut st, reduce, cable_slot);
+    } else {
         patch::front_drop(app, ui, &cx, &mut st);
     }
     patch::set_state(ui.ctx(), track, st);
@@ -204,26 +231,26 @@ pub fn has_panel(plugin: &str) -> bool {
 }
 
 /// The height of a panel's top bar (lamp, badge, preset display, buttons).
-pub const TOP_H: f32 = 36.0;
+pub const TOP_H: f32 = 28.0;
 
 /// A panel's top bar across `r`: the lamp, the name badge, the preset display, and the panel
 /// buttons named in `buttons` (right to left from the edge); returns which button was clicked.
 pub fn top_bar(app: &mut SoundApp, ui: &mut Ui, cx: &kit::Ctx, r: Rect, name: &str, kind: &str, buttons: &[(&str, bool)]) -> Option<usize> {
     let face = cx.face;
     let p = ui.painter().clone();
-    kit::lamp(&p, egui::pos2(r.left() + 6.0, r.center().y), face);
-    let bw = kit::badge(&p, egui::pos2(r.left() + 20.0, r.center().y), name, kind, face);
-    let mut x = r.right() - window_keys(app, ui, cx, r.right(), r.center().y) - 12.0;
+    kit::lamp(&p, egui::pos2(r.left() + 5.0, r.center().y), face);
+    let bw = kit::badge(&p, egui::pos2(r.left() + 16.0, r.center().y), name, kind, face);
+    let mut x = r.right() - window_keys(app, ui, cx, r.right(), r.center().y) - 10.0;
     let mut clicked = None;
     for (i, (label, on)) in buttons.iter().enumerate().rev() {
         let w = kit::button_width(&p, label);
-        let b = Rect::from_min_size(egui::pos2(x - w, r.center().y - 13.0), vec2(w, 26.0));
+        let b = Rect::from_min_size(egui::pos2(x - w, r.center().y - 10.0), vec2(w, 20.0));
         if kit::button(ui, b, (cx.track.0, *label), label, *on, face).clicked() {
             clicked = Some(i);
         }
-        x -= w + 8.0;
+        x -= w + 5.0;
     }
-    let lcd = Rect::from_min_max(egui::pos2(r.left() + 32.0 + bw, r.center().y - 14.0), egui::pos2(x - 6.0, r.center().y + 14.0));
+    let lcd = Rect::from_min_max(egui::pos2(r.left() + 26.0 + bw, r.center().y - 11.0), egui::pos2(x - 5.0, r.center().y + 11.0));
     let out = kit::lcd(ui, lcd, cx.track.0, &preset_name(cx.ins), face);
     if out.prev {
         step_preset(app, cx.track, cx.info, cx.ins, -1);
@@ -265,11 +292,11 @@ fn window_keys(app: &mut SoundApp, ui: &mut Ui, cx: &kit::Ctx, right: f32, y: f3
     let mut clicked = None;
     for (i, (label, on, tip)) in items.iter().enumerate().rev() {
         let w = kit::small_key_width(&p, label);
-        let r = Rect::from_min_size(pos2(x - w, y - 9.0), vec2(w, 18.0));
+        let r = Rect::from_min_size(pos2(x - w, y - 8.0), vec2(w, 16.0));
         if kit::small_key(ui, r, (cx.track.0, "win", i), label, *on, cx.face).on_hover_text(*tip).clicked() {
             clicked = Some(i);
         }
-        x -= w + 5.0;
+        x -= w + 3.0;
     }
     match clicked {
         Some(0) if detached => app.ui.detached_plugins.retain(|k| *k != key),
