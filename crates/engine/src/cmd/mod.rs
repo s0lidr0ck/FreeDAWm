@@ -112,6 +112,7 @@ mod scout_apply;
 pub mod scout_profile;
 mod setup_more;
 mod surround;
+pub mod synth_mod;
 mod tab;
 pub mod tap_tempo;
 pub mod tempo;
@@ -125,6 +126,7 @@ mod vocal;
 mod vocal_studio;
 mod vst3;
 pub mod warp;
+pub mod wavetable;
 mod zoom_toggle;
 
 pub use clap::plugin_info;
@@ -244,6 +246,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pattern::specs());
         v.extend(juke::specs());
         v.extend(multisample::specs());
+        v.extend(wavetable::specs());
         v.extend(clip_clean::specs());
         v.extend(clip_props::specs());
         v.extend(clip_automation::specs());
@@ -306,6 +309,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(plugin_state::specs());
         v.extend(module::specs());
         v.extend(module_ceiling::specs());
+        v.extend(synth_mod::specs());
         v.extend(copyq::specs());
         v.extend(module_asset::specs());
         v.extend(module_link::specs());

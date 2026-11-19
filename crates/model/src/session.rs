@@ -857,6 +857,7 @@ impl Session {
                 if let Some(k) = &mut ins.kit {
                     k.sanitize();
                 }
+                ins.modulation.sanitize();
             }
             // Only the instrument hosts kit effects.
             for ins in &mut t.mixer.inserts {

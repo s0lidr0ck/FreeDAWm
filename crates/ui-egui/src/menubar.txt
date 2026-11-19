@@ -348,6 +348,7 @@ Track > Change Track Width > More > 2nd Order Ambisonics = Track > Change Track 
 Track > Change Track Width > More > 3rd Order Ambisonics = Track > Change Track Width > 3rd Order Ambisonics
 Track > Split into Mono
 Track > Instrument = !instrument
+Track > Import Wavetable... = @ui.wavetable_import
 Track > ---
 Track > ## Freeze & render
 Track > Freeze

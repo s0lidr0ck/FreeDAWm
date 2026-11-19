@@ -12,6 +12,7 @@
 use super::synth::{
     Adsr, AdsrRates, Event, EventKind, EventQueue, LFO_WAVES, MAX_EVENTS, OFF_ON, SILENT, Stage, VIBRATO_HZ, event_of, lfo_shape, pick_voice,
 };
+use super::synth_mod::{self as sm, ModMatrix, VoiceMod};
 use crate::params::{Params, choice, lin, log, param_plumbing};
 use crate::util::{Smoother, frames_in, ms_to_samples, note_hz, sane_channels, sane_sr};
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
@@ -80,7 +81,7 @@ const VELOCITY: usize = 10;
 const KEY_SCALE: usize = 11;
 const FEEDBACK: usize = 12;
 
-static FM_PARAMS: [ParamInfo; 4 * OP_N + 10] = op_params![
+static FM_PARAMS: [ParamInfo; 4 * OP_N + 18] = op_params![
     (1, 100.0),
     (2, 45.0),
     (3, 0.0),
@@ -94,7 +95,17 @@ static FM_PARAMS: [ParamInfo; 4 * OP_N + 10] = op_params![
     log("lfo_rate", "LFO Rate", 0.05, 30.0, 5.0, Unit::Hz),
     lin("lfo_pitch", "LFO to Pitch", 0.0, 1200.0, 0.0, Unit::Cents),
     lin("lfo_amp", "LFO to Level", 0.0, 100.0, 0.0, Unit::Percent),
-    lin("lfo_mod", "LFO to Modulators", 0.0, 100.0, 0.0, Unit::Percent)
+    lin("lfo_mod", "LFO to Modulators", 0.0, 100.0, 0.0, Unit::Percent),
+    // Env 2: an envelope per note heard only through the modulation matrix.
+    log("env2_attack", "Env 2 Attack", 0.5, 5000.0, 5.0, Unit::Ms),
+    log("env2_decay", "Env 2 Decay", 1.0, 10000.0, 600.0, Unit::Ms),
+    lin("env2_sustain", "Env 2 Sustain", 0.0, 100.0, 0.0, Unit::Percent),
+    log("env2_release", "Env 2 Release", 1.0, 10000.0, 300.0, Unit::Ms),
+    // The macros: each a knob the modulation matrix's macro targets follow (nothing at 0).
+    lin("macro1", "Macro 1", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("macro2", "Macro 2", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("macro3", "Macro 3", 0.0, 100.0, 0.0, Unit::Percent),
+    lin("macro4", "Macro 4", 0.0, 100.0, 0.0, Unit::Percent)
 ];
 
 const ALGORITHM: usize = 4 * OP_N;
@@ -107,11 +118,56 @@ const LFO_RATE: usize = ALGORITHM + 6;
 const LFO_PITCH: usize = ALGORITHM + 7;
 const LFO_AMP: usize = ALGORITHM + 8;
 const LFO_MOD: usize = ALGORITHM + 9;
+const ENV2_A: usize = ALGORITHM + 10;
+const MACRO1: usize = ALGORITHM + 14;
+
+/// What the modulation matrix can move (parameter ids, and the virtual `pitch`), by index.
+pub(crate) const MOD_DESTS: [&str; 27] = [
+    sm::PITCH,
+    "op1_level",
+    "op2_level",
+    "op3_level",
+    "op4_level",
+    "op1_fine",
+    "op2_fine",
+    "op3_fine",
+    "op4_fine",
+    "op1_detune",
+    "op2_detune",
+    "op3_detune",
+    "op4_detune",
+    "op1_feedback",
+    "op2_feedback",
+    "op3_feedback",
+    "op4_feedback",
+    "op1_freq",
+    "op2_freq",
+    "op3_freq",
+    "op4_freq",
+    sm::SHARED_DEST,
+    "lfo_pitch",
+    "lfo_amp",
+    "lfo_mod",
+    "wheel_mod",
+    "level",
+];
+const D_PITCH: usize = 0;
+const D_OP_LEVEL: usize = 1;
+const D_OP_FINE: usize = 5;
+const D_OP_DETUNE: usize = 9;
+const D_OP_FB: usize = 13;
+const D_OP_FREQ: usize = 17;
+const D_LFO_RATE: usize = 21;
+const D_LFO_PITCH: usize = 22;
+const D_LFO_AMP: usize = 23;
+const D_LFO_MOD: usize = 24;
+const D_WHEEL_MOD: usize = 25;
+const D_LEVEL: usize = 26;
 
 pub static FM_INFO: PluginInfo = PluginInfo {
     id: "fm_synth",
-    name: "FM Synth",
-    short_name: "FM",
+    name: "Steeple",
+    short_name: "Steeple",
     category: Category::Instrument,
     params: &FM_PARAMS,
     is_instrument: true,
@@ -185,11 +241,30 @@ struct Voice {
     age: u64,
     held: bool,
     sustained: bool,
+    /// Env 2 (a modulation source only), the matrix's values, and each operator's frequency
+    /// (ratio, or fixed per sample) when the matrix moves its fine, detune or fixed frequency.
+    env2: Adsr,
+    m: VoiceMod,
+    opf: [f32; 4],
+    /// The pitch ratio the matrix gives this voice for the current output sample.
+    bend_m: f32,
 }
 
 impl Voice {
     const fn new() -> Self {
-        Voice { note: 0, vel: 0.0, freq: 440.0, ops: [Op::new(); 4], age: 0, held: false, sustained: false }
+        Voice {
+            note: 0,
+            vel: 0.0,
+            freq: 440.0,
+            ops: [Op::new(); 4],
+            age: 0,
+            held: false,
+            sustained: false,
+            env2: Adsr::new(),
+            m: VoiceMod::new(),
+            opf: [0.0; 4],
+            bend_m: 1.0,
+        }
     }
 
     /// Sounding while any operator's envelope is (an idle carrier is silent; a modulator alone
@@ -206,12 +281,14 @@ impl Voice {
         for o in &mut self.ops {
             o.env.gate_on();
         }
+        self.env2.gate_on();
     }
 
     fn gate_off(&mut self) {
         for o in &mut self.ops {
             o.env.gate_off();
         }
+        self.env2.gate_off();
     }
 }
 
@@ -299,6 +376,18 @@ pub struct FmSynth {
     wheel: f32,
     vib_phase: f32,
     lfo_phase: f32,
+    env2_rates: AdsrRates,
+    /// The modulation matrix and its evaluation (as the Subtractive Synth's, every
+    /// [`sm::TICK`] output samples: four times as many of the operators' steps).
+    mm: ModMatrix,
+    infos: [&'static ParamInfo; sm::MAX_DESTS],
+    bases: [f32; sm::MAX_DESTS],
+    macro_off: [f32; sm::MAX_DESTS],
+    tick_left: usize,
+    lfo_rate_mod: f32,
+    rng: u32,
+    /// The next operator step is the first of an output sample (the matrix moved on).
+    frame_start: bool,
 }
 
 impl Default for FmSynth {
@@ -328,9 +417,106 @@ impl FmSynth {
             wheel: 0.0,
             vib_phase: 0.0,
             lfo_phase: 0.0,
+            env2_rates: AdsrRates::default(),
+            mm: ModMatrix::new(),
+            infos: sm::infos(FM_INFO.id),
+            bases: [0.0; sm::MAX_DESTS],
+            macro_off: [0.0; sm::MAX_DESTS],
+            tick_left: 0,
+            lfo_rate_mod: 5.0,
+            rng: sm::RANDOM_SEED,
+            frame_start: false,
         };
         s.update();
         s
+    }
+
+    /// The LFO's rate now: the knob's, or what the matrix makes of it.
+    #[inline]
+    fn lfo_rate(&self) -> f32 {
+        if self.mm.on(D_LFO_RATE) { self.lfo_rate_mod } else { self.p.v(LFO_RATE) }
+    }
+
+    /// A note starts on voice `i`: its random value, and the matrix evaluated at once.
+    fn mod_note_on(&mut self, i: usize) {
+        let r = sm::next_random(&mut self.rng);
+        if let Some(v) = self.voices.get_mut(i) {
+            v.m.rnd = r;
+            v.m.fresh = true;
+        }
+        self.tick_left = 0;
+    }
+
+    /// See the Subtractive Synth's: once per output sample (the operators' four steps in it
+    /// share the values; the per-voice pitch is worked out on the first of them).
+    fn mod_step(&mut self) {
+        self.frame_start = true;
+        if self.tick_left == 0 {
+            self.tick_left = sm::TICK;
+            self.mod_tick();
+        }
+        self.tick_left -= 1;
+        let used = self.mm.used();
+        for v in self.voices.iter_mut().filter(|v| v.active()) {
+            v.m.advance(used);
+        }
+    }
+
+    fn mod_tick(&mut self) {
+        let ticks = sm::TICK;
+        let inner = self.inner_sr();
+        let p = &self.p;
+        let macros = [p.v(MACRO1) / 100.0, p.v(MACRO1 + 1) / 100.0, p.v(MACRO1 + 2) / 100.0, p.v(MACRO1 + 3) / 100.0];
+        self.mm.macro_offsets(macros, &mut self.macro_off);
+        let b = &mut self.bases;
+        b[D_PITCH] = 0.0;
+        for n in 0..4 {
+            let o = n * OP_N;
+            b[D_OP_LEVEL + n] = p.v(o + OP_LEVEL);
+            b[D_OP_FINE + n] = p.v(o + FINE);
+            b[D_OP_DETUNE + n] = p.v(o + DETUNE);
+            b[D_OP_FB + n] = p.v(o + FEEDBACK);
+            b[D_OP_FREQ + n] = p.v(o + FREQ);
+        }
+        b[D_LFO_RATE] = p.v(LFO_RATE);
+        b[D_LFO_PITCH] = p.v(LFO_PITCH);
+        b[D_LFO_AMP] = p.v(LFO_AMP);
+        b[D_LFO_MOD] = p.v(LFO_MOD);
+        b[D_WHEEL_MOD] = p.v(WHEEL_MOD);
+        b[D_LEVEL] = p.v(LEVEL);
+        let lfo = lfo_shape(p.choice(LFO_WAVE), self.lfo_phase);
+        if self.mm.on(D_LFO_RATE) {
+            self.lfo_rate_mod = sm::shared_value(&self.mm, D_LFO_RATE, lfo, self.wheel, &self.macro_off, self.infos[D_LFO_RATE], b[D_LFO_RATE]);
+        }
+        let mut src = [0.0f32; sm::N_SOURCES];
+        src[sm::SRC_LFO] = lfo;
+        src[sm::SRC_WHEEL] = self.wheel;
+        // Each operator's frequency, when the matrix moves it: (coarse, fixed) of each.
+        let freq_moved: [bool; 4] = std::array::from_fn(|n| self.mm.on(D_OP_FINE + n) || self.mm.on(D_OP_DETUNE + n) || self.mm.on(D_OP_FREQ + n));
+        let shape: [(usize, bool); 4] = std::array::from_fn(|n| (p.choice(n * OP_N), p.choice(n * OP_N + FIXED) == 1));
+        for v in self.voices.iter_mut().filter(|v| v.active()) {
+            src[sm::SRC_AMP] = v.ops[0].env.level;
+            src[sm::SRC_ENV2] = v.env2.level;
+            src[sm::SRC_VEL] = v.vel;
+            src[sm::SRC_KEY] = sm::key_value(v.note);
+            src[sm::SRC_RND] = v.m.rnd;
+            sm::aim_voice(&self.mm, &mut v.m, &src, &self.macro_off, &self.bases, &self.infos, D_LFO_RATE, ticks, |d, x, base| match d {
+                D_PITCH => 2f32.powf(x / 12.0),
+                _ if (D_OP_LEVEL..D_OP_LEVEL + 4).contains(&d) => level_amp(x),
+                _ if (D_OP_FB..D_OP_FB + 4).contains(&d) => x / 100.0 * FB_DEPTH,
+                D_LEVEL => sm::level_gain(x, base),
+                _ => x,
+            });
+            let mut opf = v.opf;
+            for (n, ((f, moved), (coarse, fixed))) in opf.iter_mut().zip(freq_moved).zip(shape).enumerate() {
+                if !moved {
+                    continue;
+                }
+                let at = |d: usize| if self.mm.on(d) { v.m.target(d) } else { self.bases.get(d).copied().unwrap_or(0.0) };
+                *f = if fixed { at(D_OP_FREQ + n) / inner } else { ratio_of(coarse, at(D_OP_FINE + n), at(D_OP_DETUNE + n)) };
+            }
+            v.opf = opf;
+        }
     }
 
     /// The rate the operators run at.
@@ -344,6 +530,8 @@ impl FmSynth {
             let b = n * OP_N + ATTACK;
             *r = AdsrRates::new(self.p.v(b), self.p.v(b + 1), self.p.v(b + 2) / 100.0, self.p.v(b + 3), sr);
         }
+        let e = ENV2_A;
+        self.env2_rates = AdsrRates::new(self.p.v(e), self.p.v(e + 1), self.p.v(e + 2) / 100.0, self.p.v(e + 3), sr);
         self.level.set(db_to_gain(self.p.v(LEVEL)));
     }
 
@@ -371,6 +559,7 @@ impl FmSynth {
             v.held = true;
             v.sustained = false;
         }
+        self.mod_note_on(idx);
     }
 
     fn stop_note(&mut self, note: u8) {
@@ -429,15 +618,18 @@ impl FmSynth {
     /// One sample at the operators' rate.
     #[inline]
     fn render_inner(&mut self) -> f32 {
+        let modded = self.mm.active();
+        let frame_start = std::mem::take(&mut self.frame_start);
         let sr = self.inner_sr();
         let alg = self.p.choice(ALGORITHM).min(MODULATORS.len() - 1);
         let mods = MODULATORS.get(alg).copied().unwrap_or([0; 4]);
         let carriers = CARRIERS.get(alg).copied().unwrap_or(1);
         let norm = 1.0 / carriers.count_ones().max(1) as f32;
         let cents = self.pitch_cents();
+        let cents_base = cents;
         self.vib_phase = (self.vib_phase + VIBRATO_HZ / sr).fract();
         let lfo = lfo_shape(self.p.choice(LFO_WAVE), self.lfo_phase);
-        self.lfo_phase = (self.lfo_phase + self.p.v(LFO_RATE) / sr).fract();
+        self.lfo_phase = (self.lfo_phase + self.lfo_rate() / sr).fract();
         let cents = cents + self.p.v(LFO_PITCH) * lfo;
         let bend = if cents == 0.0 { 1.0 } else { 2f32.powf(cents / 1200.0) };
         let lfo_amp = 1.0 - self.p.v(LFO_AMP) / 100.0 * 0.5 * (1.0 - lfo);
@@ -459,16 +651,52 @@ impl FmSynth {
                 self.p.v(b + FEEDBACK) / 100.0 * FB_DEPTH,
             );
         }
-        let mut out = 0.0;
+        let mm = &self.mm;
+        let on = |d: usize| modded && mm.on(d);
+        let scale_voices = on(D_LFO_AMP) || on(D_LEVEL);
+        let freq_moved: [bool; 4] = std::array::from_fn(|n| on(D_OP_FINE + n) || on(D_OP_DETUNE + n) || on(D_OP_FREQ + n));
+        let (mut out, mut out_mod) = (0.0, 0.0);
         for v in &mut self.voices {
             if !v.active() {
                 continue;
             }
+            v.env2.next(&self.env2_rates);
+            let (bend, mod_scale, lfo_amp_v, gain) = if modded {
+                let pick = |d: usize, x: f32| if mm.on(d) { v.m.get(d) } else { x };
+                let bend = if mm.on(D_PITCH) || mm.on(D_LFO_PITCH) {
+                    if frame_start {
+                        let c = cents_base + pick(D_LFO_PITCH, self.p.v(LFO_PITCH)) * lfo;
+                        v.bend_m = 2f32.powf(c / 1200.0) * pick(D_PITCH, 1.0);
+                    }
+                    v.bend_m
+                } else {
+                    bend
+                };
+                let mod_scale = if mm.on(D_LFO_MOD) || mm.on(D_WHEEL_MOD) {
+                    let lm = pick(D_LFO_MOD, self.p.v(LFO_MOD));
+                    let wm = pick(D_WHEEL_MOD, self.p.v(WHEEL_MOD));
+                    ((1.0 - lm / 100.0 * 0.5 * (1.0 - lfo)) * (1.0 + wm / 100.0 * self.wheel)).max(0.0)
+                } else {
+                    mod_scale
+                };
+                let la = if mm.on(D_LFO_AMP) { 1.0 - v.m.get(D_LFO_AMP) / 100.0 * 0.5 * (1.0 - lfo) } else { lfo_amp };
+                (bend, mod_scale, la, pick(D_LEVEL, 1.0))
+            } else {
+                (bend, mod_scale, lfo_amp, 1.0)
+            };
             let key_oct = (f32::from(v.note) - 60.0) / 12.0;
             let base = v.freq * bend / sr;
             let mut y = [0.0f32; 4];
             for n in (0..4).rev() {
                 let (Some(op), Some(&(f, fixed, lvl, vs, ks, fb)), Some(&mask)) = (v.ops.get_mut(n), cfg.get(n), mods.get(n)) else { continue };
+                let (f, lvl, fb) = if modded {
+                    let f = if freq_moved.get(n).copied().unwrap_or(false) { v.opf.get(n).copied().unwrap_or(f) } else { f };
+                    let lvl = if mm.on(D_OP_LEVEL + n) { v.m.get(D_OP_LEVEL + n) } else { lvl };
+                    let fb = if mm.on(D_OP_FB + n) { v.m.get(D_OP_FB + n) } else { fb };
+                    (f, lvl, fb)
+                } else {
+                    (f, lvl, fb)
+                };
                 let env = op.env.next(&self.rates[n]);
                 let inc = if fixed { f } else { base * f };
                 let inc = if inc.is_finite() { inc.clamp(0.0, 0.499) } else { 0.0 };
@@ -497,9 +725,19 @@ impl FmSynth {
                     *yn = op.y1;
                 }
             }
-            for (n, yn) in y.iter().enumerate() {
-                if carriers & (1 << n) != 0 {
-                    out += yn * norm;
+            if scale_voices {
+                let mut sum = 0.0;
+                for (n, yn) in y.iter().enumerate() {
+                    if carriers & (1 << n) != 0 {
+                        sum += yn * norm;
+                    }
+                }
+                out_mod += sum * lfo_amp_v * gain;
+            } else {
+                for (n, yn) in y.iter().enumerate() {
+                    if carriers & (1 << n) != 0 {
+                        out += yn * norm;
+                    }
                 }
             }
             // A voice whose carriers have all finished is free, whatever its modulators do.
@@ -509,7 +747,7 @@ impl FmSynth {
                 }
             }
         }
-        out * lfo_amp * 0.5
+        if scale_voices { out_mod * 0.5 } else { out * lfo_amp * 0.5 }
     }
 }
 
@@ -524,8 +762,19 @@ impl Plugin for FmSynth {
         self.reset();
     }
 
+    fn set_prepared_state(&mut self, data: &[f64]) -> bool {
+        self.mm.load(data, MOD_DESTS.len());
+        for v in &mut self.voices {
+            v.m.fresh = true;
+        }
+        self.tick_left = 0;
+        true
+    }
+
     fn reset(&mut self) {
         self.voices = [Voice::new(); VOICES];
+        self.rng = sm::RANDOM_SEED;
+        self.tick_left = 0;
         self.events.clear();
         self.down.reset();
         self.down4.reset();
@@ -558,6 +807,9 @@ impl Plugin for FmSynth {
                 let kind = e.kind;
                 self.apply(kind);
                 next += 1;
+            }
+            if self.mm.active() {
+                self.mod_step();
             }
             let y = if self.oversample {
                 for _ in 0..2 {

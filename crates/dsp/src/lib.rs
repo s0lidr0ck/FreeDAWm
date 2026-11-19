@@ -652,6 +652,11 @@ impl<F: FnMut() -> Option<Vec<u8>> + Send> PluginStateReader for F {
 /// Recorded audio a sample-playing instrument reads: planar `f32` at its own sample rate (the
 /// instrument converts rates as it plays). Implementations must be cheap to read from the audio
 /// thread: no locks, no I/O.
+/// The [`Plugin::set_asset`] key under which a host hands a built-in plugin what it made ready
+/// from the module's stored state off the audio thread (the Wavetable Synth's user table: see
+/// `plugins::wavetable::user`), whenever that changes; `None` when the state has none.
+pub const PREPARED_ASSET_KEY: &str = "prepared";
+
 pub trait SampleSource: Send + Sync {
     /// Sample rate of the audio in Hz.
     fn sample_rate(&self) -> f32;

@@ -13,7 +13,7 @@ use soundcraft_ui_egui::browser::BrowserTab;
 use soundcraft_ui_egui::browser::catalog::build_catalog;
 use soundcraft_ui_egui::browser::drop::DropTarget;
 
-/// "Voice" (audio) and "Keys" (an instrument track playing the Subtractive Synth).
+/// "Voice" (audio) and "Keys" (an instrument track playing Burley, the subtractive synth).
 fn app() -> SoundApp {
     let mut app = app_with_tracks(&["Voice"]);
     app.engine.execute("track.new", &json!({"kind": "instrument", "name": "Keys"})).unwrap();

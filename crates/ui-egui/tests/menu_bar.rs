@@ -15,12 +15,13 @@ use std::collections::HashMap;
 /// Options settings moved to Setup › Preferences…) set the counts below, plus Track › Capture to Pantry… (2026-11-17,
 /// `docs/pantry.md`), Track › Rename Selected Tracks… and Track › Pin, and Window › Separate Windows › New Mix Window… (2026-11-18),
 /// and in Event, MIDI editing: Give Notes Their Own Channels and Clear the Note's Expression
-/// (2026-11-18, before only in the MIDI Editor's Lanes menu).
+/// (2026-11-18, before only in the MIDI Editor's Lanes menu), and Track › Import Wavetable…
+/// (2026-11-18, `docs/wavetable-import.md`).
 const ROWS: [(&str, usize); 12] = [
     ("File", 14),
     ("Edit", 29),
     ("View", 11),
-    ("Track", 38),
+    ("Track", 39),
     ("Clip", 30),
     ("Event", 31),
     ("Process", 18),

@@ -118,6 +118,7 @@ pub mod step_input;
 pub mod stretch_worker;
 pub mod surfaces;
 pub mod swale_ui;
+pub mod synth_face;
 pub mod synth_panel;
 pub mod teleprompter;
 pub mod tempo_markers;
@@ -140,7 +141,7 @@ pub mod vocal_track;
 pub mod vocal_worker;
 mod wait_note;
 pub mod waveform;
-pub mod wavetable_panel;
+pub mod wavetable_import;
 pub mod widgets;
 pub mod window_sync;
 pub mod windows;
@@ -1208,6 +1209,11 @@ pub struct SoundApp {
     pub sample_drop_targets: Vec<(egui::Rect, TrackId)>,
     /// Juke pad slots `(pad, layer, robin)` drawn this frame that take a dropped audio file.
     pub kit_drop_targets: Vec<(egui::Rect, TrackId, (usize, usize, usize))>,
+    /// Where a dropped audio file opens Import Wavetable for a track's Wavetable Synth (its wave
+    /// display and the open import window; last frame's rects).
+    pub wavetable_drop_targets: Vec<(egui::Rect, TrackId)>,
+    /// The open Import Wavetable window.
+    pub wavetable_import: Option<wavetable_import::ImportWindow>,
     /// Places dropped drum takes are imported: a pad card (`Some(pad)`: the takes become the
     /// pad's layers and round-robins) or a Juke window (`None`: a kit, the takes to pads by name).
     pub kit_import_targets: Vec<(egui::Rect, TrackId, Option<usize>)>,
@@ -1421,6 +1427,8 @@ impl SoundApp {
             synthetic: Vec::new(),
             sample_drop_targets: Vec::new(),
             kit_drop_targets: Vec::new(),
+            wavetable_drop_targets: Vec::new(),
+            wavetable_import: None,
             kit_import_targets: Vec::new(),
             plugin_drop_targets: Vec::new(),
             synthetic_grace: 0,
@@ -3508,6 +3516,7 @@ impl SoundApp {
         self.ui.wide_key_owner.remove(&ctx.viewport_id());
         self.sample_drop_targets.clear();
         self.kit_drop_targets.clear();
+        self.wavetable_drop_targets.clear();
         self.kit_import_targets.clear();
         self.plugin_drop_targets.clear();
         if !self.native_menu_bar {
@@ -3543,6 +3552,7 @@ impl SoundApp {
         extra_windows::show(self, &ctx);
         recovery::show(self, &ctx);
         score_editor::show(self, &ctx);
+        wavetable_import::show(self, &ctx);
         scout::panel::show(self, &ctx);
         tour::show(self, &ctx);
         band::studio::show(self, &ctx);

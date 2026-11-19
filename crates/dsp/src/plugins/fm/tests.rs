@@ -91,13 +91,15 @@ fn every_preset_is_well_formed_and_parses() {
         assert_eq!(&p.name, name);
         assert_eq!(p.values.len(), FM_INFO.params.len());
     }
-    assert_eq!(crate::plugins::fs::factory_presets(FM_INFO.id).len(), presets::FM_PRESETS.len());
+    assert_eq!(crate::plugins::fs::factory_presets(FM_INFO.id).len(), presets::FM_PRESETS.len() + presets::PATCHED_PRESETS.len());
 }
 
 #[test]
 fn the_parameters_are_four_operators_then_the_globals() {
     let ids: Vec<&str> = FM_INFO.params.iter().map(|p| p.id).collect();
-    assert_eq!(ids.len(), 62);
+    // The 62 the synth had, then Env 2 and the four macros (the modulation matrix's).
+    assert_eq!(ids.len(), 70);
+    assert_eq!(&ids[ENV2_A..], &["env2_attack", "env2_decay", "env2_sustain", "env2_release", "macro1", "macro2", "macro3", "macro4"]);
     assert_eq!(&ids[..3], &["op1_coarse", "op1_fine", "op1_detune"]);
     assert_eq!(ids[3 * OP_N + FEEDBACK], "op4_feedback");
     assert_eq!(ids[ALGORITHM], "algorithm");

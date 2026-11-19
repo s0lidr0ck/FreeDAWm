@@ -107,6 +107,17 @@ pub(crate) fn dial(ui: &mut Ui, rect: Rect, salt: impl Hash + std::fmt::Debug, p
     let v01 = if v01.is_finite() { v01.clamp(0.0, 1.0) } else { 0.0 };
     let knob = dial_knob_bounds(rect, o.layout);
     let id = ui.id().with(("vst-dial", salt));
+    let out = dial_input(ui, knob, id, v01, o);
+    let shown = out.value.unwrap_or(v01);
+    paint_dial(ui.painter(), rect, knob, pal, shown, o, out.response.hovered(), out.response.dragged());
+    out
+}
+
+/// A dial's gestures on `knob` under `id`, without painting (a face that draws its own knob,
+/// the synth panels', takes the same gestures): the vertical drag, Shift for fine, double-click
+/// to the default, the wheel, and Ctrl+click (Cmd+click) to type a value when `o.info` is given.
+pub(crate) fn dial_input(ui: &mut Ui, knob: Rect, id: Id, v01: f32, o: &DialOpts) -> DialOut {
+    let v01 = if v01.is_finite() { v01.clamp(0.0, 1.0) } else { 0.0 };
     let frozen = o.locked || o.inactive;
     let resp = ui.interact(knob, id, if frozen { Sense::hover() } else { Sense::click_and_drag() });
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, !frozen, o.label));
@@ -167,8 +178,6 @@ pub(crate) fn dial(ui: &mut Ui, rect: Rect, salt: impl Hash + std::fmt::Debug, p
             out.ended = true;
         }
     }
-    let shown = out.value.unwrap_or(v01);
-    paint_dial(ui.painter(), rect, knob, pal, shown, o, resp.hovered(), resp.dragged());
     out
 }
 

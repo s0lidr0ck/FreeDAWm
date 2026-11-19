@@ -504,6 +504,9 @@ struct PluginSlot {
     /// The [`PreparedState::rev`](soundcraft_model::PreparedState) last handed to the plugin
     /// (`Plugin::set_prepared_state`); 0: none.
     prepared: u64,
+    /// The plugin holds an object from that preparation (`PreparedState::shared`, handed over
+    /// with `Plugin::set_asset` under `PREPARED_ASSET_KEY`).
+    prepared_shared: bool,
     /// The assets handed to the plugin (`Plugin::set_asset`), by key: the engine's own references,
     /// so the plugin never holds the last one.
     assets: Vec<(String, Arc<dyn SampleSource>)>,
@@ -1277,6 +1280,7 @@ impl SlotCtx<'_> {
             keys,
             failed: false,
             prepared: 0,
+            prepared_shared: false,
             assets: Vec::new(),
             link: None,
             kit_fx: Vec::new(),
@@ -3966,6 +3970,8 @@ fn process_strip(
                 if inst.emits {
                     inst.plugin.midi_out(&mut inst.midi);
                 }
+                // A user wavetable the synth let go of (`apply_prepared`), dropped off this thread.
+                collect_released(inst, &mut strip.released);
                 if contain_failure(inst, &mut strip.buf, frames) {
                     strip.failures.record(SlotKey::Instrument);
                 }
@@ -6573,6 +6579,16 @@ fn apply_prepared(slot: &mut PluginSlot, ins: &soundcraft_model::Insert) {
     if rev != slot.prepared {
         let data: &[f64] = ins.prepared.as_ref().map_or(&[], |p| &p.data);
         slot.plugin.set_prepared_state(data);
+        // An object made ready with it (a user wavetable) goes over by reference: a clone of the
+        // snapshot's `Arc` (no allocation). The plugin gives back what it lets go of through
+        // `take_released_asset` (collected off the audio thread); one that has no room to do so
+        // yet refuses, and it is handed over again next block.
+        let shared = ins.prepared.as_ref().and_then(|p| p.shared.as_ref()).and_then(|a| a.downcast_ref::<Arc<dyn SampleSource>>()).map(Arc::clone);
+        let has = shared.is_some();
+        if (has || slot.prepared_shared) && !slot.plugin.set_asset(soundcraft_dsp::PREPARED_ASSET_KEY, shared) {
+            return;
+        }
+        slot.prepared_shared = has;
         slot.prepared = rev;
     }
 }
@@ -8214,6 +8230,7 @@ mod tests {
             keys: 0,
             failed: false,
             prepared: 0,
+            prepared_shared: false,
             assets: Vec::new(),
             link: None,
             kit_fx: Vec::new(),
@@ -8334,6 +8351,7 @@ mod tests {
             keys: 0,
             failed: false,
             prepared: 0,
+            prepared_shared: false,
             assets: Vec::new(),
             link: None,
             kit_fx: Vec::new(),
@@ -8430,6 +8448,7 @@ mod tests {
             keys: 0,
             failed: false,
             prepared: 0,
+            prepared_shared: false,
             assets: Vec::new(),
             link: None,
             kit_fx: Vec::new(),

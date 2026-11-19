@@ -288,6 +288,16 @@ fn open(info: &soundcraft_dsp::PluginInfo) -> Result<(SoundApp, Target), String>
         for (k, v) in params {
             exec(&mut app, "mix.instrument_param", json!({"track": t.0, "param": k, "value": v}))?;
         }
+        // A synth pictured patched: a few cables and a macro target, so its arcs show.
+        if soundcraft_dsp::plugins::synth_mod::has_matrix(info.id) {
+            for (source, dest, amount) in patch_look(info.id) {
+                exec(&mut app, "mix.mod_add", json!({"track": t.0, "source": source, "dest": dest, "amount": amount}))?;
+            }
+            if let Some((dest, to)) = macro_look(info.id) {
+                exec(&mut app, "mix.macro_assign", json!({"track": t.0, "macro": 1, "dest": dest, "from": 0.0, "to": to}))?;
+                exec(&mut app, "mix.instrument_param", json!({"track": t.0, "param": "macro1", "value": 40.0}))?;
+            }
+        }
         app.ui.plugin_windows.push((t, SlotKey::Instrument));
         return Ok((app, Target::Window(egui::Id::new(("plugin", t.0, SlotKey::Instrument)))));
     }
@@ -313,6 +323,28 @@ fn open(info: &soundcraft_dsp::PluginInfo) -> Result<(SoundApp, Target), String>
     Ok((app, Target::Module(t, m)))
 }
 
+/// The cables a synth is pictured with: `(source, destination, amount)`.
+fn patch_look(id: &str) -> &'static [(&'static str, &'static str, f32)] {
+    match id {
+        "subtractive_synth" => &[("env2", "cutoff", 0.3), ("lfo", "osc2_detune", 0.12), ("velocity", "level", 0.2), ("key", "key_track", 0.2)],
+        "wavetable_synth" => {
+            &[("env2", "position", 0.38), ("lfo", "warp_amount", 0.15), ("random", "unison_spread", 0.08), ("velocity", "level", 0.25)]
+        }
+        "fm_synth" => &[("velocity", "op1_level", -0.25), ("env2", "op2_level", 0.3), ("velocity", "op3_level", 0.3), ("lfo", "op4_feedback", 0.1)],
+        _ => &[],
+    }
+}
+
+/// A macro target a synth is pictured with: `(destination, to)`.
+fn macro_look(id: &str) -> Option<(&'static str, f32)> {
+    match id {
+        "subtractive_synth" => Some(("resonance", 0.35)),
+        "wavetable_synth" => Some(("cutoff", -0.3)),
+        "fm_synth" => Some(("op2_level", 0.4)),
+        _ => None,
+    }
+}
+
 /// Renders `info`'s picture into `dir/<id>.png`.
 fn thumb(info: &'static soundcraft_dsp::PluginInfo, dir: &Path) -> Result<PathBuf, String> {
     let (app, target) = open(info)?;
@@ -331,6 +363,14 @@ fn thumb(info: &'static soundcraft_dsp::PluginInfo, dir: &Path) -> Result<PathBu
     );
     h.input_mut().max_texture_side = Some(8192);
     ready.store(true, Ordering::Relaxed);
+    // `PLUGIN_THUMB_BACK=1`: a synth's panel turned round to its cables.
+    if std::env::var_os("PLUGIN_THUMB_BACK").is_some()
+        && let Target::Window(_) = target
+        && let Some(t) = h.state().engine.session().track_by_name("Inst 1").map(|t| t.id)
+    {
+        let st = soundcraft_ui_egui::synth_face::patch::State { back: true, ..Default::default() };
+        soundcraft_ui_egui::synth_face::patch::set_state(&h.ctx, t, st);
+    }
     for _ in 0..12 {
         h.step();
     }

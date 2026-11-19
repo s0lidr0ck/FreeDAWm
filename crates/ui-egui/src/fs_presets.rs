@@ -51,6 +51,12 @@ pub fn factory_recall(info: &PluginInfo, list_name: &str, json: &str) -> Option<
     Some((name, params_of(info, &p)))
 }
 
+/// A factory preset's modulation patch (`"modulation"` beside its values: a built-in synth's
+/// matrix slots and macros, as `mix.instrument` takes it), if it has one.
+pub fn factory_modulation(json: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(json).ok()?.get("modulation").filter(|m| !m.is_null()).cloned()
+}
+
 /// A plugin's factory presets in one group: `(group, [(name, json)])`.
 pub type FactoryGroup = (String, Vec<(&'static str, &'static str)>);
 
@@ -131,10 +137,15 @@ pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, tra
                         crate::audition::preset(app, voice, name);
                     }
                     if ui.button(*name).clicked() {
-                        if let Some((_, params)) = factory_recall(info, name, json)
-                            && let Err(e) = app.run("mix.instrument", json!({"track": track.0, "plugin": info.id, "params": params}))
-                        {
-                            app.ui.status = e;
+                        if let Some((_, params)) = factory_recall(info, name, json) {
+                            let mut args = json!({"track": track.0, "plugin": info.id, "params": params});
+                            // A built-in synth's preset may patch its modulation matrix too.
+                            if let Some(m) = factory_modulation(json) {
+                                args["modulation"] = m;
+                            }
+                            if let Err(e) = app.run("mix.instrument", args) {
+                                app.ui.status = e;
+                            }
                         }
                         ui.close();
                     }
@@ -149,7 +160,22 @@ pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, tra
 pub(crate) fn preset_voice(info: &PluginInfo, name: &str, json: &str) -> Option<crate::audition::Voice> {
     let (_, params) = factory_recall(info, name, json)?;
     let params = params.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()? as f32))).collect();
-    Some(crate::audition::Voice { plugin: info.id.to_string(), params })
+    Some(crate::audition::Voice { plugin: info.id.to_string(), params, prepared: compiled_patch(info.id, factory_modulation(json).as_ref()) })
+}
+
+/// A preset's modulation patch (`{slots, macros}`, as the session keeps it) compiled for a
+/// preview copy of the synth; empty when there is none or it does not read.
+pub(crate) fn compiled_patch(plugin: &str, patch: Option<&Value>) -> Vec<f64> {
+    use soundcraft_dsp::plugins::synth_mod::{SlotSpec, TargetSpec, compile};
+    let Some(m) = patch.and_then(|v| serde_json::from_value::<soundcraft_model::SynthMod>(v.clone()).ok()) else { return Vec::new() };
+    let slots: Vec<SlotSpec<'_>> = m.slots.iter().map(|s| SlotSpec { source: &s.source, dest: &s.dest, amount: s.amount }).collect();
+    let targets: Vec<TargetSpec<'_>> = m
+        .macros
+        .iter()
+        .enumerate()
+        .flat_map(|(i, mac)| mac.targets.iter().map(move |t| TargetSpec { macro_index: i, dest: &t.dest, from: t.from, to: t.to }))
+        .collect();
+    compile(plugin, &slots, &targets).unwrap_or_default()
 }
 
 /// What an import did.
