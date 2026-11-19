@@ -83,6 +83,12 @@ fn slot_edits_are_undoable_and_validated() {
     ok(&mut e, "band.settings", json!({"feel_preset": "Blues shuffle"}));
     assert_eq!((e.session().band.song_feel.pocket, e.session().band.song_feel.groove), (1, 2));
     assert!(refused(&mut e, "band.settings", json!({"feel_preset": "Polka Disco"})).contains("Polka Disco"));
+    // "As a band": on in a new session, one undo step to switch off and back.
+    assert!(e.session().band.feel.band);
+    ok(&mut e, "band.settings", json!({"feel": {"band": false}}));
+    assert!(!e.session().band.feel.band && e.session().band.feel.natural);
+    assert!(e.undo());
+    assert!(e.session().band.feel.band);
 }
 
 #[test]

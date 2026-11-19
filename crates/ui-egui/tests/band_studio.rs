@@ -151,6 +151,13 @@ fn natural_classic_switch_runs_band_settings() {
     h.get_by_label("Bass lock").click();
     h.run_steps(3);
     assert!(h.state().engine.session().band.feel.bass_lock);
+    // "As a band" (on in a new session) switches off and on, one undo step each.
+    assert!(h.state().engine.session().band.feel.band);
+    h.get_by_label("As a band").click();
+    h.run_steps(3);
+    assert!(!h.state().engine.session().band.feel.band);
+    h.state_mut().engine.undo();
+    assert!(h.state().engine.session().band.feel.band);
 }
 
 #[test]

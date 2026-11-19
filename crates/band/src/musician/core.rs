@@ -949,6 +949,9 @@ impl Musician {
             self.dynamics = clamp(self.dynamics * self.step_shift.dyn_mul, 0.0f32, 100.0f32);
         }
 
+        if perf.band && perf.natural {
+            self.bf = self.band_step_here(loc.idx, step_ppq, off, cx);
+        }
         if self.ujam_active(lib) {
             self.ujam_step(who, step, pass, prog_bar, sib, step_ppq, cx, out);
         } else if who == 0 {
@@ -956,6 +959,7 @@ impl Musician {
         } else {
             self.persona_step(who, step, pass, prog_bar, sib, step_ppq, cx, out);
         }
+        self.bf = crate::band_feel::BandStep::default();
         self.energy = base_energy;
         self.fills = kept_fills;
         self.length = kept_length;
@@ -965,6 +969,41 @@ impl Musician {
         self.cur = None;
         self.jump_next_idx = -1;
         self.force_phrase_end = false;
+    }
+
+    /// The band-feel layer's step (not in MIDI Studio): where this step sits in its section and what comes next.
+    fn band_step_here(&self, idx: i32, step_ppq: f64, off: f64, cx: &Ctx<'_>) -> crate::band_feel::BandStep {
+        let (Some(c), Some(song)) = (self.cur, cx.song) else { return crate::band_feel::BandStep::default() };
+        let mut bars = 1;
+        let bar = self.section_bar_of(step_ppq, &mut bars, cx);
+        let bar_l = max(1.0e-6, f64::from(self.get_bar_length_ppq()));
+        let in_bar = (((step_ppq - self.bar_origin) / bar_l + 1.0e-6).rem_euclid(1.0)) as f32;
+        let ni = if self.jump_next_idx >= 0 { self.jump_next_idx } else { tension::next_entry(song, idx) };
+        let here = tension::section_energy(song, &c);
+        let next = if ni >= 0 { Some(entry_at(song, ni)) } else { None };
+        let energy_step = next.map_or(0, |n| if n.arr_pos != c.arr_pos { tension::section_energy(song, &n) - here } else { 0 });
+        let change_next = next.is_some_and(|n| n.arr_pos != c.arr_pos);
+        let last = len_i32(&song.entries) - 1;
+        let before_final = song.has_ending && idx == last - 1 && step_ppq >= self.cur_end_ppq - bar_l - 1.0e-9;
+        let final_chord = song.has_ending && idx == last;
+        let landed_up = c.chord_index == 0
+            && idx > 0
+            && entry_at(song, idx - 1).arr_pos != c.arr_pos
+            && tension::section_energy(song, &entry_at(song, idx - 1)) < here;
+        let place = crate::band_feel::SectionPlace {
+            bar,
+            bars,
+            in_bar,
+            energy_step,
+            change_next,
+            before_final,
+            final_chord,
+            first_bar: bar == 0,
+            landed_up,
+            bar_quarters: bar_l as f32,
+            ms_per_quarter: if self.host_tempo > 1.0e-3 { 60000.0f32 / self.host_tempo } else { 500.0 },
+        };
+        crate::band_feel::band_step(self.effective_take(cx), step_ppq + off, &place, self.dynamics / 50.0f32)
     }
 
     /// `void generateLiveStep (int step, float64 stepPpq, int sib, int nudge)`

@@ -1,6 +1,6 @@
 # The Band: owner's checklist
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-19 · **Change:** minor (New Band and the Studio's musicians list; previously: copying chords) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-19 · **Change:** minor (New Band, the Studio's musicians list and As a band; previously: copying chords) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
 
 The owner's hands-on pass over the Band, MIDI Studio's six musicians inside the DAW
 ([design](superpowers/specs/2026-10-21-band-design.md), [plan](superpowers/plans/2026-10-21-band.md)).
@@ -47,7 +47,7 @@ matches. When it doesn't, write what you saw under the line: the status bar text
   to drop a copy; Left/Right move the pick.
 - **Window › Studio:** the song-wide controls. Key and Scale at the top, then five tabs:
   **Musicians** (who plays, on which track and instrument; Settings), **Song** (the Band view, the factory songs, Import MIDI chords…, **Print…**), **Sections** (the
-  definitions A–H), **Feel** (Natural / Classic, Tension, the song feel and its presets) and
+  definitions A–H), **Feel** (Natural / Classic, Tension, As a band, the song feel and its presets) and
   **Band** (band presets: Load, Save as…, Reload Library).
 - **Print:** Window › Studio › Song › **Print…**: the whole song, one section block, or the
   Edit selection, and which musicians.
@@ -80,6 +80,13 @@ matches. When it doesn't, write what you saw under the line: the status bar text
   Expected: Natural's extras are audible: on drums, cymbal chokes at breaks and the ending,
   rimshots on hard snare hits, open hats and the ride bell at Energy 4, flams; on bass, slides,
   hammer-ons, ghost notes in busy grooves and the occasional fall.
+- [ ] Still on Natural, with **As a band** on (the default in a new session): play the pop song
+  from bar 1 to the bridge. Expected: the band sounds like one band, not six sequencers: the time
+  moves a little and everyone moves with it; the bass sits with the kick but not glued to it; the
+  bar before each chorus swells and the drummer fills into it while the others keep to the beats;
+  piano chords are struck, not rolled up every time. Switch **As a band** off and play the same
+  bars: Natural as before (tighter, every bar's timing alike, every chord rolled from the bottom).
+  The same Take plays the same every time.
 - [ ] Switch to **Classic** and play the same bars. Expected: the extras stop (plain MODO maps,
   as MIDI Studio's Classic plays them); back to Natural, they return.
 - [ ] In the bass drawer, change Energy 2 → 4 while playing. Expected: the bass gets busier from
@@ -175,5 +182,6 @@ while stopped, a per-song meter override and MIDI Studio's MIDI export tabs come
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-19 | minor | Track › New Band; the Studio's Musicians list and a musician's Settings in the Studio; Musician Settings... in the Edit window |
+| 2026-11-19 | minor | As a band: the band-feel layer on top of Natural (on in new sessions, off in older ones) |
 | 2026-11-18 | minor | Chords copy: Copy, Cut, Paste, Duplicate, Shift-click runs, arrows, Ctrl-drag copy (sections too) |
 | 2026-10-21 | major | Created: the owner's pass over the Band with real plugins |

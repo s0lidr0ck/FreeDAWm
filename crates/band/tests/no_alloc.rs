@@ -65,6 +65,23 @@ fn process_block_does_not_allocate() {
 }
 
 #[test]
+fn process_block_as_a_band_does_not_allocate() {
+    let (s, mut settings) = smoke();
+    settings.feel.natural = true;
+    settings.feel.band = true; // the band-feel layer runs on the audio thread too
+    let mut rt = BandRuntime::new(s.sr, settings);
+    let before = rt.buffer_addresses();
+    let mut out = Count::default();
+    let mut ppq = 0.0;
+    for i in 0..2000 {
+        let t = transport(i, &mut ppq);
+        rt.process_block(&t, 512, &mut out);
+    }
+    assert!(out.0 > 0);
+    assert_eq!(before, rt.buffer_addresses(), "a buffer moved or grew: the band-feel layer allocated");
+}
+
+#[test]
 fn apply_does_not_allocate() {
     let (s, settings) = smoke();
     let base_song = settings.song.clone();

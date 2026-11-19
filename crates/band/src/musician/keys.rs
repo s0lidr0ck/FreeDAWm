@@ -647,6 +647,22 @@ impl Musician {
         if !phrase_end {
             rate = if self.feel_for(who, cx.lib).voicing == 3 && change_next { rate * 0.3f32 } else { 0.0f32 };
         }
+        // The band-feel layer: the drummer marks the way into another section (and most repeats), unless told never to.
+        if self.perf.band
+            && self.perf.natural
+            && self.is_drums()
+            && self.fills > 0.0f32
+            && pass == self.step_pass
+            && prog_bar == self.step_prog_bar
+            && let (Some(c), Some(song)) = (self.cur, cx.song)
+            && c.chord_index == c.section_chords - 1
+        {
+            let nx = self.entry_rel(1, cx);
+            if nx.arr_pos != c.arr_pos {
+                let differs = nx.section != c.section || crate::tension::section_energy(song, &nx) != crate::tension::section_energy(song, &c);
+                rate = max(rate, if differs { 0.9f32 } else { 0.6f32 });
+            }
+        }
         let fill = self.rand01(pass, prog_bar, 901, who, cx) < min(rate, 1.0f32);
         if mark && fill && self.rendering && prog_bar == self.step_prog_bar && pass == self.step_pass {
             self.annotate(1, self.step_ppq_now, cx, out); // the Band view's mark

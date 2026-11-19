@@ -1022,6 +1022,11 @@ fn feel_tab(app: &mut SoundApp, ui: &mut Ui, pal: &VstPalette) {
             if pill(ui, 90.0, "studio-tension", pal, "Tension", f.tension).on_hover_text(tip).clicked() {
                 run(app, "band.settings", json!({"feel": {"tension": !f.tension}}));
             }
+            ui.add_space(4.0);
+            let tip = "Natural only: one pulse, phrases that breathe, fills the others answer";
+            if pill(ui, 110.0, "studio-as-a-band", pal, "As a band", f.band && f.natural).on_hover_text(tip).clicked() {
+                run(app, "band.settings", json!({"feel": {"band": !(f.band && f.natural), "natural": true}}));
+            }
         });
         ui.add_space(8.0);
         caption(ui, "The band plays together");

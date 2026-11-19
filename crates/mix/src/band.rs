@@ -180,6 +180,7 @@ pub fn prepare_band_cached(
         dynamics: f.dynamics,
         natural: f.natural,
         tension: f.tension,
+        band: f.band,
     };
     let (song, start, song_end) = match lane_song(s) {
         Some(lanes) => {

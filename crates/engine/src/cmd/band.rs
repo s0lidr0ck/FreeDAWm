@@ -39,7 +39,7 @@ pub fn specs() -> Vec<super::CommandSpec> {
             "Band Settings",
             [],
             None,
-            "{key?: 0-11|\"C\"..\"B\", scale?: major|minor, take?: 1-16, feel?: {natural?, tension?, bass_lock?, fills_yield?, leave_space?, dynamics?}, song_feel?: {on?, time?, density?, pocket?, groove?, touch?}, feel_preset?: name, feel_ignore?: [slot]}",
+            "{key?: 0-11|\"C\"..\"B\", scale?: major|minor, take?: 1-16, feel?: {natural?, tension?, band?, bass_lock?, fills_yield?, leave_space?, dynamics?}, song_feel?: {on?, time?, density?, pocket?, groove?, touch?}, feel_preset?: name, feel_ignore?: [slot]}",
             always,
             settings
         ),
@@ -502,6 +502,7 @@ fn settings(e: &mut Engine, p: &Value) -> Result<Value> {
                 let slot = match k.as_str() {
                     "natural" => &mut st.feel.natural,
                     "tension" => &mut st.feel.tension,
+                    "band" => &mut st.feel.band,
                     "bass_lock" => &mut st.feel.bass_lock,
                     "fills_yield" => &mut st.feel.fills_yield,
                     "leave_space" => &mut st.feel.leave_space,
