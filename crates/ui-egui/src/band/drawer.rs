@@ -113,7 +113,7 @@ fn is_auto(m: &MusicianSlot) -> bool {
 }
 
 /// The Target field's text: "Auto → MODO DRUM", or the chosen name.
-fn target_text(lib: &LibraryData, m: &MusicianSlot, track: &Track) -> String {
+pub(crate) fn target_text(lib: &LibraryData, m: &MusicianSlot, track: &Track) -> String {
     if is_auto(m) {
         let name = target_slot(lib, m, track).and_then(|s| lib.target(s as i32)).map_or("Generic", |t| t.name.as_str());
         format!("Auto → {name}")
@@ -191,6 +191,18 @@ impl Ctx {
     }
 }
 
+/// What a feel dial does, in plain words (50 is the player as they come).
+pub(crate) fn dial_tip(key: &str) -> &'static str {
+    match key {
+        "swing" => "How much the off-beats swing: 0 straight, 50 the song's swing, 100 heavy swing",
+        "humanize" => "Small timing and loudness wobbles, as a person plays: 0 machine-tight, 50 the player's own, 100 loose",
+        "dynamics" => "How far accents stand out from the other notes: 0 even, 50 the player's own, 100 big contrasts",
+        "fills" => "How often they play a fill into the next bar or section: 0 none, 50 the player's own, 100 twice as often",
+        "groove" => "How far they lean ahead of or behind the beat as the song's Pocket says (Natural feel): 0 on the grid, 50 the player's own",
+        _ => "",
+    }
+}
+
 fn report(app: &mut SoundApp, r: Result<Value, String>) {
     if let Err(e) = r {
         app.ui.status = e;
@@ -198,8 +210,9 @@ fn report(app: &mut SoundApp, r: Result<Value, String>) {
 }
 
 /// The drawer of musician `slot` (0-5) for `track`, a column [`BAND_DRAWER_W`] wide and as tall
-/// as the strips.
-pub fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: u8) {
+/// as the strips. `in_studio`: drawn in Window ▸ Studio (its fold closes the Studio's musician
+/// panel) rather than beside a Mix strip.
+pub fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: u8, in_studio: bool) {
     let t = Tokens::current();
     let h = ui.available_height().max(560.0);
     let (r, _) = ui.allocate_exact_size(vec2(BAND_DRAWER_W, h), Sense::hover());
@@ -224,7 +237,7 @@ pub fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: u8) {
     crate::widgets::vgradient(&p, wash, BAND_ACCENT.gamma_multiply(0.12), BAND_ACCENT.gamma_multiply(0.0));
 
     let inner = card.shrink(PAD);
-    let y = header(app, ui, track, usize::from(slot), m, inner);
+    let y = header(app, ui, track, usize::from(slot), m, inner, in_studio);
     let body = Rect::from_x_y_ranges(inner.x_range(), (y + 8.0)..=inner.max.y);
     let mut body_ui = ui.new_child(UiBuilder::new().id_salt("band-body").max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)));
     body_ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -240,7 +253,7 @@ pub fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: u8) {
 }
 
 /// Track · musician, the player and instrument, and the fold button. Returns the y under it.
-fn header(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, m: &MusicianSlot, inner: Rect) -> f32 {
+fn header(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, m: &MusicianSlot, inner: Rect, in_studio: bool) -> f32 {
     let t = Tokens::current();
     let p = ui.painter().clone();
     let y = inner.min.y;
@@ -255,7 +268,11 @@ fn header(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, m: &Music
     p.line_segment([c - vec2(4.0, 4.0), c + vec2(4.0, 4.0)], Stroke::new(1.5, xc));
     p.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], Stroke::new(1.5, xc));
     if fresp.on_hover_text("Fold the band drawer").clicked() {
-        app.ui.band_drawers.remove(&track.id);
+        if in_studio {
+            app.studio.musician = None;
+        } else {
+            app.ui.band_drawers.remove(&track.id);
+        }
     }
 
     let mut job = egui::text::LayoutJob::default();
@@ -382,7 +399,7 @@ impl Body<'_, '_> {
 
         // 4. Energy.
         let energy = usize::from(m.energy.clamp(1, 4)) - 1;
-        if let Some(i) = self.switch("Energy", "band-energy", &["1", "2", "3", "4"], Some(energy)) {
+        if let Some(i) = self.switch_noted("Energy", Some("1 calm · 4 full out"), "band-energy", &["1", "2", "3", "4"], Some(energy), false) {
             self.ctx.set(self.app, "energy", json!(i + 1));
         }
 
@@ -407,6 +424,7 @@ impl Body<'_, '_> {
             let text = v.to_string();
             let o = DialOpts { label, value_text: &text, default: 0.5, layout: LabelLayout::Below, small: true, ..DialOpts::default() };
             let out = dial(self.ui, cell, ("band-dial", key), &pal, f32::from(v) / 100.0, &o);
+            out.response.clone().on_hover_text(dial_tip(key));
             let value = out.value.map(|x| json!((x * 100.0).round().clamp(0.0, 100.0) as u8));
             self.ctx.gesture(self.app, key, value, out.started, out.ended);
         }
@@ -436,7 +454,10 @@ impl Body<'_, '_> {
             self.ctx.gesture(self.app, key, value, out.started, out.ended);
         }
         self.gap(GAP);
-        if let Some(i) = self.switch("Speed", "band-speed", &["Half", "Normal", "Double"], Some(usize::from(m.speed.min(2)))) {
+        let speed = Some(usize::from(m.speed.min(2)));
+        if let Some(i) =
+            self.switch_noted("Speed", Some("half time · as written · double time"), "band-speed", &["Half", "Normal", "Double"], speed, false)
+        {
             self.ctx.set(self.app, "speed", json!(i));
         }
         // Voice is SWAM's (MS `MusicianTab`): greyed for any other target.

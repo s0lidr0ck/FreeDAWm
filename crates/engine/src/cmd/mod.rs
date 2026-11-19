@@ -21,6 +21,7 @@ pub use sample_edit::MAX_DRAWN as MAX_DRAWN_SAMPLES;
 mod automation_edit;
 pub use automation_edit::current_pencil_shape;
 mod band;
+mod band_setup;
 pub mod chord_lane;
 mod clap;
 pub(crate) mod clip;
@@ -331,6 +332,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(scout_profile::specs());
         v.extend(looping::specs());
         v.extend(band::specs());
+        v.extend(band_setup::specs());
         v.extend(lyrics::specs());
         v.extend(notes::specs());
         v.extend(lyric_sheet::specs());

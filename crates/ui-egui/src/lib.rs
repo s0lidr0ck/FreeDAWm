@@ -1650,6 +1650,10 @@ impl SoundApp {
                     let clip = v["clip"].as_u64().map(soundcraft_model::ClipId);
                     juke_window::show_steps(self, TrackId(t), clip);
                 }
+                if id == "track.new_band" {
+                    // The band's window, on its musicians; the status says what they play on.
+                    crate::band::studio::after_new_band(self, &v);
+                }
                 if id == "track.freeze" || id == "track.unfreeze" {
                     self.ui.status = freeze_status(&self.engine, &v);
                 }

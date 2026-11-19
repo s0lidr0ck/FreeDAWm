@@ -2,6 +2,9 @@
 //! them.
 //!
 //! - Always on top: **Key** and **Scale**, shared by the whole song.
+//! - **Musicians** (the first tab): with no track playing the band, what to do first (New Band);
+//!   else each musician: on/off, track, instrument, target and whether they are heard, and
+//!   **Settings**, their band drawer at the window's right.
 //! - **Song:** the Band view (bars × the six musicians from [`band_map`], coloured by Energy, the
 //!   section strip above, the playhead while playing), the factory songs ("Lay onto lanes at bar
 //!   N"), **Import MIDI chords…** and **Print…** (Song, a Section block or the Selection; which
@@ -35,6 +38,7 @@ use soundcraft_time::Samples;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StudioTab {
     #[default]
+    Musicians,
     Song,
     Sections,
     Feel,
@@ -42,10 +46,11 @@ pub enum StudioTab {
 }
 
 impl StudioTab {
-    pub const ALL: [StudioTab; 4] = [StudioTab::Song, StudioTab::Sections, StudioTab::Feel, StudioTab::Band];
+    pub const ALL: [StudioTab; 5] = [StudioTab::Musicians, StudioTab::Song, StudioTab::Sections, StudioTab::Feel, StudioTab::Band];
 
     pub fn name(self) -> &'static str {
         match self {
+            StudioTab::Musicians => "Musicians",
             StudioTab::Song => "Song",
             StudioTab::Sections => "Sections",
             StudioTab::Feel => "Feel",
@@ -112,6 +117,8 @@ pub struct StudioUi {
     def_name: Option<(char, String)>,
     /// The last thing a command said (a refusal, what Print did).
     pub message: Option<String>,
+    /// The musician (0-5) whose controls show at the window's right (the band drawer).
+    pub musician: Option<u8>,
     lists: Option<Lists>,
     boxes: ValueBoxState,
 }
@@ -120,7 +127,7 @@ impl Default for StudioUi {
     fn default() -> Self {
         StudioUi {
             show: false,
-            tab: StudioTab::Song,
+            tab: StudioTab::Musicians,
             def_editing: None,
             lay_bar: 1,
             replace: true,
@@ -131,6 +138,7 @@ impl Default for StudioUi {
             feel_name: String::new(),
             def_name: None,
             message: None,
+            musician: None,
             lists: None,
             boxes: ValueBoxState::default(),
         }
@@ -145,15 +153,15 @@ const LANE_H: f32 = 16.0;
 /// A kept take's outline (MS `col::gold`).
 const GOLD: Color32 = Color32::from_rgb(0xD9, 0xA4, 0x41);
 
-/// `window.studio {value?, tab?: song|sections|feel|band, def?: A-H}`: shows, hides or toggles
-/// the window, on a tab.
+/// `window.studio {value?, tab?: musicians|song|sections|feel|band, def?: A-H, musician?: 1-6}`: shows,
+/// hides or toggles the window, on a tab; `musician` opens that musician's controls at its right.
 pub fn command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
     let show = p.get("value").and_then(Value::as_bool).unwrap_or(!app.studio.show);
     if let Some(t) = p.get("tab").and_then(Value::as_str) {
         app.studio.tab = StudioTab::ALL
             .into_iter()
             .find(|x| x.name().eq_ignore_ascii_case(t.trim()))
-            .ok_or_else(|| format!("window.studio: `tab` is song, sections, feel or band (got `{t}`)"))?;
+            .ok_or_else(|| format!("window.studio: `tab` is musicians, song, sections, feel or band (got `{t}`)"))?;
     }
     if let Some(d) = p.get("def").and_then(Value::as_str) {
         let mut c = d.trim().chars();
@@ -163,6 +171,15 @@ pub fn command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
                 app.studio.tab = StudioTab::Sections;
             }
             _ => return Err(format!("window.studio: `def` is a section A-H (got `{d}`)")),
+        }
+    }
+    if let Some(v) = p.get("musician") {
+        match v.as_u64().filter(|n| (1..=6).contains(n)) {
+            Some(n) => {
+                app.studio.musician = Some(n as u8 - 1);
+                app.studio.tab = StudioTab::Musicians;
+            }
+            None => return Err(format!("window.studio: `musician` is 1-6 (got {v})")),
         }
     }
     if show && !app.studio.show {
@@ -216,16 +233,34 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         ctx,
         |ui| {
             let pal = palette();
-            header(app, ui, &pal);
-            ui.add_space(6.0);
-            tabs(app, ui);
-            ui.add_space(4.0);
-            ui.separator();
-            egui::ScrollArea::vertical().id_salt("band_studio_body").auto_shrink([false, false]).show(ui, |ui| match app.studio.tab {
-                StudioTab::Song => song_tab(app, ui, &pal),
-                StudioTab::Sections => sections_tab(app, ui, &pal),
-                StudioTab::Feel => feel_tab(app, ui, &pal),
-                StudioTab::Band => band_tab(app, ui),
+            // The picked musician's drawer, at the right, while a track plays them.
+            let s = app.engine.session_arc();
+            let drawer = app.studio.musician.and_then(|k| track_of(&s, usize::from(k)).map(|t| (k, t)));
+            if drawer.is_none() {
+                app.studio.musician = None;
+            }
+            let side = if drawer.is_some() { super::BAND_DRAWER_W + 8.0 } else { 0.0 };
+            ui.horizontal_top(|ui| {
+                let w = (ui.available_width() - side).max(200.0);
+                ui.vertical(|ui| {
+                    ui.set_width(w);
+                    header(app, ui, &pal);
+                    ui.add_space(6.0);
+                    tabs(app, ui);
+                    ui.add_space(4.0);
+                    ui.separator();
+                    egui::ScrollArea::vertical().id_salt("band_studio_body").auto_shrink([false, false]).show(ui, |ui| match app.studio.tab {
+                        StudioTab::Musicians => musicians(app, ui, &pal),
+                        StudioTab::Song => song_tab(app, ui, &pal),
+                        StudioTab::Sections => sections_tab(app, ui, &pal),
+                        StudioTab::Feel => feel_tab(app, ui, &pal),
+                        StudioTab::Band => band_tab(app, ui),
+                    });
+                });
+                if let Some((k, track)) = drawer {
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| super::drawer(app, ui, track, k, true));
+                }
             });
         },
     );
@@ -389,6 +424,162 @@ fn tabs(app: &mut SoundApp, ui: &mut Ui) {
     });
 }
 
+// ---- The musicians: who plays, on which track, and their controls -------------------------------
+
+/// The first track whose input is musician `k` (0-5).
+pub fn track_of(s: &Session, k: usize) -> Option<&soundcraft_model::Track> {
+    s.tracks.iter().find(|t| t.mixer.input == Route::Musician(k as u8))
+}
+
+/// How a musician is heard, in a few words, and whether that is a problem the user should fix.
+pub fn musician_status(s: &Session, lib: &soundcraft_band::library::LibraryData, k: usize) -> (String, bool) {
+    let Some(m) = s.band.slots.get(k) else { return (String::new(), false) };
+    if !m.enabled {
+        return ("Off: not heard".into(), false);
+    }
+    let Some(track) = track_of(s, k) else { return ("No track plays them: not heard".into(), true) };
+    if track.mixer.mute || m.mute {
+        return ("Muted".into(), false);
+    }
+    let drums = matches!(m.instrument, 5 | 11);
+    let plugin = track.instrument.as_ref().map(|i| i.plugin.as_str()).unwrap_or("");
+    let drum_sound = matches!(plugin, "juke" | "drum_synth") || super::target_slot(lib, m, track).is_some_and(|t| t != 0);
+    if drums && !drum_sound {
+        return ("Drums on a pitched instrument: give the track Juke, Drum Synth or a drum plug-in".into(), true);
+    }
+    if super::loaded_instrument(track).is_empty() {
+        return ("The track has no instrument: nothing is heard".into(), true);
+    }
+    ("Plays".into(), false)
+}
+
+/// The track's instrument as the musicians list shows it: its name, and the preset it loaded.
+fn instrument_text(track: &soundcraft_model::Track) -> String {
+    let name = super::loaded_instrument(track);
+    match track.instrument.as_ref().map(|i| i.preset.as_str()).filter(|p| !p.is_empty() && !p.starts_with('<')) {
+        Some(p) if !name.is_empty() => format!("{name} · {p}"),
+        _ if name.is_empty() => "No instrument".into(),
+        _ => name,
+    }
+}
+
+/// After `track.new_band` (menu, button or control): the Studio opens on its Musicians tab, and the
+/// status says how many tracks were made and how many play a built-in fallback.
+pub fn after_new_band(app: &mut SoundApp, v: &Value) {
+    let list = v.get("musicians").and_then(Value::as_array).cloned().unwrap_or_default();
+    let built_in = list.iter().filter(|m| m.get("installed").and_then(Value::as_bool) == Some(false)).count();
+    let song = v.get("song").and_then(Value::as_str).map(|s| format!("; laid “{s}”")).unwrap_or_default();
+    let msg = if built_in == 0 {
+        format!("New Band: {} track(s) on your plug-ins{song}. Press Play.", list.len())
+    } else {
+        format!(
+            "New Band: {} track(s), {built_in} on built-in instruments (no installed plug-in the Library knows was found){song}. Press Play.",
+            list.len()
+        )
+    };
+    app.studio.show = true;
+    app.studio.lists = None;
+    app.studio.tab = StudioTab::Musicians;
+    // The window's line is short (it shares the row with Key and Scale); the status line has it all.
+    app.studio.message = Some(format!("New Band: {} track(s), {built_in} on built-in instruments", list.len()));
+    app.ui.status = msg;
+}
+
+/// `track.new_band`, from a button in the window.
+fn new_band(app: &mut SoundApp) {
+    run(app, "track.new_band", json!({}));
+}
+
+/// The Musicians tab: with no track playing the band, what to do first; else every musician,
+/// whether they are heard, on which track and instrument, and the way to their controls.
+fn musicians(app: &mut SoundApp, ui: &mut Ui, pal: &VstPalette) {
+    let s = app.engine.session_arc();
+    let lib = app.engine.band_library();
+    let t = Tokens::current();
+    let any_track = (0..6).any(|k| track_of(&s, k).is_some());
+    if !any_track {
+        card(ui, "START HERE", |ui| {
+            ui.label(RichText::new("No track plays the band yet.").font(bold(13.0)).color(t.text));
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "New Band makes a track for each musician who is on, with an instrument that sounds: your MODO DRUM, MODO BASS, \
+                     Pianoteq… when the plug-in scan found them, else a built-in one. When the Sections and Chords rulers are empty it \
+                     lays a verse–chorus song on them too. Then press Play. One Undo takes it all back.",
+                )
+                .font(regular(11.0))
+                .color(t.text_dim),
+            );
+            ui.add_space(8.0);
+            let resp = ui.add(egui::Button::new(RichText::new("New Band").font(bold(12.0))).min_size(vec2(140.0, 28.0)));
+            if resp.on_hover_text("Track ▸ New Band: a track for each musician, playing them").clicked() {
+                new_band(app);
+            }
+            ui.add_space(4.0);
+            caption(ui, "Or give any instrument track a musician yourself: its input menu ▸ Musicians.");
+        });
+        return;
+    }
+    card(ui, "MUSICIANS", |ui| {
+        let unheard = (0..6).filter(|k| s.band.slots.get(*k).is_some_and(|m| m.enabled) && track_of(&s, *k).is_none()).count();
+        if unheard > 0 {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{unheard} musician(s) who are on have no track and are not heard.")).font(regular(11.0)).color(t.text),
+                );
+                if ui.button("Add their tracks").on_hover_text("Track ▸ New Band: a track for each musician who is on and has none").clicked() {
+                    new_band(app);
+                }
+            });
+            ui.add_space(4.0);
+        }
+        egui::Grid::new("studio-musicians").num_columns(6).spacing(vec2(14.0, 4.0)).show(ui, |ui| {
+            for h in ["", "Musician", "Track", "Instrument", "Target", ""] {
+                caption(ui, h);
+            }
+            ui.end_row();
+            for (k, m) in s.band.slots.iter().enumerate() {
+                let on = m.enabled;
+                let resp = pill(ui, 54.0, ("studio-on", k), pal, if on { "On" } else { "Off" }, on);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, format!("Musician {} on", k + 1)));
+                if resp.on_hover_text("Switch this musician on or off").clicked() {
+                    run(app, "band.slot", json!({"slot": k + 1, "enabled": !on}));
+                }
+                let (status, problem) = musician_status(&s, &lib, k);
+                ui.vertical(|ui| {
+                    let ink = if on { t.text } else { t.text_dim };
+                    ui.add(egui::Label::new(RichText::new(musician_name(k, m)).font(bold(11.0)).color(ink)).extend());
+                    let ink = if problem { t.meter_yellow } else { t.text_dim };
+                    ui.add(egui::Label::new(RichText::new(&status).font(regular(10.0)).color(ink)).extend());
+                });
+                let track = track_of(&s, k);
+                match track {
+                    Some(tr) => {
+                        ui.label(RichText::new(&tr.name).font(regular(11.0)));
+                        ui.label(RichText::new(instrument_text(tr)).font(regular(11.0)));
+                        ui.label(RichText::new(super::drawer::target_text(&lib, m, tr)).font(regular(11.0)).color(t.text_dim))
+                            .on_hover_text("What the musician's notes are shaped for: Auto picks it by the track's instrument; Generic sends plain General MIDI notes");
+                    }
+                    None => {
+                        for _ in 0..3 {
+                            ui.label(RichText::new("—").color(t.text_dim));
+                        }
+                    }
+                }
+                let open = app.studio.musician == Some(k as u8);
+                let b = ui.add_enabled(track.is_some(), egui::Button::selectable(open, picked_text(RichText::new("Settings"), open)));
+                let b = b.on_hover_text("This musician's player, Energy, feel dials and target, at the window's right");
+                let b = b.on_disabled_hover_text("No track plays this musician: add their track first");
+                b.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Musician {} settings", k + 1)));
+                if b.clicked() {
+                    app.studio.musician = if open { None } else { Some(k as u8) };
+                }
+                ui.end_row();
+            }
+        });
+    });
+}
+
 // ---- Song: the Band view, factory songs, chord import, Print ------------------------------------
 
 fn song_tab(app: &mut SoundApp, ui: &mut Ui, pal: &VstPalette) {
@@ -442,7 +633,8 @@ fn band_view(app: &mut SoundApp, ui: &mut Ui) {
     for (k, m) in s.band.slots.iter().enumerate() {
         let y = area.min.y + k as f32 * LANE_H;
         let name_r = Rect::from_min_size(pos2(r.min.x, y), vec2(LABEL_W - 8.0, LANE_H));
-        let ink = if m.enabled { t.text } else { t.text_dim.gamma_multiply(0.7) };
+        let heard = m.enabled && track_of(&s, k).is_some();
+        let ink = if heard { t.text } else { t.text_dim.gamma_multiply(0.7) };
         p.with_clip_rect(name_r).text(pos2(name_r.min.x, name_r.center().y), Align2::LEFT_CENTER, musician_name(k, m), regular(9.5), ink);
         for (b, c) in cells.iter().enumerate() {
             let cell = cell_rect(area, bars, b, k);
@@ -475,7 +667,7 @@ fn band_view(app: &mut SoundApp, ui: &mut Ui) {
     }
     ui.add_space(4.0);
     ui.label(
-        RichText::new("Brighter = more Energy · hatched = sits out · gold = a kept take · the strip's tint is the arrangement's Energy nudge")
+        RichText::new("Brighter = more Energy · hatched = sits out · gold = a kept take · the strip's tint is the arrangement's Energy nudge · a dim name is not heard (off, or no track plays it)")
             .font(regular(9.5))
             .color(t.text_dim),
     );

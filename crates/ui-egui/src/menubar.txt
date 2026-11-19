@@ -299,6 +299,7 @@ Track > New...
 Track > Duplicate = Track > Duplicate...
 Track > Create Click Track
 Track > New Beat = @track.new_beat
+Track > New Band = @track.new_band
 Track > Vocal Track = @track.vocal
 Track > ---
 Track > ## Organise

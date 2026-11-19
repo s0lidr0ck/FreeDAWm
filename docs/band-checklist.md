@@ -1,6 +1,6 @@
 # The Band: owner's checklist
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-18 · **Change:** minor (copying chords; previously major: created) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-19 · **Change:** minor (New Band and the Studio's musicians list; previously: copying chords) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
 
 The owner's hands-on pass over the Band, MIDI Studio's six musicians inside the DAW
 ([design](superpowers/specs/2026-10-21-band-design.md), [plan](superpowers/plans/2026-10-21-band.md)).
@@ -23,6 +23,14 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 
 ## Where things are
 
+- **The quick start:** **Track › New Band** (or **New Band** in Window › Studio while no track
+  plays the band) makes a track for each musician who is on, playing them, on an installed
+  instrument their target names (MODO DRUM for the drummer…) when the plug-in scan found it, else a
+  built-in one (Juke for drums; piano, bass, organ, pad, brass and pluck presets on the built-in
+  synths). With empty lanes it lays Pop Verse Chorus Bridge. One undo step.
+- **Who plays what:** Window › Studio › **Musicians** (the first tab): each musician's on/off, track,
+  instrument and preset, target, and whether they are heard. **Settings** opens their drawer at
+  the Studio's right. In the Edit window, right-click a track name › **Musician Settings...**.
 - **A track plays a musician:** on an Instrument or MIDI track, open the track's **input** menu
   (the input selector on the strip in the Mix window, or the I/O column in the Edit window). Under
   the heading **Musicians** are the six, each as `N · player (instrument)`. Pick one. A greyed
@@ -37,8 +45,8 @@ matches. When it doesn't, write what you saw under the line: the status bar text
   double-click on Chords to type a chord. Chords copy as clips do: click one (Shift-click another
   for the run between), then Ctrl/Cmd+C, X, V (at the insertion point), D, or Ctrl-drag a chord
   to drop a copy; Left/Right move the pick.
-- **Window › Studio:** the song-wide controls. Key and Scale at the top, then four tabs:
-  **Song** (the Band view, the factory songs, Import MIDI chords…, **Print…**), **Sections** (the
+- **Window › Studio:** the song-wide controls. Key and Scale at the top, then five tabs:
+  **Musicians** (who plays, on which track and instrument; Settings), **Song** (the Band view, the factory songs, Import MIDI chords…, **Print…**), **Sections** (the
   definitions A–H), **Feel** (Natural / Classic, Tension, the song feel and its presets) and
   **Band** (band presets: Load, Save as…, Reload Library).
 - **Print:** Window › Studio › Song › **Print…**: the whole song, one section block, or the
@@ -56,6 +64,10 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 
 ## 2. MODO DRUM and MODO BASS 2
 
+- [ ] With MODO DRUM and MODO BASS 2 scanned (the plug-in menus list them), in a new session:
+  **Track › New Band**. Expected: five tracks (Piano, Drums, Bass, Strings, Brass); Drums plays
+  MODO DRUM and Bass MODO BASS 2, the others built-in instruments; the Studio's Musicians list says
+  so and the status line counts the built-in ones; Play is heard at once; one Undo removes it all.
 - [ ] New Instrument track "Drums" with **MODO DRUM** on it; input → Musicians → the drummer
   (load the band preset **Factory Band** first if no slot plays Drums). New Instrument track
   "Bass" with **MODO BASS 2**; input → the bassist. Expected: each strip shows the Band key.
@@ -162,5 +174,6 @@ while stopped, a per-song meter override and MIDI Studio's MIDI export tabs come
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | Track › New Band; the Studio's Musicians list and a musician's Settings in the Studio; Musician Settings... in the Edit window |
 | 2026-11-18 | minor | Chords copy: Copy, Cut, Paste, Duplicate, Shift-click runs, arrows, Ctrl-drag copy (sections too) |
 | 2026-10-21 | major | Created: the owner's pass over the Band with real plugins |

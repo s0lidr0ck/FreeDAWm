@@ -1207,7 +1207,7 @@ fn bump_next_id(st: &mut BandState) {
     st.next_id = st.next_id.max(top.saturating_add(1)).max(1);
 }
 
-fn song_factory(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn song_factory(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "band.song.factory";
     let name = name_in(C, p)?.to_string();
     let songs = factory_songs();

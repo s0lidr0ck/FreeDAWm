@@ -2402,6 +2402,17 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
         let selected = crate::window_sync::selection_of(app, window);
         if selected.contains(&id) { selected.iter().map(|track| track.0).collect() } else { vec![tid] }
     };
+    // A track playing a band musician: that musician's controls, in Window ▸ Studio.
+    if let Some(k) = app.engine.session().track(id).and_then(crate::band::musician_of) {
+        let tip = "The musician this track plays: player, Energy, feel and target, in Window ▸ Studio";
+        if ui.button("Musician Settings...").on_hover_text(tip).clicked() {
+            if let Err(e) = app.run("window.studio", json!({"value": true, "musician": k + 1})) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+        ui.separator();
+    }
     let inactive = app.engine.session().track(id).is_some_and(|t| t.inactive);
     let locked = app.engine.session().track(id).is_some_and(|t| t.edit_locked);
     for (label, cmd) in items {

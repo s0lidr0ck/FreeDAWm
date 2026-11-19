@@ -195,7 +195,7 @@ fn strip_and_drawers(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<
         if let Some(track) = session.track(id)
             && let Some(k) = crate::band::musician_of(track)
         {
-            crate::band::drawer(app, ui, track, k);
+            crate::band::drawer(app, ui, track, k, false);
         }
     }
     // An open drawer sits right of its strip; the strips after it shift right.
