@@ -240,7 +240,7 @@ pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
         &[
             ("Creep", &[("position", 0.0, 0.5)]),
             ("Shine", &[("cutoff", -0.1, 0.2)]),
-            ("Drift", &[("lfo_pitch", 0.0, 0.02)]),
+            ("Drift", &[("lfo_pitch", 0.0, 0.05), ("unison_detune", 0.0, 0.3)]),
             ("Depth", &[("warp_amount", 0.0, 0.4)]),
         ],
     ),

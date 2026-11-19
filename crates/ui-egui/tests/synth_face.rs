@@ -132,7 +132,7 @@ fn a_source_dragged_onto_a_knob_patches_it() {
     let (mut h, t) = harness("subtractive_synth");
     let (from, to) = (centre(&h, "LFO"), centre(&h, "Cutoff"));
     press_drag_release(&mut h, from, to);
-    assert_eq!(slots(&h, t), vec![("lfo".to_string(), "cutoff".to_string(), 0.25)]);
+    assert_eq!(slots(&h, t), vec![("lfo".to_string(), "cutoff".to_string(), 0.3)]);
     h.state_mut().engine.execute("edit.undo", &json!({})).unwrap();
     assert!(slots(&h, t).is_empty(), "one undo step");
     for _ in 0..30 {
@@ -176,7 +176,7 @@ fn on_the_back_a_cable_patches_and_pulling_it_out_removes_it() {
     step(&mut h);
     let (from, to) = (centre(&h, "LFO out"), centre(&h, "Cutoff socket"));
     press_drag_release(&mut h, from, to);
-    assert_eq!(slots(&h, t), vec![("lfo".to_string(), "cutoff".to_string(), 0.25)]);
+    assert_eq!(slots(&h, t), vec![("lfo".to_string(), "cutoff".to_string(), 0.3)]);
     for _ in 0..30 {
         step(&mut h);
     }

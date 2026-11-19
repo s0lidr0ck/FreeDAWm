@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Modulation",
             [],
             None,
-            "{track?, module? (\"instrument\" or a module id), source, dest, amount? (-1..1 of the knob's travel, default 0.25)} → {slot, slots}: a modulation-matrix slot on a built-in synth (Subtractive, Wavetable, FM); at most 16. Sources: amp_env, env2, lfo, velocity, mod_wheel, key, random; dests: see mix.mod_info",
+            "{track?, module? (\"instrument\" or a module id), source, dest, amount? (-1..1 of the knob's travel; default 0.3, two semitones on a pitch, downwards for an envelope, velocity or the wheel on a knob near its top)} → {slot, slots}: a modulation-matrix slot on a built-in synth (Subtractive, Wavetable, FM); at most 16. Sources: amp_env, env2, lfo, velocity, mod_wheel, key, random; dests: see mix.mod_info",
             has_selection,
             mod_add
         ),
@@ -47,7 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assign Macro",
             [],
             None,
-            "{track?, module?, macro: 1..4, dest, amount? | from?, to? (-1..1 each), remove?: bool} → {macro, targets}: a synth macro drives `dest` from `from` (macro at 0) to `to` (at 100 %); `amount` = from 0 to amount; at most 8 per macro; one already on `dest` is changed",
+            "{track?, module?, macro: 1..4, dest, amount? | from?, to? (-1..1 each), remove?: bool} → {macro, targets}: a synth macro drives `dest` from `from` (macro at 0) to `to` (at 100 %); `amount` = from 0 to amount; neither: half the travel from the knob, up or (near its top) down; at most 8 per macro; one already on `dest` is changed",
             has_selection,
             macro_assign
         ),
@@ -65,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Surprise",
             [],
             None,
-            "{track?, module?, seed?: integer} → {added: [slot], slots}: two or three random modulation slots in safe ranges (pitch within a fifth, level at most +3 dB), the same for the same seed",
+            "{track?, module?, seed?: integer} → {added: [slot], slots}: two or three random modulation slots in safe ranges (pitch within a fifth, level within 6 dB), the same for the same seed",
             has_selection,
             mod_surprise
         ),
@@ -218,6 +218,12 @@ pub(crate) fn parse_patch(c: &str, plugin: &str, v: &Value) -> Result<SynthMod> 
     Ok(m)
 }
 
+/// Where destination `dest` of `ins`'s synth stands now, 0..1 of its knob's travel (the virtual
+/// pitch: its middle).
+fn knob_pos(ins: &Insert, dest: &str) -> f32 {
+    sm::dest_info(&ins.plugin, dest).map_or(0.5, |i| i.to_normalized(ins.params.get(dest).copied().filter(|v| v.is_finite()).unwrap_or(i.default)))
+}
+
 /// After an edit: the patch tidied and made ready for the synth.
 fn done(ins: &mut Insert) {
     ins.modulation.sanitize();
@@ -228,9 +234,10 @@ fn mod_add(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "mix.mod_add";
     let source = text(C, p, "source")?.ok_or_else(|| bad(C, "`source` required"))?;
     let dest = text(C, p, "dest")?.ok_or_else(|| bad(C, "`dest` required"))?;
-    let amount = amount_of(C, p, "amount")?.unwrap_or(0.25);
+    let amount = amount_of(C, p, "amount")?;
     let ins = synth_mut(e, C, p)?;
     let (source, dest) = checked(C, &ins.plugin, source, dest.trim())?;
+    let amount = amount.unwrap_or_else(|| sm::default_amount(&ins.plugin, &source, &dest, knob_pos(ins, &dest)));
     if ins.modulation.slots.len() >= MAX_MOD_SLOTS {
         return Err(bad(C, format!("all {MAX_MOD_SLOTS} modulation slots are in use: remove one first")));
     }
@@ -296,6 +303,7 @@ fn macro_assign(e: &mut Engine, p: &Value) -> Result<Value> {
     if !sm::dests(&ins.plugin).contains(&dest.as_str()) {
         return Err(bad(C, format!("`{}` cannot modulate `{dest}` (one of: {})", ins.plugin, sm::dests(&ins.plugin).join(", "))));
     }
+    let pos = knob_pos(ins, &dest);
     let Some(mac) = macro_mut(&mut ins.modulation, i) else { return Err(bad(C, "no such macro")) };
     let at = mac.targets.iter().position(|t| t.dest == dest);
     if remove {
@@ -305,7 +313,7 @@ fn macro_assign(e: &mut Engine, p: &Value) -> Result<Value> {
         let old = at.and_then(|a| mac.targets.get(a)).cloned();
         let (f, t) = match (amount, from, to) {
             (Some(a), _, _) => (0.0, a),
-            (None, None, None) => old.as_ref().map_or((0.0, 0.5), |o| (o.from, o.to)),
+            (None, None, None) => old.as_ref().map(|o| (o.from, o.to)).unwrap_or_else(|| sm::default_macro_range(pos)),
             (None, f, t) => (f.or(old.as_ref().map(|o| o.from)).unwrap_or(0.0), t.or(old.as_ref().map(|o| o.to)).unwrap_or(0.0)),
         };
         let target = MacroTarget { dest: dest.clone(), from: f, to: t };
@@ -340,13 +348,14 @@ fn macro_name(e: &mut Engine, p: &Value) -> Result<Value> {
 }
 
 /// What Surprise may patch, with the largest amount each way it may use: musical, never loud.
-/// Pitch within a fifth (7 of the 48 semitones' travel), the level at most +3 dB.
+/// Pitch within a fifth (7 of the 48 semitones' travel), the level within 6 dB (3 dB, as it
+/// was, is barely heard as a change).
 fn surprise_limit(plugin: &str, dest: &str) -> Option<f32> {
     let info = sm::dest_info(plugin, dest)?;
     let span = info.max - info.min;
     Some(match dest {
         sm::PITCH | "osc_pitch" | "osc2_semitones" => 7.0 / span,
-        "level" => 3.0 / span,
+        "level" => 6.0 / span,
         "osc_fine" | "osc2_detune" => 0.15,
         _ if dest.ends_with("_freq") => return None,
         sm::SHARED_DEST => 0.15,
@@ -402,8 +411,8 @@ fn mod_surprise(e: &mut Engine, p: &Value) -> Result<Value> {
             continue;
         }
         let limit = surprise_limit(&ins.plugin, dest).unwrap_or(0.0);
-        // At least a third of the limit, so it is heard; either way.
-        let mag = limit * (0.35 + 0.65 * dice.unit());
+        // At least half the limit, so it is heard; either way.
+        let mag = limit * (0.5 + 0.5 * dice.unit());
         let amount = if dice.below(2) == 0 { mag } else { -mag };
         ins.modulation.slots.push(ModSlot { source: src.id.to_string(), dest: dest.to_string(), amount: (amount * 1000.0).round() / 1000.0 });
         added.push(ins.modulation.slots.len() - 1);
@@ -665,6 +674,29 @@ mod tests {
         }
     }
 
+    /// A source dropped with no amount moves a third of the travel (two semitones on a pitch), a
+    /// one-way source downwards on a knob near its top; a macro dragged on with no range drives
+    /// half the travel, up, or down from a knob near its top.
+    #[test]
+    fn dropped_sources_and_macros_get_amounts_that_are_heard() {
+        let (mut e, t) = synth_track("subtractive_synth");
+        e.execute("mix.mod_add", &json!({"track": t, "source": "lfo", "dest": "resonance"})).unwrap();
+        e.execute("mix.mod_add", &json!({"track": t, "source": "env2", "dest": "pitch"})).unwrap();
+        e.execute("mix.instrument_param", &json!({"track": t, "param": "cutoff", "value": 18_000.0})).unwrap();
+        e.execute("mix.mod_add", &json!({"track": t, "source": "velocity", "dest": "cutoff"})).unwrap();
+        e.execute("mix.mod_add", &json!({"track": t, "source": "lfo", "dest": "cutoff"})).unwrap();
+        let s: Vec<f32> = inst(&e, t).modulation.slots.iter().map(|s| s.amount).collect();
+        assert!((s[0] - 0.3).abs() < 1e-6, "{s:?}");
+        assert!((s[1] * 48.0 - 2.0).abs() < 1e-3, "two semitones: {s:?}");
+        assert!((s[2] + 0.3).abs() < 1e-6, "velocity on an open filter closes it: {s:?}");
+        assert!((s[3] - 0.3).abs() < 1e-6, "the LFO swings both ways anyway: {s:?}");
+        e.execute("mix.macro_assign", &json!({"track": t, "macro": 1, "dest": "resonance"})).unwrap();
+        e.execute("mix.macro_assign", &json!({"track": t, "macro": 1, "dest": "cutoff"})).unwrap();
+        let m = &inst(&e, t).modulation.macros[0];
+        assert_eq!((m.targets[0].from, m.targets[0].to), (0.0, 0.5));
+        assert_eq!((m.targets[1].from, m.targets[1].to), (0.0, -0.5), "room only below");
+    }
+
     #[test]
     fn surprise_is_deterministic_and_stays_in_safe_ranges() {
         for plugin in ["subtractive_synth", "wavetable_synth", "fm_synth"] {
@@ -682,7 +714,7 @@ mod tests {
                     let span = info.max - info.min;
                     match s.dest.as_str() {
                         "pitch" | "osc_pitch" | "osc2_semitones" => assert!(s.amount.abs() * span <= 7.0 + 1e-3, "{plugin}: {s:?}"),
-                        "level" => assert!(s.amount.abs() * span <= 3.0 + 1e-3, "{plugin}: {s:?}"),
+                        "level" => assert!(s.amount.abs() * span <= 6.0 + 1e-3, "{plugin}: {s:?}"),
                         _ => assert!(s.amount.abs() <= 0.4 + 1e-6, "{plugin}: {s:?}"),
                     }
                     assert!(sm::check_slot(plugin, &s.source, &s.dest).is_ok());

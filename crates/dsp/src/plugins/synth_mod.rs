@@ -161,6 +161,37 @@ pub fn check_slot(plugin: &str, source: &str, dest: &str) -> Result<(usize, usiz
     Ok((s, d))
 }
 
+/// The share of a knob's travel a source moves it by when patched with no amount given (dropped
+/// on a knob): 30 % (it was 25 %). Measured on a held chord (the preset lab's clearly-audible
+/// score), turning most knobs by this much is plainly heard (the cutoff, the levels, the LFO
+/// depths, Warp, the operators' levels and feedback); a few stay gentle at any small amount
+/// (Osc 2's detune, the oscillator mix, key tracking, X-Mod to pitch) and want a larger one
+/// dragged in by hand. More by default would throw most sounds out of shape at the first drop.
+pub const DEFAULT_AMOUNT: f32 = 0.3;
+
+/// How far a macro dragged onto a knob drives it when no range is given: half the knob's travel.
+pub const DEFAULT_MACRO_RANGE: f32 = 0.5;
+
+/// The amount a source `source` gets when patched onto `dest` of `plugin` with none given, the
+/// knob standing at `pos` (0..1 of its travel): [`DEFAULT_AMOUNT`], but two semitones on a
+/// pitch (a third of a pitch knob's four octaves is a siren), and downwards for a one-way source
+/// (an envelope, velocity, the wheel) when the knob has less room above it than the amount.
+pub fn default_amount(plugin: &str, source: &str, dest: &str, pos: f32) -> f32 {
+    let a = match dest {
+        PITCH | "osc_pitch" | "osc2_semitones" => dest_info(plugin, dest).map_or(0.0417, |i| 2.0 / (i.max - i.min).max(1.0)),
+        _ => DEFAULT_AMOUNT,
+    };
+    let one_way = source_index(source).and_then(|i| SOURCES.get(i)).is_some_and(|s| s.lo >= 0.0);
+    if one_way && pos + a > 1.0 && pos > 0.5 { -a } else { a }
+}
+
+/// The range (`from`, `to`) a macro gets on `dest` when dragged onto it with none given, the
+/// knob standing at `pos`: from where the knob is to [`DEFAULT_MACRO_RANGE`] of the travel up,
+/// or down when there is less room above (a range past the knob's end would be partly silent).
+pub fn default_macro_range(pos: f32) -> (f32, f32) {
+    if pos + DEFAULT_MACRO_RANGE > 1.0 && pos > 0.5 { (0.0, -DEFAULT_MACRO_RANGE) } else { (0.0, DEFAULT_MACRO_RANGE) }
+}
+
 /// A bipolar amount kept in range (NaN: 0).
 pub fn clamp_amount(x: f32) -> f32 {
     if x.is_finite() { x.clamp(-1.0, 1.0) } else { 0.0 }

@@ -34,12 +34,12 @@ pub static SUITE: [PatchedPreset; 52] = [
         Simple,
         "Basics",
         "Init for Patching",
-        "Init with the four macros named and wired to one thing each, all at zero so it sounds like Init: Bright raises the modulator, Bite its feedback, Ratio nudges it off the harmonic, Vibrato brings in the LFO.",
+        "Init with the four macros named and wired to one thing each, all at zero so it sounds like Init: Bright raises the modulator, Bite the carrier's feedback, Ratio nudges it off the harmonic, Vibrato brings in the LFO.",
         &[("level", -7.0)],
         &[],
         &[
             ("Bright", &[("op2_level", 0.0, 0.3)]),
-            ("Bite", &[("op2_feedback", 0.0, 0.3)]),
+            ("Bite", &[("op1_feedback", 0.0, 0.4)]),
             ("Ratio", &[("op2_fine", 0.0, 0.1)]),
             ("Vibrato", &[("lfo_pitch", 0.0, 0.02)]),
         ],
@@ -795,8 +795,8 @@ pub static SUITE: [PatchedPreset; 52] = [
         &[
             ("Bark", &[("op2_level", 0.0, 0.2), ("op2_feedback", 0.0, 0.15)]),
             ("Tine", &[("op4_level", 0.0, 0.25)]),
-            ("Mellow", &[("op2_level", 0.0, -0.15), ("op3_level", 0.0, -0.1)]),
-            ("Shimmer", &[("op3_detune", 0.0, 0.1), ("lfo_pitch", 0.0, 0.005)]),
+            ("Mellow", &[("op2_level", 0.0375, -0.3), ("op3_level", 0.0375, -0.25), ("op4_level", 0.0625, -0.25)]),
+            ("Shimmer", &[("op3_detune", -0.15, 0.45), ("op1_detune", 0.129, -0.3), ("lfo_pitch", -0.0043, 0.015), ("lfo_amp", -0.15, 0.35)]),
         ],
     ),
     suite(
@@ -830,13 +830,13 @@ pub static SUITE: [PatchedPreset; 52] = [
             ("macro1", 30.0),
             ("macro2", 40.0),
             ("macro3", 20.0),
-            ("level", -4.5),
+            ("level", -5.5),
         ],
         &[("env2", "op2_level", 0.2), ("velocity", "op4_level", 0.2), ("random", "op2_fine", 0.02)],
         &[
             ("Clang", &[("op2_level", 0.0, 0.25), ("op4_level", 0.0, 0.2)]),
             ("Hum", &[("op3_level", -0.3, 0.2)]),
-            ("Toll", &[("op2_fine", 0.0, 0.1), ("op4_fine", 0.0, 0.1)]),
+            ("Toll", &[("op2_fine", -0.0625, 0.35), ("op4_fine", -0.0625, 0.35)]),
         ],
     ),
     suite(
@@ -863,7 +863,11 @@ pub static SUITE: [PatchedPreset; 52] = [
             ("level", -7.0),
         ],
         &[("velocity", "op2_level", 0.3), ("key", "op2_level", -0.1), ("env2", "op2_feedback", 0.4)],
-        &[("Mallet", &[("op2_level", 0.0, 0.25)]), ("Wood", &[("op1_feedback", 0.0, 0.2)]), ("Motor", &[("lfo_amp", 0.0, 0.3)])],
+        &[
+            ("Mallet", &[("op2_level", 0.0, 0.25)]),
+            ("Wood", &[("op1_feedback", 0.0, 0.2)]),
+            ("Motor", &[("lfo_amp", 0.0, 0.9), ("lfo_mod", 0.0, 0.5)]),
+        ],
     ),
     suite(
         Special,
@@ -894,7 +898,7 @@ pub static SUITE: [PatchedPreset; 52] = [
         &[
             ("Growl", &[("op2_level", 0.0, 0.2), ("op2_feedback", 0.0, 0.2)]),
             ("Weight", &[("op3_level", -0.2, 0.25)]),
-            ("Thump", &[("op4_level", 0.0, 0.35)]),
+            ("Thump", &[("op4_level", -0.2, 0.65)]),
         ],
     ),
     suite(
@@ -937,7 +941,7 @@ pub static SUITE: [PatchedPreset; 52] = [
         Special,
         "Pluck",
         "Koto Garden",
-        "A koto that bends into each note by velocity, its pick brighter up the keyboard, each string a hair differently tuned. Pick sets the brightness, Bend how far a note dips into pitch, Ring the decay of the pick.",
+        "A koto that bends into each note by velocity, its pick brighter up the keyboard, each string a hair differently tuned. Pick sets the brightness, Bend how far its pitch sways, Ring a metallic ring in the pick.",
         &[
             ("op1_decay", 2000.0),
             ("op1_sustain", 0.0),
@@ -956,7 +960,11 @@ pub static SUITE: [PatchedPreset; 52] = [
             ("level", -7.5),
         ],
         &[("env2", "pitch", 0.008), ("velocity", "op2_level", 0.2), ("key", "op2_level", 0.1), ("random", "op1_detune", 0.04)],
-        &[("Pick", &[("op2_level", 0.0, 0.25)]), ("Bend", &[("pitch", 0.0, 0.012)]), ("Ring", &[("op2_feedback", 0.0, 0.2)])],
+        &[
+            ("Pick", &[("op2_level", 0.0, 0.25)]),
+            ("Bend", &[("pitch", 0.0, 0.012), ("lfo_pitch", -0.0267, 0.04)]),
+            ("Ring", &[("op2_feedback", -0.3, 0.9)]),
+        ],
     ),
     suite(
         Special,
@@ -1023,17 +1031,17 @@ pub static SUITE: [PatchedPreset; 52] = [
         ],
         &[("env2", "op4_level", 0.15), ("random", "op3_detune", 0.06)],
         &[
-            ("Sway", &[("lfo_mod", 0.0, 0.4)]),
-            ("Lift", &[("op4_level", 0.0, 0.2)]),
+            ("Sway", &[("lfo_mod", -0.4, 1.0), ("lfo_amp", -0.333, 0.5), ("lfo_rate", -0.05, 0.075)]),
+            ("Lift", &[("op4_level", -0.2, 0.5)]),
             ("Air", &[("op3_level", -0.2, 0.15)]),
-            ("Drift", &[("op3_detune", 0.0, 0.1), ("op1_detune", 0.0, -0.06)]),
+            ("Drift", &[("op3_detune", -0.267, 0.5), ("op1_detune", 0.227, -0.4), ("lfo_pitch", -0.0133, 0.02)]),
         ],
     ),
     suite(
         Special,
         "Percussion",
         "Cowbell Kit",
-        "A struck metal kit on one patch: the key picks the pitch, velocity the clang, and Env 2 a knock at the start. Clang raises the modulator, Ring the decay of the partials, Pitch tunes the fixed operator.",
+        "A struck metal kit on one patch: the key picks the pitch, velocity the clang, and Env 2 a knock at the start. Clang raises the modulator, Ring a harsher, ringing clang, Pitch tunes the fixed operator.",
         &[
             ("op1_coarse", 2.0),
             ("op1_decay", 500.0),
@@ -1053,7 +1061,11 @@ pub static SUITE: [PatchedPreset; 52] = [
             ("level", -8.5),
         ],
         &[("velocity", "op2_level", 0.25), ("env2", "op1_feedback", 0.4)],
-        &[("Clang", &[("op2_level", 0.0, 0.25)]), ("Ring", &[("op2_feedback", 0.0, 0.2)]), ("Pitch", &[("op2_freq", -0.1, 0.1)])],
+        &[
+            ("Clang", &[("op2_level", 0.0, 0.25)]),
+            ("Ring", &[("op2_feedback", -0.257, 0.8), ("op2_level", -0.0857, 0.2)]),
+            ("Pitch", &[("op2_freq", -0.1, 0.1)]),
+        ],
     ),
     // ---- Wild ----
     suite(

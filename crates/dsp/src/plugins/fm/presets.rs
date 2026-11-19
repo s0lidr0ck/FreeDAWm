@@ -309,7 +309,11 @@ pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
             ("level", -10.0),
         ],
         &[("velocity", "op2_level", 0.2), ("env2", "op4_level", 0.25), ("random", "op4_detune", 0.15)],
-        &[("Bell", &[("op4_level", 0.0, 0.3)]), ("Bite", &[("op2_level", 0.0, 0.2)]), ("Shimmer", &[("lfo_pitch", 0.0, 0.01)])],
+        &[
+            ("Bell", &[("op4_level", 0.0, 0.3)]),
+            ("Bite", &[("op2_level", 0.0, 0.2)]),
+            ("Shimmer", &[("lfo_pitch", 0.0, 0.06), ("op4_detune", 0.0, 0.3)]),
+        ],
     ),
     patched(
         "Keys",
@@ -378,7 +382,17 @@ pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
             ("level", -10.0),
         ],
         &[("lfo", "op3_fine", 0.02), ("lfo", "op4_detune", -0.1), ("random", "op2_detune", 0.1)],
-        &[("Drift", &[("op3_detune", 0.0, 0.2), ("op4_fine", 0.0, 0.03)])],
+        &[(
+            "Drift",
+            &[
+                ("op3_detune", 0.0, 0.6),
+                ("op4_fine", 0.0, 0.06),
+                ("op2_detune", 0.0, -0.5),
+                ("lfo_pitch", 0.0, 0.015),
+                ("lfo_amp", 0.0, 0.7),
+                ("lfo_rate", 0.0, 0.2),
+            ],
+        )],
     ),
 ];
 

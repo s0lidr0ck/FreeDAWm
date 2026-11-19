@@ -15,13 +15,16 @@ fn main() {
     let calibrate = args.iter().any(|a| a == "--calibrate");
     let words: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     let only = words.first().map(|s| s.as_str());
-    // `--markdown`: the table of every preset for `docs/synth-presets.md`, nothing rendered.
+    // `--markdown`: the table of every preset for `docs/synth-presets.md` (each macro measured).
     if args.iter().any(|a| a == "--markdown") {
-        println!("| Synth | Tier | Group | Preset | What it is for | Macros |\n|---|---|---|---|---|---|");
+        println!("| Synth | Tier | Group | Preset | What it is for | Macros (clearly-heard score) |\n|---|---|---|---|---|---|");
         for id in SYNTHS {
             let synth = soundcraft_dsp::plugin_info(id).map_or(id, |i| i.name);
             for p in lab::presets(id) {
-                let macros: Vec<&str> = p.macros.iter().map(|(n, _)| n.as_str()).collect();
+                // Each macro with its clearly-audible score (1.0 is the line; see
+                // `preset_lab::audible`).
+                let macros: Vec<String> =
+                    (0..p.macros.len()).map(|i| format!("{} ({:.1})", p.macros[i].0, lab::macro_effect(&p, i).map_or(0.0, |(s, _)| s))).collect();
                 let macros = if macros.is_empty() { "–".to_string() } else { macros.join(", ") };
                 println!("| {synth} | {} | {} | {} | {} | {macros} |", p.tier, p.group, p.name, p.desc.replace('|', "/"));
             }
@@ -31,6 +34,25 @@ fn main() {
     let filter = words.get(1).map(|s| s.to_lowercase());
     // `--macros`: what each named macro does between 0 and 100 % (the `audible` score: 1.0 is
     // the clearly-heard line), and whether it follows while a chord is held.
+    // `--pitch`: a held middle C's pitch traits with each macro at 0 and 100 % (the tracker's view).
+    if args.iter().any(|a| a == "--pitch") {
+        for id in SYNTHS.iter().filter(|id| only.is_none_or(|o| o == **id)) {
+            for p in lab::presets(id).iter().filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f))) {
+                for i in 0..p.macros.len() {
+                    let one = [lab::Note { at: 0, len: lab::secs(2.5), key: 60, vel: 100 }];
+                    let t = |v: f32| {
+                        let x = lab::render(p, lab::State { macros: lab::Macros::One(i, v), wheel: 0.0 }, &one, lab::secs(2.5))?;
+                        let m = lab::mono(&x);
+                        let track = lab::f0_track(m.get(lab::secs(0.3)..).unwrap_or(&[]), 261.6);
+                        let found = track.iter().flatten().count() as f32 / track.len().max(1) as f32;
+                        Some((found, lab::pitch_traits(m.get(lab::secs(0.3)..).unwrap_or(&[]), 261.6)))
+                    };
+                    println!("{} {}: 0 -> {:?}, 100 -> {:?}", p.name, p.macros[i].0, t(0.0), t(100.0));
+                }
+            }
+        }
+        return;
+    }
     if args.iter().any(|a| a == "--macros") {
         for id in SYNTHS.iter().filter(|id| only.is_none_or(|o| o == **id)) {
             let list: Vec<lab::Preset> =

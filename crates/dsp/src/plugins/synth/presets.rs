@@ -549,7 +549,7 @@ pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
             ("level", -8.0),
         ],
         &[("mod_wheel", "lfo_cutoff", 0.5), ("env2", "xmod_cutoff", 0.2)],
-        &[("Growl", &[("xmod_pitch", 0.0, 0.3)])],
+        &[("Growl", &[("xmod_pitch", 0.0, 0.8), ("xmod_cutoff", 0.0, 0.3)])],
     ),
     patched(
         "Lead",

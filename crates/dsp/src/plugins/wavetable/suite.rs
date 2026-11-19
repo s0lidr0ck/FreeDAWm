@@ -35,12 +35,12 @@ pub static SUITE: [PatchedPreset; 50] = [
         Simple,
         "Basics",
         "Init for Patching",
-        "Init with the four macros named and wired to one thing each, all at zero so it sounds like Init: Morph moves through the table, Tone closes the filter, Motion lets the LFO move the position, Warp bends the wave with FM.",
+        "Init with the four macros named and wired to one thing each, all at zero so it sounds like Init: Morph moves through the table, Tone brightens the wave and rings the filter, Motion lets the LFO move the position, Warp bends the wave with FM.",
         &[("warp_mode", 1.0), ("level", -2.5)],
         &[],
         &[
             ("Morph", &[("position", 0.0, 0.67)]),
-            ("Tone", &[("cutoff", 0.0, -0.3)]),
+            ("Tone", &[("position", 0.0, 0.35), ("resonance", 0.0, 0.4)]),
             ("Motion", &[("lfo_position", 0.0, 0.4)]),
             ("Warp", &[("warp_amount", 0.0, 0.4)]),
         ],
@@ -652,7 +652,7 @@ pub static SUITE: [PatchedPreset; 50] = [
         ],
         &[("env2", "warp_amount", 0.2), ("mod_wheel", "unison_detune", 0.3), ("lfo", "position", 0.05)],
         &[
-            ("Grit", &[("warp_amount", 0.0, 0.35)]),
+            ("Grit", &[("warp_amount", -0.193, 0.8)]),
             ("Movement", &[("lfo_position", 0.0, 0.4)]),
             ("Width", &[("unison_spread", -0.3, 0.5)]),
             ("Sub", &[("sub_level", 0.0, 0.6)]),
@@ -679,7 +679,11 @@ pub static SUITE: [PatchedPreset; 50] = [
             ("level", -8.0),
         ],
         &[("velocity", "position", 0.3), ("env2", "position", 0.3)],
-        &[("Mouth", &[("position", 0.0, 0.5)]), ("Snap", &[("env2_position", 0.0, 0.3)]), ("Body", &[("sub_level", 0.0, 0.6)])],
+        &[
+            ("Mouth", &[("position", -0.043, 0.6), ("cutoff", -0.15, 0.35)]),
+            ("Snap", &[("env2_position", 0.0, 0.7), ("env2_cutoff", -0.25, 0.25)]),
+            ("Body", &[("sub_level", 0.0, 0.6)]),
+        ],
     ),
     suite(
         Special,
@@ -733,7 +737,11 @@ pub static SUITE: [PatchedPreset; 50] = [
             ("level", -3.5),
         ],
         &[("key", "position", 0.2), ("env2", "position", 0.2), ("random", "position", 0.05)],
-        &[("Width", &[("position", 0.0, 0.5)]), ("Talk", &[("env2_position", 0.0, 0.4)]), ("Chorus", &[("unison_detune", 0.0, 0.25)])],
+        &[
+            ("Width", &[("position", 0.0, 0.5)]),
+            ("Talk", &[("env2_position", 0.0, 0.4)]),
+            ("Chorus", &[("unison_detune", -0.15, 0.6), ("unison_spread", -0.15, 0.35)]),
+        ],
     ),
     suite(
         Special,
@@ -765,8 +773,8 @@ pub static SUITE: [PatchedPreset; 50] = [
         ],
         &[("env2", "warp_amount", 0.05), ("lfo", "position", 0.08), ("random", "position", 0.06), ("random", "unison_spread", 0.1)],
         &[
-            ("Bloom", &[("env2_position", 0.0, 0.5)]),
-            ("Breath", &[("lfo_position", 0.0, 0.4)]),
+            ("Bloom", &[("env2_position", 0.0, 0.8), ("warp_amount", -0.3, 0.3), ("position", -0.15, 0.15)]),
+            ("Breath", &[("lfo_position", -0.4, 1.0), ("lfo_cutoff", -0.267, 0.4)]),
             ("Air", &[("cutoff", -0.15, 0.15)]),
             ("Width", &[("unison_spread", -0.5, 0.2)]),
         ],
@@ -821,7 +829,11 @@ pub static SUITE: [PatchedPreset; 50] = [
             ("level", -2.5),
         ],
         &[("velocity", "warp_amount", 0.25), ("env2", "warp_amount", 0.15), ("key", "warp_amount", -0.1), ("random", "osc_fine", 0.03)],
-        &[("Ring", &[("warp_amount", 0.0, 0.3)]), ("Shine", &[("position", 0.0, 0.33)]), ("Age", &[("osc_fine", 0.0, 0.05)])],
+        &[
+            ("Ring", &[("warp_amount", 0.0, 0.3)]),
+            ("Shine", &[("position", 0.0, 0.33)]),
+            ("Age", &[("osc_fine", -0.0375, 0.2), ("lfo_pitch", -0.0075, 0.03)]),
+        ],
     ),
     suite(
         Special,
@@ -844,7 +856,7 @@ pub static SUITE: [PatchedPreset; 50] = [
             ("level", 1.0),
         ],
         &[("velocity", "warp_amount", 0.3), ("env2", "position", 0.4)],
-        &[("Fold", &[("warp_amount", 0.0, 0.35)]), ("Tone", &[("cutoff", -0.2, 0.1)]), ("Snap", &[("env2_position", 0.0, 0.3)])],
+        &[("Fold", &[("warp_amount", 0.0, 0.35)]), ("Tone", &[("cutoff", -0.2, 0.1)]), ("Snap", &[("env2_position", 0.0, 0.7)])],
     ),
     suite(
         Special,
@@ -870,7 +882,7 @@ pub static SUITE: [PatchedPreset; 50] = [
             ("level", -4.0),
         ],
         &[("key", "position", -0.2), ("lfo", "position", 0.1)],
-        &[("Drip", &[("lfo_position", 0.0, 0.5)]), ("Depth", &[("position", -0.2, 0.3)]), ("Hiss", &[("noise_level", 0.0, 0.15)])],
+        &[("Drip", &[("lfo_position", -0.333, 1.0)]), ("Depth", &[("position", -0.2, 0.3)]), ("Hiss", &[("noise_level", -0.15, 0.5)])],
     ),
     suite(
         Special,
@@ -895,7 +907,11 @@ pub static SUITE: [PatchedPreset; 50] = [
             ("level", -5.5),
         ],
         &[("mod_wheel", "lfo_rate", 0.3)],
-        &[("Steps", &[("lfo_position", 0.0, 0.8)]), ("Speed", &[("lfo_rate", -0.1, 0.25)]), ("Bite", &[("resonance", 0.0, 0.3)])],
+        &[
+            ("Steps", &[("lfo_position", 0.0, 0.8), ("lfo_cutoff", -0.4, 0.4)]),
+            ("Speed", &[("lfo_rate", -0.25, 0.6), ("lfo_cutoff", -0.1, 0.25)]),
+            ("Bite", &[("resonance", -0.0857, 0.5), ("level", 0.043, -0.1)]),
+        ],
     ),
     // ---- Wild ----
     suite(

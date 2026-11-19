@@ -164,8 +164,9 @@ pub fn dest_name(plugin: &str, id: &str) -> String {
 fn drop_on(app: &mut SoundApp, track: TrackId, ins: &Insert, drag: Drag, dest: &str) -> bool {
     let t = track.0;
     match drag {
-        Drag::Source(i) => run(app, "mix.mod_add", json!({"track": t, "source": SOURCES[i].id, "dest": dest, "amount": 0.25})),
-        Drag::Macro(m) => run(app, "mix.macro_assign", json!({"track": t, "macro": m + 1, "dest": dest, "amount": 0.5})),
+        // The amount and range the engine gives by default (see `synth_mod::default_amount`).
+        Drag::Source(i) => run(app, "mix.mod_add", json!({"track": t, "source": SOURCES[i].id, "dest": dest})),
+        Drag::Macro(m) => run(app, "mix.macro_assign", json!({"track": t, "macro": m + 1, "dest": dest})),
         Drag::Cable(slot) => {
             let same = ins.modulation.slots.get(slot).is_some_and(|s| s.dest == dest);
             !same && run(app, "mix.mod_set", json!({"track": t, "slot": slot, "dest": dest}))

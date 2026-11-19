@@ -161,17 +161,21 @@ fn every_preset_plays_at_the_suites_level_in_every_state() {
     }));
 }
 
-/// Every macro a preset names changes what it plays.
+/// Every macro a preset names is clearly heard between 0 and 100 %, on a held chord or a short
+/// note: at least one of the changes [`lab::audible`] lists crosses its line (the brightness by
+/// 25 %, an octave band or the level by 6 dB, a modulation's depth or rate by a factor of two, the
+/// pitch by a semitone, the width by 30 %, an envelope time by a factor of two). The suite's
+/// macros were reworked to clear it with room (the report prints each score; see
+/// `docs/synth-presets.md`).
 #[test]
-fn every_named_macro_changes_the_sound() {
+fn every_named_macro_is_clearly_heard() {
     check(each(|p| {
-        let notes = chord(&MID_CHORD, 110, secs(1.0));
         (0..p.macros.len())
             .filter_map(|i| {
-                let a = lab::render(p, State { macros: Macros::One(i, 0.0), wheel: 0.0 }, &notes, secs(1.0))?;
-                let b = lab::render(p, State { macros: Macros::One(i, 100.0), wheel: 0.0 }, &notes, secs(1.0))?;
-                let diff = a.iter().zip(&b).flat_map(|(x, y)| x.iter().zip(y).map(|(u, v)| (u - v).abs())).fold(0.0f32, f32::max);
-                (diff < 1e-3).then(|| format!("{} {}: macro {} ({}) does nothing", p.plugin, p.name, i + 1, p.macros[i].0))
+                let (score, what) = lab::macro_effect(p, i)?;
+                eprintln!("{} {} macro {} ({}): {score:.2}, {what}", p.plugin, p.name, i + 1, p.macros[i].0);
+                (score < 1.0)
+                    .then(|| format!("{} {}: macro {} ({}) is not clearly heard: {score:.2} ({what})", p.plugin, p.name, i + 1, p.macros[i].0))
             })
             .collect()
     }));

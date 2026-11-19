@@ -39,7 +39,7 @@ pub static SUITE: [PatchedPreset; 49] = [
         &[
             ("Tone", &[("cutoff", 0.0, 0.3)]),
             ("Motion", &[("lfo_cutoff", 0.0, 0.5)]),
-            ("Grit", &[("resonance", 0.0, 0.5)]),
+            ("Grit", &[("resonance", 0.0, 0.8), ("level", 0.0, -0.15)]),
             ("Detune", &[("osc2_detune", 0.0, 0.1)]),
         ],
     ),
@@ -715,8 +715,8 @@ pub static SUITE: [PatchedPreset; 49] = [
         &[("mod_wheel", "cutoff", 0.2), ("mod_wheel", "lfo_pitch", 0.02), ("mod_wheel", "xmod_pitch", 0.15)],
         &[
             ("Bite", &[("resonance", 0.0, 0.3), ("filter_env_amount", 0.0, 0.2)]),
-            ("Vibrato", &[("lfo_pitch", 0.0, 0.02)]),
-            ("Edge", &[("xmod_pitch", 0.0, 0.2)]),
+            ("Vibrato", &[("lfo_pitch", -0.04, 0.06)]),
+            ("Edge", &[("xmod_pitch", -0.333, 0.7), ("xmod_cutoff", -0.233, 0.35)]),
         ],
     ),
     suite(
@@ -743,7 +743,11 @@ pub static SUITE: [PatchedPreset; 49] = [
             ("level", -2.0),
         ],
         &[("env2", "xmod_pitch", 0.3), ("velocity", "xmod_pitch", 0.1)],
-        &[("Edge", &[("xmod_pitch", 0.0, 0.35)]), ("Bright", &[("cutoff", -0.1, 0.2)]), ("Tilt", &[("osc2_semitones", 0.0, 0.146)])],
+        &[
+            ("Edge", &[("xmod_pitch", -0.129, 0.65), ("xmod_cutoff", -0.15, 0.35)]),
+            ("Bright", &[("cutoff", -0.1, 0.2)]),
+            ("Tilt", &[("osc2_semitones", 0.0, 0.146), ("osc_mix", 0.0, 0.5)]),
+        ],
     ),
     suite(
         Special,
@@ -771,12 +775,12 @@ pub static SUITE: [PatchedPreset; 49] = [
             ("macro2", 50.0),
             ("macro3", 30.0),
             ("macro4", 50.0),
-            ("level", -0.5),
+            ("level", -1.5),
         ],
         &[("env2", "osc_mix", 0.3), ("env2", "osc2_detune", 0.03), ("random", "osc2_detune", 0.02), ("random", "cutoff", 0.04)],
         &[
-            ("Haze", &[("osc2_detune", 0.0, 0.04)]),
-            ("Bloom", &[("osc_mix", 0.0, 0.3)]),
+            ("Haze", &[("osc2_detune", -0.373, 0.6), ("lfo_pitch", -0.02, 0.03), ("lfo_cutoff", -0.133, 0.2)]),
+            ("Bloom", &[("osc_mix", -0.45, 0.75)]),
             ("Air", &[("cutoff", -0.1, 0.25)]),
             ("Width", &[("unison_spread", -0.4, 0.4)]),
         ],
@@ -811,7 +815,7 @@ pub static SUITE: [PatchedPreset; 49] = [
         ],
         &[("lfo", "unison_detune", 0.1)],
         &[
-            ("Shimmer", &[("unison_detune", 0.0, 0.2)]),
+            ("Shimmer", &[("unison_detune", -0.267, 0.6)]),
             ("Warmth", &[("cutoff", 0.15, -0.15)]),
             ("Width", &[("unison_spread", -0.5, 0.3)]),
             ("Swell", &[("filter_env_amount", 0.0, 0.2)]),
@@ -841,10 +845,14 @@ pub static SUITE: [PatchedPreset; 49] = [
             ("macro1", 30.0),
             ("macro2", 20.0),
             ("macro3", 30.0),
-            ("level", -0.0),
+            ("level", -1.0),
         ],
         &[("velocity", "cutoff", 0.15), ("key", "cutoff", 0.08), ("random", "pitch", 0.0015)],
-        &[("Bright", &[("cutoff", 0.0, 0.25)]), ("Ring", &[("resonance", 0.0, 0.4)]), ("Age", &[("pitch", 0.0, 0.002), ("osc2_detune", 0.0, 0.03)])],
+        &[
+            ("Bright", &[("cutoff", -0.043, 0.35), ("xmod_pitch", -0.257, 0.6)]),
+            ("Ring", &[("resonance", -0.15, 1.0)]),
+            ("Age", &[("pitch", 0.0, 0.002), ("osc2_detune", -0.094, 0.25), ("lfo_pitch", -0.005, 0.012)]),
+        ],
     ),
     suite(
         Special,
@@ -870,10 +878,14 @@ pub static SUITE: [PatchedPreset; 49] = [
             ("macro1", 40.0),
             ("macro2", 40.0),
             ("macro3", 30.0),
-            ("level", 0.0),
+            ("level", -2.0),
         ],
         &[("velocity", "filter_env_amount", 0.2), ("key", "cutoff", 0.1), ("random", "osc_mix", 0.1)],
-        &[("Snap", &[("filter_env_amount", -0.1, 0.2)]), ("Body", &[("osc_mix", -0.3, 0.3)]), ("Ring", &[("resonance", 0.0, 0.4)])],
+        &[
+            ("Snap", &[("filter_env_amount", -0.1, 0.2)]),
+            ("Body", &[("osc_mix", -0.3, 0.3)]),
+            ("Ring", &[("resonance", -0.15, 0.75), ("level", 0.0386, -0.09)]),
+        ],
     ),
     suite(
         Special,
@@ -924,7 +936,7 @@ pub static SUITE: [PatchedPreset; 49] = [
             ("level", 0.0),
         ],
         &[("mod_wheel", "lfo_amp", 0.5), ("mod_wheel", "cutoff", 0.08)],
-        &[("Bow", &[("cutoff", -0.1, 0.2)]), ("Tremolo", &[("lfo_amp", 0.0, 0.4)]), ("Width", &[("unison_spread", -0.5, 0.2)])],
+        &[("Bow", &[("cutoff", -0.1, 0.2)]), ("Tremolo", &[("lfo_amp", -0.4, 0.8)]), ("Width", &[("unison_spread", -0.5, 0.2)])],
     ),
     suite(
         Special,
@@ -951,7 +963,11 @@ pub static SUITE: [PatchedPreset; 49] = [
             ("level", 0.5),
         ],
         &[("mod_wheel", "lfo_rate", 0.4)],
-        &[("Sweep", &[("lfo_cutoff", 0.0, 0.7)]), ("Speed", &[("lfo_rate", -0.1, 0.25)]), ("Focus", &[("resonance", -0.2, 0.2)])],
+        &[
+            ("Sweep", &[("lfo_cutoff", 0.0, 0.7)]),
+            ("Speed", &[("lfo_rate", -0.1, 0.25)]),
+            ("Focus", &[("resonance", -0.4, 0.5), ("level", 0.0667, -0.1)]),
+        ],
     ),
     // ---- Wild ----
     suite(

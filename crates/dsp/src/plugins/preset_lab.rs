@@ -596,6 +596,10 @@ pub struct Traits {
     /// trend, and its rate (Hz).
     pub tone_mod_oct: f32,
     pub tone_rate: f32,
+    /// Timbre modulation: how far the level of the octave bands moves around its trend (dB, the
+    /// mean of the three bands that move most): a sweep through a wavetable or a changing
+    /// formant that leaves the centroid where it was.
+    pub band_mod_db: f32,
     /// Side against mid (see [`width`]).
     pub width: f32,
     /// The lowest strong partial (Hz; 0: none found).
@@ -707,6 +711,10 @@ pub fn f0_track(x: &[f32], hint: f32) -> Vec<Option<f32>> {
             }
             tau += 1;
         }
+        // No dip that deep (beating copies blur it): the deepest one, if it is clear enough.
+        if pick.is_none() {
+            pick = (tmin..=tmax).min_by(|a, b| cm[*a].total_cmp(&cm[*b])).filter(|t| cm[*t] < 0.35);
+        }
         out.push(pick.map(|t| {
             let (a, b, c) = (cm[t - 1], cm[t], cm[t + 1]);
             let den = a - 2.0 * b + c;
@@ -720,7 +728,7 @@ pub fn f0_track(x: &[f32], hint: f32) -> Vec<Option<f32>> {
 
 /// What a held note's pitch does (from [`f0_track`]): (its middle value in Hz, the vibrato's
 /// spread in cents around the trend, the vibrato's rate in Hz); `None` when fewer than 70 % of
-/// the steps found a clear period (an inharmonic or noisy sound).
+/// the steps found a clear period (an inharmonic or noisy sound), or the pitch jumps about.
 pub fn pitch_traits(x: &[f32], hint: f32) -> Option<(f32, f32, f32)> {
     let track = f0_track(x, hint);
     let heard: Vec<f32> = track.iter().flatten().copied().collect();
@@ -731,9 +739,51 @@ pub fn pitch_traits(x: &[f32], hint: f32) -> Option<(f32, f32, f32)> {
     let mut sorted = heard.clone();
     sorted.sort_by(f32::total_cmp);
     let mid = sorted.get(sorted.len() / 2).copied()?;
-    let cents: Vec<f32> = heard.iter().map(|f| 1200.0 * (f / mid).log2()).collect();
+    // A step read an octave off (the tracker's usual slip) is folded back to the note's octave.
+    let cents: Vec<f32> = heard.iter().map(|f| 1200.0 * (f / mid).log2()).map(|c| c - 1200.0 * (c / 1200.0).round()).collect();
     let (sd, rate) = wobble(&cents, 192.0 * 4.0 / RATE);
+    // A spread of more than 150 cents even so is no steady pitch to speak of.
+    if sd > 150.0 {
+        return None;
+    }
     Some((mid, sd, rate))
+}
+
+/// [`Traits::band_mod_db`] of `x` (mono, at [`RATE`]): each octave band's level in 2048-frame
+/// steps, its spread around its trend, the three that move most averaged (bands more than 30 dB
+/// under the loudest left out).
+fn band_motion(x: &[f32]) -> f32 {
+    const N: usize = 2048;
+    let bin = f64::from(RATE) / N as f64;
+    let frames: Vec<[f32; 9]> = x
+        .chunks_exact(N)
+        .filter(|c| rms(c) > 1e-4)
+        .map(|c| {
+            let p = power(c, N);
+            let mut b = [0.0f64; 9];
+            for (k, v) in p.iter().enumerate().skip(1) {
+                let hz = k as f64 * bin;
+                for (o, cf) in b.iter_mut().zip(BANDS) {
+                    let cf = f64::from(cf);
+                    if hz >= cf / std::f64::consts::SQRT_2 && hz < cf * std::f64::consts::SQRT_2 {
+                        *o += v;
+                    }
+                }
+            }
+            b.map(|v| (10.0 * (v + 1e-20).log10()) as f32)
+        })
+        .collect();
+    if frames.len() < 8 {
+        return 0.0;
+    }
+    let mean = |i: usize| frames.iter().map(|f| f[i]).sum::<f32>() / frames.len() as f32;
+    let means: Vec<f32> = (0..9).map(mean).collect();
+    let top = means.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mut sds: Vec<f32> =
+        (0..9).filter(|&i| means[i] >= top - 30.0).map(|i| wobble(&frames.iter().map(|f| f[i]).collect::<Vec<f32>>(), N as f32 / RATE).0).collect();
+    sds.sort_by(|a, b| b.total_cmp(a));
+    let n = sds.len().min(3);
+    if n == 0 { 0.0 } else { sds.iter().take(n).sum::<f32>() / n as f32 }
 }
 
 /// The [`Traits`] of frames `from..to` of `x` (at [`RATE`]).
@@ -773,6 +823,7 @@ pub fn traits(x: &[Vec<f32>; 2], from: usize, to: usize) -> Traits {
         amp_rate,
         tone_mod_oct,
         tone_rate,
+        band_mod_db: band_motion(&m),
         width: width(&part),
         pitch_hz: lowest_partial(m.get(..16384.min(m.len())).unwrap_or(&[])).unwrap_or(0.0),
     }
@@ -791,6 +842,9 @@ pub fn traits(x: &[Vec<f32>; 2], from: usize, to: usize) -> Traits {
 ///   1.5 dB of tremolo or a tenth of an octave of sweep (less is hardly heard as movement), or
 ///   its rate by a factor of two where both are half as deep again (so a rate read from a
 ///   barely moving sound does not count);
+/// - the timbre's motion (octave bands moving around their trend, [`Traits::band_mod_db`])
+///   changes by a factor of two where the larger is at least 2 dB: a sweep through a wavetable
+///   or between vowels that leaves the brightness where it was;
 /// - the pitch of a held note moves by a semitone or more, or its vibrato deepens by a factor of
 ///   two where the deeper one spreads at least 8 cents (about ±11 cents: a gentle but plain
 ///   vibrato) — measured by [`macro_effect`] on a single held note ([`pitch_traits`]), as a
@@ -821,6 +875,7 @@ pub fn audible(a: &Traits, b: &Traits) -> (f32, String) {
     let depth = |x: f32, y: f32, floor: f32| if x.max(y) >= floor { (x.max(y) / x.min(y).max(floor * 0.25)).ln() / 2f32.ln() } else { 0.0 };
     take(depth(a.amp_mod_db, b.amp_mod_db, 1.5), format!("tremolo {:.1} -> {:.1} dB", a.amp_mod_db, b.amp_mod_db));
     take(depth(a.tone_mod_oct, b.tone_mod_oct, 0.1), format!("sweep {:.2} -> {:.2} oct", a.tone_mod_oct, b.tone_mod_oct));
+    take(depth(a.band_mod_db, b.band_mod_db, 2.0), format!("timbre motion {:.1} -> {:.1} dB", a.band_mod_db, b.band_mod_db));
     if a.amp_mod_db.min(b.amp_mod_db) >= 2.25 && a.amp_rate > 0.0 && b.amp_rate > 0.0 {
         take((b.amp_rate / a.amp_rate).ln().abs() / 2f32.ln(), format!("tremolo rate {:.1} -> {:.1} Hz", a.amp_rate, b.amp_rate));
     }
