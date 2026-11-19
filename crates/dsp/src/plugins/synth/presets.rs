@@ -589,6 +589,9 @@ mod tests {
             assert_eq!(&p.name, name);
             assert_eq!(p.values.len(), SYNTH_INFO.params.len());
         }
-        assert_eq!(crate::plugins::fs::factory_presets(SYNTH_INFO.id).len(), SYNTH_PRESETS.len() + PATCHED_PRESETS.len() + super::super::suite::SUITE.len());
+        assert_eq!(
+            crate::plugins::fs::factory_presets(SYNTH_INFO.id).len(),
+            SYNTH_PRESETS.len() + PATCHED_PRESETS.len() + super::super::suite::SUITE.len()
+        );
     }
 }

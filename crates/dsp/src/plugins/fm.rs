@@ -18,9 +18,9 @@ use crate::util::{Smoother, frames_in, ms_to_samples, note_hz, sane_channels, sa
 use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
 
 pub mod presets;
-pub mod suite;
 #[cfg(test)]
 mod reference;
+pub mod suite;
 
 /// Operator frequency ratios: 0.5, then 1 to 16.
 const COARSE: &[&str] = &["0.5", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"];

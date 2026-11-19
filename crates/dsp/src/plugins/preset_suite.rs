@@ -125,7 +125,9 @@ fn every_preset_plays_at_the_suites_level_in_every_state() {
     ];
     check(each(|p| {
         let mut out = Vec::new();
-        let Some(x) = lab::render(p, State::SAVED, &chord(&MID_CHORD, 100, secs(2.5)), secs(2.5)) else { return vec![format!("{}: no synth", p.name)] };
+        let Some(x) = lab::render(p, State::SAVED, &chord(&MID_CHORD, 100, secs(2.5)), secs(2.5)) else {
+            return vec![format!("{}: no synth", p.name)];
+        };
         let loud = lab::loudness_db(&x);
         let mut worst = lab::db(lab::peak(&x));
         // DC as saved (audio-rate modulation pushed to its extremes by the macros and the wheel
@@ -252,7 +254,7 @@ fn the_suite_keeps_aliasing_down_and_its_claims_true() {
         ("wavetable_synth", "Heat Shimmer", "moves"),
         ("wavetable_synth", "Dust Devil", "moves"),
         ("wavetable_synth", "Harmonic Riser", "moves"),
-        ("fm_synth", "Bright Tine", "bright"),
+        ("fm_synth", "Triangle Ting", "bright"),
         ("fm_synth", "Soft Tine Piano", "dark"),
         ("fm_synth", "Bell Tower Drone", "moves"),
     ];
@@ -264,7 +266,8 @@ fn the_suite_keeps_aliasing_down_and_its_claims_true() {
         let mut worst = -200.0f32;
         for key in [84u8, 96] {
             let note = [Note { at: 0, len: secs(1.0), key, vel: 100 }];
-            let (Some(a), Some(b)) = (lab::render_at(p, lab::RATE, State::SAVED, &note, secs(0.5)), lab::render_at(p, lab::RATE * 4.0, State::SAVED, &note, secs(0.5)))
+            let (Some(a), Some(b)) =
+                (lab::render_at(p, lab::RATE, State::SAVED, &note, secs(0.5)), lab::render_at(p, lab::RATE * 4.0, State::SAVED, &note, secs(0.5)))
             else {
                 continue;
             };
@@ -275,7 +278,9 @@ fn the_suite_keeps_aliasing_down_and_its_claims_true() {
             out.push(format!("{} {}: aliasing {worst:.1} dB at C6/C7", p.plugin, p.name));
         }
         for (_, _, what) in CLAIMS.iter().filter(|(id, n, _)| *id == p.plugin && *n == p.name) {
-            let held = lab::render(p, State::SAVED, &[Note { at: 0, len: secs(3.0), key: 60, vel: 100 }], secs(3.0)).map(|y| lab::mono(&y)).unwrap_or_default();
+            let held = lab::render(p, State::SAVED, &[Note { at: 0, len: secs(3.0), key: 60, vel: 100 }], secs(3.0))
+                .map(|y| lab::mono(&y))
+                .unwrap_or_default();
             let late = lab::centroid(held.get(secs(1.5)..secs(2.5)).unwrap_or(&[]), lab::RATE).unwrap_or(0.0);
             let moves = lab::movement_oct(&lab::centroid_track(held.get(secs(0.05)..).unwrap_or(&[])));
             let ok = match *what {

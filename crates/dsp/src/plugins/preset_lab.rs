@@ -79,8 +79,7 @@ pub fn parse(plugin: &'static str, json: &str) -> Option<Preset> {
         }
     }
     let slot_specs: Vec<SlotSpec<'_>> = slots.iter().map(|(s, d, a)| SlotSpec { source: s, dest: d, amount: *a }).collect();
-    let target_specs: Vec<TargetSpec<'_>> =
-        targets.iter().map(|(i, d, f, t)| TargetSpec { macro_index: *i, dest: d, from: *f, to: *t }).collect();
+    let target_specs: Vec<TargetSpec<'_>> = targets.iter().map(|(i, d, f, t)| TargetSpec { macro_index: *i, dest: d, from: *f, to: *t }).collect();
     let prepared = if slot_specs.is_empty() && target_specs.is_empty() { Vec::new() } else { compile(plugin, &slot_specs, &target_specs)? };
     Some(Preset {
         plugin,
@@ -282,7 +281,12 @@ pub fn loudness_db(x: &[Vec<f32>; 2]) -> f32 {
 
 /// The larger DC offset of the two sides, dBFS.
 pub fn dc_db(x: &[Vec<f32>; 2]) -> f32 {
-    x.iter().map(|c| if c.is_empty() { 0.0 } else { (c.iter().map(|v| f64::from(*v)).sum::<f64>() / c.len() as f64).abs() as f32 }).fold(0.0, f32::max).max(1e-10).log10() * 20.0
+    x.iter()
+        .map(|c| if c.is_empty() { 0.0 } else { (c.iter().map(|v| f64::from(*v)).sum::<f64>() / c.len() as f64).abs() as f32 })
+        .fold(0.0, f32::max)
+        .max(1e-10)
+        .log10()
+        * 20.0
 }
 
 /// Side against mid RMS (0: mono; 1: as much side as mid).

@@ -16,12 +16,12 @@ pub mod lull;
 pub mod mend;
 pub mod meters;
 pub mod modulation;
-pub mod preset_lab;
-#[cfg(test)]
-mod preset_suite;
 pub mod multisampler;
 mod per_channel;
 pub mod pitch;
+pub mod preset_lab;
+#[cfg(test)]
+mod preset_suite;
 pub mod reverb;
 pub mod rez;
 pub mod sampler;

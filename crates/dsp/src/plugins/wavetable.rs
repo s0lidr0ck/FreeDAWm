@@ -19,9 +19,9 @@ use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
 
 pub mod import;
 pub mod presets;
-pub mod suite;
 #[cfg(test)]
 mod reference;
+pub mod suite;
 pub mod tables;
 pub mod user;
 
