@@ -1535,6 +1535,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if id == "ui.capture_midi" {
         return Some(crate::midi_devices::capture(app));
     }
+    if id == "ui.ara_editor" {
+        return Some(crate::ara_ui::open_editor(app, p));
+    }
     if id == "window.new_mix" {
         return Some(crate::mix_more::open(app));
     }

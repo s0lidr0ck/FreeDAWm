@@ -50,6 +50,8 @@ pub enum Behaviour {
     TinyFactory = 9,
     /// Its factory has no `createDocumentControllerWithDocument`.
     NullCreate = 10,
+    /// Binding an instance gives no playback renderer.
+    NoRenderer = 11,
 }
 
 /// What the controller of one document saw (by document name).
@@ -72,6 +74,17 @@ pub struct Report {
     pub hostile: Vec<(String, bool)>,
     /// Playback regions added to a bound instance's playback renderer, minus removed.
     pub rendered: usize,
+    /// Calls to bound instances' renderers made while the plug-in instance was rendering
+    /// (`render` running): ARA wants regions changed only on an inactive instance.
+    pub renderer_while_rendering: usize,
+    /// The last selection an editor view was told: (playback regions, region sequences, time
+    /// range), and how many region sequences it was told to hide.
+    pub selection: Option<(usize, usize, Option<(f64, f64)>)>,
+    pub hidden: usize,
+    /// Archives stored and restored, and modifications cloned.
+    pub stored: usize,
+    pub restored: usize,
+    pub cloned: usize,
     /// Whether the controller was destroyed.
     pub destroyed: bool,
 }
@@ -105,6 +118,13 @@ unsafe impl Sync for SyncFactory {}
 const CONTENT_TYPES: &[ARAContentType] = &[kARAContentTypeNotes];
 const ARCHIVE_IDS: &[ARAPersistentID] = &[c"org.freedawm.test.ara.archive.1".as_ptr()];
 
+/// The transformations the test plug-in supports: time-stretch (a region may play its
+/// modification over a different duration).
+pub const TRANSFORMATIONS: ARAPlaybackTransformationFlags = kARAPlaybackTransformationTimestretch;
+
+/// The gain the test plug-in renders a modification with until [`set_gain`] changes it.
+pub const DEFAULT_GAIN: f32 = -0.5;
+
 const fn make<const B: u8>() -> ARAFactory {
     let (lowest, highest) = if B == Behaviour::Ara1 as u8 {
         (kARAAPIGeneration_1_0_Draft, kARAAPIGeneration_1_0_Final)
@@ -128,12 +148,12 @@ const fn make<const B: u8>() -> ARAFactory {
         compatibleDocumentArchiveIDs: ARCHIVE_IDS.as_ptr(),
         analyzeableContentTypesCount: CONTENT_TYPES.len(),
         analyzeableContentTypes: CONTENT_TYPES.as_ptr(),
-        supportedPlaybackTransformationFlags: kARAPlaybackTransformationNoChanges,
+        supportedPlaybackTransformationFlags: TRANSFORMATIONS,
         supportsStoringAudioFileChunks: kARAFalse,
     }
 }
 
-static FACTORIES: [SyncFactory; 11] = [
+static FACTORIES: [SyncFactory; 12] = [
     SyncFactory(make::<0>()),
     SyncFactory(make::<1>()),
     SyncFactory(make::<2>()),
@@ -145,6 +165,7 @@ static FACTORIES: [SyncFactory; 11] = [
     SyncFactory(make::<8>()),
     SyncFactory(make::<9>()),
     SyncFactory(make::<10>()),
+    SyncFactory(make::<11>()),
 ];
 
 /// The static ARA factory of the test plug-in behaving as `b`.
@@ -188,20 +209,34 @@ struct PSrc {
     pid: String,
     frames: i64,
     channels: i32,
+    rate: f64,
     access: bool,
     active: bool,
     read: bool,
     reported: bool,
+    /// What the 32-bit read gave, per channel: what the renderer plays.
+    audio: std::sync::Arc<Vec<Vec<f32>>>,
 }
 
 struct PMod {
     source: usize,
     active: bool,
+    host: ARAAudioModificationHostRef,
+    pid: String,
+    /// The test plug-in's one "edit": the gain it renders the modification with.
+    gain: f32,
+    /// Its content changed since the host was last told.
+    dirty: bool,
 }
 
+#[derive(Clone, Copy)]
 struct PRegion {
     modification: usize,
     sequence: usize,
+    start_mod: f64,
+    dur_mod: f64,
+    start_pb: f64,
+    dur_pb: f64,
 }
 
 #[derive(Default)]
@@ -215,6 +250,10 @@ struct State {
     regions: HashMap<usize, PRegion>,
     readers: HashMap<usize, Vec<ARAContentNote>>,
     notes: HashMap<usize, Vec<ARAContentNote>>,
+    /// The document data changed since the host was last told.
+    data_dirty: bool,
+    /// Renders fail (non-finite output) from now on ([`set_fault`]).
+    fault: bool,
 }
 
 struct Controller {
@@ -224,6 +263,8 @@ struct Controller {
     audio: ARAAudioAccessControllerInterface,
     content: ARAContentAccessControllerInterface,
     model: ARAModelUpdateControllerInterface,
+    archiving: ARAArchivingControllerInterface,
+    playback: ARAPlaybackControllerInterface,
     instance: ARADocumentControllerInstance,
     state: Mutex<State>,
 }
@@ -326,13 +367,15 @@ unsafe extern "C" fn create_controller<const B: u8>(
     }
     // SAFETY: the host's instance and the interfaces it points to are valid for the controller's
     // life (ARA contract); copied by value (they are fully sized: the host is ours).
-    let (hi, audio, content, model) = unsafe {
+    let (hi, audio, content, model, archiving, playback) = unsafe {
         let hi = host.read_unaligned();
         (
             hi,
             { hi.audioAccessControllerInterface }.read_unaligned(),
             { hi.contentAccessControllerInterface }.read_unaligned(),
             { hi.modelUpdateControllerInterface }.read_unaligned(),
+            { hi.archivingControllerInterface }.read_unaligned(),
+            { hi.playbackControllerInterface }.read_unaligned(),
         )
     };
     // SAFETY: valid for the call.
@@ -354,6 +397,8 @@ unsafe extern "C" fn create_controller<const B: u8>(
         audio,
         content,
         model,
+        archiving,
+        playback,
         instance: ARADocumentControllerInstance {
             structSize: std::mem::size_of::<ARADocumentControllerInstance>(),
             documentControllerRef: std::ptr::null_mut(),
@@ -439,6 +484,122 @@ unsafe extern "C" fn notify_model_updates(dc: ARADocumentControllerRef) {
             if let Some(f) = { c.model.notifyAudioSourceContentChanged } {
                 // SAFETY: as above.
                 unsafe { f(r, src.host, std::ptr::null(), kARAContentUpdateEverythingChanged) };
+            }
+        }
+        let r = c.host.modelUpdateControllerHostRef;
+        for m in s.mods.values_mut().filter(|m| m.dirty) {
+            m.dirty = false;
+            if let Some(f) = { c.model.notifyAudioModificationContentChanged } {
+                // SAFETY: as above.
+                unsafe { f(r, m.host, std::ptr::null(), kARAContentUpdateEverythingChanged) };
+            }
+        }
+        if std::mem::take(&mut s.data_dirty)
+            && c.model.structSize > std::mem::offset_of!(ARAModelUpdateControllerInterface, notifyDocumentDataChanged)
+            && let Some(f) = { c.model.notifyDocumentDataChanged }
+        {
+            // SAFETY: as above (the host's interface is large enough to have it).
+            unsafe { f(r) };
+        }
+    })
+}
+
+/// Writes the test plug-in's archive: a header line, then one `persistent id <tab> gain` line per
+/// modification stored.
+unsafe extern "C" fn store_objects(dc: ARADocumentControllerRef, w: ARAArchiveWriterHostRef, filter: *const ARAStoreObjectsFilter) -> ARABool {
+    with(dc, "storeObjectsToArchive", |c, s| {
+        if s.editing {
+            violation(c, "storeObjectsToArchive while editing".into());
+        }
+        let only: Option<Vec<usize>> = if filter.is_null() {
+            None
+        } else {
+            // SAFETY: valid for the call, with `audioModificationRefsCount` refs.
+            let f = unsafe { filter.read_unaligned() };
+            let p = f.audioModificationRefs;
+            Some(if p.is_null() {
+                Vec::new()
+            } else {
+                (0..f.audioModificationRefsCount).map(|i| unsafe { p.add(i).read_unaligned() } as usize).collect()
+            })
+        };
+        let mut text = String::from("FreeDAWm test ARA archive 1\n");
+        let mut ids: Vec<(&String, f32)> =
+            s.mods.iter().filter(|(k, _)| only.as_ref().is_none_or(|o| o.contains(k))).map(|(_, m)| (&m.pid, m.gain)).collect();
+        ids.sort_by(|a, b| a.0.cmp(b.0));
+        for (pid, gain) in ids {
+            text.push_str(&format!("{pid}\t{}\n", gain.to_bits()));
+        }
+        let Some(write) = ({ c.archiving.writeBytesToArchive }) else { return kARAFalse };
+        let bytes = text.as_bytes();
+        // Two writes, the second at an offset, as plug-ins do.
+        let half = bytes.len() / 2;
+        // SAFETY: the host's function and writer ref, during this call as ARA requires.
+        let ok = unsafe {
+            write(c.host.archivingControllerHostRef, w, 0, half, bytes.as_ptr()) != kARAFalse
+                && write(c.host.archivingControllerHostRef, w, half, bytes.len() - half, bytes.as_ptr().add(half)) != kARAFalse
+        };
+        with_report(&c.name, |r| r.stored += 1);
+        if ok { kARATrue } else { kARAFalse }
+    })
+}
+
+/// Reads an archive [`store_objects`] wrote back into the modifications with the same persistent
+/// ids (inside an editing cycle, after the host made them).
+unsafe extern "C" fn restore_objects(dc: ARADocumentControllerRef, r: ARAArchiveReaderHostRef, _filter: *const ARARestoreObjectsFilter) -> ARABool {
+    with(dc, "restoreObjectsFromArchive", |c, s| {
+        if !s.editing {
+            violation(c, "restoreObjectsFromArchive outside an editing cycle".into());
+        }
+        let (Some(size), Some(read)) = ({ c.archiving.getArchiveSize }, { c.archiving.readBytesFromArchive }) else { return kARAFalse };
+        let h = c.host.archivingControllerHostRef;
+        // SAFETY: the host's functions and reader ref, during this call as ARA requires.
+        let n = unsafe { size(h, r) };
+        if n > 1 << 20 {
+            return kARAFalse;
+        }
+        let mut buf = vec![0u8; n];
+        // SAFETY: as above; `buf` holds `n` bytes.
+        if n > 0 && unsafe { read(h, r, 0, n, buf.as_mut_ptr()) } == kARAFalse {
+            return kARAFalse;
+        }
+        // SAFETY: as above.
+        let id = unsafe { cstr({ c.archiving.getDocumentArchiveID }.map_or(std::ptr::null(), |f| f(h, r))) };
+        if id != "org.freedawm.test.ara.archive.1" {
+            violation(c, format!("restoreObjectsFromArchive of an archive with id \"{id}\""));
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let mut lines = text.lines();
+        if lines.next() != Some("FreeDAWm test ARA archive 1") {
+            return kARAFalse;
+        }
+        for line in lines {
+            let Some((pid, bits)) = line.split_once('\t') else { return kARAFalse };
+            let Ok(bits) = bits.parse::<u32>() else { return kARAFalse };
+            for m in s.mods.values_mut().filter(|m| m.pid == pid) {
+                m.gain = f32::from_bits(bits);
+            }
+        }
+        with_report(&c.name, |rep| rep.restored += 1);
+        kARATrue
+    })
+}
+
+/// What [`store_objects`] wrote for a document's modifications, by persistent id (tests).
+pub fn parse_archive(bytes: &[u8]) -> Option<HashMap<String, f32>> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let mut lines = text.lines();
+    (lines.next()? == "FreeDAWm test ARA archive 1").then_some(())?;
+    lines.map(|l| l.split_once('\t').and_then(|(p, b)| Some((p.to_string(), f32::from_bits(b.parse().ok()?))))).collect()
+}
+
+unsafe extern "C" fn head_tail(dc: ARADocumentControllerRef, _r: ARAPlaybackRegionRef, head: *mut ARATimeDuration, tail: *mut ARATimeDuration) {
+    with(dc, "getPlaybackRegionHeadAndTailTime", |_, _| {
+        if !head.is_null() && !tail.is_null() {
+            // SAFETY: the host's out-pointers, valid for the call.
+            unsafe {
+                head.write_unaligned(0.0);
+                tail.write_unaligned(0.0);
             }
         }
     })
@@ -536,7 +697,10 @@ unsafe extern "C" fn create_source(dc: ARADocumentControllerRef, h: ARAAudioSour
         // SAFETY: as above.
         let pid = unsafe { cstr(props.persistentID) };
         let r = new_ref(s);
-        s.srcs.insert(r, PSrc { host: h, pid, frames: props.sampleCount, channels: props.channelCount, active: true, ..PSrc::default() });
+        s.srcs.insert(
+            r,
+            PSrc { host: h, pid, frames: props.sampleCount, channels: props.channelCount, rate: props.sampleRate, active: true, ..PSrc::default() },
+        );
         ptr(r)
     })
 }
@@ -558,6 +722,7 @@ unsafe extern "C" fn update_source(dc: ARADocumentControllerRef, a: ARAAudioSour
         }
         src.frames = props.sampleCount;
         src.channels = props.channelCount;
+        src.rate = props.sampleRate;
         src.read = false;
         src.reported = false;
     })
@@ -614,16 +779,39 @@ unsafe extern "C" fn destroy_source(dc: ARADocumentControllerRef, a: ARAAudioSou
 unsafe extern "C" fn create_modification(
     dc: ARADocumentControllerRef,
     a: ARAAudioSourceRef,
-    _h: ARAAudioModificationHostRef,
-    _p: *const ARAAudioModificationProperties,
+    h: ARAAudioModificationHostRef,
+    p: *const ARAAudioModificationProperties,
 ) -> ARAAudioModificationRef {
     with(dc, "createAudioModification", |c, s| {
         editing(c, s, "createAudioModification");
         if !s.srcs.get(&(a as usize)).is_some_and(|x| x.active) {
             violation(c, "createAudioModification of an unknown or deactivated source".into());
         }
+        // SAFETY: valid for the call, the strings too.
+        let pid = if p.is_null() { String::new() } else { unsafe { cstr(p.read_unaligned().persistentID) } };
         let r = new_ref(s);
-        s.mods.insert(r, PMod { source: a as usize, active: true });
+        s.mods.insert(r, PMod { source: a as usize, active: true, host: h, pid, gain: DEFAULT_GAIN, dirty: false });
+        ptr(r)
+    })
+}
+
+unsafe extern "C" fn clone_modification(
+    dc: ARADocumentControllerRef,
+    m: ARAAudioModificationRef,
+    h: ARAAudioModificationHostRef,
+    p: *const ARAAudioModificationProperties,
+) -> ARAAudioModificationRef {
+    with(dc, "cloneAudioModification", |c, s| {
+        editing(c, s, "cloneAudioModification");
+        let Some((source, gain)) = s.mods.get(&(m as usize)).filter(|x| x.active).map(|x| (x.source, x.gain)) else {
+            violation(c, "cloneAudioModification of an unknown or deactivated modification".into());
+            return std::ptr::null_mut();
+        };
+        // SAFETY: valid for the call, the strings too.
+        let pid = if p.is_null() { String::new() } else { unsafe { cstr(p.read_unaligned().persistentID) } };
+        let r = new_ref(s);
+        s.mods.insert(r, PMod { source, active: true, host: h, pid, gain, dirty: false });
+        with_report(&c.name, |rep| rep.cloned += 1);
         ptr(r)
     })
 }
@@ -666,17 +854,30 @@ unsafe extern "C" fn destroy_modification(dc: ARADocumentControllerRef, m: ARAAu
     })
 }
 
-fn check_region(c: &Controller, s: &State, p: *const ARAPlaybackRegionProperties, call: &str) -> Option<usize> {
+fn check_region(c: &Controller, s: &State, m: usize, p: *const ARAPlaybackRegionProperties, call: &str) -> Option<PRegion> {
     // SAFETY: valid for the call.
     let props = unsafe { p.read_unaligned() };
     let seq = props.regionSequenceRef as usize;
-    let d = props.durationInModificationTime;
-    if props.structSize < kARAPlaybackRegionPropertiesMinSize || !s.seqs.contains(&seq) || d.is_nan() || d <= 0.0 || d != props.durationInPlaybackTime
+    let (d, dp) = (props.durationInModificationTime, props.durationInPlaybackTime);
+    let flags = props.transformationFlags;
+    let stretch_ok = d == dp || flags & kARAPlaybackTransformationTimestretch != 0;
+    if props.structSize < kARAPlaybackRegionPropertiesMinSize
+        || !s.seqs.contains(&seq)
+        || !(d > 0.0 && dp > 0.0)
+        || !stretch_ok
+        || flags & !TRANSFORMATIONS != 0
     {
         violation(c, format!("{call} with bad properties"));
         return None;
     }
-    Some(seq)
+    Some(PRegion {
+        modification: m,
+        sequence: seq,
+        start_mod: props.startInModificationTime,
+        dur_mod: d,
+        start_pb: props.startInPlaybackTime,
+        dur_pb: dp,
+    })
 }
 
 unsafe extern "C" fn create_region(
@@ -690,9 +891,16 @@ unsafe extern "C" fn create_region(
         if !s.mods.get(&(m as usize)).is_some_and(|x| x.active) {
             violation(c, "createPlaybackRegion of an unknown or deactivated modification".into());
         }
-        let seq = check_region(c, s, p, "createPlaybackRegion").unwrap_or(0);
+        let region = check_region(c, s, m as usize, p, "createPlaybackRegion").unwrap_or(PRegion {
+            modification: m as usize,
+            sequence: 0,
+            start_mod: 0.0,
+            dur_mod: 0.0,
+            start_pb: 0.0,
+            dur_pb: 0.0,
+        });
         let r = new_ref(s);
-        s.regions.insert(r, PRegion { modification: m as usize, sequence: seq });
+        s.regions.insert(r, region);
         ptr(r)
     })
 }
@@ -700,9 +908,10 @@ unsafe extern "C" fn create_region(
 unsafe extern "C" fn update_region(dc: ARADocumentControllerRef, r: ARAPlaybackRegionRef, p: *const ARAPlaybackRegionProperties) {
     with(dc, "updatePlaybackRegionProperties", |c, s| {
         editing(c, s, "updatePlaybackRegionProperties");
-        let seq = check_region(c, s, p, "updatePlaybackRegionProperties");
-        match (s.regions.get_mut(&(r as usize)), seq) {
-            (Some(x), Some(q)) => x.sequence = q,
+        let m = s.regions.get(&(r as usize)).map_or(0, |x| x.modification);
+        let new = check_region(c, s, m, p, "updatePlaybackRegionProperties");
+        match (s.regions.get_mut(&(r as usize)), new) {
+            (Some(x), Some(n)) => *x = n,
             (None, _) => violation(c, "updatePlaybackRegionProperties of an unknown region".into()),
             _ => {}
         }
@@ -712,6 +921,9 @@ unsafe extern "C" fn update_region(dc: ARADocumentControllerRef, r: ARAPlaybackR
 unsafe extern "C" fn destroy_region(dc: ARADocumentControllerRef, r: ARAPlaybackRegionRef) {
     with(dc, "destroyPlaybackRegion", |c, s| {
         editing(c, s, "destroyPlaybackRegion");
+        if bound_lock().values().any(|b| b.ctrl == c as *const Controller as usize && b.regions.contains(&(r as usize))) {
+            violation(c, "destroyPlaybackRegion of a region a bound plug-in instance still renders".into());
+        }
         if s.regions.remove(&(r as usize)).is_none() {
             violation(c, "destroyPlaybackRegion of an unknown region".into());
         }
@@ -801,7 +1013,7 @@ const fn iface(size: usize, missing: bool) -> ARADocumentControllerInterface {
         deactivateAudioSourceForUndoHistory: Some(deactivate_source),
         destroyAudioSource: Some(destroy_source),
         createAudioModification: Some(create_modification),
-        cloneAudioModification: None,
+        cloneAudioModification: Some(clone_modification),
         updateAudioModificationProperties: Some(update_modification),
         deactivateAudioModificationForUndoHistory: Some(deactivate_modification),
         destroyAudioModification: Some(destroy_modification),
@@ -825,9 +1037,9 @@ const fn iface(size: usize, missing: bool) -> ARADocumentControllerInterface {
         createRegionSequence: Some(create_sequence),
         updateRegionSequenceProperties: Some(update_sequence),
         destroyRegionSequence: Some(destroy_sequence),
-        getPlaybackRegionHeadAndTailTime: None,
-        restoreObjectsFromArchive: None,
-        storeObjectsToArchive: None,
+        getPlaybackRegionHeadAndTailTime: Some(head_tail),
+        restoreObjectsFromArchive: Some(restore_objects),
+        storeObjectsToArchive: Some(store_objects),
         getProcessingAlgorithmsCount: None,
         getProcessingAlgorithmProperties: None,
         getProcessingAlgorithmForAudioSource: None,
@@ -918,6 +1130,7 @@ fn read_sources(c: &Controller, s: &mut State) {
         let mut sums = [0u64; 2];
         let mut frames_read = 0;
         let mut silent = true;
+        let mut audio = Vec::new();
         for (i, use64) in [false, true].into_iter().enumerate() {
             let r = reader(c, src, use64);
             if r.is_null() {
@@ -937,6 +1150,9 @@ fn read_sources(c: &Controller, s: &mut State) {
             sums[i] = checksum(&samples);
             frames_read = samples.first().map_or(0, |x| x.len() as i64);
             silent &= tail;
+            if !use64 {
+                audio = samples.iter().map(|ch| ch.iter().map(|x| *x as f32).collect()).collect();
+            }
         }
         let pid = src.pid.clone();
         let note = |sum: u64, volume: f32| ARAContentNote {
@@ -951,6 +1167,7 @@ fn read_sources(c: &Controller, s: &mut State) {
         s.notes.insert(k, vec![note(sums[0], 0.5), note(sums[1], 1.0)]);
         if let Some(src) = s.srcs.get_mut(&k) {
             src.read = true;
+            src.audio = std::sync::Arc::new(std::mem::take(&mut audio));
         }
         with_report(&c.name, |r| {
             r.read.insert(pid, (sums[0], sums[1], frames_read, silent));
@@ -1051,29 +1268,60 @@ fn hostile(c: &Controller, s: &State) {
     with_report(&c.name, |r| r.hostile.extend(seen));
 }
 
-// ---- companion plug-in instances (the VST3 fixture) --------------------------------------------
+// ---- companion plug-in instances (the VST3 fixture, the engine's tests) --------------------------
 
 struct SyncExt(ARAPlugInExtensionInstance);
 // SAFETY: immutable after creation (function pointers and numbers).
 unsafe impl Sync for SyncExt {}
 unsafe impl Send for SyncExt {}
 
-/// Bound instances' document names, by playback renderer ref.
-fn bound() -> &'static Mutex<HashMap<usize, String>> {
-    static B: std::sync::OnceLock<Mutex<HashMap<usize, String>>> = std::sync::OnceLock::new();
+/// One bound instance: its controller (address), document name and the regions its playback
+/// renderer was given.
+struct Bound {
+    ctrl: usize,
+    name: String,
+    regions: Vec<usize>,
+    /// It is rendering now ([`render`] running).
+    rendering: bool,
+}
+
+/// Bound instances by renderer id (the playback renderer, editor renderer and editor view refs
+/// of one instance are the same number).
+fn bound() -> &'static Mutex<HashMap<usize, Bound>> {
+    static B: std::sync::OnceLock<Mutex<HashMap<usize, Bound>>> = std::sync::OnceLock::new();
     B.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-unsafe extern "C" fn add_region(renderer: ARAPlaybackRendererRef, _region: ARAPlaybackRegionRef) {
-    if let Some(name) = bound().lock().unwrap_or_else(PoisonError::into_inner).get(&(renderer as usize)).cloned() {
-        with_report(&name, |r| r.rendered += 1);
-    }
+fn bound_lock() -> std::sync::MutexGuard<'static, HashMap<usize, Bound>> {
+    bound().lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-unsafe extern "C" fn remove_region(renderer: ARAPlaybackRendererRef, _region: ARAPlaybackRegionRef) {
-    if let Some(name) = bound().lock().unwrap_or_else(PoisonError::into_inner).get(&(renderer as usize)).cloned() {
-        with_report(&name, |r| r.rendered = r.rendered.saturating_sub(1));
+fn renderer_call(renderer: ARAPlaybackRendererRef, f: impl FnOnce(&mut Bound)) {
+    let mut b = bound_lock();
+    let Some(x) = b.get_mut(&(renderer as usize)) else { return };
+    if x.rendering {
+        let name = x.name.clone();
+        with_report(&name, |r| r.renderer_while_rendering += 1);
     }
+    f(x);
+}
+
+unsafe extern "C" fn add_region(renderer: ARAPlaybackRendererRef, region: ARAPlaybackRegionRef) {
+    renderer_call(renderer, |b| {
+        if !b.regions.contains(&(region as usize)) {
+            b.regions.push(region as usize);
+            with_report(&b.name, |r| r.rendered += 1);
+        }
+    });
+}
+
+unsafe extern "C" fn remove_region(renderer: ARAPlaybackRendererRef, region: ARAPlaybackRegionRef) {
+    renderer_call(renderer, |b| {
+        if let Some(i) = b.regions.iter().position(|x| *x == region as usize) {
+            b.regions.remove(i);
+            with_report(&b.name, |r| r.rendered = r.rendered.saturating_sub(1));
+        }
+    });
 }
 
 static RENDERER: ARAPlaybackRendererInterface = ARAPlaybackRendererInterface {
@@ -1082,36 +1330,237 @@ static RENDERER: ARAPlaybackRendererInterface = ARAPlaybackRendererInterface {
     removePlaybackRegion: Some(remove_region),
 };
 
+unsafe extern "C" fn editor_add(_r: ARAEditorRendererRef, _p: ARAPlaybackRegionRef) {}
+unsafe extern "C" fn editor_remove(_r: ARAEditorRendererRef, _p: ARAPlaybackRegionRef) {}
+unsafe extern "C" fn editor_add_seq(_r: ARAEditorRendererRef, _q: ARARegionSequenceRef) {}
+unsafe extern "C" fn editor_remove_seq(_r: ARAEditorRendererRef, _q: ARARegionSequenceRef) {}
+
+static EDITOR_RENDERER: ARAEditorRendererInterface = ARAEditorRendererInterface {
+    structSize: std::mem::size_of::<ARAEditorRendererInterface>(),
+    addPlaybackRegion: Some(editor_add),
+    removePlaybackRegion: Some(editor_remove),
+    addRegionSequence: Some(editor_add_seq),
+    removeRegionSequence: Some(editor_remove_seq),
+};
+
+unsafe extern "C" fn notify_selection(view: ARAEditorViewRef, sel: *const ARAViewSelection) {
+    let Some(name) = bound_lock().get(&(view as usize)).map(|b| b.name.clone()) else { return };
+    if sel.is_null() {
+        return;
+    }
+    // SAFETY: the host's selection, valid for the call; the time range too when given.
+    let s = unsafe { sel.read_unaligned() };
+    let range = if s.timeRange.is_null() {
+        None
+    } else {
+        // SAFETY: as above.
+        let r = unsafe { s.timeRange.read_unaligned() };
+        Some((r.start, r.duration))
+    };
+    with_report(&name, |r| r.selection = Some((s.playbackRegionRefsCount, s.regionSequenceRefsCount, range)));
+}
+
+unsafe extern "C" fn notify_hide(view: ARAEditorViewRef, count: ARASize, _refs: *const ARARegionSequenceRef) {
+    let Some(name) = bound_lock().get(&(view as usize)).map(|b| b.name.clone()) else { return };
+    with_report(&name, |r| r.hidden = count);
+}
+
+static EDITOR_VIEW: ARAEditorViewInterface = ARAEditorViewInterface {
+    structSize: std::mem::size_of::<ARAEditorViewInterface>(),
+    notifySelection: Some(notify_selection),
+    notifyHideRegionSequences: Some(notify_hide),
+};
+
 /// Binds a companion plug-in instance to the document controller `dc` with the given roles
-/// (`IPlugInEntryPoint2::bindToDocumentControllerWithRoles`): the instance's extension, with a
-/// playback renderer when that role is assigned. Null for a controller that is not live. Leaks one
-/// small struct per call (test code).
+/// (`IPlugInEntryPoint2::bindToDocumentControllerWithRoles`): the instance's extension, with the
+/// interfaces of the roles assigned (none for a playback renderer with [`Behaviour::NoRenderer`]).
+/// Null for a controller that is not live. The returned value is the instance's renderer id as
+/// [`render`] and [`unbind`] take it. Leaks one small struct per call (test code).
 pub fn bind(
     dc: ARADocumentControllerRef,
     known: ARAPlugInInstanceRoleFlags,
     assigned: ARAPlugInInstanceRoleFlags,
 ) -> *const ARAPlugInExtensionInstance {
-    let name = with(dc, "bindToDocumentControllerWithRoles", |c, _| {
+    let got = with(dc, "bindToDocumentControllerWithRoles", |c, _| {
         if assigned & !known != 0 {
             violation(c, "assigned roles that are not known".into());
         }
-        Some(c.name.clone())
+        Some((c.name.clone(), c.behaviour))
     });
-    let Some(name) = name else { return std::ptr::null() };
+    let Some((name, behaviour)) = got else { return std::ptr::null() };
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    bound().lock().unwrap_or_else(PoisonError::into_inner).insert(id, name);
-    let playback = assigned & kARAPlaybackRendererRole != 0;
+    bound_lock().insert(id, Bound { ctrl: dc as usize, name, regions: Vec::new(), rendering: false });
+    let playback = assigned & kARAPlaybackRendererRole != 0 && behaviour != Behaviour::NoRenderer as u8;
+    let editor = assigned & kARAEditorRendererRole != 0;
+    let view = assigned & kARAEditorViewRole != 0;
     let ext = Box::leak(Box::new(SyncExt(ARAPlugInExtensionInstance {
         structSize: std::mem::size_of::<ARAPlugInExtensionInstance>(),
         plugInExtensionRef: std::ptr::null_mut(),
         plugInExtensionInterface: std::ptr::null(),
         playbackRendererRef: if playback { ptr(id) } else { std::ptr::null_mut() },
         playbackRendererInterface: if playback { &RENDERER } else { std::ptr::null() },
-        editorRendererRef: std::ptr::null_mut(),
-        editorRendererInterface: std::ptr::null(),
-        editorViewRef: std::ptr::null_mut(),
-        editorViewInterface: std::ptr::null(),
+        editorRendererRef: if editor { ptr(id) } else { std::ptr::null_mut() },
+        editorRendererInterface: if editor { &EDITOR_RENDERER } else { std::ptr::null() },
+        editorViewRef: if view { ptr(id) } else { std::ptr::null_mut() },
+        editorViewInterface: if view { &EDITOR_VIEW } else { std::ptr::null() },
     })));
     &ext.0
+}
+
+/// [`bind`], for a host that keeps the extension with a [`crate::BoundInstance`]: the renderer id
+/// and the extension.
+pub fn bind_raw(
+    dc: ARADocumentControllerRef,
+    known: ARAPlugInInstanceRoleFlags,
+    assigned: ARAPlugInInstanceRoleFlags,
+) -> (usize, crate::RawExtension) {
+    let ext = bind(dc, known, assigned);
+    // SAFETY: the test plug-in's extensions are leaked: valid for the life of the process.
+    (renderer_id(ext), unsafe { crate::RawExtension::new(ext) })
+}
+
+/// [`bind`], with the renderer id (as [`render`] and [`unbind`] take it; 0 when it gave nothing).
+pub fn bind_id(
+    dc: ARADocumentControllerRef,
+    known: ARAPlugInInstanceRoleFlags,
+    assigned: ARAPlugInInstanceRoleFlags,
+) -> (*const ARAPlugInExtensionInstance, usize) {
+    let ext = bind(dc, known, assigned);
+    (ext, renderer_id(ext))
+}
+
+/// The renderer id of an extension [`bind`] returned (0 for null).
+fn renderer_id(ext: *const ARAPlugInExtensionInstance) -> usize {
+    if ext.is_null() {
+        return 0;
+    }
+    // SAFETY: an extension `bind` made (leaked, so alive); read unaligned.
+    let e = unsafe { ext.read_unaligned() };
+    [e.playbackRendererRef, e.editorRendererRef, e.editorViewRef].into_iter().find(|p| !p.is_null()).map_or(0, |p| p as usize)
+}
+
+/// The instance went (its VST3 component was destroyed): it renders nothing any more.
+pub fn unbind(renderer: usize) {
+    bound_lock().remove(&renderer);
+}
+
+/// Renders the playback regions given to instance `renderer` for the block starting at song
+/// sample `position` (at `rate` Hz) into `out` (one slice per output channel, all as long): each
+/// region plays its modification's source, read through the host, times the modification's
+/// gain (from [`DEFAULT_GAIN`], changed by [`set_gain`] or a restored archive), mapped through a
+/// time-stretch linearly, nearest sample; output channel `c` plays source channel `c` (the last one
+/// past its channels). Everything else is silence. `false` (and silence) for an unknown instance;
+/// after [`set_fault`], NaN.
+pub fn render(renderer: usize, position: i64, rate: f64, out: &mut [&mut [f32]]) -> bool {
+    for ch in out.iter_mut() {
+        ch.iter_mut().for_each(|x| *x = 0.0);
+    }
+    let (ctrl, regions) = {
+        let mut b = bound_lock();
+        let Some(x) = b.get_mut(&renderer) else { return false };
+        x.rendering = true;
+        (x.ctrl, x.regions.clone())
+    };
+    let ok = live().lock().unwrap_or_else(PoisonError::into_inner).contains(&ctrl);
+    if ok && rate > 0.0 {
+        // SAFETY: a live controller (checked above); see `with`.
+        let c = unsafe { &*(ctrl as *const Controller) };
+        let s = c.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let frames = out.first().map_or(0, |c| c.len());
+        if s.fault {
+            for ch in out.iter_mut() {
+                ch.iter_mut().for_each(|x| *x = f32::NAN);
+            }
+        } else {
+            for reg in regions.iter().filter_map(|r| s.regions.get(r)) {
+                let Some(m) = s.mods.get(&reg.modification).filter(|m| m.active) else { continue };
+                let Some(src) = s.srcs.get(&m.source).filter(|x| x.active) else { continue };
+                let s0 = (reg.start_pb * rate).round() as i64;
+                let len = (reg.dur_pb * rate).round() as i64;
+                let src_rate = if src.rate > 0.0 { src.rate } else { rate };
+                let m0 = (reg.start_mod * src_rate).round() as i64;
+                let mlen = reg.dur_mod * src_rate;
+                for k in 0..frames {
+                    let p = position + k as i64;
+                    if p < s0 || p >= s0 + len || len <= 0 {
+                        continue;
+                    }
+                    let rel = p - s0;
+                    let at = m0 + if (mlen - len as f64).abs() < 1e-6 { rel } else { (rel as f64 * mlen / len as f64).round() as i64 };
+                    for (c, ch) in out.iter_mut().enumerate() {
+                        let n = src.audio.len();
+                        let Some(sch) = src.audio.get(c.min(n.saturating_sub(1))) else { continue };
+                        let v = usize::try_from(at).ok().and_then(|i| sch.get(i)).copied().unwrap_or(0.0);
+                        if let Some(o) = ch.get_mut(k) {
+                            *o += v * m.gain;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(x) = bound_lock().get_mut(&renderer) {
+        x.rendering = false;
+    }
+    ok
+}
+
+fn with_named(doc: &str, f: impl FnOnce(&Controller, &mut State)) -> bool {
+    let addrs: Vec<usize> = live().lock().unwrap_or_else(PoisonError::into_inner).clone();
+    for a in addrs {
+        // SAFETY: a live controller; see `with`.
+        let c = unsafe { &*(a as *const Controller) };
+        if c.name == doc {
+            let mut s = c.state.lock().unwrap_or_else(PoisonError::into_inner);
+            f(c, &mut s);
+            return true;
+        }
+    }
+    false
+}
+
+/// An edit in the plug-in (as if the user changed something in its editor): the gain of the
+/// modification with persistent id `pid` in the document named `doc`. The plug-in tells the host
+/// the modification's content and its document data changed at its next `notifyModelUpdates`.
+pub fn set_gain(doc: &str, pid: &str, gain: f32) -> bool {
+    let mut found = false;
+    with_named(doc, |_, s| {
+        for m in s.mods.values_mut().filter(|m| m.pid == pid) {
+            m.gain = gain;
+            m.dirty = true;
+            found = true;
+        }
+        s.data_dirty |= found;
+    });
+    found
+}
+
+/// The gain of a modification (tests), `None` if there is none with that persistent id.
+pub fn gain(doc: &str, pid: &str) -> Option<f32> {
+    let mut out = None;
+    with_named(doc, |_, s| out = s.mods.values().find(|m| m.pid == pid).map(|m| m.gain));
+    out
+}
+
+/// From now on every render of document `doc` gives NaN (a plug-in gone wrong).
+pub fn set_fault(doc: &str, fault: bool) -> bool {
+    with_named(doc, |_, s| s.fault = fault)
+}
+
+/// The plug-in asks the host to start playback, then to locate to `at` seconds (its playback
+/// controller), as a plug-in's transport buttons would.
+pub fn request_playback(doc: &str, at: f64) -> bool {
+    with_named(doc, |c, _| {
+        let h = c.host.playbackControllerHostRef;
+        // SAFETY: the host's functions and ref (valid while the controller lives).
+        unsafe {
+            if let Some(f) = { c.playback.requestSetPlaybackPosition } {
+                f(h, at);
+            }
+            if let Some(f) = { c.playback.requestStartPlayback } {
+                f(h);
+            }
+        }
+    })
 }

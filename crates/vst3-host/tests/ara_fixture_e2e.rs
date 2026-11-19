@@ -110,6 +110,9 @@ fn the_vst3_factory_hosts_an_ara_document_that_reads_the_audio() {
             persistent_id: "clip-3".into(),
             start_in_source: 0.0,
             duration: 0.2,
+            source_duration: 0.2,
+            transformation: 0,
+            origin: None,
             start_in_song: 1.0,
             color: None,
         }],
@@ -125,5 +128,87 @@ fn the_vst3_factory_hosts_an_ara_document_that_reads_the_audio() {
     }
     assert_eq!(doc.read_stats().failed, 0);
     drop(doc);
+    drop(factory);
+}
+
+/// Playback through the VST3 plug-in: an instance bound to the document with the playback and
+/// editor renderer roles, given the region before it is activated, renders the region (the test
+/// plug-in: its source times -0.5) at the transport position the process context gives, at any
+/// block size; the document stores and restores through ARA's archiving.
+#[test]
+fn a_bound_vst3_instance_renders_its_region_and_the_document_round_trips() {
+    use soundcraft_ara_host::BoundInstance;
+    use soundcraft_ara_host::sys::{kARAEditorRendererRole, kARAEditorViewRole, kARAPlaybackRendererRole};
+    use soundcraft_dsp::{Plugin, Transport};
+    let id = find("Fixture ARA").id;
+    let factory = soundcraft_vst3_host::ara_factory(&id).unwrap();
+    let mut doc = Document::new(factory.ptr(), "vst3 ara play").unwrap();
+    let channels: Vec<Vec<f32>> = (0..2).map(|c| (0..48_000).map(|i| ((i * (c + 5)) % 97) as f32 / 97.0 - 0.5).collect()).collect();
+    let audio = Arc::new(MemorySource { channels: channels.clone(), rate: 48_000.0 });
+    let g = Graph {
+        name: "vst3 ara play".into(),
+        sequences: vec![SequenceDesc { key: 1, name: "Vox".into(), order: 0, color: None }],
+        sources: vec![SourceDesc { key: 7, name: "take.wav".into(), persistent_id: "take".into(), audio }],
+        regions: vec![RegionDesc {
+            key: 3,
+            source: 7,
+            sequence: 1,
+            name: "take".into(),
+            persistent_id: "clip-3".into(),
+            start_in_source: 0.1,
+            duration: 0.2,
+            source_duration: 0.2,
+            transformation: 0,
+            origin: None,
+            start_in_song: 0.5,
+            color: None,
+        }],
+        ..Graph::default()
+    };
+    doc.sync(&g);
+    let roles = kARAPlaybackRendererRole | kARAEditorRendererRole;
+    let known = roles | kARAEditorViewRole;
+    for block in [64usize, 1000] {
+        let (plugin, raw) = soundcraft_vst3_host::instantiate_ara(&id, doc.controller_ref(), known, roles).unwrap();
+        let bound = BoundInstance::new(Box::new(plugin) as Box<dyn Plugin>, raw, roles, "Fixture ARA").unwrap();
+        assert!(bound.has_playback());
+        bound.add_region(doc.region_ref(3).unwrap());
+        let cell = bound.cell();
+        cell.with(|p| p.prepare(48_000.0, block, 2)).unwrap();
+        let mut out = vec![Vec::new(); 2];
+        let mut buf = vec![vec![0.0f32; block]; 2];
+        let mut pos = 0i64;
+        while pos < 48_000 {
+            let n = block.min((48_000 - pos) as usize);
+            cell.with(|p| {
+                p.set_transport(&Transport { playing: true, tempo: 120.0, numerator: 4, denominator: 4, samples: pos, ..Transport::default() });
+                p.process(&mut buf, n);
+            });
+            for (o, b) in out.iter_mut().zip(&buf) {
+                o.extend_from_slice(&b[..n]);
+            }
+            pos += n as i64;
+        }
+        for (c, ch) in out.iter().enumerate() {
+            for (p, v) in ch.iter().enumerate() {
+                let want = if (24_000..33_600).contains(&p) { -0.5 * channels[c][4_800 + p - 24_000] } else { 0.0 };
+                assert_eq!(*v, want, "block {block}, channel {c}, sample {p}");
+            }
+        }
+        drop(bound);
+    }
+    // A plug-in without ARA cannot be bound.
+    let plain = find("Fixture Plain").id;
+    let Err(e) = soundcraft_vst3_host::instantiate_ara(&plain, doc.controller_ref(), known, roles) else { panic!("bound a plug-in without ARA") };
+    assert!(e.to_string().contains("ARA 2 entry point"), "{e}");
+    // The document as an archive, restored into a new document.
+    let archive = doc.store().unwrap();
+    assert!(String::from_utf8_lossy(&archive).contains("clip-3"));
+    drop(doc);
+    let mut again = Document::new(factory.ptr(), "vst3 ara play 2").unwrap();
+    again.restore_next_sync(archive, &again.info().document_archive_id.clone());
+    again.sync(&g);
+    assert_eq!(again.take_restore_result(), Some(Ok(())));
+    drop(again);
     drop(factory);
 }

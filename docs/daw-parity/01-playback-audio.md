@@ -145,7 +145,7 @@ Varispeed is the only whole-project speed control among the four.
 | Split a stereo track into mono | ● | ● | ● | ● | **Works**: each new track plays its own channel |
 | Freeze, commit, render in place | ● | ● | ● | ● | **Works**: freeze up to a chosen module; third-party plug-ins stay loaded |
 | Built-in pitch correction heard live | ◐ | ● | ● | ● | **Works** (Tune Vocal), except on stretched clips |
-| ARA editors | ● | ● | ● | ● | **Partial**: ARA 2 stage one ([section 4](04-editing-audio.md), J): ARA VST3 plug-ins are found and read and analyse the clips given to them (Clip › ARA Plug-ins…); nothing plays through them yet (stage two), and their editor windows are stage three |
+| ARA editors | ● | ● | ● | ● | **Partial** ([section 4](04-editing-audio.md), J; `docs/ara.md`): ARA 2 VST3 plug-ins read the clips given to them (the clip menu's ARA submenu, Clip › ARA Plug-ins…), the clips play through them (one playback renderer instance per clip on the audio thread, latency made up, the loop and tempo in the process context; bypassed with the reason when one misbehaves), bounces and freezes render through them offline equal to playback, their documents are saved with the session, and their editor opens told the selection. Left: untried with commercial plug-ins; editor windows on Linux; CLAP and AU |
 
 ## G. Tempo and time-stretch
 
@@ -349,6 +349,7 @@ Feature entries for the four come from their manuals as known, not from a side-b
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | ARA editors: playback through the plug-in, offline renders, saving and the editor view built (section 4, J) |
 | 2026-11-18 | minor | ARA editors: stage one built (section 4, J) |
 | 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |
 | 2026-11-18 | minor | a hosted Clip Effects module's own editor window and its full state per clip slot |

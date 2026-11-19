@@ -386,6 +386,7 @@ pub fn start(app: &mut SoundApp, command: &str, p: &Value) -> Result<(), String>
     }
     // Third-party plugins keep state the session can't see: store it before rendering a track.
     app.capture_plugin_states();
+    app.prepare_ara_renders();
     let mut worker = ml::prepare(&app.engine, command, p).map_err(|e| e.to_string())?;
     // The UI keeps the targets only; the worker owns (and frees) the source audio.
     let job = worker.without_audio();

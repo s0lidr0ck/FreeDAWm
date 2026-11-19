@@ -10,7 +10,7 @@
 //! memory it does not own.
 
 use crate::sys::*;
-use crate::{AnalysisState, AraError, AudioSource, FactoryInfo, Graph, HostEvent, Note, ReadStats, SyncReport};
+use crate::{AnalysisState, AraError, AudioSource, FactoryInfo, Graph, HostEvent, Note, PlaybackRequest, ReadStats, SyncReport};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::{CString, c_char, c_void};
 use std::marker::PhantomData;
@@ -33,6 +33,8 @@ const MAX_EVENTS: i32 = 1 << 20;
 const MAX_HOST_EVENTS: usize = 4096;
 /// Most modifications kept deactivated for the undo history before the oldest is destroyed.
 const MAX_GRAVEYARD: usize = 512;
+/// Largest archive a plug-in may write (bytes).
+const MAX_ARCHIVE: usize = 1 << 30;
 
 /// The API generations this host implements, oldest first: 2.0 final (every ARA 2 plug-in, and
 /// the only one on ARM) and 2.3 final (the document-data change notification).
@@ -305,6 +307,11 @@ struct Shared {
     tempo: Mutex<Vec<ARAContentTempoEntry>>,
     bars: Mutex<Vec<ARAContentBarSignature>>,
     events: Mutex<VecDeque<RawEvent>>,
+    /// Archives being read (`restoreObjectsFromArchive`), by reader host ref: the bytes and the
+    /// document archive id they were written with.
+    archive_in: Mutex<HashMap<usize, (Arc<[u8]>, CString)>>,
+    /// Archives being written (`storeObjectsToArchive`), by writer host ref.
+    archive_out: Mutex<HashMap<usize, Vec<u8>>>,
     next: AtomicUsize,
     samples_read: AtomicU64,
     reads: AtomicU64,
@@ -319,7 +326,7 @@ enum RawEvent {
     ModificationContent(usize),
     RegionContent(usize),
     DocumentData,
-    Playback(&'static str),
+    Playback(PlaybackRequest),
 }
 
 impl Shared {
@@ -331,6 +338,8 @@ impl Shared {
             tempo: Mutex::new(Vec::new()),
             bars: Mutex::new(Vec::new()),
             events: Mutex::new(VecDeque::new()),
+            archive_in: Mutex::new(HashMap::new()),
+            archive_out: Mutex::new(HashMap::new()),
             next: AtomicUsize::new(1),
             samples_read: AtomicU64::new(0),
             reads: AtomicU64::new(0),
@@ -506,41 +515,90 @@ static AUDIO_ACCESS: ARAAudioAccessControllerInterface = ARAAudioAccessControlle
     destroyAudioReader: Some(destroy_audio_reader),
 };
 
-// Archiving: stage 2 stores and restores documents; until then no archive is ever open, so every
-// call is a plug-in error answered with nothing.
-unsafe extern "C" fn get_archive_size(_c: ARAArchivingControllerHostRef, _r: ARAArchiveReaderHostRef) -> ARASize {
+// Archiving: an archive is open only while the host stores or restores a document; every call
+// names it by its reader or writer host ref, checked against the open ones.
+unsafe extern "C" fn get_archive_size(c: ARAArchivingControllerHostRef, r: ARAArchiveReaderHostRef) -> ARASize {
     guard(0, || {
-        crate::ara_log!("getArchiveSize: no archive is open (storing documents is not supported yet)");
-        0
+        let Some(sh) = shared_of(c) else { return 0 };
+        match lock(&sh.archive_in).get(&(r as usize)) {
+            Some((data, _)) => data.len(),
+            None => {
+                crate::ara_log!("getArchiveSize: unknown archive reader ref {r:p}");
+                0
+            }
+        }
     })
 }
 unsafe extern "C" fn read_archive(
-    _c: ARAArchivingControllerHostRef,
-    _r: ARAArchiveReaderHostRef,
-    _p: ARASize,
-    _l: ARASize,
-    _b: *mut ARAByte,
+    c: ARAArchivingControllerHostRef,
+    r: ARAArchiveReaderHostRef,
+    pos: ARASize,
+    len: ARASize,
+    buf: *mut ARAByte,
 ) -> ARABool {
     guard(kARAFalse, || {
-        crate::ara_log!("readBytesFromArchive: no archive is open (restoring documents is not supported yet)");
-        kARAFalse
+        let Some(sh) = shared_of(c) else { return kARAFalse };
+        let data = lock(&sh.archive_in).get(&(r as usize)).map(|(d, _)| d.clone());
+        let Some(data) = data else {
+            crate::ara_log!("readBytesFromArchive: unknown archive reader ref {r:p}");
+            return kARAFalse;
+        };
+        let Some(src) = pos.checked_add(len).and_then(|end| data.get(pos..end)) else {
+            crate::ara_log!("readBytesFromArchive: {len} bytes at {pos} is past the archive's {} bytes", data.len());
+            return kARAFalse;
+        };
+        if buf.is_null() {
+            crate::ara_log!("readBytesFromArchive: null buffer");
+            return kARAFalse;
+        }
+        // SAFETY: the plug-in's buffer holds `len` bytes (ARA contract); `src` is `len` bytes of
+        // our own archive; they cannot overlap.
+        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), buf, src.len()) };
+        kARATrue
     })
 }
 unsafe extern "C" fn write_archive(
-    _c: ARAArchivingControllerHostRef,
-    _w: ARAArchiveWriterHostRef,
-    _p: ARASize,
-    _l: ARASize,
-    _b: *const ARAByte,
+    c: ARAArchivingControllerHostRef,
+    w: ARAArchiveWriterHostRef,
+    pos: ARASize,
+    len: ARASize,
+    buf: *const ARAByte,
 ) -> ARABool {
     guard(kARAFalse, || {
-        crate::ara_log!("writeBytesToArchive: no archive is open (storing documents is not supported yet)");
-        kARAFalse
+        let Some(sh) = shared_of(c) else { return kARAFalse };
+        let mut out = lock(&sh.archive_out);
+        let Some(data) = out.get_mut(&(w as usize)) else {
+            crate::ara_log!("writeBytesToArchive: unknown archive writer ref {w:p}");
+            return kARAFalse;
+        };
+        let Some(end) = pos.checked_add(len).filter(|e| *e <= MAX_ARCHIVE) else {
+            crate::ara_log!("writeBytesToArchive: {len} bytes at {pos} is more than an archive may hold");
+            return kARAFalse;
+        };
+        if len == 0 {
+            return kARATrue;
+        }
+        if buf.is_null() {
+            crate::ara_log!("writeBytesToArchive: null buffer");
+            return kARAFalse;
+        }
+        if data.len() < end {
+            data.resize(end, 0);
+        }
+        let Some(dst) = data.get_mut(pos..end) else { return kARAFalse };
+        // SAFETY: the plug-in's buffer holds `len` readable bytes (ARA contract); `dst` is `len`
+        // bytes of our own vector.
+        unsafe { std::ptr::copy_nonoverlapping(buf, dst.as_mut_ptr(), len) };
+        kARATrue
     })
 }
 unsafe extern "C" fn archiving_progress(_c: ARAArchivingControllerHostRef, _v: f32) {}
-unsafe extern "C" fn archive_id(_c: ARAArchivingControllerHostRef, _r: ARAArchiveReaderHostRef) -> ARAPersistentID {
-    std::ptr::null()
+unsafe extern "C" fn archive_id(c: ARAArchivingControllerHostRef, r: ARAArchiveReaderHostRef) -> ARAPersistentID {
+    guard(std::ptr::null(), || {
+        let Some(sh) = shared_of(c) else { return std::ptr::null() };
+        // The string lives in the table until the restore it belongs to is over, as ARA asks.
+        lock(&sh.archive_in).get(&(r as usize)).map_or(std::ptr::null(), |(_, id)| id.as_ptr())
+    })
 }
 
 static ARCHIVING: ARAArchivingControllerInterface = ARAArchivingControllerInterface {
@@ -715,22 +773,30 @@ static MODEL_UPDATE: ARAModelUpdateControllerInterface = ARAModelUpdateControlle
     notifyDocumentDataChanged: Some(document_data_changed),
 };
 
-// Playback control: stage 2. Requests are recorded (the app shows them as not supported yet) and
-// otherwise ignored, which ARA allows ("the host may choose to ignore any of these requests").
+// Playback control: requests are queued and handed to the host as [`HostEvent::PlaybackRequest`]
+// (the app carries them out on its transport); ARA allows a host to ignore any of them.
 unsafe extern "C" fn request_start(c: ARAPlaybackControllerHostRef) {
-    guard((), || push_event(c, RawEvent::Playback("start playback")))
+    guard((), || push_event(c, RawEvent::Playback(PlaybackRequest::Start)))
 }
 unsafe extern "C" fn request_stop(c: ARAPlaybackControllerHostRef) {
-    guard((), || push_event(c, RawEvent::Playback("stop playback")))
+    guard((), || push_event(c, RawEvent::Playback(PlaybackRequest::Stop)))
 }
-unsafe extern "C" fn request_position(c: ARAPlaybackControllerHostRef, _t: ARATimePosition) {
-    guard((), || push_event(c, RawEvent::Playback("set the playback position")))
+unsafe extern "C" fn request_position(c: ARAPlaybackControllerHostRef, t: ARATimePosition) {
+    guard((), || {
+        if t.is_finite() {
+            push_event(c, RawEvent::Playback(PlaybackRequest::Position(t)));
+        }
+    })
 }
-unsafe extern "C" fn request_cycle(c: ARAPlaybackControllerHostRef, _s: ARATimePosition, _d: ARATimeDuration) {
-    guard((), || push_event(c, RawEvent::Playback("set the loop range")))
+unsafe extern "C" fn request_cycle(c: ARAPlaybackControllerHostRef, start: ARATimePosition, duration: ARATimeDuration) {
+    guard((), || {
+        if start.is_finite() && duration.is_finite() && duration > 0.0 {
+            push_event(c, RawEvent::Playback(PlaybackRequest::Cycle(start, duration)));
+        }
+    })
 }
-unsafe extern "C" fn request_enable_cycle(c: ARAPlaybackControllerHostRef, _e: ARABool) {
-    guard((), || push_event(c, RawEvent::Playback("turn looping on or off")))
+unsafe extern "C" fn request_enable_cycle(c: ARAPlaybackControllerHostRef, on: ARABool) {
+    guard((), || push_event(c, RawEvent::Playback(PlaybackRequest::EnableCycle(on != kARAFalse))))
 }
 
 static PLAYBACK: ARAPlaybackControllerInterface = ARAPlaybackControllerInterface {
@@ -804,6 +870,13 @@ pub struct Document {
     progress: HashMap<u64, (AnalysisState, f32)>,
     content_changed: Vec<u64>,
     editing: bool,
+    /// An archive to restore in the next editing cycle (the bytes and their document archive id).
+    restore: Option<(Arc<[u8]>, String)>,
+    /// The archive reader of a restore that uses the deprecated begin/endRestoringDocumentFromArchive
+    /// (a plug-in without `restoreObjectsFromArchive`) in place of begin/endEditing.
+    old_restore: Option<usize>,
+    /// How the last restore went (taken by [`Document::take_restore_result`]).
+    restore_result: Option<Result<(), String>>,
     _not_send: PhantomData<*mut ()>,
 }
 
@@ -900,6 +973,9 @@ impl Document {
             progress: HashMap::new(),
             content_changed: Vec::new(),
             editing: false,
+            restore: None,
+            old_restore: None,
+            restore_result: None,
             _not_send: PhantomData,
         };
         if let Some(missing) = doc.missing_function() {
@@ -970,16 +1046,105 @@ impl Document {
     fn begin(&mut self) {
         if !self.editing {
             self.editing = true;
-            dc!(self.beginEditing());
+            match self.old_restore {
+                Some(h) => {
+                    dc!(self.beginRestoringDocumentFromArchive(as_ref(h)));
+                }
+                None => {
+                    dc!(self.beginEditing());
+                }
+            }
         }
     }
 
     fn end(&mut self) {
         if self.editing {
             self.editing = false;
-            dc!(self.endEditing());
+            match self.old_restore.take() {
+                Some(h) => {
+                    let ok = dc!(self.endRestoringDocumentFromArchive(as_ref(h)));
+                    self.restore_result = Some(restored(ok, &self.info.name));
+                }
+                None => {
+                    dc!(self.endEditing());
+                }
+            }
             // Follow-up updates belong to the same undo frame (see `endEditing` in the header).
             dc!(self.notifyModelUpdates());
+        }
+    }
+
+    /// The plug-in's document controller (what a plug-in instance is bound to).
+    pub fn controller_ref(&self) -> ARADocumentControllerRef {
+        self.dc
+    }
+
+    /// The playback region of the graph region `key`, while it has one.
+    pub fn region_ref(&self, key: u64) -> Option<ARAPlaybackRegionRef> {
+        self.mods.get(&key).filter(|m| m.active).and_then(|m| m.region.as_ref()).map(|r| r.aref)
+    }
+
+    /// The region sequence of the graph sequence `key`.
+    pub fn sequence_ref(&self, key: u64) -> Option<ARARegionSequenceRef> {
+        self.seqs.get(&key).map(|s| s.aref)
+    }
+
+    /// The graph keys of the regions that have a playback region now.
+    pub fn regions(&self) -> Vec<u64> {
+        self.mods.iter().filter(|(_, m)| m.active && m.region.is_some()).map(|(k, _)| *k).collect()
+    }
+
+    /// The head and tail time (seconds) the plug-in says region `key` sounds beyond its bounds
+    /// (`(0, 0)` when it does not say; ARA 2.0's optional `getPlaybackRegionHeadAndTailTime`).
+    pub fn head_tail(&self, key: u64) -> (f64, f64) {
+        let Some(r) = self.region_ref(key) else { return (0.0, 0.0) };
+        let (mut head, mut tail) = (0.0f64, 0.0f64);
+        if dc!(self.getPlaybackRegionHeadAndTailTime(r, &mut head, &mut tail)).is_none() {
+            return (0.0, 0.0);
+        }
+        let ok = |t: f64| if t.is_finite() { t.clamp(0.0, 60.0) } else { 0.0 };
+        (ok(head), ok(tail))
+    }
+
+    /// Restores `archive` (written by [`Document::store`] of a plug-in whose factory gave
+    /// `archive_id`) in the next editing cycle that builds the graph ([`Document::sync`]), as ARA
+    /// asks: the objects are made, then the plug-in reads their saved state by persistent id.
+    pub fn restore_next_sync(&mut self, archive: Vec<u8>, archive_id: &str) {
+        self.restore = Some((archive.into(), archive_id.to_string()));
+    }
+
+    /// How the last restore went, once (`None`: none happened since the last call).
+    pub fn take_restore_result(&mut self) -> Option<Result<(), String>> {
+        self.restore_result.take()
+    }
+
+    /// The plug-in's whole document as an archive (`storeObjectsToArchive`, or the deprecated
+    /// `storeDocumentToArchive` of a plug-in without it). Not while editing.
+    pub fn store(&mut self) -> Result<Vec<u8>, String> {
+        if self.editing {
+            return Err("the document is being edited".into());
+        }
+        let host = self.shared.new_ref();
+        lock(&self.shared.archive_out).insert(host, Vec::new());
+        let ok = if { self.iface.storeObjectsToArchive }.is_some() {
+            dc!(self.storeObjectsToArchive(as_ref(host), std::ptr::null()))
+        } else {
+            dc!(self.storeDocumentToArchive(as_ref(host)))
+        };
+        let data = lock(&self.shared.archive_out).remove(&host).unwrap_or_default();
+        match ok {
+            Some(b) if b != kARAFalse => {
+                crate::ara_log!("{}: stored its ARA document ({} bytes)", self.info.name, data.len());
+                Ok(data)
+            }
+            Some(_) => {
+                crate::ara_log!("{}: storeObjectsToArchive failed", self.info.name);
+                Err("the plug-in could not store its document".into())
+            }
+            None => {
+                crate::ara_log!("{}: offers no way to store its document", self.info.name);
+                Err("the plug-in offers no way to store its document".into())
+            }
         }
     }
 
@@ -1138,6 +1303,16 @@ impl Document {
         if !self.differs(&g) {
             return report;
         }
+        // A saved document to restore: in this cycle, once the graph is built.
+        let reader = self.restore.take().map(|(data, id)| {
+            let host = self.shared.new_ref();
+            lock(&self.shared.archive_in).insert(host, (data, c_string(&id)));
+            if { self.iface.restoreObjectsFromArchive }.is_none() && { self.iface.beginRestoringDocumentFromArchive }.is_some() {
+                self.old_restore = Some(host);
+            }
+            host
+        });
+        let new_style = reader.is_some() && self.old_restore.is_none();
         self.begin();
         if self.name != g.name {
             let cname = c_string(&g.name);
@@ -1310,7 +1485,14 @@ impl Document {
             }
         }
         self.destroy_unused_sources();
+        if let Some(h) = reader.filter(|_| new_style) {
+            let ok = dc!(self.restoreObjectsFromArchive(as_ref(h), std::ptr::null()));
+            self.restore_result = Some(restored(ok, &self.info.name));
+        }
         self.end();
+        if let Some(h) = reader {
+            lock(&self.shared.archive_in).remove(&h);
+        }
         report
     }
 
@@ -1409,7 +1591,18 @@ impl Document {
             name: name.as_ptr(),
             persistentID: pid.as_ptr(),
         };
-        let aref = dc!(self.createAudioModification(src_ref, as_ref(host), &props)).unwrap_or(std::ptr::null_mut());
+        // A copy of a live modification (a duplicated or split clip) starts as its clone.
+        let origin = r.origin.filter(|o| *o != r.key).and_then(|o| self.mods.get(&o)).filter(|m| m.active && m.source == r.source).map(|m| m.aref);
+        let cloned = match origin {
+            Some(o) if { self.iface.cloneAudioModification }.is_some() => {
+                dc!(self.cloneAudioModification(o, as_ref(host), &props)).filter(|p| !p.is_null())
+            }
+            _ => None,
+        };
+        let aref = match cloned {
+            Some(a) => a,
+            None => dc!(self.createAudioModification(src_ref, as_ref(host), &props)).unwrap_or(std::ptr::null_mut()),
+        };
         if aref.is_null() {
             crate::ara_log!("{}: createAudioModification refused \"{}\"", self.info.name, r.name);
             return false;
@@ -1454,9 +1647,9 @@ impl Document {
         let color = r.color.map(|[r, g, b]| ARAColor { r, g, b });
         let props = ARAPlaybackRegionProperties {
             structSize: std::mem::size_of::<ARAPlaybackRegionProperties>(),
-            transformationFlags: kARAPlaybackTransformationNoChanges,
+            transformationFlags: r.transformation,
             startInModificationTime: r.start_in_source,
-            durationInModificationTime: r.duration,
+            durationInModificationTime: r.source_duration,
             startInPlaybackTime: r.start_in_song,
             durationInPlaybackTime: r.duration,
             musicalContextRef: self.context,
@@ -1482,6 +1675,24 @@ impl Document {
             m.region = Some(Region { aref, host, desc: r.clone() });
         }
         true
+    }
+}
+
+/// A restore's outcome from the plug-in's answer.
+fn restored(ok: Option<ARABool>, name: &str) -> Result<(), String> {
+    match ok {
+        Some(b) if b != kARAFalse => {
+            crate::ara_log!("{name}: restored its saved ARA document");
+            Ok(())
+        }
+        Some(_) => {
+            crate::ara_log!("{name}: could not read its saved ARA document (it restored what it could)");
+            Err("the plug-in could not read all of its saved state".into())
+        }
+        None => {
+            crate::ara_log!("{name}: offers no way to restore its document; its saved state is kept unread");
+            Err("the plug-in offers no way to restore its saved state".into())
+        }
     }
 }
 
@@ -1527,6 +1738,253 @@ impl Drop for Document {
         lock(documents()).remove(&self.key);
         uninitialise(&self.factory, &self.fac);
         crate::ara_log!("{}: ARA document \"{}\" closed", self.info.name, self.name);
+    }
+}
+
+// ---- plug-in instances bound to a document ------------------------------------------------------
+
+/// What binding a plug-in instance to a document controller gave
+/// (`IPlugInEntryPoint2::bindToDocumentControllerWithRoles`): the playback renderer, editor
+/// renderer and editor view interfaces of the roles assigned, each checked for size and
+/// functions. Used on the model thread only, like the [`Document`] (it is neither `Send` nor
+/// `Sync`); valid while the plug-in instance that gave it lives (see [`Extension::new`]).
+pub(crate) struct Extension {
+    name: String,
+    playback: Option<(ARAPlaybackRendererRef, ARAPlaybackRendererInterface)>,
+    editor: Option<(ARAEditorRendererRef, ARAEditorRendererInterface)>,
+    view: Option<(ARAEditorViewRef, ARAEditorViewInterface)>,
+    _not_send: PhantomData<*mut ()>,
+}
+
+impl std::fmt::Debug for Extension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Extension({}: playback {}, editor {}, view {})", self.name, self.playback.is_some(), self.editor.is_some(), self.view.is_some())
+    }
+}
+
+impl Extension {
+    /// Reads the extension a binding returned, for the roles `assigned`. Fails (with why) when it
+    /// is null or too small, or lacks an interface or function a role assigned needs.
+    ///
+    /// # Safety
+    /// `p` is null or what the plug-in's `bindToDocumentControllerWithRoles` returned; the plug-in
+    /// instance that returned it outlives the returned value and every call made through it.
+    pub(crate) unsafe fn new(p: *const ARAPlugInExtensionInstance, assigned: ARAPlugInInstanceRoleFlags, name: &str) -> Result<Extension, String> {
+        // SAFETY: per the contract, null or the plug-in's instance struct, its first `structSize`
+        // bytes readable.
+        let Some((inst, _)) = (unsafe { copy_versioned(p, kARAPlugInExtensionInstanceMinSize) }) else {
+            return Err("the plug-in gave no ARA extension when it was bound (bindToDocumentControllerWithRoles)".into());
+        };
+        let mut ext = Extension { name: name.to_string(), playback: None, editor: None, view: None, _not_send: PhantomData };
+        if assigned & kARAPlaybackRendererRole != 0 {
+            // SAFETY: null or the plug-in's static interface struct, valid while the instance lives.
+            let i = unsafe { copy_versioned(inst.playbackRendererInterface, kARAPlaybackRendererInterfaceMinSize) };
+            match i {
+                Some((i, _))
+                    if !{ inst.playbackRendererRef }.is_null() && { i.addPlaybackRegion }.is_some() && { i.removePlaybackRegion }.is_some() =>
+                {
+                    ext.playback = Some((inst.playbackRendererRef, i));
+                }
+                _ => return Err("the plug-in gave no usable ARA playback renderer".into()),
+            }
+        }
+        if assigned & kARAEditorRendererRole != 0 {
+            // SAFETY: as above.
+            let i = unsafe { copy_versioned(inst.editorRendererInterface, kARAEditorRendererInterfaceMinSize) };
+            if let Some((i, _)) = i.filter(|_| !{ inst.editorRendererRef }.is_null()) {
+                ext.editor = Some((inst.editorRendererRef, i));
+            }
+        }
+        if assigned & kARAEditorViewRole != 0 {
+            // SAFETY: as above.
+            let i = unsafe { copy_versioned(inst.editorViewInterface, kARAEditorViewInterfaceMinSize) };
+            if let Some((i, _)) = i.filter(|_| !{ inst.editorViewRef }.is_null()) {
+                ext.view = Some((inst.editorViewRef, i));
+            }
+        }
+        Ok(ext)
+    }
+
+    /// Whether it renders playback regions.
+    pub fn has_playback(&self) -> bool {
+        self.playback.is_some()
+    }
+
+    /// Whether it has an editor view to tell the selection.
+    pub fn has_view(&self) -> bool {
+        self.view.is_some()
+    }
+
+    /// Gives a playback region to its playback renderer (and its editor renderer, when it has one).
+    /// Only while the instance is not active (VST3 `setActive(false)`), as ARA asks.
+    pub fn add_region(&self, region: ARAPlaybackRegionRef) {
+        if let Some((r, i)) = &self.playback
+            && let Some(f) = { i.addPlaybackRegion }
+        {
+            // SAFETY: the instance's own function and renderer ref (alive per `new`), on the model
+            // thread, with a live playback region of the document it is bound to.
+            unsafe { f(*r, region) };
+        }
+        if let Some((r, i)) = &self.editor
+            && let Some(f) = { i.addPlaybackRegion }
+        {
+            // SAFETY: as above.
+            unsafe { f(*r, region) };
+        }
+    }
+
+    /// Takes a playback region back from its renderers (inactive instance only).
+    pub fn remove_region(&self, region: ARAPlaybackRegionRef) {
+        if let Some((r, i)) = &self.playback
+            && let Some(f) = { i.removePlaybackRegion }
+        {
+            // SAFETY: as in `add_region`.
+            unsafe { f(*r, region) };
+        }
+        if let Some((r, i)) = &self.editor
+            && let Some(f) = { i.removePlaybackRegion }
+        {
+            // SAFETY: as in `add_region`.
+            unsafe { f(*r, region) };
+        }
+    }
+
+    /// Tells its editor view what the host has selected: playback regions, region sequences and a
+    /// time range (seconds), as ARA's `notifySelection` describes.
+    pub fn notify_selection(&self, regions: &[ARAPlaybackRegionRef], sequences: &[ARARegionSequenceRef], range: Option<(f64, f64)>) {
+        let Some((v, i)) = &self.view else { return };
+        let Some(f) = ({ i.notifySelection }) else { return };
+        let range =
+            range.filter(|(s, d)| s.is_finite() && d.is_finite() && *d >= 0.0).map(|(start, duration)| ARAContentTimeRange { start, duration });
+        let sel = ARAViewSelection {
+            structSize: std::mem::size_of::<ARAViewSelection>(),
+            playbackRegionRefsCount: regions.len(),
+            playbackRegionRefs: if regions.is_empty() { std::ptr::null() } else { regions.as_ptr() },
+            regionSequenceRefsCount: sequences.len(),
+            regionSequenceRefs: if sequences.is_empty() { std::ptr::null() } else { sequences.as_ptr() },
+            timeRange: range.as_ref().map_or(std::ptr::null(), |r| r as *const ARAContentTimeRange),
+        };
+        // SAFETY: the view's own function and ref (alive per `new`), on the model thread; the
+        // selection and the arrays it points to live for the call.
+        unsafe { f(*v, &sel) };
+    }
+
+    /// Tells its editor view which region sequences the host hides (`notifyHideRegionSequences`).
+    pub fn hide_sequences(&self, sequences: &[ARARegionSequenceRef]) {
+        let Some((v, i)) = &self.view else { return };
+        let Some(f) = ({ i.notifyHideRegionSequences }) else { return };
+        // SAFETY: as in `notify_selection`; the array lives for the call.
+        unsafe { f(*v, sequences.len(), if sequences.is_empty() { std::ptr::null() } else { sequences.as_ptr() }) };
+    }
+}
+
+/// The ARA extension a plug-in instance's binding returned, not yet read. Only the FFI side that
+/// bound the instance can make one ([`RawExtension::new`]); a [`BoundInstance`] reads it and keeps
+/// it together with that instance.
+pub struct RawExtension(*const ARAPlugInExtensionInstance);
+
+impl RawExtension {
+    /// # Safety
+    /// `p` is null, or what `bindToDocumentControllerWithRoles` of the plug-in instance this value
+    /// is handed along with (to [`BoundInstance::new`]) returned: valid while that instance lives.
+    pub unsafe fn new(p: *const ARAPlugInExtensionInstance) -> RawExtension {
+        RawExtension(p)
+    }
+}
+
+/// A plug-in instance shared between the model thread (which made it and will destroy it) and the
+/// audio thread (which renders with it, never waiting for it).
+pub struct InstanceCell<P: ?Sized> {
+    inner: Mutex<Option<Box<P>>>,
+}
+
+impl<P: ?Sized> InstanceCell<P> {
+    /// Runs `f` on the instance unless the other thread holds it or it is gone (never waits:
+    /// for the audio thread).
+    pub fn try_with<R>(&self, f: impl FnOnce(&mut P) -> R) -> Option<R> {
+        let mut g = self.inner.try_lock().ok()?;
+        g.as_deref_mut().map(f)
+    }
+
+    /// Runs `f` on the instance, waiting for a block the audio thread is rendering with it
+    /// (model thread only). `None` once it is gone.
+    pub fn with<R>(&self, f: impl FnOnce(&mut P) -> R) -> Option<R> {
+        lock(&self.inner).as_deref_mut().map(f)
+    }
+
+    /// Whether the instance is still there.
+    pub fn alive(&self) -> bool {
+        lock(&self.inner).is_some()
+    }
+}
+
+/// A plug-in instance bound to an ARA document controller and the extension its binding gave,
+/// kept together so the extension is never used once the instance is gone: dropping this destroys
+/// the instance (on the model thread, where it was made, as ARA asks), the audio thread's share of
+/// it ([`BoundInstance::cell`]) then holding nothing. Neither `Send` nor `Sync`.
+pub struct BoundInstance<P: ?Sized> {
+    cell: Arc<InstanceCell<P>>,
+    ext: Extension,
+}
+
+impl<P: ?Sized> BoundInstance<P> {
+    /// Reads the extension the binding of `instance` gave for the roles `assigned` (see
+    /// [`Extension`]): fails with why when it is unusable (the instance is then destroyed here).
+    pub fn new(instance: Box<P>, raw: RawExtension, assigned: ARAPlugInInstanceRoleFlags, name: &str) -> Result<BoundInstance<P>, String> {
+        // SAFETY: `raw` came from the binding of `instance` (`RawExtension::new`'s contract), which
+        // this value keeps alive for as long as the extension is used (it is used only through
+        // `self`, and `Drop` destroys the instance, the extension going with `self`).
+        let ext = unsafe { Extension::new(raw.0, assigned, name) }?;
+        Ok(BoundInstance { cell: Arc::new(InstanceCell { inner: Mutex::new(Some(instance)) }), ext })
+    }
+
+    /// The instance, for the audio thread ([`InstanceCell::try_with`]) and the model thread.
+    pub fn cell(&self) -> Arc<InstanceCell<P>> {
+        self.cell.clone()
+    }
+
+    /// Runs `f` with the extension while the instance is alive (held for the call).
+    fn with_ext(&self, f: impl FnOnce(&Extension)) {
+        let g = lock(&self.cell.inner);
+        if g.is_some() {
+            f(&self.ext);
+        }
+    }
+
+    /// Whether it renders playback regions / has an editor view.
+    pub fn has_playback(&self) -> bool {
+        self.ext.has_playback()
+    }
+    pub fn has_view(&self) -> bool {
+        self.ext.has_view()
+    }
+
+    /// See [`Extension::add_region`] (only while the instance is not active).
+    pub fn add_region(&self, region: ARAPlaybackRegionRef) {
+        self.with_ext(|e| e.add_region(region));
+    }
+
+    /// See [`Extension::remove_region`] (only while the instance is not active).
+    pub fn remove_region(&self, region: ARAPlaybackRegionRef) {
+        self.with_ext(|e| e.remove_region(region));
+    }
+
+    /// See [`Extension::notify_selection`].
+    pub fn notify_selection(&self, regions: &[ARAPlaybackRegionRef], sequences: &[ARARegionSequenceRef], range: Option<(f64, f64)>) {
+        self.with_ext(|e| e.notify_selection(regions, sequences, range));
+    }
+
+    /// See [`Extension::hide_sequences`].
+    pub fn hide_sequences(&self, sequences: &[ARARegionSequenceRef]) {
+        self.with_ext(|e| e.hide_sequences(sequences));
+    }
+}
+
+impl<P: ?Sized> Drop for BoundInstance<P> {
+    fn drop(&mut self) {
+        // Waits for a block the audio thread renders with it, then destroys it here.
+        let instance = lock(&self.cell.inner).take();
+        drop(instance);
     }
 }
 

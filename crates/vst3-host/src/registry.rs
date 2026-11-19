@@ -595,6 +595,18 @@ pub fn instantiate(id: &str) -> Result<Box<dyn Plugin>, Vst3Error> {
     Ok(Box::new(instantiate_plugin(id)?))
 }
 
+/// Makes plug-in `id` and binds it to an ARA document controller (see [`crate::instantiate_ara`]).
+pub fn instantiate_ara(
+    id: &str,
+    dc: soundcraft_ara_host::sys::ARADocumentControllerRef,
+    known: i32,
+    assigned: i32,
+) -> Result<(Vst3Plugin, soundcraft_ara_host::RawExtension), Vst3Error> {
+    let (inst, info) = instantiate_raw(id)?;
+    let ext = inst.bind_ara(dc, known, assigned).map_err(|e| Vst3Error::Instantiate(id.to_string(), e))?;
+    Ok((Vst3Plugin::new(inst, info), ext))
+}
+
 pub fn instantiate_plugin(id: &str) -> Result<Vst3Plugin, Vst3Error> {
     let (inst, info) = instantiate_raw(id)?;
     let mut p = Vst3Plugin::new(inst, info);

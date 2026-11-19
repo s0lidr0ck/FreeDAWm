@@ -109,6 +109,11 @@ fn sized_strip(s: &Session, t: &Track, ch: usize, mb: usize, room: usize) -> Str
     st.routed_src.reserve(sources + routed);
     st.module_in.reserve(sources);
     st.inst_outs.sync(t, mb);
+    // Every audio track's room for ARA voices (a few KB), so a clip given to one later never
+    // makes the audio thread allocate.
+    if t.kind == TrackKind::Audio {
+        st.arabuf = vec![vec![0.0; mb]; ch];
+    }
     let clips = t.clips().iter().filter(|c| c.is_audio() && clip_fx_params(c).is_some()).count();
     if clips > 0 {
         st.clip_fx.reserve(clips);

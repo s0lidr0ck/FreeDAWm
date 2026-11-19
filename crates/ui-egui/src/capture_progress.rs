@@ -28,6 +28,7 @@ pub fn start(app: &mut SoundApp, params: &Value) -> Result<Value, String> {
     // Third-party plugins keep state the session can't see: the job renders through instances
     // of its own, which read it.
     app.capture_plugin_states();
+    app.prepare_ara_renders();
     match CaptureJob::new(&app.engine, params) {
         Ok(job) => {
             app.capture = Some(Running { job, loads: app.engine.loads() });

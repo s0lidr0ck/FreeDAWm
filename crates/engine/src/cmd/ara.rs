@@ -1,7 +1,7 @@
-//! ARA plug-ins on clips (Clip › ARA Plug-in…): `clip.ara_add` gives the selected audio clips to
-//! an ARA plug-in the VST3 scan found (it reads their audio and follows their edits, see
-//! [`crate::ara`]); `clip.ara_remove` takes them back. One undo step each. Stage one: the clips
-//! still play their own audio.
+//! ARA plug-ins on clips (Clip › ARA Plug-ins…, the clip menu's ARA submenu): `clip.ara_add` gives
+//! the selected audio clips to an ARA plug-in the VST3 scan found (it reads their audio, follows
+//! their edits and the clips play through it, see [`crate::ara`]); `clip.ara_bypass` bypasses it;
+//! `clip.ara_remove` takes them back. One undo step each.
 
 use super::*;
 use crate::cmd;
@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add ARA Plug-in",
             [],
             None,
-            "{clips?, plugin: \"vst3:<class id>\" (an ARA 2 plug-in the scan found)} — the audio clips are given to the ARA plug-in, which reads their audio from the session and follows their edits; they still play their own audio (playback through ARA is not built yet). Stretched, warped, reversed, looped or transposed clips are left out",
+            "{clips?, plugin: \"vst3:<class id>\" (an ARA 2 plug-in the scan found)} — the audio clips are given to the ARA plug-in, which reads their audio from the session, follows their edits and plays them. Warped, reversed, looped or transposed clips are left out, and stretched ones unless the plug-in supports time-stretch",
             ara_available,
             add
         ),
@@ -59,38 +59,42 @@ fn has_ara_clip(e: &Engine) -> std::result::Result<(), String> {
     if any { Ok(()) } else { Err("Select a clip given to an ARA plug-in".into()) }
 }
 
-/// The plug-in's display name, if `id` is an ARA plug-in this host can use.
-fn ara_plugin(id: &str) -> Option<String> {
+/// The plug-in's display name and the playback transformations it supports, if `id` is an ARA
+/// plug-in this host can use.
+fn ara_plugin(id: &str) -> Option<(String, i32)> {
     #[cfg(test)]
     if let Some(name) = id.strip_prefix("test:") {
-        return Some(name.to_string());
+        return Some((name.to_string(), soundcraft_ara_host::sys::kARAPlaybackTransformationTimestretch));
     }
-    soundcraft_vst3_host::ara_plugins().into_iter().find(|d| d.id == id).map(|d| d.ara.map(|a| a.name).filter(|n| !n.is_empty()).unwrap_or(d.name))
+    soundcraft_vst3_host::ara_plugins().into_iter().find(|d| d.id == id).map(|d| {
+        let flags = d.ara.as_ref().map_or(0, |a| a.transformations);
+        (d.ara.map(|a| a.name).filter(|n| !n.is_empty()).unwrap_or(d.name), flags)
+    })
 }
 
 fn add(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "clip.ara_add";
     let plugin = str_param(p, "plugin").ok_or_else(|| bad(C, "`plugin` required"))?.to_string();
-    let name = ara_plugin(&plugin).ok_or_else(|| bad(C, format!("`{plugin}` is not an ARA 2 plug-in the scan found")))?;
+    let (name, flags) = ara_plugin(&plugin).ok_or_else(|| bad(C, format!("`{plugin}` is not an ARA 2 plug-in the scan found")))?;
     let ids = clip_ids_param(e, p);
     let s = e.session_mut();
     let (mut given, mut left_out) = (0, Vec::new());
     for id in ids {
         let Some(c) = s.find_clip_mut(id) else { continue };
-        if let Some(why) = crate::ara::unsupported(c) {
+        if let Some(why) = crate::ara::unsupported(c, flags) {
             left_out.push(json!({"clip": id.0, "why": why}));
             continue;
         }
-        c.ara = Some(ClipAra { plugin: plugin.clone(), name: name.clone(), ..ClipAra::default() });
+        c.ara = Some(ClipAra { plugin: plugin.clone(), name: name.clone(), origin: Some(id.0), ..ClipAra::default() });
         given += 1;
     }
     if given == 0 {
         return Err(bad(
             C,
-            "no audio clip that ARA can take is selected (stretched, warped, reversed, looped or transposed clips are not given to ARA plug-ins yet)",
+            "no audio clip that ARA can take is selected (warped, reversed, looped or transposed clips cannot be given to an ARA plug-in, nor stretched ones unless it supports time-stretch)",
         ));
     }
-    e.message(format!("{name} reads {given} clip(s) through ARA; they still play their own audio (playback through ARA is not built yet)"));
+    e.message(format!("{name} has {given} clip(s) through ARA: they play through it"));
     Ok(json!({"plugin": plugin, "name": name, "clips": given, "left_out": left_out}))
 }
 

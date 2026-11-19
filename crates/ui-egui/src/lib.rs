@@ -1560,6 +1560,9 @@ impl SoundApp {
         if id == capture_progress::ID && open_behind_window {
             return capture_progress::start(self, &params);
         }
+        if id.starts_with("file.bounce") || matches!(id, "track.freeze" | "track.commit" | "track.bounce" | "edit.consolidate" | "process.run") {
+            self.prepare_ara_renders();
+        }
         if id.starts_with("session.save")
             || id.starts_with("file.bounce")
             || matches!(id, "track.freeze" | "track.commit" | "track.bounce" | "track.make_inactive" | "track.capture_multisample")
@@ -2296,6 +2299,9 @@ impl SoundApp {
     /// Reads every live third-party plugin's state and stores it on its insert
     /// (`mix.insert_state`), so saves and bounces include it.
     pub fn capture_plugin_states(&mut self) {
+        // The ARA plug-ins' documents go into the session (saves, autosaves, bounces).
+        self.ara.sync(&self.engine);
+        self.ara.store_archives(&mut self.engine);
         self.sync_player();
         let Some(p) = &self.player else { return };
         let clips = p.capture_clip_states();
@@ -2312,6 +2318,17 @@ impl SoundApp {
         // The hosted Clip Effects modules' states too, on their clips.
         for (slot, data) in clips {
             self.store_clip_state(slot, &data);
+        }
+    }
+
+    /// Renders every clip given to an ARA plug-in through it, offline, unless its last render still
+    /// fits (see `AraHost::prepare_offline`): before a bounce, freeze, commit or consolidate,
+    /// which then hear the plug-in as playback does.
+    pub(crate) fn prepare_ara_renders(&mut self) {
+        self.ara.sync(&self.engine);
+        let n = self.ara.prepare_offline(&mut self.engine);
+        if n > 0 {
+            soundcraft_engine::ara::log_line(&format!("{n} clip(s) rendered through their ARA plug-in for an offline render"));
         }
     }
 
