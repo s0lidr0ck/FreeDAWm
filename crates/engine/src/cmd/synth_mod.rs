@@ -634,6 +634,37 @@ mod tests {
         assert!(old.modulation.is_empty());
     }
 
+    /// Every factory preset of the three synths loads through `mix.instrument` (the preset menu)
+    /// and `mix.module_preset` (the browser) with its values and its whole patch, as the JSON
+    /// says, and the session keeps both through a save.
+    #[test]
+    fn every_factory_preset_round_trips_through_the_commands() {
+        for plugin in ["subtractive_synth", "wavetable_synth", "fm_synth"] {
+            let (mut e, t) = synth_track(plugin);
+            let info = soundcraft_dsp::plugin_info(plugin).unwrap();
+            for (name, json) in soundcraft_dsp::plugins::fs::factory_presets(plugin) {
+                let p = soundcraft_dsp::plugins::fs::FsPreset::parse(json, info).unwrap();
+                let v: Value = serde_json::from_str(json).unwrap();
+                let patch = v.get("modulation").cloned().unwrap_or(Value::Null);
+                let want: SynthMod = if patch.is_null() { SynthMod::default() } else { serde_json::from_value(patch.clone()).unwrap() };
+                for (cmd, args) in [
+                    ("mix.instrument", json!({"track": t, "plugin": plugin, "params": p.values, "modulation": patch, "preset": name})),
+                    ("mix.module_preset", json!({"track": t, "module": "instrument", "params": p.values, "modulation": patch, "preset": name})),
+                ] {
+                    e.execute(cmd, &args).unwrap_or_else(|err| panic!("{plugin} {name} via {cmd}: {err}"));
+                    let ins = inst(&e, t);
+                    for (k, x) in &p.values {
+                        assert_eq!(ins.params.get(k), Some(x), "{plugin} {name} via {cmd}: {k}");
+                    }
+                    assert_eq!(ins.modulation, want, "{plugin} {name} via {cmd}: its patch");
+                    assert_eq!(ins.prepared.is_some(), !want.is_empty(), "{plugin} {name} via {cmd}");
+                    let back: soundcraft_model::Session = serde_json::from_str(&serde_json::to_string(e.session()).unwrap()).unwrap();
+                    assert_eq!(back.track(TrackId(t)).unwrap().instrument.as_ref().unwrap().modulation, want, "{plugin} {name}: saved");
+                }
+            }
+        }
+    }
+
     #[test]
     fn surprise_is_deterministic_and_stays_in_safe_ranges() {
         for plugin in ["subtractive_synth", "wavetable_synth", "fm_synth"] {

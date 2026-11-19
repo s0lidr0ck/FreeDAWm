@@ -98,7 +98,7 @@ fn every_preset_is_well_formed_and_parses() {
         assert_eq!(&p.name, name);
         assert_eq!(p.values.len(), WAVETABLE_INFO.params.len());
     }
-    assert_eq!(crate::plugins::fs::factory_presets(WAVETABLE_INFO.id).len(), presets::WAVETABLE_PRESETS.len() + presets::PATCHED_PRESETS.len());
+    assert_eq!(crate::plugins::fs::factory_presets(WAVETABLE_INFO.id).len(), presets::WAVETABLE_PRESETS.len() + presets::PATCHED_PRESETS.len() + super::suite::SUITE.len());
 }
 
 /// The band limit at work: a saw-like frame at 2.6 kHz read at the level `level_for` picks

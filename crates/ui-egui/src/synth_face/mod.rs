@@ -353,12 +353,19 @@ pub fn step_preset(app: &mut SoundApp, track: TrackId, info: &soundcraft_dsp::Pl
 pub fn preset_menu(app: &mut SoundApp, ui: &mut Ui, track: TrackId, info: &soundcraft_dsp::PluginInfo) {
     for (group, list) in crate::fs_presets::factory_groups(info) {
         ui.menu_button(group, |ui| {
-            for (name, json) in list {
-                if ui.button(*name).clicked() {
-                    recall(app, track, info, name, json);
-                    ui.close();
-                }
-            }
+            egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() - 80.0).max(160.0)).show(ui, |ui| {
+                crate::fs_presets::tiered_rows(ui, list, |ui, name, json| {
+                    let b = ui.button(name);
+                    let b = match crate::fs_presets::preset_field(json, "desc") {
+                        Some(d) => b.on_hover_text(d.replace("\\\"", "\"")),
+                        None => b,
+                    };
+                    if b.clicked() {
+                        recall(app, track, info, name, json);
+                        ui.close();
+                    }
+                });
+            });
         });
     }
     let users = crate::preset_house::user_names(app, info.id);

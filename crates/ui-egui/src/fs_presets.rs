@@ -57,6 +57,37 @@ pub fn factory_modulation(json: &str) -> Option<Value> {
     serde_json::from_str::<Value>(json).ok()?.get("modulation").filter(|m| !m.is_null()).cloned()
 }
 
+/// Text field `key` of a factory preset's JSON (`"tier"`, `"desc"`) as it is written there,
+/// found without parsing (the menus ask every frame); `None` when it has none.
+pub fn preset_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let open = format!("\"{key}\":\"");
+    let start = json.find(&open)? + open.len();
+    let rest = json.get(start..)?;
+    let mut escaped = false;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '\\' if !escaped => escaped = true,
+            '"' if !escaped => return rest.get(..i),
+            _ => escaped = false,
+        }
+    }
+    None
+}
+
+/// The presets of one group's submenu: a small heading wherever the tier changes (Simple,
+/// Expected, Special, Wild: the built-in synths' presets carry one), then `row` for each.
+pub(crate) fn tiered_rows(ui: &mut egui::Ui, list: &[(&'static str, &'static str)], mut row: impl FnMut(&mut egui::Ui, &'static str, &'static str)) {
+    let mut last: Option<&str> = None;
+    for (name, json) in list {
+        let tier = preset_field(json, "tier");
+        if let Some(t) = tier.filter(|t| last != Some(*t)) {
+            ui.label(egui::RichText::new(t).small().weak());
+        }
+        last = tier;
+        row(ui, name, json);
+    }
+}
+
 /// A plugin's factory presets in one group: `(group, [(name, json)])`.
 pub type FactoryGroup = (String, Vec<(&'static str, &'static str)>);
 
@@ -99,8 +130,8 @@ pub(crate) fn factory_menu(
     for (group, list) in groups {
         ui.menu_button(group, |ui| {
             egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() - 80.0).max(160.0)).show(ui, |ui| {
-                for (name, json) in list {
-                    if ui.button(*name).clicked() {
+                tiered_rows(ui, list, |ui, name, json| {
+                    if ui.button(name).clicked() {
                         if let Some((preset, params)) = factory_recall(info, name, json) {
                             let r = app.run("mix.module_params", json!({"track": track.0, "module": module.0, "params": params, "preset": preset}));
                             if let Err(e) = r {
@@ -109,7 +140,7 @@ pub(crate) fn factory_menu(
                         }
                         ui.close();
                     }
-                }
+                });
             });
         });
     }
@@ -125,7 +156,7 @@ pub(crate) fn factory_menu(
 pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, track: soundcraft_model::TrackId, info: &PluginInfo) {
     for (group, list) in factory_groups(info) {
         ui.menu_button(group, |ui| {
-            for (name, json) in list {
+            tiered_rows(ui, list, |ui, name, json| {
                 ui.horizontal(|ui| {
                     let what = format!("preset:{}:{name}", info.id);
                     let on = app.audition.playing.as_deref() == Some(what.as_str());
@@ -136,9 +167,14 @@ pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, tra
                     {
                         crate::audition::preset(app, voice, name);
                     }
-                    if ui.button(*name).clicked() {
-                        if let Some((_, params)) = factory_recall(info, name, json) {
-                            let mut args = json!({"track": track.0, "plugin": info.id, "params": params});
+                    let load = ui.button(name);
+                    let load = match preset_field(json, "desc") {
+                        Some(d) => load.on_hover_text(d.replace("\\\"", "\"")),
+                        None => load,
+                    };
+                    if load.clicked() {
+                        if let Some((preset, params)) = factory_recall(info, name, json) {
+                            let mut args = json!({"track": track.0, "plugin": info.id, "params": params, "preset": preset});
                             // A built-in synth's preset may patch its modulation matrix too.
                             if let Some(m) = factory_modulation(json) {
                                 args["modulation"] = m;
@@ -150,7 +186,7 @@ pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, tra
                         ui.close();
                     }
                 });
-            }
+            });
         });
     }
 }

@@ -195,7 +195,15 @@ fn the_preset_display_steps_through_the_factory_presets() {
     step(&mut h);
     step(&mut h);
     let ins = h.state().engine.session().track(t).unwrap().instrument.clone().unwrap();
-    assert_eq!(ins.preset, "Round Bass");
-    assert_eq!(ins.params.get("osc2_semitones").copied(), Some(-12.0));
+    // The menu's first preset: Init, at the suite's level.
+    assert_eq!(ins.preset, "Init");
+    assert_eq!(ins.params.get("osc2_semitones").copied(), Some(0.0));
+    // The next one names its macros and brings their patch with it.
+    h.get_by_label("Next preset").click();
+    step(&mut h);
+    step(&mut h);
+    let ins = h.state().engine.session().track(t).unwrap().instrument.clone().unwrap();
+    assert_eq!(ins.preset, "Init for Patching");
+    assert_eq!(ins.modulation.macro_name(0), "Tone");
     let _ = h.get_by_label("Presets");
 }

@@ -3,7 +3,7 @@
 //! the controls do, checked by tests for level and range). No samples.
 
 use super::WAVETABLE_INFO;
-use crate::plugins::synth::presets::{PatchedPreset, SynthPreset, pairs_for, patched, patched_pairs_for, preset};
+use crate::plugins::synth::presets::{PatchedPreset, SynthPreset, menu_pairs, patched, preset};
 use std::sync::OnceLock;
 
 // Tables: 0 Classic, 1 Harmonic Sweep, 2 Pulse Width, 3 Sync Saw, 4 Sync Square, 5 Vowels,
@@ -302,12 +302,9 @@ pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
     ),
 ];
 
-/// The factory presets as `(name, json)` pairs, in menu order (built once).
+/// The factory presets as `(name, json)` pairs, in menu order (built once): by group
+/// ([`super::suite::GROUPS`]), then by tier, the first presets before the suite's within a tier.
 pub fn factory_presets() -> &'static [(&'static str, &'static str)] {
     static BUILT: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let mut v = pairs_for(&WAVETABLE_INFO, &WAVETABLE_PRESETS);
-        v.extend(patched_pairs_for(&WAVETABLE_INFO, &PATCHED_PRESETS));
-        v
-    })
+    BUILT.get_or_init(|| menu_pairs(&WAVETABLE_INFO, &super::suite::GROUPS, &WAVETABLE_PRESETS, &[&PATCHED_PRESETS, &super::suite::SUITE]))
 }
