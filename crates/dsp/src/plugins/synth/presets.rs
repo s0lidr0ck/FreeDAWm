@@ -368,10 +368,13 @@ pub(crate) fn json_for(info: &crate::PluginInfo, p: &SynthPreset) -> String {
 
 /// The factory presets as `(name, json)` pairs, in menu order (built once): by group
 /// ([`super::suite::GROUPS`]), then by tier, the first presets ([`SYNTH_PRESETS`],
-/// [`PATCHED_PRESETS`]) before the suite's ([`super::suite::SUITE`]) within a tier.
+/// [`PATCHED_PRESETS`]) before the suite's ([`super::suite::SUITE`]) within a tier (the showcase set,
+/// [`super::showcase::SHOWCASE`], is its own group, "Patched").
 pub fn factory_presets() -> &'static [(&'static str, &'static str)] {
     static BUILT: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
-    BUILT.get_or_init(|| menu_pairs(&SYNTH_INFO, &super::suite::GROUPS, &SYNTH_PRESETS, &[&PATCHED_PRESETS, &super::suite::SUITE]))
+    BUILT.get_or_init(|| {
+        menu_pairs(&SYNTH_INFO, &super::suite::GROUPS, &SYNTH_PRESETS, &[&PATCHED_PRESETS, &super::suite::SUITE, &super::showcase::SHOWCASE])
+    })
 }
 
 /// A factory preset that patches the modulation matrix: its parameters, its slots
@@ -591,7 +594,7 @@ mod tests {
         }
         assert_eq!(
             crate::plugins::fs::factory_presets(SYNTH_INFO.id).len(),
-            SYNTH_PRESETS.len() + PATCHED_PRESETS.len() + super::super::suite::SUITE.len()
+            SYNTH_PRESETS.len() + PATCHED_PRESETS.len() + super::super::suite::SUITE.len() + super::super::showcase::SHOWCASE.len()
         );
     }
 }

@@ -303,8 +303,11 @@ pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
 ];
 
 /// The factory presets as `(name, json)` pairs, in menu order (built once): by group
-/// ([`super::suite::GROUPS`]), then by tier, the first presets before the suite's within a tier.
+/// ([`super::suite::GROUPS`]), then by tier, the first presets before the suite's within a tier (the showcase set,
+/// [`super::showcase::SHOWCASE`], is its own group, "Patched").
 pub fn factory_presets() -> &'static [(&'static str, &'static str)] {
     static BUILT: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
-    BUILT.get_or_init(|| menu_pairs(&WAVETABLE_INFO, &super::suite::GROUPS, &WAVETABLE_PRESETS, &[&PATCHED_PRESETS, &super::suite::SUITE]))
+    BUILT.get_or_init(|| {
+        menu_pairs(&WAVETABLE_INFO, &super::suite::GROUPS, &WAVETABLE_PRESETS, &[&PATCHED_PRESETS, &super::suite::SUITE, &super::showcase::SHOWCASE])
+    })
 }

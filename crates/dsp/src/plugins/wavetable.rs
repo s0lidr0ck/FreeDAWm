@@ -21,6 +21,7 @@ pub mod import;
 pub mod presets;
 #[cfg(test)]
 mod reference;
+pub mod showcase;
 pub mod suite;
 pub mod tables;
 pub mod user;

@@ -93,7 +93,7 @@ fn every_preset_is_well_formed_and_parses() {
     }
     assert_eq!(
         crate::plugins::fs::factory_presets(FM_INFO.id).len(),
-        presets::FM_PRESETS.len() + presets::PATCHED_PRESETS.len() + super::suite::SUITE.len()
+        presets::FM_PRESETS.len() + presets::PATCHED_PRESETS.len() + super::suite::SUITE.len() + super::showcase::SHOWCASE.len()
     );
 }
 

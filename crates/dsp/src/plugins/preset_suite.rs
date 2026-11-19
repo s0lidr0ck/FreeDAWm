@@ -19,8 +19,26 @@ fn suite_of(plugin: &str) -> (&'static [PatchedPreset], &'static [&'static str])
     }
 }
 
+/// The showcase set of `plugin`: the "Patched" group, presets whose point is the patching.
+fn showcase_of(plugin: &str) -> &'static [PatchedPreset] {
+    match plugin {
+        "subtractive_synth" => &synth::showcase::SHOWCASE,
+        "wavetable_synth" => &wavetable::showcase::SHOWCASE,
+        _ => &fm::showcase::SHOWCASE,
+    }
+}
+
+/// The group the showcase set is listed under in every synth's menu.
+const SHOWCASE_GROUP: &str = "Patched";
+
+/// A preset of the suite or the showcase set (the presets added for the release, held to the
+/// suite's bars), not one of the first presets whose sound is pinned.
 fn is_new(p: &Preset) -> bool {
-    suite_of(p.plugin).0.iter().any(|s| s.preset.name == p.name)
+    suite_of(p.plugin).0.iter().chain(showcase_of(p.plugin)).any(|s| s.preset.name == p.name)
+}
+
+fn is_showcase(p: &Preset) -> bool {
+    showcase_of(p.plugin).iter().any(|s| s.preset.name == p.name)
 }
 
 /// Runs `f` over every preset of every synth on a few threads; returns what it complained of.
@@ -77,7 +95,7 @@ fn every_synth_has_a_full_suite_in_four_tiers_with_unique_names() {
         assert!(order.windows(2).all(|w| w[0] <= w[1]), "{id}: menu order");
         assert_eq!(list.first().map(|p| p.name.as_str()), Some("Init"), "{id}: Init first");
         let info = crate::plugin_info(id).unwrap();
-        for s in suite {
+        for s in suite.iter().chain(showcase_of(id)) {
             let p = &s.preset;
             for (k, v) in p.set {
                 let pi = info.param(k).unwrap_or_else(|| panic!("{id} {}: {k}", p.name));
@@ -178,6 +196,50 @@ fn every_named_macro_is_clearly_heard() {
                     .then(|| format!("{} {}: macro {} ({}) is not clearly heard: {score:.2} ({what})", p.plugin, p.name, i + 1, p.macros[i].0))
             })
             .collect()
+    }));
+}
+
+/// The showcase set ("Patched" in each synth's menu) shows off the patching: a dozen or more
+/// presets per synth, all in that group and only they, in the Special and Wild tiers, each with
+/// four named macros and at least three slots that are each clearly heard when their source
+/// moves, from at least three different sources ([`lab::slot_effect`]: the preset against itself
+/// with that slot taken out, the source at the end of its travel, scored by [`lab::audible`] on
+/// the same line the macros meet).
+#[test]
+fn every_showcase_preset_has_three_sources_clearly_heard() {
+    for id in lab::SYNTHS {
+        let set = showcase_of(id);
+        assert!((12..=16).contains(&set.len()), "{id}: {} showcase presets", set.len());
+        let list = lab::presets(id);
+        for p in &list {
+            assert_eq!(p.group == SHOWCASE_GROUP, is_showcase(p), "{id} {}: the {SHOWCASE_GROUP} group is the showcase set", p.name);
+        }
+        for s in set {
+            let p = &s.preset;
+            assert!(matches!(p.tier, Tier::Special | Tier::Wild), "{id} {}", p.name);
+            assert_eq!(s.macros.len(), 4, "{id} {}: four named macros", p.name);
+            assert!(s.slots.len() >= 3, "{id} {}", p.name);
+        }
+    }
+    check(each(|p| {
+        if !is_showcase(p) {
+            return Vec::new();
+        }
+        let mut heard = std::collections::BTreeSet::new();
+        let mut count = 0;
+        for (i, (source, dest, amount)) in p.slot_list.iter().enumerate() {
+            let Some((score, what)) = lab::slot_effect(p, i) else { return vec![format!("{} {}: slot {i} does not render", p.plugin, p.name)] };
+            eprintln!("{} {} slot {} ({source} -> {dest} {amount}): {score:.2}, {what}", p.plugin, p.name, i + 1);
+            if score >= 1.0 {
+                count += 1;
+                heard.insert(source.clone());
+            }
+        }
+        if count < 3 || heard.len() < 3 {
+            vec![format!("{} {}: {count} slots clearly heard, from {} sources ({heard:?})", p.plugin, p.name, heard.len())]
+        } else {
+            Vec::new()
+        }
     }));
 }
 

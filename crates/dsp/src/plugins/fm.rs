@@ -20,6 +20,7 @@ use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
 pub mod presets;
 #[cfg(test)]
 mod reference;
+pub mod showcase;
 pub mod suite;
 
 /// Operator frequency ratios: 0.5, then 1 to 16.

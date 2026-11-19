@@ -15,7 +15,7 @@
 use super::presets::{PatchedPreset, Tier::*, suite};
 
 /// The menu's groups, in order.
-pub const GROUPS: [&str; 9] = ["Basics", "Bass", "Lead", "Pad", "Keys", "Pluck", "Brass & Strings", "Texture", "Effects"];
+pub const GROUPS: [&str; 10] = ["Basics", "Patched", "Bass", "Lead", "Pad", "Keys", "Pluck", "Brass & Strings", "Texture", "Effects"];
 
 /// The suite, as listed (the menu sorts it by group and tier).
 pub static SUITE: [PatchedPreset; 49] = [

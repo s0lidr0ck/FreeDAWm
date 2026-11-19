@@ -17,6 +17,7 @@ use crate::{Category, ParamInfo, Plugin, PluginInfo, Unit, db_to_gain};
 pub mod presets;
 #[cfg(test)]
 mod reference;
+pub mod showcase;
 pub mod suite;
 
 pub(crate) const MAX_EVENTS: usize = 512;

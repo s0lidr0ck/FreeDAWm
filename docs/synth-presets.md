@@ -1,7 +1,8 @@
 # The synths' factory presets
 
 Burley (the subtractive synth), Cicada (the wavetable synth) and Steeple (the FM synth) each come
-with a suite of factory presets: Burley 68, Cicada 66, Steeple 68.
+with a suite of factory presets: Burley 81, Cicada 79, Steeple 81. Thirteen of each are the
+**showcase set** (the **Patched** group, below): presets whose whole point is the patching.
 
 **Designed by measurement; tuned by ear later.** Nothing in this suite was listened to. Every
 preset was written from what its controls do and then measured by the preset lab
@@ -12,8 +13,9 @@ full. Expect the presets to be retuned by ear before or after release.
 ## How the menu is organised
 
 Groups by **type** (Basics, Bass, Lead, Pad, Keys, Pluck, and per synth Brass & Strings, Bells,
-Mallets, Brass, Percussion, Texture, Effects), with the **tier** shown as a small heading inside
-each group's submenu, in this order:
+Mallets, Brass, Percussion, Texture, Effects), plus **Patched** (the showcase set, second in
+every synth's menu, right after Basics), with the **tier** shown as a small heading inside each
+group's submenu, in this order:
 
 | Tier | What it is |
 |---|---|
@@ -33,6 +35,129 @@ keep their sound exactly: their reference fingerprints are pinned. They were sor
 tiers and groups, and are quieter than the suite (about -16 to -34 dBFS on the chord against the
 suite's -13); a few of Steeple's touch -0.1 dBFS at full velocity in the high register.
 
+## The showcase set: Patched
+
+Before this set, only a handful of presets showed what the modulation matrix can do. Counted on
+2026-11-19 (`preset_report --patching`, and `--slots` for what each cable does when its source
+moves, scored on the same clearly-heard line as the macros, below):
+
+| Synth | Presets | With any cable (beyond the macros) | With 3 or more cables | From 3 or more sources | Cables | Cables clearly heard | Presets with 3 cables clearly heard | ...from 3 sources |
+|---|---|---|---|---|---|---|---|---|
+| Burley | 68 | 27 | 12 | 6 | 61 | 41 | 7 | 3 |
+| Cicada | 66 | 24 | 10 | 5 | 60 | 33 | 3 | 0 |
+| Steeple | 68 | 24 | 13 | 7 | 57 | 31 | 4 | 1 |
+
+Cables by source then: Burley Amp Env 1, Env 2 10, LFO 6, Velocity 9, Wheel 16, Key 4, Random 15;
+Cicada Env 2 13, LFO 9, Velocity 7, Wheel 14, Key 4, Random 13; Steeple Env 2 15, LFO 3, Velocity
+10, Wheel 12, Key 4, Random 13. By destination they went mostly to the obvious places: Burley's
+cutoff (18 of 61), Cicada's position and Warp (39 of 60), Steeple's modulator levels (24 of 57).
+The key and the LFO on anything but the filter were barely used.
+
+The **Patched** group adds thirteen presets per synth (nine in Special: two basses, two leads,
+keys or a pluck, pads, brass or strings; four in Wild: evolving and wild textures, Macro 1 taking
+each from tame to wild). In every one several sources do something audible at once, and the
+patches are the kind a player finds by playing: velocity on more than loudness (the vibrato's
+depth, the cross-modulation, how far Env 2 sweeps, the drawbars, the feedback), the mod wheel
+bringing in wobble, tremolo, sync wobble or an octave climb, the key making low notes snap harder
+or high notes thinner, per-note random voicing every note a little differently, Env 2 on unusual
+places (the noise, the sub, the resonance, the vibrato's depth so it blooms in late, the level
+for a brass swell, the Warp for an FM key click), the LFO on the oscillator mix, the stereo
+spread, the table position, a fixed operator's frequency. Several of them modulate modulation:
+velocity or Env 2 on the LFO's depth, velocity on Env 2's depth, the wheel on the LFO's depth and
+rate. Every preset has four named macros, and each macro moves several things together, often a
+cable's depth (Wobble sets the LFO's depth before the wheel adds its own; Bloom how deep the late
+vibrato goes). Each description says in plain words what to play to hear it: play harder, push
+the wheel, hold a note, play high or low.
+
+**What holds them** (`crates/dsp/src/plugins/preset_suite.rs`): every bar the rest of the suite
+meets (the held chord's level window or a percussive preset's peak line, peaks under -1 dBFS in
+every macro and wheel state, every named macro clearly heard, little DC, aliasing at C6 and C7
+under -30 dB, melodic Special presets playing the key), and
+`every_showcase_preset_has_three_sources_clearly_heard`: twelve to sixteen per synth, all in the
+Patched group and only they, Special or Wild, four named macros each, and at least three cables
+that are each clearly heard when their source moves, from at least three different sources. A
+cable is measured by `preset_lab::slot_effect`: the preset against itself with that cable taken
+out, the source at the end of the travel a player reaches (every note at velocity 127; the wheel
+at full; the music two octaves up and two octaves down for the key; eight notes in turn, each a
+new value, for random; Env 2, the amp envelope and the LFO move by themselves), scored by the same
+`preset_lab::audible` as the macros (brightness by 25 %, a band or the level by 6 dB, a
+modulation's depth or rate by a factor of two, a semitone, the width by 30 %, an envelope time by
+a factor of two). The first presets' fingerprints are untouched and the rest of the suite sounds
+as before.
+
+**Measured on 2026-11-19, after:** of the showcase set's 193 cables, 192 cross the line (the one
+under it, Cicada's Storm Shutter's random on the position, scores 0.98; that preset has four
+others); every preset has at least four cables heard from at least four different sources (28 of
+the 39 from five). Median cable score 2.1 (Burley), 2.3 (Cicada), 3.4 (Steeple); every macro at
+least 1.08, medians 3.2, 2.8 and 3.7. Counting the
+whole menu now (`--patching`): Burley 40 presets with a cable, 25 with three or more, 19 from
+three or more sources; Cicada 37, 23, 18; Steeple 37, 26, 20. The showcase's held chords sit at
+-18.8 dBFS on average for Burley (-26.0 to -12.8, its basses and plucks held by their peaks with
+velocity and the macros up), -16.0 for Cicada and -14.9 for Steeple; worst peak -1.2 dBFS; worst
+aliasing -34.0 dB (Burley), -35.2 (Cicada) and -54.8 (Steeple); at most 2.7 times Init's cost.
+
+**Hearing them:** `cargo run --release -p soundcraft-dsp --example preset_audition -- <dir>
+<synth id> "<name>"...` plays a showcase preset's phrase (a bass riff, a lead line, chords, a
+broken chord or hits, from its description) soft, then hard, then with the wheel swept up and back
+down, then with Macro 1 at 0 % and at 100 %.
+
+Each showcase preset's cables and macros as measured (1.0 is the clearly-heard line; the full
+descriptions, with what to play, are in the table of every preset below):
+
+**Burley**
+
+| Preset | Tier | Cables: source → knob (clearly-heard score when the source moves) | Macros (score) |
+|---|---|---|---|
+| Hush Puppy Bass | Special | Velocity → cutoff (3.9), Random → cutoff (12.0), Key → filter_env_amount (2.1), Wheel → lfo_cutoff (3.1), Wheel → lfo_rate (2.6) | Bite (12.0), Growl (12.0), Weight (2.6), Wobble (2.6) |
+| Gravel Road Bass | Special | Velocity → unison_detune (1.3), Random → osc2_detune (1.0), Env 2 → sub_level (1.4), Wheel → resonance (1.2), Key → cutoff (3.1) | Snarl (2.1), Spread (1.9), Dark (4.6), Chew (3.7) |
+| Whippoorwill Lead | Special | Env 2 → noise_level (1.1), Velocity → lfo_pitch (3.9), Key → cutoff (3.9), Wheel → osc2_semitones (1.6), Random → cutoff (1.1) | Breath (1.9), Bite (3.2), Vibrato (1.5), Air (3.1) |
+| Front Porch Fiddle | Special | Env 2 → lfo_pitch (1.3), Velocity → cutoff (7.2), Random → osc2_detune (2.0), Wheel → xmod_pitch (1.1), Key → resonance (1.0) | Bow (7.4), Bloom (1.4), Rasp (1.5), Body (17.0) |
+| Roadhouse Keys | Special | Velocity → cutoff (5.0), Random → osc_mix (10.1), Key → osc_mix (10.1), Wheel → lfo_amp (1.4) | Bright (3.2), Wood (12.0), Tremolo (2.1), Chime (9.2) |
+| Cotton Gin Pluck | Special | Velocity → filter_env_amount (2.2), Random → cutoff (2.2), Key → filter_env_amount (1.7), Wheel → resonance (1.0) | Snap (1.7), Ring (3.4), Body (13.1), Spread (3.3) |
+| Magnolia Pad | Special | LFO → osc_mix (1.0), Random → cutoff (2.0), Velocity → filter_env_amount (3.2), Wheel → lfo_cutoff (1.4), Key → unison_detune (1.4) | Bloom (2.2), Drift (1.5), Shimmer (2.8), Sweep (2.6) |
+| Bayou Breath Pad | Special | Env 2 → resonance (1.7), Key → unison_spread (1.4), LFO → unison_spread (1.3), Wheel → cutoff (11.6), Random → cutoff (3.4) | Air (7.2), Whistle (4.0), Sway (3.2), Open (10.8) |
+| Revival Brass | Special | Velocity → filter_env_amount (3.6), Env 2 → level (2.6), Random → osc2_detune (1.4), Wheel → lfo_pitch (2.5), Velocity → resonance (1.8) | Blare (6.1), Growl (12.0), Section (2.9), Vibrato (1.9) |
+| Haint Choir | Wild | LFO → osc2_semitones (2.9), Random → pitch (1.0), Env 2 → unison_spread (1.8), Wheel → lfo_rate (4.9), LFO → cutoff (2.0) | Haunt (8.8), Wander (2.6), Snarl (1.2), Space (2.4) |
+| Gator Growl | Wild | Velocity → xmod_pitch (1.2), Key → cutoff (3.9), LFO → xmod_cutoff (2.6), Wheel → resonance (1.4), Random → lfo_cutoff (1.7) | Jaws (2.4), Chew (3.2), Mud (5.0), Bite (2.0) |
+| Firefly Field | Wild | Random → pitch (3.5), Random → cutoff (3.5), LFO → level (3.4), Env 2 → pitch (2.7), Wheel → lfo_rate (2.7) | Swarm (3.2), Flicker (6.2), Glow (3.6), Fall (5.7) |
+| Tent Revival Riser | Wild | Env 2 → pitch (1.6), Velocity → filter_env_amount (3.0), Random → osc2_detune (2.0), Wheel → lfo_cutoff (4.0), LFO → pitch (3.6) | Rapture (4.8), Speed (3.6), Choir (2.5), Grit (1.6) |
+
+**Cicada**
+
+| Preset | Tier | Cables: source → knob (clearly-heard score when the source moves) | Macros (score) |
+|---|---|---|---|
+| Crawdad Bass | Special | Velocity → position (1.4), Env 2 → position (2.2), Key → cutoff (3.4), Wheel → lfo_position (1.3), Random → position (2.0) | Pulse (2.8), Fold (1.4), Sub (7.2), Wobble (2.2) |
+| Mudcat Bass | Special | Env 2 → position (1.1), Velocity → position (2.3), Random → position (2.0), Key → cutoff (2.7), Wheel → lfo_position (1.3) | Sync (2.5), Sweep (2.0), Growl (2.2), Weight (2.6) |
+| Sync Holler Lead | Special | Velocity → warp_amount (2.3), Env 2 → warp_amount (2.4), Key → position (1.6), Wheel → lfo_position (1.8), Random → position (2.0) | Tear (4.5), Fall (3.2), Shake (4.4), Air (5.4) |
+| Mockingbird Lead | Special | Env 2 → lfo_pitch (1.8), Velocity → position (4.0), Random → warp_amount (1.0), Wheel → warp_amount (1.2), Key → cutoff (2.2) | Song (4.3), Bloom (1.2), Edge (1.4), Width (3.3) |
+| Tin Roof Keys | Special | Velocity → position (4.7), Env 2 → warp_amount (3.3), Key → position (2.3), Wheel → lfo_amp (3.0), Random → cutoff (2.6) | Stops (3.4), Click (8.9), Tremolo (3.0), Drift (2.6) |
+| Dewdrop Keys | Special | Velocity → warp_amount (1.3), Random → position (1.9), Env 2 → position (1.5), Wheel → lfo_position (1.4), Key → cutoff (2.4) | Shine (2.6), Comb (1.4), Ring (1.3), Motion (1.4) |
+| Spanish Moss Pad | Special | LFO → position (1.4), Random → position (6.2), Velocity → cutoff (5.9), Wheel → lfo_rate (10.5), Wheel → lfo_cutoff (2.1), Env 2 → warp_amount (1.1) | Sway (2.0), Bloom (4.6), Glow (2.2), Width (3.1) |
+| Low Country Choir | Special | Key → position (3.4), LFO → position (2.4), Random → osc_fine (1.6), Wheel → lfo_position (1.6), Velocity → cutoff (4.1) | Vowel (1.8), Drift (2.1), Choir (2.4), Breath (8.8) |
+| Sunbelt Brass | Special | Velocity → env2_cutoff (3.7), Random → unison_detune (1.6), Key → cutoff (3.6), Wheel → lfo_pitch (3.7), Env 2 → cutoff (3.0) | Blare (1.5), Swell (4.0), Section (2.7), Vibrato (3.1) |
+| Junebug Swarm | Wild | Random → osc_pitch (5.7), LFO → warp_amount (1.2), Env 2 → osc_pitch (1.2), Wheel → lfo_rate (3.0), Velocity → cutoff (3.5) | Swarm (4.5), Rattle (1.2), Grit (1.5), Buzz (1.1) |
+| Storm Shutter | Wild | LFO → position (12.0), Velocity → warp_amount (1.8), Key → warp_amount (3.7), Random → position (1.0), Wheel → lfo_rate (2.3) | Storm (1.7), Bang (12.0), Slam (4.5), Gust (3.8) |
+| Moonshine Still | Wild | Env 2 → warp_amount (1.2), LFO → osc_fine (1.2), Random → position (6.7), Wheel → cutoff (10.7), Key → cutoff (4.2) | Proof (3.7), Bubble (1.8), Heat (11.3), Hiss (5.6) |
+| Holy Roller | Wild | LFO → warp_amount (1.8), Wheel → osc_pitch (12.6), Random → warp_amount (1.6), Velocity → position (5.2), Key → cutoff (12.0) | Spirit (3.7), Rock (14.1), Shout (1.3), Spread (5.1) |
+
+**Steeple**
+
+| Preset | Tier | Cables: source → knob (clearly-heard score when the source moves) | Macros (score) |
+|---|---|---|---|
+| Pecan Bass | Special | Velocity → op2_level (3.8), Key → op2_level (3.7), Env 2 → op3_level (2.6), Wheel → lfo_mod (1.3), Random → op2_detune (1.3) | Bark (3.2), Click (18.4), Growl (2.2), Wobble (1.9) |
+| Rattlesnake Bass | Special | Velocity → op2_feedback (10.9), Env 2 → op2_fine (1.7), Key → op2_feedback (7.0), Wheel → op2_level (12.0), Random → op2_level (15.7) | Rattle (13.9), Snap (3.5), Weight (2.2), Edge (16.7) |
+| Steam Whistle Lead | Special | Env 2 → lfo_pitch (1.8), Velocity → op2_feedback (1.4), Key → op2_level (5.5), Wheel → op2_level (17.8), Random → op1_detune (1.3) | Reed (18.8), Bloom (1.2), Steam (15.2), Flutter (1.4) |
+| Riverboat Calliope | Special | Env 2 → op4_level (2.3), Velocity → op2_level (2.3), Key → op3_level (1.5), Random → op4_level (3.9), Wheel → lfo_amp (2.5) | Pipes (1.5), Chiff (6.1), Tremble (2.9), Reed (2.4) |
+| Sanctified Tine | Special | Velocity → op2_level (8.2), Velocity → op4_level (4.8), Key → op2_level (3.5), Random → op4_level (4.3), Wheel → lfo_amp (2.1) | Bark (3.7), Tine (6.8), Tremolo (2.4), Warm (6.2) |
+| Hammered Dulcimer | Special | Velocity → op2_level (2.1), Random → op3_detune (1.1), Env 2 → op4_level (3.2), Wheel → lfo_amp (1.9), Key → op2_level (1.1) | Strike (2.5), Shimmer (3.9), Course (2.2), Sway (1.1) |
+| Cumberland Pad | Special | LFO → op4_level (3.4), Random → op2_detune (1.0), Velocity → op4_level (4.9), Wheel → op4_level (6.3) | Breath (2.6), Glow (10.0), Drift (11.8), Air (16.3) |
+| Blue Ridge Strings | Special | Env 2 → op2_level (1.0), Env 2 → op4_level (13.1), Velocity → op4_feedback (15.8), LFO → op3_detune (1.0), Wheel → lfo_pitch (3.7) | Bow (5.1), Rosin (2.5), Section (1.6), Vibrato (3.2) |
+| Second Line Brass | Special | Env 2 → op4_level (5.5), Velocity → op4_feedback (6.7), Random → op2_detune (4.2), Wheel → lfo_pitch (3.0), Key → op4_level (12.0) | Blare (12.7), Growl (3.1), Spread (1.6), Vibrato (2.6) |
+| Twister Bells | Wild | Random → op2_fine (1.0), LFO → op2_level (1.9), Env 2 → pitch (1.3), Wheel → lfo_rate (2.9), Velocity → op4_level (5.0) | Storm (1.2), Swing (2.0), Clang (4.1), Fall (12.7) |
+| Junkyard Choir | Wild | Random → op4_freq (15.5), LFO → op4_freq (6.8), Velocity → op4_level (5.5), Wheel → op4_level (3.0), Key → op2_level (1.7) | Scrap (4.3), Bend (2.3), Clank (5.0), Rust (5.1) |
+| Radio Preacher | Wild | LFO → op2_fine (1.5), Random → op2_feedback (11.0), Velocity → op2_level (11.9), Wheel → op3_level (14.8), Key → op3_level (5.8) | Sermon (15.2), Talk (1.2), Static (13.7), Distance (9.2) |
+| Hail on the Tin | Wild | Random → pitch (10.3), Random → op2_level (2.5), Env 2 → op2_level (2.6), Key → op4_level (1.4), Wheel → lfo_amp (3.4) | Storm (6.6), Rattle (2.8), Ring (8.9), Pitch (11.1) |
+
 ## Measured (the `preset_report` example)
 
 `cargo run --release -p soundcraft-dsp --example preset_report` prints, per preset: loudness of a
@@ -42,7 +167,9 @@ release tail of a short note (to -60 dB), the spectral centroid of a held middle
 and how far it moves (octaves), aliasing at C6 and C7 (a 48 kHz render against the same at
 192 kHz), the lowest strong partial against the played note (cents) and the render cost against
 Init. `--calibrate` prints the level each preset would need for -13 dBFS with every peak under
--1.6 dBFS; `--markdown` prints the table below.
+-1.6 dBFS; `--markdown` prints the table below; `--patching` counts the presets with cables by
+source and destination; `--slots` scores what each cable does when its source moves; `--macros`
+each macro. A filter after the synth id matches part of a name or a whole group (`patched`).
 
 The suite's tests (`crates/dsp/src/plugins/preset_suite.rs`) keep it honest: every preset reads,
 names are unique, four tiers of at least eight each, the menu in group and tier order with Init
@@ -111,7 +238,8 @@ states); none of the synths has a DC blocker on its output yet.
 | Cicada | 66 (9 / 33 / 14 / 10) | -15.1 dBFS (-22.2 to -12.8) | -1.3 dBFS | -33.0 dB | 2.4 x |
 | Steeple | 68 (8 / 38 / 13 / 9) | -15.1 dBFS (-23.5 to -12.5) | -1.4 dBFS | -34.4 dB | 2.4 x |
 
-The suite's presets that sit under -16 dBFS are percussive (plucks, hits, impacts, bells) or
+These are the presets before the showcase set; the Patched group's own numbers are in its
+section above. The suite's presets that sit under -16 dBFS are percussive (plucks, hits, impacts, bells) or
 lift with their macros up: their level is held by the peak line, not by the chord. The first
 presets (unchanged): Burley -22.0 dBFS on average, Cicada -20.3, Steeple -16.7 (six of Steeple's
 peak between -1.4 and -0.1 dBFS).
@@ -119,13 +247,25 @@ peak between -1.4 and -0.1 dBFS).
 ## Every preset
 
 | Synth | Tier | Group | Preset | What it is for | Macros (clearly-heard score) |
-|---|---|---|---|---|---|
 | Burley | Simple | Basics | Init | The synth as it starts, at the suite's level: two saws a little apart through a soft low-pass. Start here. | – |
 | Burley | Simple | Basics | Init for Patching | Init with the four macros named and wired to one thing each, all at zero so it sounds like Init: Tone opens the filter, Motion brings in the LFO's sweep, Grit the resonance, Detune pulls the two saws apart. | Tone (5.3), Motion (3.1), Grit (4.0), Detune (2.4) |
 | Burley | Simple | Basics | Plain Saw | One saw, the filter wide open and no envelope movement: the raw sound to shape from scratch. | – |
 | Burley | Simple | Basics | Plain Square | One square, the filter wide open: hollow, woody, the odd harmonics only. | – |
 | Burley | Simple | Basics | Plain Sine | One sine: the pure tone, for sub lines, whistles and test notes. | – |
 | Burley | Simple | Basics | Plain Triangle | One triangle: soft and flute-like, a few quiet odd harmonics over the note. | – |
+| Burley | Special | Patched | Hush Puppy Bass | A round square-and-saw bass that answers your hands. Play harder and it bites (velocity opens the filter); every note's tone lands a little differently, like fingers on strings (random on the cutoff); low notes thump with more envelope than high ones (key); push the wheel for a wobble that also speeds up. Bite sharpens the filter, Growl the cross-modulation, Weight the sub (and less of the saw), Wobble the wobble's depth before the wheel. | Bite (12.0), Growl (12.0), Weight (2.6), Wobble (2.7) |
+| Burley | Special | Patched | Gravel Road Bass | A thick three-voice bass that changes under your fingers: hard notes spread the voices wider apart (velocity), each note's second saw lands a little differently out of tune (random), every note starts with a sub-octave thump that falls away (Env 2 on the sub), and the wheel winds up the resonance. Snarl adds a cross-modulated snarl, Spread the stereo, Dark closes the filter, Chew adds a slow chewing sweep. | Snarl (2.1), Spread (2.0), Dark (4.6), Chew (3.7) |
+| Burley | Special | Patched | Whippoorwill Lead | A singing lead with a breath at the start of each note (Env 2 on the noise). Play harder for more vibrato (velocity sets its depth); higher notes come out brighter (key); push the wheel and the second oscillator climbs a full octave above the first. Breath sets the chiff, Bite the resonance and sweep, Vibrato the vibrato under every note, Air the noise that stays. | Breath (1.9), Bite (3.2), Vibrato (1.5), Air (3.1) |
+| Burley | Special | Patched | Front Porch Fiddle | A bowed lead: hold a note and the vibrato blooms in after a moment (Env 2 slowly raises the vibrato's depth), the bow pressing harder the harder you play (velocity on the filter's swell), each note bowed a little differently (random on the detune), and the wheel adds a rosin rasp of cross-modulation. Bow sets the bite, Bloom how deep the late vibrato goes, Rasp the grit, Body the sub-octave under it. | Bow (7.4), Bloom (1.4), Rasp (1.5), Body (17.0) |
+| Burley | Special | Patched | Roadhouse Keys | An upright-ish piano tone made of patches: play harder and it gets brighter and louder; every key is voiced a touch differently, like an old roadhouse upright (random on how much of the octave above it has); the low notes are woodier and the high notes chime (key on the mix); push the wheel for a tremolo. Bright opens the filter, Wood adds a sub-octave body, Tremolo the wheel's depth before the wheel, Chime the octave on top. | Bright (3.2), Wood (12.0), Tremolo (2.1), Chime (9.2) |
+| Burley | Special | Patched | Cotton Gin Pluck | A pluck that is never played the same way twice: play harder for a longer, brighter sweep (velocity on the filter envelope); every note's filter lands a little differently (random); low notes snap harder than high ones (key on the filter envelope); push the wheel and the pluck rings out like a resonant string. Snap sets the sweep, Ring the resonance, Body adds the sub-octave, Spread the stereo. | Snap (1.7), Ring (3.4), Body (13.1), Spread (3.3) |
+| Burley | Special | Patched | Magnolia Pad | A slow pad where several things move at once: the LFO morphs the two oscillators into each other (LFO on the mix), each note of a chord sits at its own brightness (random on the cutoff), harder chords bloom brighter (velocity on the filter envelope), and the wheel brings in a filter sweep. Bloom sets the swell, Drift the LFO's morph, Shimmer the stereo and detune, Sweep the filter sweep before the wheel. | Bloom (2.2), Drift (1.5), Shimmer (2.8), Sweep (2.6) |
+| Burley | Special | Patched | Bayou Breath Pad | A breathy pad whose noise and resonance move with you: every chord starts with a whistle in the filter that settles (Env 2 on the resonance), high notes spread wider than low ones (key on the spread), the LFO pans the unison's width in and out (LFO on the spread), each note of a chord sits a little brighter or darker (random on the cutoff), and the wheel opens the filter. Air sets the breath, Whistle the resonance, Sway how far the width swings, Open the filter. | Air (7.2), Whistle (4.0), Sway (3.2), Open (10.8) |
+| Burley | Special | Patched | Revival Brass | Brass you play like brass: hard notes blare (velocity on the filter envelope and the resonance), every note swells in after its first breath (Env 2 dips the level at the start), the section is never quite in tune (random on the detune), and the wheel brings vibrato. Blare sets the brightness, Growl a cross-modulated rasp from the sub, Section the spread, Vibrato the vibrato before the wheel. | Blare (6.1), Growl (12.0), Section (2.9), Vibrato (1.9) |
+| Burley | Wild | Patched | Haint Choir | An evolving choir of ghosts: a slow LFO drags the second oscillator up and down a fifth, each voice wanders off pitch on its own (random), Env 2 spreads the choir wider over a second or two, and the wheel speeds everything up. Haunt takes it from a calm choir to a screaming one; Wander sets the LFO's pull, Snarl the resonance, Space the width. | Haunt (8.8), Wander (2.6), Snarl (1.2), Space (2.4) |
+| Burley | Wild | Patched | Gator Growl | A bass monster with every source pulling at it: velocity throws the sub at oscillator 1 at audio rate, the key moves the filter the wrong way (low notes brighter), the LFO chews the cross-modulation, and the wheel winds up the resonance. Jaws takes it from a fat bass to a full roar; Chew sets the LFO's speed, Mud the low end, Bite the resonance. | Jaws (2.3), Chew (3.2), Mud (5.0), Bite (2.0) |
+| Burley | Wild | Patched | Firefly Field | A field of blinking lights: every note sparkles at its own random pitch and brightness, a fast LFO flickers the level, Env 2 makes each note fall in pitch as it fades, and the wheel slows the flicker to a crawl. Swarm takes it from a few glints to a dense cloud; Flicker sets the LFO's depth, Glow the filter, Fall how far each note drops. | Swarm (3.3), Flicker (6.2), Glow (3.6), Fall (5.6) |
+| Burley | Wild | Patched | Tent Revival Riser | A riser you steer: hold a chord and Env 2 lifts the pitch and opens the filter over several seconds, harder chords open further (velocity on the filter envelope), every voice rises at its own rate (random on the detune), the LFO shakes the pitch, and the wheel stirs it into the filter too. Rapture takes it from a gentle lift to a shrieking climb; Speed sets the LFO, Choir the unison, Grit the cross-modulation. | Rapture (4.8), Speed (3.6), Choir (2.5), Grit (1.6) |
 | Burley | Simple | Bass | Sub Sine | A sine with a touch of triangle: low end with no edge, for small speakers add Heft after it. | – |
 | Burley | Simple | Bass | One-Osc Bass | One saw through the 24 dB low-pass with a short filter blip: the plainest bass that still has a front edge. | – |
 | Burley | Expected | Bass | Round Bass | Saw and square an octave down, filtered low with a short pluck: a bass line that sits under the mix. | – |
@@ -194,6 +334,19 @@ peak between -1.4 and -0.1 dBFS).
 | Cicada | Simple | Basics | Plain Triangle | The Classic table at its triangle: soft, a few odd harmonics. | – |
 | Cicada | Simple | Basics | Plain Saw | The Classic table at its saw: every harmonic, bright and buzzy. | – |
 | Cicada | Simple | Basics | Plain Square | The Classic table at its square: hollow, the odd harmonics only. | – |
+| Cicada | Special | Patched | Crawdad Bass | A pulse bass that you shape as you play: harder notes narrow the pulse for more bite (velocity on the position), each note starts narrow and nasal and opens out (Env 2 on the position), low notes are rounder than high ones (key on the filter), and the wheel brings in pulse-width wobble. Pulse sets the width, Fold a Warp fold, Sub the sub, Wobble the wobble before the wheel. | Pulse (2.8), Fold (1.3), Sub (7.2), Wobble (2.2) |
+| Cicada | Special | Patched | Mudcat Bass | A sync bass that growls when you lean on it: every note's sync sweeps down from bright to round (Env 2 on the position), harder notes start brighter still (velocity on the position), each note lands a little differently (random on the position), high notes are brighter (key on the filter), and the wheel adds a sync wobble. Sync sets where the sweep ends, Sweep how far Env 2 sweeps, Growl an FM growl, Weight the sub. | Sync (2.5), Sweep (2.0), Growl (2.2), Weight (2.6) |
+| Cicada | Special | Patched | Sync Holler Lead | A sync lead that tears when you dig in: play harder for more sync (velocity on the Warp), each note's sync starts high and falls (Env 2 on the Warp too), high notes lean from saw toward square (key on the position), each note starts at its own place on the table (random on the position), and the wheel brings a sync wobble. Tear sets the sync that stays, Fall how far Env 2 sweeps it, Shake a vibrato with a filter shimmer, Air the filter. | Tear (4.5), Fall (3.2), Shake (4.4), Air (5.4) |
+| Cicada | Special | Patched | Mockingbird Lead | A lead that changes its song as you hold it: the vibrato grows in after a moment (Env 2 raises the vibrato's depth), harder notes are brighter along the Harmonic Sweep table (velocity on the position), each note gets its own touch of FM edge (random on the Warp), and the wheel pushes the FM further. Song sets the brightness, Bloom the late vibrato, Edge the FM that stays, Width the stereo. | Song (4.3), Bloom (1.2), Edge (1.4), Width (3.3) |
+| Cicada | Special | Patched | Tin Roof Keys | Organ-ish keys from the Drawbars table that respond like a player's: harder notes pull out more drawbars (velocity on the position), each note starts with an FM bark that fades, like a percussion stop (Env 2 on the Warp), high notes thin out (key on the position, downwards), every key is a little brighter or duller (random on the filter), and the wheel spins up a tremolo. Stops sets the drawbars, Click an FM key click, Tremolo the tremolo before the wheel, Drift a per-key tuning drift. | Stops (3.4), Click (8.9), Tremolo (3.0), Drift (2.6) |
+| Cicada | Special | Patched | Dewdrop Keys | Glassy keys from the Comb table: harder notes ring with an FM shimmer (velocity on the Warp), each note's comb sits in a slightly different place (random on the position), Env 2 sweeps the comb as the note sounds, and the wheel sets it moving. Shine sets the shimmer, Comb where the comb sits, Ring the resonance, Motion the motion before the wheel. | Shine (2.6), Comb (1.4), Ring (1.3), Motion (1.4) |
+| Cicada | Special | Patched | Spanish Moss Pad | A pad that never sits still: the LFO sweeps the wave slowly between triangle and saw, every note of a chord starts at its own place in it (random on the position), harder chords are brighter (velocity on the filter), and the wheel speeds the sweep and adds a filter sway. Sway sets the LFO's sweep and a filter sway with it, Bloom a slow Env 2 FM shimmer that swells in, Glow the filter, Width the stereo. | Sway (2.0), Bloom (4.6), Glow (2.3), Width (3.1) |
+| Cicada | Special | Patched | Low Country Choir | A choir pad from the Vowels table: low notes sing 'oo' and high notes 'ee' (key on the position), the LFO drifts the vowel slowly, every voice of a chord sits a few cents apart (random on the fine tune), and the wheel sets the vowels swaying back and forth. Vowel sets where the choir sings, Drift the LFO's reach, Choir the unison, Breath the noise. | Vowel (1.7), Drift (2.1), Choir (2.4), Breath (8.7) |
+| Cicada | Special | Patched | Sunbelt Brass | Brass that swells and blares: every note's filter swells open with Env 2, and the harder you play the further it goes (velocity on Env 2's depth), the section is never quite together (random on the unison's detune), high notes are brighter (key on the filter), and the wheel brings vibrato. Blare sets the brightness, Swell how far Env 2 sweeps the filter and the wave, Section the spread, Vibrato the vibrato before the wheel. | Blare (1.5), Swell (4.0), Section (2.7), Vibrato (3.1) |
+| Cicada | Wild | Patched | Junebug Swarm | A swarm of buzzing notes from the Odd to Even table: every note lands on its own pitch (random on the pitch), a fast LFO rattles the FM Warp, each note starts high and falls as it dies (Env 2 on the pitch), harder notes buzz brighter (velocity on the filter), and the wheel slows the rattle to a crawl. Swarm takes it from a few bugs to a cloud; Rattle sets the LFO's grip, Grit moves along the table, Buzz the resonance. | Swarm (4.5), Rattle (1.2), Grit (1.5), Buzz (1.1) |
+| Cicada | Wild | Patched | Storm Shutter | A rhythmic texture that bangs in the wind: a square LFO bangs back and forth through the Grit table, harder notes slam the Sync Warp, each note starts somewhere else on the table (random on the position), high notes get less sync (key on the Warp), and the wheel speeds the banging. Storm takes it from a rattle to a gale; Bang sets the LFO's steps, Slam the sync, Gust the noise and a sweep of the high-pass. | Storm (1.7), Bang (12.0), Slam (4.5), Gust (3.8) |
+| Cicada | Wild | Patched | Moonshine Still | A drone that cooks: Env 2 folds the Phase Bend table further and further over several seconds, the LFO bubbles the fine tune, every note starts on its own part of the table (random), and the wheel lifts the lid (wheel on the filter). Proof takes it from a warm hum to a boil; Bubble sets the LFO's depth, Heat the filter, Hiss the noise. | Proof (3.7), Bubble (1.8), Heat (11.3), Hiss (5.6) |
+| Cicada | Wild | Patched | Holy Roller | A folding drone that shouts: the LFO folds the wave in and out, the wheel bends the whole thing up an octave, each note of a chord is folded its own amount (random on the Warp), harder chords push the Fold table further along, and high notes are brighter (key on the filter). Spirit takes it from a hum to a holler; Rock sets the LFO's speed, Shout the resonance, Spread the stereo. | Spirit (3.7), Rock (14.1), Shout (1.3), Spread (5.1) |
 | Cicada | Simple | Bass | One-Table Bass | The Classic saw an octave down through a 24 dB low-pass that Env 2 opens briefly on each note: a plain bass. | – |
 | Cicada | Expected | Bass | Sync Growl | The Sync Saw table swept up by the second envelope on each note, low-passed: a bass that opens and closes. | – |
 | Cicada | Expected | Bass | Fold Bass | The Fold table, harder with velocity: soft notes round, hard ones growl. | – |
@@ -259,6 +412,19 @@ peak between -1.4 and -0.1 dBFS).
 | Steeple | Simple | Basics | Plain Sine | One operator alone, no modulation: a pure sine that holds while the key does. | – |
 | Steeple | Simple | Basics | Plain FM | One operator modulating another at the same ratio, held steady: the plain FM tone, a little like a muted saw. | – |
 | Steeple | Simple | Basics | Feedback Saw | One operator feeding back on itself: the sine turns toward a saw. Raise Op 1 Feedback for more buzz. | – |
+| Steeple | Special | Patched | Pecan Bass | A woody FM bass that follows your hands: play harder for more bark (velocity on the modulator), low notes are brighter than high ones so the line stays even (key on the modulator, downwards), every note starts with a click of extra overtones (Env 2 on the top modulator), and the wheel sets the tone wobbling. Bark sets the brightness, Click the attack, Growl the feedback, Wobble the wobble before the wheel. | Bark (3.2), Click (18.3), Growl (2.2), Wobble (2.0) |
+| Steeple | Special | Patched | Rattlesnake Bass | A gritty feedback bass: harder notes rattle with more feedback (velocity on the feedback), each note snaps in with an off-ratio overtone that settles (Env 2 on the modulator's ratio), high notes are smoother (key on the feedback, downwards), every note bites a little differently (random on the modulator), and the wheel pushes the modulator harder. Rattle sets the feedback, Snap how far the ratio jumps, Weight the low octave, Edge the brightness. | Rattle (13.9), Snap (3.5), Weight (2.2), Edge (16.7) |
+| Steeple | Special | Patched | Steam Whistle Lead | A reedy lead that sings as you hold it: the vibrato grows in after a moment (Env 2 raises the vibrato's depth), harder notes are reedier (velocity on the feedback), high notes calmer (key on the modulator, downwards), and the wheel brightens it like a harder breath. Reed sets the brightness, Bloom the late vibrato, Steam a breathy third operator, Flutter a faster, wider vibrato. | Reed (18.8), Bloom (1.3), Steam (15.2), Flutter (1.4) |
+| Steeple | Special | Patched | Riverboat Calliope | A steam-organ lead from three pipes: each note starts with a puff of reedy chiff on the top pipe (Env 2 on its modulator), harder notes open the octave pipe (velocity), high notes thin out (key on the top pipe, downwards), every pipe's reed is voiced a little differently (random), and the wheel sets the pipes trembling. Pipes sets the upper stops, Chiff the puff, Tremble the tremolo before the wheel, Reed bends the top pipe's reed off true. | Pipes (1.5), Chiff (6.1), Tremble (2.8), Reed (2.4) |
+| Steeple | Special | Patched | Sanctified Tine | An electric piano that plays like a real one: harder notes bark and ring (velocity on both modulators), high notes are sweeter (key on the bark, downwards), every key's tine rings a little differently (random on the tine's level), and the wheel brings in a tremolo. Bark sets the edge, Tine the bell, Tremolo the tremolo before the wheel, Warm darkens the body. | Bark (3.7), Tine (6.8), Tremolo (2.4), Warm (6.2) |
+| Steeple | Special | Patched | Hammered Dulcimer | Struck strings: harder notes ring brighter and longer in the overtones (velocity on the modulator), every string is a touch out from its neighbour (random on the detune), each strike starts with a metallic shimmer that fades (Env 2 on an inharmonic operator), and the wheel sets the strings trembling. Strike sets the brightness, Shimmer the metal, Course the double-string detune, Sway a slow sway in the overtones. | Strike (2.5), Shimmer (3.9), Course (2.2), Sway (1.1) |
+| Steeple | Special | Patched | Cumberland Pad | A warm FM pad that moves on its own and under your hands: the LFO swells the shared modulator so the chord breathes, every voice of a chord is tuned its own way (random on a carrier's detune), harder chords are brighter (velocity on the modulator), and the wheel brightens it further. Breath deepens and quickens the breathing, Glow the brightness, Drift the detune and a little grain, Air a high shimmer. | Breath (2.6), Glow (10.0), Drift (11.8), Air (16.3) |
+| Steeple | Special | Patched | Blue Ridge Strings | Bowed strings that swell like a section: every note bows in brighter as Env 2 swells the modulator, harder chords bow harder (velocity on the feedback's rosin), the LFO's chorus drifts the second string against the first, and the wheel adds vibrato. Bow sets the brightness, Rosin the grit, Section the detune, Vibrato the vibrato before the wheel. | Bow (5.1), Rosin (2.4), Section (1.6), Vibrato (3.2) |
+| Steeple | Special | Patched | Second Line Brass | A street brass band: every note swells into its blare (Env 2 on the modulator), harder notes blare more (velocity on the feedback), the horns are never quite together (random on the detune), and the wheel brings a wide vibrato. Blare sets the brightness, Growl the feedback, Spread the detune between the horns, Vibrato the vibrato before the wheel. | Blare (12.7), Growl (3.1), Spread (1.6), Vibrato (2.6) |
+| Steeple | Wild | Patched | Twister Bells | Bells caught in a storm: every strike lands on its own inharmonic ratio (random on the modulator's ratio), the LFO swings the modulator's depth, each bell falls in pitch as it rings (Env 2 on the pitch), and the wheel speeds the swing into a whirl. Storm takes it from struck bells to a twisting cloud; Swing adds a swinging tremolo, Clang the strike, Fall how far each bell drops. | Storm (1.2), Swing (2.0), Clang (4.1), Fall (12.7) |
+| Steeple | Wild | Patched | Junkyard Choir | A choir of scrap metal: a fixed-frequency operator clangs under every note at its own random pitch, the LFO swings that clang up and down, harder notes clang louder, high notes buzz brighter (key on the modulator), and the wheel pushes the clang further. Scrap takes it from a hum to a junk pile; Bend sets the LFO's grip, Clank the feedback, Rust the low drone. | Scrap (4.3), Bend (2.3), Clank (5.0), Rust (5.1) |
+| Steeple | Wild | Patched | Radio Preacher | A voice on a far-off AM station: the LFO sweeps the modulator's ratio so the tone talks, each note preaches in its own key of feedback (random), harder notes shout (velocity on the modulator), and the wheel turns up the static (wheel on the third operator). Sermon takes it from a murmur to a shout; Talk sets how far and fast it talks, Static the feedback, Distance fades the station away. | Sermon (15.2), Talk (1.2), Static (13.7), Distance (9.2) |
+| Steeple | Wild | Patched | Hail on the Tin | Hail on a tin roof: every note lands at its own random pitch and brightness, Env 2 snaps each one with a bright strike, high notes ring longer in the metal (key on the inharmonic operator), and the wheel shakes it all with a fast LFO. Storm takes it from a few drops to a downpour; Rattle sets the LFO, Ring the metal, Pitch how far the drops scatter. | Storm (6.6), Rattle (2.8), Ring (8.9), Pitch (11.1) |
 | Steeple | Expected | Keys | Tine Piano | Two pairs: a bright high modulator for the strike on one carrier, a soft one for the body on the other; harder keys bring more of both. | – |
 | Steeple | Expected | Keys | Drawn Organ | All four heard at 0.5, 1, 2 and 4 times the key, held while the key is. | – |
 | Steeple | Expected | Keys | Clav Pluck | A third-harmonic modulator dying away fast over a short carrier: a plucked, nasal key. | – |

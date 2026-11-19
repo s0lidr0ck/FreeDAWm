@@ -16,7 +16,8 @@
 use crate::plugins::synth::presets::{PatchedPreset, Tier::*, suite};
 
 /// The menu's groups, in order.
-pub const GROUPS: [&str; 12] = ["Basics", "Keys", "Bells", "Mallets", "Bass", "Brass", "Pluck", "Lead", "Pad", "Percussion", "Texture", "Effects"];
+pub const GROUPS: [&str; 13] =
+    ["Basics", "Patched", "Keys", "Bells", "Mallets", "Bass", "Brass", "Pluck", "Lead", "Pad", "Percussion", "Texture", "Effects"];
 
 /// The suite, as listed (the menu sorts it by group and tier).
 pub static SUITE: [PatchedPreset; 52] = [
