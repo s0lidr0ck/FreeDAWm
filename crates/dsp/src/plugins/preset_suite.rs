@@ -138,7 +138,7 @@ fn every_preset_plays_at_the_suites_level_in_every_state() {
                 let Some(y) = lab::render(p, state, &chord(keys, 127, secs(1.0)), secs(1.0)) else { continue };
                 worst = worst.max(lab::db(lab::peak(&y)));
                 let l = lab::loudness_db(&y);
-                if !(l > -45.0) {
+                if l.is_nan() || l <= -45.0 {
                     out.push(format!("{} {}: {state:?} {keys:?}: {l:.1} dBFS, silent", p.plugin, p.name));
                 }
             }
@@ -146,7 +146,7 @@ fn every_preset_plays_at_the_suites_level_in_every_state() {
         // The suite's presets stay under −1 dBFS; the first presets (whose sound is pinned)
         // under full scale.
         let line = if is_new(p) { -1.0 } else { 0.0 };
-        if !(worst < line) {
+        if worst.is_nan() || worst >= line {
             out.push(format!("{} {}: peak {worst:.1} dBFS", p.plugin, p.name));
         }
         if is_new(p) && dc > -30.0 {
@@ -220,11 +220,11 @@ fn wild_presets_stay_bounded_at_full_tilt() {
         let peak = x.as_ref().map_or(f32::INFINITY, lab::peak);
         let last = x.as_ref().map_or(0.0, |x| lab::rms2(x, secs(9.0), secs(10.0)));
         let mut out = Vec::new();
-        if !(peak < 0.891) {
+        if peak.is_nan() || peak >= 0.891 {
             out.push(format!("{} {}: peak {:.1} dBFS at full tilt", p.plugin, p.name, lab::db(peak)));
         }
         // A held drone or lead keeps sounding (an impact or a key dies away, as it should).
-        if matches!(p.group.as_str(), "Texture" | "Lead") && !(lab::db(last) > -50.0) {
+        if matches!(p.group.as_str(), "Texture" | "Lead") && (last.is_nan() || lab::db(last) <= -50.0) {
             out.push(format!("{} {}: silent after nine seconds at full tilt", p.plugin, p.name));
         }
         out
