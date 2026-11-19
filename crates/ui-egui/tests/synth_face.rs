@@ -207,3 +207,69 @@ fn the_preset_display_steps_through_the_factory_presets() {
     assert_eq!(ins.modulation.macro_name(0), "Tone");
     let _ = h.get_by_label("Presets");
 }
+
+/// Every filled circle painted this frame (shapes nested in lists included): (centre, radius,
+/// colour).
+fn circles(h: &Harness<'_, SoundApp>) -> Vec<(Pos2, f32, egui::Color32)> {
+    fn walk(s: &egui::Shape, out: &mut Vec<(Pos2, f32, egui::Color32)>) {
+        match s {
+            egui::Shape::Circle(c) => out.push((c.center, c.radius, c.fill)),
+            egui::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.output().shapes {
+        walk(&c.shape, &mut out);
+    }
+    out
+}
+
+/// While a voice sounds, a patched knob shows where its value is now: a bright dot riding its
+/// arc at the position the synth reads back, off the knob's own pointer (which stays where it was
+/// set). With Reduce motion the arcs stay static (no dot).
+#[test]
+fn a_patched_knob_shows_its_live_value_as_a_dot() {
+    use soundcraft_dsp::plugins::synth_mod as sm;
+    use soundcraft_ui_egui::synth_face::kit;
+    let (mut h, t) = harness("subtractive_synth");
+    h.state_mut().engine.execute("mix.mod_add", &json!({"track": t.0, "source": "lfo", "dest": "cutoff", "amount": 0.5})).unwrap();
+    // The synth's read-back as the audio thread leaves it: a voice sounding, the LFO near its
+    // top and the cutoff at 90 % of its travel.
+    let a = std::sync::Arc::new(soundcraft_dsp::analysis::Analysis::with_live(sm::LIVE_LEN));
+    let d = sm::dests("subtractive_synth").iter().position(|x| *x == "cutoff").unwrap();
+    a.live.set(sm::LIVE_SOUNDING, 1.0);
+    a.live.set(sm::LIVE_SOURCES + 2, 0.8);
+    a.live.set(sm::LIVE_DESTS + d, 0.9);
+    let mut meter = soundcraft_mix::StripMeter::default();
+    meter.analysis.push((soundcraft_mix::INSTRUMENT_ANALYSIS, a.clone()));
+    h.state_mut().preview_meters = Some(soundcraft_playback::MeterSnapshot { tracks: [(t, meter)].into_iter().collect(), main: Default::default() });
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    let c = centre(&h, "Cutoff");
+    let dots = |h: &Harness<'_, SoundApp>| -> Vec<Pos2> {
+        circles(h).into_iter().filter(|(p, _, col)| *col == kit::LIVE_DOT && p.distance(c) < kit::KNOB * 0.6).map(|(p, _, _)| p).collect()
+    };
+    let got = dots(&h);
+    assert_eq!(got.len(), 1, "one dot on the cutoff knob: {got:?}");
+    let want = kit::live_dot_at(c, kit::KNOB, 0.9);
+    assert!(got[0].distance(want) < 1.0, "at 90 % of the travel: {:?} against {want:?}", got[0]);
+    let knob = soundcraft_dsp::plugin_info("subtractive_synth").unwrap().param("cutoff").unwrap();
+    let set = knob.to_normalized(param_or_default(&h, t, "cutoff"));
+    assert!(got[0].distance(kit::live_dot_at(c, kit::KNOB, set)) > 5.0, "off the knob's own pointer");
+    // The LFO moves on: the dot follows.
+    a.live.set(sm::LIVE_DESTS + d, 0.4);
+    step(&mut h);
+    assert!(dots(&h).first().is_some_and(|p| p.distance(kit::live_dot_at(c, kit::KNOB, 0.4)) < 1.0));
+    // Reduce motion: static arcs only.
+    h.state_mut().extra.reduce_motion = true;
+    step(&mut h);
+    step(&mut h);
+    assert!(dots(&h).is_empty(), "no moving dot with Reduce motion");
+}
+
+fn param_or_default(h: &Harness<'_, SoundApp>, t: TrackId, id: &str) -> f32 {
+    let ins = h.state().engine.session().track(t).unwrap().instrument.clone().unwrap();
+    ins.params.get(id).copied().unwrap_or_else(|| soundcraft_dsp::plugin_info(&ins.plugin).unwrap().param(id).unwrap().default)
+}

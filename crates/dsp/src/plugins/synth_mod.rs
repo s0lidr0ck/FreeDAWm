@@ -473,6 +473,104 @@ pub(crate) fn next_random(state: &mut u32) -> f32 {
     (x as f32 / u32::MAX as f32) * 2.0 - 1.0
 }
 
+// ------------------------------------------------------------------------- live read-back
+
+/// What a synth publishes for its panel after every block, in its
+/// [`Analysis::live`](crate::analysis::Analysis::live) values (the synth's
+/// [`Plugin::analysis`](crate::Plugin::analysis); atomic stores only, nothing allocated or
+/// locked on the audio thread):
+/// - [`LIVE_SOUNDING`]: 1 while a voice sounds, else 0;
+/// - [`LIVE_SOURCES`]`..+`[`N_SOURCES`]: each source's value now, in its own range
+///   ([`SOURCES`] order), for the voice shown (the per-voice sources 0 when none sounds);
+/// - [`LIVE_DESTS`]`..+`[`MAX_DESTS`]: each patched destination's value now as a position in its
+///   knob's travel (0..1, the same units an arc is drawn in), −1 where nothing drives it.
+///
+/// The voice shown is the most recently started one still sounding (its release included): the
+/// note just played is the one the panel follows. With no voice sounding a destination rests at
+/// its knob plus the macros' offsets (the macros move it even between notes).
+pub const LIVE_SOUNDING: usize = 0;
+/// See [`LIVE_SOUNDING`].
+pub const LIVE_SOURCES: usize = 1;
+/// See [`LIVE_SOUNDING`].
+pub const LIVE_DESTS: usize = LIVE_SOURCES + N_SOURCES;
+/// How many live values a synth with the matrix publishes.
+pub const LIVE_LEN: usize = LIVE_DESTS + MAX_DESTS;
+
+/// The live values of a synth, as [`publish`] stores them: what the panel reads.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LiveRead {
+    pub sounding: bool,
+    pub sources: [f32; N_SOURCES],
+    /// Per destination (the synth's [`dests`] order): position now, `None` where nothing drives it.
+    pub dests: [Option<f32>; MAX_DESTS],
+}
+
+impl LiveRead {
+    /// Reads the values `live` holds (any thread).
+    pub fn of(live: &crate::analysis::LiveValues) -> LiveRead {
+        let get = |i: usize| {
+            let v = live.get(i);
+            if v.is_finite() { v } else { 0.0 }
+        };
+        LiveRead {
+            sounding: get(LIVE_SOUNDING) > 0.5,
+            sources: std::array::from_fn(|i| get(LIVE_SOURCES + i)),
+            dests: std::array::from_fn(|d| {
+                let v = live.get(LIVE_DESTS + d);
+                (v.is_finite() && v >= 0.0).then_some(v.min(1.0))
+            }),
+        }
+    }
+
+    /// Destination `id`'s position now on `plugin`.
+    pub fn dest(&self, plugin: &str, id: &str) -> Option<f32> {
+        let d = dests(plugin).iter().position(|x| *x == id)?;
+        self.dests.get(d).copied().flatten()
+    }
+}
+
+/// The voice a synth shows on its panel: of `(sounding, age)` per voice, the most recently
+/// started one still sounding.
+#[inline]
+pub(crate) fn shown_voice(voices: impl Iterator<Item = (bool, u64)>) -> Option<usize> {
+    voices.enumerate().filter(|(_, (on, _))| *on).max_by_key(|(_, (_, age))| *age).map(|(i, _)| i)
+}
+
+/// Stores a synth's live values (see [`LIVE_SOUNDING`]): `src` the sources for the voice shown
+/// (`voice`, its matrix values; `None`: no voice sounds), `shared_now` the shared destination's
+/// value now. Atomic stores only.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn publish(
+    live: &crate::analysis::LiveValues,
+    mm: &ModMatrix,
+    infos: &[&'static ParamInfo; MAX_DESTS],
+    bases: &[f32; MAX_DESTS],
+    macro_off: &[f32; MAX_DESTS],
+    shared: usize,
+    shared_now: f32,
+    src: &[f32; N_SOURCES],
+    voice: Option<&VoiceMod>,
+) {
+    live.set(LIVE_SOUNDING, if voice.is_some() { 1.0 } else { 0.0 });
+    for (i, v) in src.iter().enumerate() {
+        live.set(LIVE_SOURCES + i, *v);
+    }
+    for (d, info) in infos.iter().enumerate() {
+        let at = if !mm.on(d) {
+            -1.0
+        } else if d == shared {
+            info.to_normalized(shared_now)
+        } else if let Some(m) = voice {
+            info.to_normalized(m.target(d))
+        } else {
+            let base = bases.get(d).copied().unwrap_or(0.0);
+            info.to_normalized(modded(info, base, macro_off.get(d).copied().unwrap_or(0.0)))
+        };
+        live.set(LIVE_DESTS + d, at);
+    }
+}
+
 /// The seed the per-note random values start from after a reset.
 pub(crate) const RANDOM_SEED: u32 = 0x5EED_0C0A;
 
@@ -880,6 +978,217 @@ mod tests {
             };
             let (a, b) = (time(false), time(true));
             println!("{id}: 16 voices, 1 s of audio: {:.1} ms plain, {:.1} ms with 16 slots (+{:.0} %)", a * 1e3, b * 1e3, (b / a - 1.0) * 100.0);
+        }
+    }
+
+    /// A held chord with `set` (macro 1 driving `targets`), where `moves` are set at 0.6 s (a
+    /// knob turned while the chord is held): both sides, 1.6 s.
+    fn held_with(id: &str, set: &[(&str, f32)], targets: &[TargetSpec<'_>], moves: &[(&str, f32)]) -> [Vec<f32>; 2] {
+        let mut p = crate::create(id).unwrap();
+        p.prepare(48_000.0, 256, 2);
+        for (k, v) in set {
+            assert!(p.set_param(k, *v), "{k}");
+        }
+        p.set_prepared_state(&compile(id, &[], targets).unwrap_or_default());
+        let mut io = vec![vec![0.0f32; 256]; 2];
+        for _ in 0..10 {
+            p.process(&mut io, 256);
+        }
+        let mut out = [Vec::new(), Vec::new()];
+        for (i, n) in [48u8, 55, 60, 64].iter().enumerate() {
+            p.note_on(i, *n, 100);
+        }
+        let mut at = 0;
+        while at < 76_800 {
+            if (28_800..28_800 + 256).contains(&at) {
+                for (k, v) in moves {
+                    p.set_param(k, *v);
+                }
+            }
+            io.iter_mut().for_each(|c| c.fill(0.0));
+            p.process(&mut io, 256);
+            out[0].extend_from_slice(&io[0]);
+            out[1].extend_from_slice(&io[1]);
+            at += 256;
+        }
+        out
+    }
+
+    /// Every destination of every synth, driven by a macro turned while a chord is held, sounds
+    /// as turning the knob itself by the same share of its travel does (the macro's range lands
+    /// in the knob's own units and taper, and the held voices follow at once, not only the next
+    /// note), wherever turning the knob is heard at all.
+    #[test]
+    fn a_macro_turned_on_a_held_note_sounds_like_turning_the_knob() {
+        use super::super::preset_lab::{audible, traits};
+        let mut report = Vec::new();
+        let mut bad = Vec::new();
+        for id in SYNTHS {
+            let info = crate::plugin_info(id).unwrap();
+            for d in dests(id) {
+                if *d == PITCH {
+                    continue;
+                }
+                let pi = info.param(d).unwrap();
+                // What the knob needs around it to be heard.
+                let mut set: Vec<(&str, f32)> = vec![("amp_sustain", 100.0)];
+                match *d {
+                    "unison_detune" | "unison_spread" => set.push(("unison", 3.0)),
+                    "lfo_rate" => set.push(("lfo_amp", 60.0)),
+                    "warp_amount" => set.push(("warp_mode", 1.0)),
+                    _ => {}
+                }
+                if let Some(op) = d.strip_prefix("op").and_then(|r| r.strip_suffix("_freq")) {
+                    set.push((Box::leak(format!("op{op}_fixed").into_boxed_str()), 1.0));
+                }
+                set.retain(|(k, _)| info.param(k).is_some());
+                let base = pi.default;
+                let n0 = pi.to_normalized(base);
+                let delta = if *d == "level" {
+                    -0.3
+                } else if n0 <= 0.55 {
+                    0.4
+                } else {
+                    -0.4
+                };
+                let turned = pi.from_normalized(n0 + delta);
+                let t = [TargetSpec { macro_index: 0, dest: d, from: 0.0, to: delta }];
+                let still = held_with(id, &set, &t, &[]);
+                let knob = held_with(id, &set, &t, &[(d, turned)]);
+                let mac = held_with(id, &set, &t, &[("macro1", 100.0)]);
+                let tr = |x: &[Vec<f32>; 2]| traits(x, 48_000, 76_800);
+                let (ts, tk, tm) = (tr(&still), tr(&knob), tr(&mac));
+                let heard = audible(&ts, &tk);
+                let off = audible(&tm, &tk);
+                let moved = audible(&ts, &tm);
+                report
+                    .push(format!("{id} {d}: knob {:.2} ({}), macro {:.2}, macro against knob {:.2} ({})", heard.0, heard.1, moved.0, off.0, off.1));
+                if heard.0 >= 1.0 && (off.0 > 0.5 || moved.0 < 0.6 * heard.0) {
+                    bad.push(report.last().cloned().unwrap_or_default());
+                }
+            }
+        }
+        eprintln!("{}", report.join("\n"));
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
+
+    /// The read-back the panels draw from: a note with envelope 2 on the cutoff (Steeple: on an
+    /// operator's level) reports a value that rises from the knob as the envelope opens and
+    /// falls back after the key is let go; with no voice sounding the value rests at the knob
+    /// (plus the macros'); two instances never see each other's values; the sources read as
+    /// they are.
+    #[test]
+    fn the_live_values_follow_the_note_and_rest_at_the_knob() {
+        for id in SYNTHS {
+            let dest = if id == "fm_synth" { "op2_level" } else { "cutoff" };
+            let env: &[(&str, f32)] = match id {
+                "subtractive_synth" => &[("filter_attack", 150.0), ("filter_decay", 300.0), ("filter_sustain", 30.0), ("filter_release", 100.0)],
+                _ => &[("env2_attack", 150.0), ("env2_decay", 300.0), ("env2_sustain", 30.0), ("env2_release", 100.0)],
+            };
+            let knob = if id == "fm_synth" { 30.0 } else { 500.0 };
+            let make = || {
+                let mut p = crate::create(id).unwrap();
+                p.prepare(48_000.0, 256, 2);
+                for (k, v) in env {
+                    assert!(p.set_param(k, *v), "{id} {k}");
+                }
+                p.set_param(dest, knob);
+                for k in ["amp_release", "op1_release", "op2_release", "op3_release", "op4_release"] {
+                    p.set_param(k, 50.0);
+                }
+                p.set_prepared_state(&compile(id, &[SlotSpec { source: "env2", dest, amount: 0.5 }], &[]).unwrap());
+                p
+            };
+            let (mut a, mut b) = (make(), make());
+            let (la, lb) = (a.analysis().unwrap(), b.analysis().unwrap());
+            assert!(!std::sync::Arc::ptr_eq(&la, &lb), "{id}: each instance its own");
+            let info = dest_info(id, dest).unwrap();
+            let at_knob = info.to_normalized(knob);
+            let mut io = vec![vec![0.0f32; 256]; 2];
+            let read = |l: &crate::analysis::Analysis| LiveRead::of(&l.live);
+            // (The cutoff glides to a newly set knob over a few milliseconds.)
+            for _ in 0..60 {
+                a.process(&mut io, 256);
+                b.process(&mut io, 256);
+            }
+            let idle = read(&la);
+            assert!(!idle.sounding, "{id}");
+            let v = idle.dest(id, dest).unwrap();
+            assert!((v - at_knob).abs() < 5e-3, "{id}: idle at the knob ({v} against {at_knob})");
+            assert_eq!(idle.sources[SRC_AMP], 0.0);
+            // A note on `a` only.
+            a.note_on(0, 60, 127);
+            let mut track = Vec::new();
+            for blk in 0..300 {
+                if blk == 150 {
+                    a.note_off(0, 60);
+                }
+                a.process(&mut io, 256);
+                b.process(&mut io, 256);
+                let r = read(&la);
+                track.push((r.sounding, r.dest(id, dest).unwrap_or(-1.0), r.sources[SRC_ENV2], r.sources[SRC_VEL]));
+                let other = read(&lb);
+                assert!(!other.sounding && other.sources[SRC_ENV2] == 0.0, "{id}: the other instance sees nothing");
+                assert!((other.dest(id, dest).unwrap() - at_knob).abs() < 1e-3, "{id}");
+            }
+            let first = track[0].1;
+            let peak = track.iter().map(|t| t.1).fold(0.0f32, f32::max);
+            let held_end = track[149].1;
+            assert!(track[0].0 && (track[0].3 - 1.0).abs() < 1e-6, "{id}: sounding, velocity 127");
+            assert!((first - at_knob).abs() < 0.1, "{id}: starts near the knob ({first} against {at_knob})");
+            assert!(peak > at_knob + 0.3, "{id}: the envelope opens it ({peak})");
+            assert!(held_end < peak - 0.1 && held_end > at_knob + 0.05, "{id}: falls to the sustain ({held_end})");
+            let last = track.last().unwrap();
+            assert!(!last.0, "{id}: the note has died away");
+            assert!((last.1 - at_knob).abs() < 1e-3, "{id}: back at the knob");
+            // A macro moves the resting value between notes.
+            let mut c = make();
+            c.set_prepared_state(
+                &compile(id, &[SlotSpec { source: "env2", dest, amount: 0.5 }], &[TargetSpec { macro_index: 0, dest, from: 0.0, to: 0.2 }]).unwrap(),
+            );
+            c.set_param("macro1", 100.0);
+            for _ in 0..60 {
+                c.process(&mut io, 256);
+            }
+            let v = LiveRead::of(&c.analysis().unwrap().live).dest(id, dest).unwrap();
+            assert!((v - (at_knob + 0.2)).abs() < 5e-3, "{id}: knob plus the macro ({v})");
+        }
+    }
+
+    /// Publishing allocates nothing: the live values stay where they were made across a thousand
+    /// blocks of notes, macros and patches (the stores are atomic; the crate has no counting
+    /// allocator, `unsafe` being forbidden, so the storage keeping its address is the check), and
+    /// a synth's audio is the same with its panel reading the values or not.
+    #[test]
+    fn publishing_the_live_values_allocates_nothing() {
+        for id in SYNTHS {
+            let mut p = crate::create(id).unwrap();
+            p.prepare(48_000.0, 256, 2);
+            let live = p.analysis().unwrap();
+            let at = live.live.buffer_address();
+            let data = compile(
+                id,
+                &[SlotSpec { source: "lfo", dest: "level", amount: 0.2 }],
+                &[TargetSpec { macro_index: 1, dest: "level", from: 0.0, to: -0.2 }],
+            )
+            .unwrap();
+            p.set_prepared_state(&data);
+            let mut io = vec![vec![0.0f32; 256]; 2];
+            let ptrs: Vec<(*const f32, usize)> = io.iter().map(|c| (c.as_ptr(), c.capacity())).collect();
+            for blk in 0..1000usize {
+                if blk % 20 == 0 {
+                    p.note_on(blk % 256, 40 + (blk / 20 % 40) as u8, 100);
+                }
+                if blk % 20 == 10 {
+                    p.note_off(0, 40 + (blk / 20 % 40) as u8);
+                }
+                p.set_param("macro2", (blk % 100) as f32);
+                p.process(&mut io, 256);
+                let _ = LiveRead::of(&live.live);
+            }
+            assert_eq!(at, p.analysis().unwrap().live.buffer_address(), "{id}");
+            assert!(std::sync::Arc::ptr_eq(&live, &p.analysis().unwrap()), "{id}: the same handle every call");
+            assert_eq!(ptrs, io.iter().map(|c| (c.as_ptr(), c.capacity())).collect::<Vec<_>>());
         }
     }
 

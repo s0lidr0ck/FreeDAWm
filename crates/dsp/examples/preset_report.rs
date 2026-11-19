@@ -29,6 +29,44 @@ fn main() {
         return;
     }
     let filter = words.get(1).map(|s| s.to_lowercase());
+    // `--macros`: what each named macro does between 0 and 100 % (the `audible` score: 1.0 is
+    // the clearly-heard line), and whether it follows while a chord is held.
+    if args.iter().any(|a| a == "--macros") {
+        for id in SYNTHS.iter().filter(|id| only.is_none_or(|o| o == **id)) {
+            let list: Vec<lab::Preset> =
+                lab::presets(id).into_iter().filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f))).collect();
+            let jobs: Vec<(usize, usize)> = list.iter().enumerate().flat_map(|(k, p)| (0..p.macros.len()).map(move |i| (k, i))).collect();
+            let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).min(4);
+            let mut out: Vec<String> = vec![String::new(); jobs.len()];
+            let per = jobs.len().div_ceil(threads).max(1);
+            std::thread::scope(|s| {
+                for (part, js) in out.chunks_mut(per).zip(jobs.chunks(per)) {
+                    let list = &list;
+                    s.spawn(move || {
+                        for (o, &(k, i)) in part.iter_mut().zip(js) {
+                            let p = &list[k];
+                            let (score, what) = lab::macro_effect(p, i).unwrap_or((0.0, "no render".into()));
+                            let during = if args_during() {
+                                lab::macro_during(p, i).map_or(String::new(), |(a, b)| format!(" during {a:.2}/{b:.2}"))
+                            } else {
+                                String::new()
+                            };
+                            let flag = if score < 1.0 {
+                                "FAIL"
+                            } else if score < 1.5 {
+                                "thin"
+                            } else {
+                                "ok"
+                            };
+                            *o = format!("MACRO {id} | {} | {} | {} | {score:.2} | {flag} | {what}{during}", p.tier, p.name, p.macros[i].0);
+                        }
+                    });
+                }
+            });
+            out.iter().for_each(|l| println!("{l}"));
+        }
+        return;
+    }
     for id in SYNTHS.iter().filter(|id| only.is_none_or(|o| o == **id)) {
         let list = lab::presets(id);
         let base = lab::defaults(id).and_then(|p| measure(&p, false)).map_or(1.0, |r| r.seconds.max(1e-9));
@@ -97,4 +135,9 @@ fn summary(rs: &[Report]) {
         "summary: {} presets {tiers:?}; loudness mean {mean:.1} dBFS (sd {sd:.1}, {lo:.1} to {hi:.1}; {off} more than 3 dB from -12); worst peak {worst:.1} dBFS ({over} over -1); quietest state {quiet:.1} dBFS; worst aliasing {alias:.1} dB; most costly {cost:.1} x Init",
         rs.len()
     );
+}
+
+/// `--during`: also turn each macro while a chord is held (slower).
+fn args_during() -> bool {
+    std::env::args().any(|a| a == "--during")
 }

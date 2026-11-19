@@ -189,10 +189,14 @@ fn draw_filter(app: &mut SoundApp, ui: &mut Ui, r: Rect, cx: &Ctx) {
     let env_oct = cx.value("filter_env_amount") / 100.0 * 6.0;
     let (a, b) = (cutoff, (cutoff * 2f32.powf(env_oct)).clamp(LO_HZ, HI_HZ));
     p.rect_filled(Rect::from_x_y_ranges(x_of(a.min(b))..=x_of(a.max(b)), plot.y_range()), 0.0, kit::alpha(face.glow, 0.045));
+    // Where modulation has the filter now (the knobs' settings when nothing moves it): the curve
+    // and its point follow it, a faint ring stays at the setting.
+    let live_cut = cx.live_value("cutoff").map_or(cutoff, |c| c.clamp(LO_HZ, HI_HZ));
+    let live_k = cx.live_value("resonance").map_or(k, |r| 2.0 - 1.95 * (r.clamp(0.0, 100.0) / 100.0));
     let curve: Vec<Pos2> = (0..=200)
         .map(|i| {
             let x = plot.min.x + plot.width() * i as f32 / 200.0;
-            pos2(x, y_of(response_db(hz_of(x), cutoff, k, kind)))
+            pos2(x, y_of(response_db(hz_of(x), live_cut, live_k, kind)))
         })
         .collect();
     // The area under the curve, faintly lit.
@@ -209,7 +213,11 @@ fn draw_filter(app: &mut SoundApp, ui: &mut Ui, r: Rect, cx: &Ctx) {
     }
     p.add(egui::Shape::mesh(fill));
     kit::trace(&p, curve, face.glow, 2.4);
-    let dot = pos2(x_of(cutoff), y_of(response_db(cutoff, cutoff, k, kind)));
+    let dot = pos2(x_of(live_cut), y_of(response_db(live_cut, live_cut, live_k, kind)));
+    let set_at = pos2(x_of(cutoff), y_of(response_db(cutoff, cutoff, k, kind)));
+    if set_at.distance(dot) > 1.5 {
+        p.circle_stroke(set_at, 4.0, egui::Stroke::new(1.0, kit::alpha(face.glow, 0.5)));
+    }
     let resp = ui.interact(plot, egui::Id::new(("burley-filter", cx.track.0)), Sense::click_and_drag());
     let hot = resp.hovered() || resp.dragged();
     p.circle_filled(dot, if hot { 6.5 } else { 5.0 }, face.glow);

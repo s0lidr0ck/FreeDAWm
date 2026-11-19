@@ -177,7 +177,9 @@ fn draw_algorithm(app: &mut SoundApp, ui: &mut Ui, r: Rect, cx: &Ctx) {
             p.rect_stroke(b, 4.0, wire, egui::StrokeKind::Inside);
         }
         // The level as a bar along the box's foot.
-        let level = (cx.value(&format!("op{}_level", n + 1)) / 100.0).clamp(0.0, 1.0);
+        // The level where modulation has it now (the knob when nothing moves it).
+        let id = format!("op{}_level", n + 1);
+        let level = (cx.live_value(&id).unwrap_or_else(|| cx.value(&id)) / 100.0).clamp(0.0, 1.0);
         let bar = Rect::from_min_size(pos2(b.left() + 3.0, b.bottom() - 4.0), vec2((b.width() - 6.0) * level, 2.0));
         p.rect_filled(bar, 1.0, if heard { kit::alpha(face.well, 0.7) } else { face.glow });
         if n + 1 == chosen {

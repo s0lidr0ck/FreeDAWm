@@ -330,3 +330,27 @@ fn a_removed_tracks_analysis_leaves_with_its_instances() {
     drop(handles);
     assert!(w.upgrade().is_none());
 }
+
+/// A built-in synth's live modulation values reach its track's meter (its panel draws them) under
+/// the instrument's key, and leave with the instance when the instrument is changed.
+#[test]
+fn the_instruments_live_values_ride_on_the_meter() {
+    let mut s = Session::default();
+    let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, Some("Synth"));
+    let tr = s.track_mut(t).unwrap();
+    tr.instrument = Some(Insert::new("subtractive_synth"));
+    tr.mixer.output = Route::Main;
+    let mut eng = MixEngine::new(48_000.0, BLOCK);
+    render(&mut eng, &s, 0..2);
+    let find = |eng: &MixEngine| eng.meters[&t].analysis.iter().find(|(id, _)| *id == soundcraft_mix::INSTRUMENT_ANALYSIS).map(|(_, a)| a.clone());
+    let a = find(&eng).expect("the synth's handle");
+    assert_eq!(a.live.len(), soundcraft_dsp::plugins::synth_mod::LIVE_LEN);
+    let w = Arc::downgrade(&a);
+    drop(a);
+    s.track_mut(t).unwrap().instrument = Some(Insert::new("drum_synth"));
+    render(&mut eng, &s, 2..3);
+    assert!(find(&eng).is_none(), "the new instrument has none");
+    // (An engine that makes its own instances lets the retired ones go in `sync`.)
+    drop((eng.take_retired(), eng.take_retired_analysis()));
+    assert!(w.upgrade().is_none(), "gone with the synth: no copy is kept");
+}

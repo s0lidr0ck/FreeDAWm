@@ -165,9 +165,24 @@ pub fn secs(s: f32) -> usize {
     (s * RATE) as usize
 }
 
+/// A parameter moved during a render: from frame `at` (counted at 48 kHz, applied at the start
+/// of the block it falls in) parameter `param` is `value`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Change {
+    pub at: usize,
+    pub param: &'static str,
+    pub value: f32,
+}
+
 /// `p` playing `notes` for `frames` at `rate` in `state`: (left, right). `None` if the synth
 /// cannot be made.
 pub fn render_at(p: &Preset, rate: f32, state: State, notes: &[Note], frames: usize) -> Option<[Vec<f32>; 2]> {
+    render_changing(p, rate, state, notes, frames, &[])
+}
+
+/// [`render_at`] with parameters moved while it plays (`changes`, in time order): a knob
+/// turned during a held note.
+pub fn render_changing(p: &Preset, rate: f32, state: State, notes: &[Note], frames: usize, changes: &[Change]) -> Option<[Vec<f32>; 2]> {
     const BLOCK: usize = 256;
     let mut s = crate::create(p.plugin)?;
     s.prepare(rate, BLOCK, 2);
@@ -215,9 +230,17 @@ pub fn render_at(p: &Preset, rate: f32, state: State, notes: &[Note], frames: us
     }
     io.iter_mut().for_each(|c| c.iter_mut().for_each(|x| *x = 0.0));
     let mut next = 0;
+    let mut moved = 0;
     let mut t = 0;
     while t < total {
         let n = BLOCK.min(total - t);
+        while let Some(c) = changes.get(moved) {
+            if at(c.at) >= t + n {
+                break;
+            }
+            s.set_param(c.param, c.value);
+            moved += 1;
+        }
         while let Some(&(when, on, key, vel)) = ev.get(next) {
             if when >= t + n {
                 break;
@@ -549,4 +572,334 @@ pub fn line(r: &Report) -> String {
         r.pitch_cents,
         r.cost
     )
+}
+
+// ------------------------------------------------------------------------- what a macro does
+
+/// The octave bands a sound's level is compared in (centre frequencies, Hz).
+pub const BANDS: [f32; 9] = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
+
+/// What a stretch of sound is like, for telling two apart (a macro down and up).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Traits {
+    /// RMS of both sides, dBFS.
+    pub loud_db: f32,
+    /// Spectral centroid (Hz; 0 when silent), from the averaged spectrum.
+    pub centroid: f32,
+    /// Level in each of [`BANDS`], dB (relative: only differences mean anything).
+    pub bands_db: [f32; 9],
+    /// Amplitude modulation: the spread (standard deviation) of the 10 ms level in dB around
+    /// its straight-line trend (so a steady decay is not counted), and its rate (Hz).
+    pub amp_mod_db: f32,
+    pub amp_rate: f32,
+    /// Tone modulation: the spread of the centroid in octaves (1024-frame steps) around its
+    /// trend, and its rate (Hz).
+    pub tone_mod_oct: f32,
+    pub tone_rate: f32,
+    /// Side against mid (see [`width`]).
+    pub width: f32,
+    /// The lowest strong partial (Hz; 0: none found).
+    pub pitch_hz: f32,
+}
+
+/// Welch-averaged power spectrum of `x` (8192-frame Hann frames, half overlapping).
+fn averaged_power(x: &[f32]) -> Vec<f64> {
+    const N: usize = 8192;
+    let mut sum = vec![0.0f64; N / 2 + 1];
+    let mut frames = 0usize;
+    let mut at = 0;
+    while at + N <= x.len().max(N) {
+        let part = x.get(at..(at + N).min(x.len())).unwrap_or(&[]);
+        for (s, v) in sum.iter_mut().zip(power(part, N)) {
+            *s += v;
+        }
+        frames += 1;
+        at += N / 2;
+    }
+    let k = 1.0 / frames.max(1) as f64;
+    sum.iter_mut().for_each(|s| *s *= k);
+    sum
+}
+
+/// The residual spread of `ys` around its least-squares line, and the rate (per second, at one
+/// value every `step_s` seconds) it crosses that line (a quarter of its spread either side, so
+/// noise does not count).
+fn wobble(ys: &[f32], step_s: f32) -> (f32, f32) {
+    let n = ys.len();
+    if n < 8 {
+        return (0.0, 0.0);
+    }
+    let nf = n as f64;
+    let (mut sx, mut sy, mut sxx, mut sxy) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for (i, y) in ys.iter().enumerate() {
+        let (x, y) = (i as f64, f64::from(*y));
+        sx += x;
+        sy += y;
+        sxx += x * x;
+        sxy += x * y;
+    }
+    let den = nf * sxx - sx * sx;
+    let slope = if den.abs() > 1e-12 { (nf * sxy - sx * sy) / den } else { 0.0 };
+    let icpt = (sy - slope * sx) / nf;
+    let res: Vec<f64> = ys.iter().enumerate().map(|(i, y)| f64::from(*y) - (icpt + slope * i as f64)).collect();
+    let sd = (res.iter().map(|r| r * r).sum::<f64>() / nf).sqrt();
+    let h = sd * 0.25;
+    let mut side = 0i32;
+    let mut flips = 0usize;
+    for r in &res {
+        let now = if *r > h {
+            1
+        } else if *r < -h {
+            -1
+        } else {
+            side
+        };
+        if side != 0 && now != side {
+            flips += 1;
+        }
+        side = now;
+    }
+    (sd as f32, flips as f32 / 2.0 / (n as f32 * step_s))
+}
+
+/// A held note's pitch over time: `x` (at [`RATE`], a note near `hint` Hz) cut into 16 ms steps,
+/// each step's fundamental found by the YIN method (within 1.3 octaves of `hint`) on a copy
+/// taken down to 12 kHz; `None` for a step that is silent or has no clear period. Off the audio
+/// thread (allocates).
+pub fn f0_track(x: &[f32], hint: f32) -> Vec<Option<f32>> {
+    const DOWN: usize = 4;
+    const W: usize = 256;
+    const HOP: usize = 192;
+    let rate = RATE / DOWN as f32;
+    let y: Vec<f32> = x.chunks_exact(DOWN).map(|c| c.iter().sum::<f32>() / DOWN as f32).collect();
+    let tmin = ((rate / (hint * 2.5)).floor() as usize).max(2);
+    let tmax = (rate / (hint / 2.5)).ceil() as usize;
+    let mut out = Vec::new();
+    let mut d = vec![0.0f32; tmax + 2];
+    let mut at = 0;
+    while at + W + tmax + 2 <= y.len() {
+        let frame = y.get(at..at + W + tmax + 2).unwrap_or(&[]);
+        let energy: f32 = frame.iter().take(W).map(|v| v * v).sum::<f32>() / W as f32;
+        if energy < 1e-8 {
+            out.push(None);
+            at += HOP;
+            continue;
+        }
+        for (tau, dt) in d.iter_mut().enumerate().skip(1) {
+            *dt = (0..W).map(|j| frame.get(j).copied().unwrap_or(0.0) - frame.get(j + tau).copied().unwrap_or(0.0)).map(|v| v * v).sum();
+        }
+        // The cumulative-mean-normalised difference, and its first dip under the threshold.
+        let mut run = 0.0f32;
+        let mut cm = vec![1.0f32; tmax + 2];
+        for tau in 1..=tmax + 1 {
+            run += d[tau];
+            cm[tau] = if run > 0.0 { d[tau] * tau as f32 / run } else { 1.0 };
+        }
+        let mut pick = None;
+        let mut tau = tmin;
+        while tau <= tmax {
+            if cm[tau] < 0.15 {
+                while tau < tmax && cm[tau + 1] < cm[tau] {
+                    tau += 1;
+                }
+                pick = Some(tau);
+                break;
+            }
+            tau += 1;
+        }
+        out.push(pick.map(|t| {
+            let (a, b, c) = (cm[t - 1], cm[t], cm[t + 1]);
+            let den = a - 2.0 * b + c;
+            let shift = if den.abs() > 1e-9 { (0.5 * (a - c) / den).clamp(-0.5, 0.5) } else { 0.0 };
+            rate / (t as f32 + shift)
+        }));
+        at += HOP;
+    }
+    out
+}
+
+/// What a held note's pitch does (from [`f0_track`]): (its middle value in Hz, the vibrato's
+/// spread in cents around the trend, the vibrato's rate in Hz); `None` when fewer than 70 % of
+/// the steps found a clear period (an inharmonic or noisy sound).
+pub fn pitch_traits(x: &[f32], hint: f32) -> Option<(f32, f32, f32)> {
+    let track = f0_track(x, hint);
+    let heard: Vec<f32> = track.iter().flatten().copied().collect();
+    let sounding = track.len();
+    if sounding < 8 || (heard.len() as f32) < 0.7 * sounding as f32 {
+        return None;
+    }
+    let mut sorted = heard.clone();
+    sorted.sort_by(f32::total_cmp);
+    let mid = sorted.get(sorted.len() / 2).copied()?;
+    let cents: Vec<f32> = heard.iter().map(|f| 1200.0 * (f / mid).log2()).collect();
+    let (sd, rate) = wobble(&cents, 192.0 * 4.0 / RATE);
+    Some((mid, sd, rate))
+}
+
+/// The [`Traits`] of frames `from..to` of `x` (at [`RATE`]).
+pub fn traits(x: &[Vec<f32>; 2], from: usize, to: usize) -> Traits {
+    let to = to.min(x[0].len());
+    let from = from.min(to);
+    let part = [x[0].get(from..to).unwrap_or(&[]).to_vec(), x[1].get(from..to).unwrap_or(&[]).to_vec()];
+    let m = mono(&part);
+    let spec = averaged_power(&m);
+    let bin = f64::from(RATE) / 8192.0;
+    let (mut s, mut w) = (0.0, 0.0);
+    let mut bands = [0.0f64; 9];
+    for (k, v) in spec.iter().enumerate().skip(1) {
+        let hz = k as f64 * bin;
+        if hz > 20_000.0 {
+            break;
+        }
+        let mag = v.sqrt();
+        s += mag * hz;
+        w += mag;
+        for (b, c) in bands.iter_mut().zip(BANDS) {
+            let c = f64::from(c);
+            if hz >= c / std::f64::consts::SQRT_2 && hz < c * std::f64::consts::SQRT_2 {
+                *b += v;
+            }
+        }
+    }
+    let env: Vec<f32> = envelope(&part).into_iter().filter(|v| *v > 1e-5).map(db).collect();
+    let (amp_mod_db, amp_rate) = wobble(&env, 0.01);
+    let tone: Vec<f32> = m.chunks_exact(1024).filter(|c| rms(c) > 1e-4).filter_map(|c| centroid(c, RATE)).map(f32::log2).collect();
+    let (tone_mod_oct, tone_rate) = wobble(&tone, 1024.0 / RATE);
+    Traits {
+        loud_db: db(rms2(&part, 0, part[0].len())),
+        centroid: if w > 1e-12 { (s / w) as f32 } else { 0.0 },
+        bands_db: bands.map(|b| (10.0 * (b + 1e-20).log10()) as f32),
+        amp_mod_db,
+        amp_rate,
+        tone_mod_oct,
+        tone_rate,
+        width: width(&part),
+        pitch_hz: lowest_partial(m.get(..16384.min(m.len())).unwrap_or(&[])).unwrap_or(0.0),
+    }
+}
+
+/// How clearly a change from `a` to `b` is heard, as a score: 1.0 is the "clearly audible"
+/// line, and the reading that scored highest. The line is crossed by any one of these (each
+/// well past what a listener just notices, so the change is heard on a laptop's speakers in a
+/// mix, not only in a quiet room on headphones):
+/// - the brightness (centroid) moves by 25 % or more: about a third of an octave, several times
+///   the few per cent at which a change of brightness is first noticed;
+/// - the level in some octave band changes by 6 dB or more (bands more than 30 dB under the
+///   loudest are left out, being masked): twice the 3 dB that reads as "a little louder";
+/// - the overall level changes by 6 dB or more;
+/// - a modulation's depth changes by a factor of two or more, where the deeper one is at least
+///   1.5 dB of tremolo or a tenth of an octave of sweep (less is hardly heard as movement), or
+///   its rate by a factor of two where both are half as deep again (so a rate read from a
+///   barely moving sound does not count);
+/// - the pitch of a held note moves by a semitone or more, or its vibrato deepens by a factor of
+///   two where the deeper one spreads at least 8 cents (about ±11 cents: a gentle but plain
+///   vibrato) — measured by [`macro_effect`] on a single held note ([`pitch_traits`]), as a
+///   chord's pitch cannot be read reliably;
+/// - the stereo width changes by 30 % or more, where the wider one is at least 0.15 (side at
+///   −16 dB under mid: narrower images sound mono either way);
+/// - an envelope time (the attack, or the tail after a short note) changes by a factor of two
+///   or more where the longer one is at least 50 ms (attack) or 150 ms (tail).
+pub fn audible(a: &Traits, b: &Traits) -> (f32, String) {
+    let mut best = (0.0f32, String::from("nothing measurable"));
+    let mut take = |score: f32, what: String| {
+        if score.is_finite() && score > best.0 {
+            best = (score, what);
+        }
+    };
+    if a.centroid > 0.0 && b.centroid > 0.0 {
+        let r = b.centroid / a.centroid;
+        take(r.ln().abs() / 1.25f32.ln(), format!("brightness {:.0} -> {:.0} Hz", a.centroid, b.centroid));
+    }
+    let top = a.bands_db.iter().chain(&b.bands_db).copied().fold(f32::NEG_INFINITY, f32::max);
+    for (i, (x, y)) in a.bands_db.iter().zip(&b.bands_db).enumerate() {
+        if x.max(*y) < top - 30.0 {
+            continue;
+        }
+        take((y - x).abs() / 6.0, format!("{:.0} Hz band {:+.1} dB", BANDS[i], y - x));
+    }
+    take((b.loud_db - a.loud_db).abs() / 6.0, format!("level {:+.1} dB", b.loud_db - a.loud_db));
+    let depth = |x: f32, y: f32, floor: f32| if x.max(y) >= floor { (x.max(y) / x.min(y).max(floor * 0.25)).ln() / 2f32.ln() } else { 0.0 };
+    take(depth(a.amp_mod_db, b.amp_mod_db, 1.5), format!("tremolo {:.1} -> {:.1} dB", a.amp_mod_db, b.amp_mod_db));
+    take(depth(a.tone_mod_oct, b.tone_mod_oct, 0.1), format!("sweep {:.2} -> {:.2} oct", a.tone_mod_oct, b.tone_mod_oct));
+    if a.amp_mod_db.min(b.amp_mod_db) >= 2.25 && a.amp_rate > 0.0 && b.amp_rate > 0.0 {
+        take((b.amp_rate / a.amp_rate).ln().abs() / 2f32.ln(), format!("tremolo rate {:.1} -> {:.1} Hz", a.amp_rate, b.amp_rate));
+    }
+    if a.tone_mod_oct.min(b.tone_mod_oct) >= 0.15 && a.tone_rate > 0.0 && b.tone_rate > 0.0 {
+        take((b.tone_rate / a.tone_rate).ln().abs() / 2f32.ln(), format!("sweep rate {:.1} -> {:.1} Hz", a.tone_rate, b.tone_rate));
+    }
+    if a.width.max(b.width) >= 0.15 {
+        take((b.width - a.width).abs() / a.width.max(b.width) / 0.3, format!("width {:.2} -> {:.2}", a.width, b.width));
+    }
+    best
+}
+
+/// [`audible`] for envelope times: `a` and `b` in ms, `floor` the shortest that counts.
+fn time_score(a: f32, b: f32, floor: f32) -> f32 {
+    if a.max(b) < floor { 0.0 } else { (a.max(b) / a.min(b).max(floor * 0.25)).ln() / 2f32.ln() }
+}
+
+/// What turning macro `i` (0-based) of `p` from 0 to 100 % does, the other macros as saved:
+/// the [`audible`] score and what scored it, over a held chord (C3 G3 C4 E4, velocity 100,
+/// 2.5 s) and a short middle C (150 ms, for plucks and other sounds that die away).
+pub fn macro_effect(p: &Preset, i: usize) -> Option<(f32, String)> {
+    let held = chord(&MID_CHORD, 100, secs(2.5));
+    let short = [Note { at: 0, len: secs(0.15), key: 60, vel: 100 }];
+    let at = |v: f32, notes: &[Note], frames: usize| render(p, State { macros: Macros::One(i, v), wheel: 0.0 }, notes, frames);
+    let (h0, h1) = (at(0.0, &held, secs(2.5))?, at(100.0, &held, secs(2.5))?);
+    let (s0, s1) = (at(0.0, &short, secs(3.0))?, at(100.0, &short, secs(3.0))?);
+    let mut best = audible(&traits(&h0, secs(0.3), secs(2.5)), &traits(&h1, secs(0.3), secs(2.5)));
+    best.1 = format!("held: {}", best.1);
+    let (sc, what) = audible(&traits(&s0, 0, secs(0.6)), &traits(&s1, 0, secs(0.6)));
+    if sc > best.0 {
+        best = (sc, format!("short note: {what}"));
+    }
+    let (a0, a1) = (attack_ms(&envelope(&h0)), attack_ms(&envelope(&h1)));
+    let sc = time_score(a0, a1, 50.0);
+    if sc > best.0 {
+        best = (sc, format!("attack {a0:.0} -> {a1:.0} ms"));
+    }
+    let (t0, t1) = (tail_ms(&envelope(&s0), secs(0.15)), tail_ms(&envelope(&s1), secs(0.15)));
+    let sc = time_score(t0, t1, 150.0);
+    if sc > best.0 {
+        best = (sc, format!("tail {t0:.0} -> {t1:.0} ms"));
+    }
+    // A held middle C: its pitch and vibrato.
+    let one = [Note { at: 0, len: secs(2.5), key: 60, vel: 100 }];
+    let (n0, n1) = (at(0.0, &one, secs(2.5))?, at(100.0, &one, secs(2.5))?);
+    let hint = crate::midi_to_hz(60.0) as f32;
+    let pt = |x: &[Vec<f32>; 2]| pitch_traits(mono(x).get(secs(0.3)..).unwrap_or(&[]), hint);
+    if let (Some(a), Some(b)) = (pt(&n0), pt(&n1)) {
+        let cents = 1200.0 * (b.0 / a.0).log2();
+        let mut take = |score: f32, what: String| {
+            if score.is_finite() && score > best.0 {
+                best = (score, what);
+            }
+        };
+        take(cents.abs() / 100.0, format!("pitch {cents:+.0} cents"));
+        if a.1.max(b.1) >= 8.0 {
+            take((a.1.max(b.1) / a.1.min(b.1).max(2.0)).ln() / 2f32.ln(), format!("vibrato {:.0} -> {:.0} cents", a.1, b.1));
+        }
+        if a.1.min(b.1) >= 12.0 && a.2 > 0.0 && b.2 > 0.0 {
+            take((b.2 / a.2).ln().abs() / 2f32.ln(), format!("vibrato rate {:.1} -> {:.1} Hz", a.2, b.2));
+        }
+    }
+    Some(best)
+}
+
+/// Macro `i` (0-based) of `p` turned from 0 to 100 % over 200 ms while a chord is held (from
+/// 1.0 s; the other macros as saved), against the macro left at 0 and at 100 % throughout:
+/// (how far apart the two fixed renders are, how far the turned one still is from the one at
+/// 100 %), both [`audible`] scores of 1.6..2.8 s. A macro whose targets follow while a note is
+/// held leaves the second near zero.
+pub fn macro_during(p: &Preset, i: usize) -> Option<(f32, f32)> {
+    let param = MACRO_PARAMS.get(i)?;
+    let held = chord(&MID_CHORD, 100, secs(3.0));
+    let state = State { macros: Macros::One(i, 0.0), wheel: 0.0 };
+    let turn: Vec<Change> = (0..=10).map(|k| Change { at: secs(1.0) + k * secs(0.02), param, value: k as f32 * 10.0 }).collect();
+    let moved = render_changing(p, RATE, state, &held, secs(3.0), &turn)?;
+    let at0 = render(p, state, &held, secs(3.0))?;
+    let at1 = render(p, State { macros: Macros::One(i, 100.0), wheel: 0.0 }, &held, secs(3.0))?;
+    let t = |x: &[Vec<f32>; 2]| traits(x, secs(1.6), secs(2.8));
+    let (t0, t1, tm) = (t(&at0), t(&at1), t(&moved));
+    Some((audible(&t0, &t1).0, audible(&tm, &t1).0))
 }

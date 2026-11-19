@@ -297,6 +297,32 @@ fn open(info: &soundcraft_dsp::PluginInfo) -> Result<(SoundApp, Target), String>
                 exec(&mut app, "mix.macro_assign", json!({"track": t.0, "macro": 1, "dest": dest, "from": 0.0, "to": to}))?;
                 exec(&mut app, "mix.instrument_param", json!({"track": t.0, "param": "macro1", "value": 40.0}))?;
             }
+            // `PLUGIN_THUMB_LIVE=1`: a chord held on the synth for a while (offline), its live
+            // modulation read back as the panel reads it from the audio thread.
+            // `PLUGIN_THUMB_STATIC=1`: Reduce motion (the arcs as they were before live display).
+            app.extra.reduce_motion = std::env::var_os("PLUGIN_THUMB_STATIC").is_some();
+            if std::env::var_os("PLUGIN_THUMB_LIVE").is_some() {
+                let ins = app.engine.session().track(t).and_then(|tr| tr.instrument.clone()).ok_or("no instrument")?;
+                let mut p = soundcraft_dsp::create(info.id).ok_or("no synth")?;
+                p.prepare(SR, 256, 2);
+                for (k, v) in &ins.params {
+                    p.set_param(k, *v);
+                }
+                if let Some(prep) = &ins.prepared {
+                    p.set_prepared_state(&prep.data);
+                }
+                let secs: f32 = std::env::var("PLUGIN_THUMB_LIVE").ok().and_then(|s| s.parse().ok()).unwrap_or(0.35);
+                for n in [48u8, 55, 60, 64] {
+                    p.note_on(0, n, 110);
+                }
+                let mut io = vec![vec![0.0f32; 256]; 2];
+                for _ in 0..((SR * secs) as usize / 256).max(1) {
+                    p.process(&mut io, 256);
+                }
+                let mut strip = StripMeter::default();
+                strip.analysis.extend(p.analysis().map(|a| (soundcraft_mix::INSTRUMENT_ANALYSIS, a)));
+                app.preview_meters = Some(MeterSnapshot { tracks: [(t, strip)].into_iter().collect(), main: StripMeter::default() });
+            }
         }
         app.ui.plugin_windows.push((t, SlotKey::Instrument));
         return Ok((app, Target::Window(egui::Id::new(("plugin", t.0, SlotKey::Instrument)))));

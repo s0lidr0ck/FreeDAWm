@@ -40,13 +40,22 @@ pub fn arcs(ins: &Insert, face: &Face) -> (Vec<ModArc>, Vec<ArcKind>) {
             hi: a.max(b),
             amount: s.amount,
             name: src.name.to_string(),
+            src: si,
         });
         kinds.push(ArcKind::Slot(i));
     }
     for (m, mac) in ins.modulation.macros.iter().enumerate() {
         for (t, tg) in mac.targets.iter().enumerate() {
             let name = ins.modulation.macro_name(m);
-            out.push(ModArc { dest: tg.dest.clone(), colour: face.accent, lo: tg.from.min(tg.to), hi: tg.from.max(tg.to), amount: tg.to, name });
+            out.push(ModArc {
+                dest: tg.dest.clone(),
+                colour: face.accent,
+                lo: tg.from.min(tg.to),
+                hi: tg.from.max(tg.to),
+                amount: tg.to,
+                name,
+                src: SOURCES.len() + m,
+            });
             kinds.push(ArcKind::Macro(m, t));
         }
     }
@@ -103,6 +112,18 @@ pub struct State {
     pub hover_source: Option<usize>,
     /// The Back's input jack whose amount knob shows.
     pub amount_at: Option<String>,
+    /// The macro (0-based) whose knob or name was hovered last frame (its targets light up).
+    pub hover_macro: Option<usize>,
+    /// The macro last turned, and when (its targets' arcs light up a moment).
+    pub macro_touch: Option<(usize, f64)>,
+}
+
+/// How long a turned macro's targets stay lit, seconds.
+pub const MACRO_FLASH_S: f64 = 0.8;
+
+/// The destinations macro `m` (0-based) of `ins` drives.
+pub fn macro_targets(ins: &Insert, m: usize) -> Vec<String> {
+    ins.modulation.macros.get(m).map(|x| x.targets.iter().map(|t| t.dest.clone()).collect()).unwrap_or_default()
 }
 
 fn state_id(track: TrackId) -> Id {
@@ -331,7 +352,7 @@ pub fn sources(ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State) -> Option<usize> 
             y += line_h + 6.0;
         }
         let cr = Rect::from_min_size(pos2(x, y), vec2(w, line_h));
-        let resp = kit::chip(ui, cr, (cx.track.0, "src", i), s.name, source_colour(i), face);
+        let resp = kit::chip(ui, cr, (cx.track.0, "src", i), s.name, source_colour(i), face, cx.source_level(i));
         if resp.hovered() {
             hovered = Some(i);
         }
@@ -353,11 +374,14 @@ pub fn macros(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State
     kit::section(&p, r, "Macros", if cx.back { "outputs" } else { "" }, face);
     let cells = kit::section_cells(r, 4);
     let caps = (face.accent.lerp_to_gamma(Color32::WHITE, 0.15), face.accent.lerp_to_gamma(Color32::BLACK, 0.45), face.on_accent);
+    let now = ui.input(|i| i.time);
+    st.hover_macro = None;
     for (m, cell) in cells.iter().enumerate() {
         let name = cx.ins.modulation.macro_name(m);
         if cx.back {
             let c = pos2(cell.center().x, cell.top() + kit::KNOB * 0.5 + 1.0);
             kit::output_jack(&p, c, face.accent);
+            kit::level_light(&p, c, 2.6, face.accent, cx.source_level(SOURCES.len() + m));
             let lr = Rect::from_min_size(pos2(cell.left() - 8.0, cell.top() + kit::KNOB + 2.0), vec2(cell.width() + 16.0, 12.0));
             let w = crate::editor_kit::look::tracked_width(&p, &name, 9.5, 0.02, true);
             p.rect_filled(Rect::from_center_size(lr.center(), vec2(w + 6.0, 12.0)), 2.0, kit::alpha(face.panel_at(0.5), 0.92));
@@ -366,7 +390,15 @@ pub fn macros(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State
             continue;
         }
         let param = sm::MACRO_PARAMS[m];
-        kit::knob_ex(app, ui, cx, *cell, param, &name, Some(caps));
+        let knob = kit::knob_ex(app, ui, cx, *cell, param, &name, Some(caps));
+        // Turning a macro lights what it drives a moment; hovering it lights them as a source
+        // chip does.
+        if knob.response.dragged() || knob.response.changed() {
+            st.macro_touch = Some((m, now));
+        }
+        if knob.response.hovered() {
+            st.hover_macro = Some(m);
+        }
         let label = Rect::from_min_size(pos2(cell.left() - 4.0, cell.top() + kit::KNOB + 2.0), vec2(cell.width() + 8.0, 12.0));
         let hid = Id::new(("synth-macro-name", cx.track.0, m));
         if let Some((rm, text)) = st.rename.as_mut().filter(|(rm, _)| *rm == m) {
@@ -391,6 +423,7 @@ pub fn macros(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, st: &mut State
         if resp.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::Grab);
             p.rect_stroke(label, 3.0, Stroke::new(1.0, kit::alpha(face.accent, 0.6)), egui::StrokeKind::Inside);
+            st.hover_macro = Some(m);
         }
         if resp.drag_started() {
             st.drag = Some((Drag::Macro(m), label.center()));
@@ -466,6 +499,9 @@ pub fn back(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect, st: &mut Stat
             let fan = (k as f32 - (n as f32 - 1.0) * 0.5) * 5.0;
             let end = *b + vec2(fan, 0.0);
             let colour = cx.arcs.get(arc).map_or(Color32::WHITE, |x| x.colour);
+            // A cable carries its source's level: a little brighter as it rises.
+            let level = cx.arcs.get(arc).and_then(|x| cx.source_level(x.src)).unwrap_or(0.0);
+            let colour = colour.lerp_to_gamma(Color32::WHITE, 0.28 * level);
             let phase = if arc % 2 == 0 { 1.0 } else { -0.7 };
             shapes.extend(cable_shapes(a, end, colour, sw * phase));
             plugs.push((a, colour));
@@ -476,6 +512,18 @@ pub fn back(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, area: Rect, st: &mut Stat
     for (c, colour) in plugs {
         p.circle_filled(c, 4.5, colour.lerp_to_gamma(Color32::BLACK, 0.35));
         p.circle_filled(c, 2.8, colour);
+    }
+    // The sockets with cables glow with the level of what drives them: a ring round the nut.
+    for (dest, c) in &ends {
+        let level = cx
+            .arcs
+            .iter()
+            .filter(|a| &a.dest == dest)
+            .filter_map(|a| cx.source_level(a.src).map(|l| (l, a.colour)))
+            .max_by(|x, y| x.0.total_cmp(&y.0));
+        if let Some((l, colour)) = level.filter(|(l, _)| *l > 0.01) {
+            p.circle_stroke(*c, 11.5, Stroke::new(1.0 + 1.5 * l, kit::alpha(colour, 0.15 + 0.55 * l)));
+        }
     }
     // Gestures over the whole back.
     let resp = ui.interact(area, Id::new(("synth-back", cx.track.0)), Sense::click_and_drag());

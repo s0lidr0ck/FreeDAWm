@@ -389,6 +389,8 @@ pub struct FmSynth {
     rng: u32,
     /// The next operator step is the first of an output sample (the matrix moved on).
     frame_start: bool,
+    /// What the panel reads after each block (see [`sm::LIVE_SOUNDING`]).
+    live: std::sync::Arc<crate::analysis::Analysis>,
 }
 
 impl Default for FmSynth {
@@ -427,6 +429,7 @@ impl FmSynth {
             lfo_rate_mod: 5.0,
             rng: sm::RANDOM_SEED,
             frame_start: false,
+            live: std::sync::Arc::new(crate::analysis::Analysis::with_live(sm::LIVE_LEN)),
         };
         s.update();
         s
@@ -461,6 +464,24 @@ impl FmSynth {
         for v in self.voices.iter_mut().filter(|v| v.active()) {
             v.m.advance(used);
         }
+    }
+
+    /// The panel's live values after a block (see [`sm::LIVE_SOUNDING`]).
+    fn publish(&self) {
+        let shown = sm::shown_voice(self.voices.iter().map(|v| (v.active(), v.age)));
+        let mut src = [0.0f32; sm::N_SOURCES];
+        src[sm::SRC_LFO] = lfo_shape(self.p.choice(LFO_WAVE), self.lfo_phase);
+        src[sm::SRC_WHEEL] = self.wheel;
+        let voice = shown.and_then(|i| self.voices.get(i));
+        if let Some(v) = voice {
+            src[sm::SRC_AMP] = v.ops[0].env.level;
+            src[sm::SRC_ENV2] = v.env2.level;
+            src[sm::SRC_VEL] = v.vel;
+            src[sm::SRC_KEY] = sm::key_value(v.note);
+            src[sm::SRC_RND] = v.m.rnd;
+        }
+        let rate = self.lfo_rate();
+        sm::publish(&self.live.live, &self.mm, &self.infos, &self.bases, &self.macro_off, D_LFO_RATE, rate, &src, voice.map(|v| &v.m));
     }
 
     fn mod_tick(&mut self) {
@@ -835,6 +856,11 @@ impl Plugin for FmSynth {
         for e in evs.iter().take(count).skip(next) {
             self.apply(e.kind);
         }
+        self.publish();
+    }
+
+    fn analysis(&self) -> Option<std::sync::Arc<crate::analysis::Analysis>> {
+        Some(self.live.clone())
     }
 
     fn tail_samples(&self) -> usize {

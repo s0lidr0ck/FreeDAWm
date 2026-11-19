@@ -138,19 +138,21 @@ fn draw_table(app: &mut SoundApp, ui: &mut Ui, r: Rect, cx: &Ctx) {
     kit::display(&p, r, "Wavetable", face);
     let bank = cx.value("table").round().clamp(0.0, (tables::BANKS.len() - 1) as f32) as usize;
     let pos = (cx.value("position") / 100.0).clamp(0.0, 1.0);
+    // The bright wave is where modulation has Position now (the knob when nothing moves it).
+    let shown = cx.live_value("position").map_or(pos, |v| (v / 100.0).clamp(0.0, 1.0));
     const LAYERS: usize = 10;
     let (dx, dyy) = (10.0, 6.5);
     let w = r.width() - 40.0 - dx * (LAYERS - 1) as f32;
     let amp = 18.0;
     let mut y = vec![0.0f32; 192];
-    let current = ((pos * (LAYERS - 1) as f32).round() as usize).min(LAYERS - 1);
+    let current = ((shown * (LAYERS - 1) as f32).round() as usize).min(LAYERS - 1);
     // An imported table plays instead of the bank (see `wavetable_import`).
     let user = crate::wavetable_import::user_table(cx.ins);
     // Back to front: the deepest layer first, so the nearer ones cover it.
     for i in (0..LAYERS).rev() {
         let at = i as f32 / (LAYERS - 1) as f32;
         let here = i == current;
-        let wave_pos = if here { pos } else { at };
+        let wave_pos = if here { shown } else { at };
         match user.as_deref() {
             Some(t) => t.draw(wave_pos, &mut y),
             None => tables::draw(bank, wave_pos, &mut y),

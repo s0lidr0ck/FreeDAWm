@@ -161,9 +161,9 @@ fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synt
     let patchable = |d: &str| dests.contains(&d);
     // What lights up: every destination while a source or macro is dragged, else what the hovered
     // source drives.
-    let lit: Vec<String> = match (st.drag, st.hover_source) {
-        (Some((patch::Drag::Source(_) | patch::Drag::Macro(_), _)), _) => dests.iter().map(|d| (*d).to_string()).collect(),
-        (_, Some(i)) => {
+    let lit: Vec<String> = match (st.drag, st.hover_source, st.hover_macro) {
+        (Some((patch::Drag::Source(_) | patch::Drag::Macro(_), _)), _, _) => dests.iter().map(|d| (*d).to_string()).collect(),
+        (_, Some(i), _) => {
             let id = soundcraft_dsp::plugins::synth_mod::SOURCES.get(i).map_or("", |x| x.id);
             ins.modulation
                 .slots
@@ -172,8 +172,25 @@ fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synt
                 .map(|x| x.dest.clone())
                 .collect()
         }
+        (_, _, Some(m)) => patch::macro_targets(ins, m),
         _ => Vec::new(),
     };
+    // Live modulation: what the synth reads back from the audio thread this frame (the atomics
+    // behind its analysis handle, read now, not at the meters' rate), unless Reduce motion keeps
+    // the arcs static.
+    let now = ui.input(|i| i.time);
+    let motion = !app.extra.reduce_motion;
+    let live = if motion { live_read(app, track) } else { None };
+    // A macro just turned lights the arcs of everything it drives a moment.
+    let flash: Vec<String> = match st.macro_touch {
+        Some((m, at)) if motion && now - at < patch::MACRO_FLASH_S => patch::macro_targets(ins, m),
+        _ => Vec::new(),
+    };
+    if motion && (live.is_some_and(|l| l.sounding) || !flash.is_empty()) {
+        // Repaint only while a voice sounds or a lit macro fades; a moved control repaints by
+        // itself.
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+    }
     let centres = RefCell::new(Vec::new());
     let outputs = RefCell::new(Vec::new());
     let cx = kit::Ctx {
@@ -188,6 +205,9 @@ fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synt
         centres: &centres,
         back: st.back,
         outputs: &outputs,
+        motion,
+        live,
+        flash: &flash,
     };
     let top = Rect::from_min_size(inner.min, vec2(inner.width(), TOP_H));
     let clicked = top_bar(app, ui, &cx, top, s.name, s.kind, &[("Surprise", false), ("Front", !st.back), ("Back", st.back)]);
@@ -223,6 +243,16 @@ fn panel(app: &mut SoundApp, ui: &mut Ui, track: TrackId, ins: &Insert, s: &Synt
         patch::front_drop(app, ui, &cx, &mut st);
     }
     patch::set_state(ui.ctx(), track, st);
+}
+
+/// The live modulation values the instrument of `track` publishes (see
+/// `soundcraft_dsp::plugins::synth_mod::LIVE_SOUNDING`), read from its analysis handle on the
+/// track's meter: `None` while the audio is off or the instance has none.
+fn live_read(app: &SoundApp, track: TrackId) -> Option<soundcraft_dsp::plugins::synth_mod::LiveRead> {
+    // (An offscreen render or a test feeds `preview_meters` instead of a player.)
+    let m = app.preview_meters.as_ref().and_then(|p| p.tracks.get(&track)).or_else(|| app.meter_snapshot.tracks.get(&track))?;
+    let (_, a) = m.analysis.iter().find(|(id, _)| *id == soundcraft_mix::INSTRUMENT_ANALYSIS)?;
+    (a.live.len() >= soundcraft_dsp::plugins::synth_mod::LIVE_LEN).then(|| soundcraft_dsp::plugins::synth_mod::LiveRead::of(&a.live))
 }
 
 /// Whether `plugin` is drawn as an instrument panel.

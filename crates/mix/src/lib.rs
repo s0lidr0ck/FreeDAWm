@@ -252,6 +252,11 @@ pub fn create_instance_for(id: &str, state: Option<&[u8]>, sample_rate: f32, max
     Some(NewInstance { plugin, refused_state })
 }
 
+/// The key of the instrument's analysis handle in [`StripMeter::analysis`]: the id the
+/// instrument goes by as a key source (`sidechain::INSTRUMENT_OUT`), which no chain module has
+/// (`Mixer::sanitize` renumbers one that claims it).
+pub const INSTRUMENT_ANALYSIS: ModuleId = sidechain::INSTRUMENT_OUT;
+
 /// Peak meter values for one strip (linear, per channel, max over the last block).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StripMeter {
@@ -272,9 +277,9 @@ pub struct StripMeter {
     /// One entry per chain module, in chain order (resized only when the chain's structure
     /// changes, never while rendering).
     pub modules: Vec<ModuleMeter>,
-    /// Sample streams of the chain modules whose plugin has any, in chain order (filled in
-    /// `sync`, never while rendering). The `Arc` lives as long as the instance, so it survives
-    /// reorders.
+    /// Sample streams of the chain modules whose plugin has any, in chain order, then the
+    /// instrument's under [`INSTRUMENT_ANALYSIS`] (filled in `sync`, never while rendering). The
+    /// `Arc` lives as long as the instance, so it survives reorders.
     pub analysis: Vec<(ModuleId, Arc<soundcraft_dsp::analysis::Analysis>)>,
     /// Low-latency monitoring: bit `i` set means chain module `i` is bypassed by it (modules
     /// from 64 on aren't reported). Zero while it's off.
@@ -2179,20 +2184,6 @@ impl MixEngine {
             }
             strip.plugins = chain;
             strip.mods.resize(t.mixer.inserts.len(), ModuleMeter::default());
-            // Handles of instances that left the chain go with them, so the last reference is
-            // never dropped on the audio thread (see `take_retired_analysis`).
-            let old_analysis = std::mem::take(&mut strip.analysis);
-            strip.analysis.extend(strip.plugins.iter().flatten().filter_map(|p| Some((p.module, p.plugin.analysis()?))));
-            for (_, a) in old_analysis {
-                if !strip.analysis.iter().any(|(_, b)| Arc::ptr_eq(&a, b)) {
-                    cx.retired_analysis.push(a);
-                }
-            }
-            // The meter's copies of retired handles go now, while the retired ones are still held
-            // (an inactive track's meter is not refreshed by `render`).
-            if let Some(m) = self.meters.get_mut(&t.id) {
-                m.analysis.clone_from(&strip.analysis);
-            }
             for (m, ins) in strip.mods.iter_mut().zip(&t.mixer.inserts) {
                 m.module = ins.id;
             }
@@ -2223,6 +2214,23 @@ impl MixEngine {
                 if t.midi_fx.iter().any(|f| f.kind == soundcraft_model::MidiFxKind::Scale && f.follow > 0) {
                     midi_fx::sync_chords(&mut *slot.plugin, &midi_fx::chord_table(s));
                 }
+            }
+            // The chain's analysis handles, and the instrument's under [`INSTRUMENT_ANALYSIS`]
+            // (a synth's live modulation values for its panel). Handles of instances that left go
+            // with them, so the last reference is never dropped on the audio thread (see
+            // `take_retired_analysis`).
+            let old_analysis = std::mem::take(&mut strip.analysis);
+            strip.analysis.extend(strip.plugins.iter().flatten().filter_map(|p| Some((p.module, p.plugin.analysis()?))));
+            strip.analysis.extend(strip.instrument.as_ref().and_then(|p| p.plugin.analysis()).map(|a| (INSTRUMENT_ANALYSIS, a)));
+            for (_, a) in old_analysis {
+                if !strip.analysis.iter().any(|(_, b)| Arc::ptr_eq(&a, b)) {
+                    cx.retired_analysis.push(a);
+                }
+            }
+            // The meter's copies of retired handles go now, while the retired ones are still held
+            // (an inactive track's meter is not refreshed by `render`).
+            if let Some(m) = self.meters.get_mut(&t.id) {
+                m.analysis.clone_from(&strip.analysis);
             }
             let n = if t.mixer.inserts.is_empty() { 0 } else { ch };
             if strip.llm_dry.len() != n || strip.llm_dry.iter().any(|b| b.len() != mb) {

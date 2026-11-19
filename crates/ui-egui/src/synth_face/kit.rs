@@ -16,6 +16,7 @@ use crate::editor_kit::look::{tracked_text, tracked_width};
 use crate::theme::{bold, mono};
 use egui::{Align2, Color32, CornerRadius, CursorIcon, Id, Mesh, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
+use soundcraft_dsp::plugins::synth_mod::LiveRead;
 use soundcraft_dsp::{ParamInfo, PluginInfo, Unit};
 use soundcraft_model::{Insert, TrackId};
 use std::cell::RefCell;
@@ -418,7 +419,20 @@ pub struct Ctx<'a> {
     /// The Back's output jacks as drawn this frame: source index ([`SOURCE_COLOURS`] order, then
     /// the macros from 7) and centre.
     pub outputs: &'a RefCell<Vec<(usize, Pos2)>>,
+    /// Modulation is shown moving (off with Reduce motion: the arcs stay static).
+    pub motion: bool,
+    /// What the synth is doing now, read from the audio thread this frame (`None`: no reading,
+    /// as when the audio is off).
+    pub live: Option<LiveRead>,
+    /// Destinations whose arcs light up brightly a moment (a macro just turned).
+    pub flash: &'a [String],
 }
+
+/// The dot that shows where a modulated knob's value is now: its colour and radius (at the
+/// knob's full size).
+pub const LIVE_DOT: Color32 = Color32::from_rgb(0xff, 0xfb, 0xf0);
+/// See [`LIVE_DOT`].
+pub const LIVE_DOT_R: f32 = 2.7;
 
 /// One arc on a knob: the range a source (or a macro) moves it over, relative to where the knob
 /// stands, in the knob's travel; and the amount a drag on the arc changes.
@@ -431,6 +445,8 @@ pub struct ModArc {
     pub amount: f32,
     /// What drives it, for its menu ("LFO", a macro's name).
     pub name: String,
+    /// What drives it, by index: a source ([`SOURCE_COLOURS`] order), or a macro from 7.
+    pub src: usize,
 }
 
 /// What the panel does with a gesture on an arc (index into [`Ctx::arcs`]).
@@ -459,6 +475,60 @@ impl Ctx<'_> {
     /// `id`'s value as the synth clamps it (its default when missing).
     pub fn value(&self, id: &str) -> f32 {
         self.param_info(id).map_or(0.0, |p| p.clamp(self.ins.params.get(id).copied().filter(|v| v.is_finite()).unwrap_or(p.default)))
+    }
+
+    /// The macros' offset on destination `id` now, in its travel (each target's `from` to `to`
+    /// at its macro's position).
+    pub fn macro_offset(&self, id: &str) -> f32 {
+        let m = &self.ins.modulation;
+        m.macros
+            .iter()
+            .enumerate()
+            .flat_map(|(i, mac)| {
+                let v = (self.value(soundcraft_dsp::plugins::synth_mod::MACRO_PARAMS.get(i).copied().unwrap_or("")) / 100.0).clamp(0.0, 1.0);
+                mac.targets.iter().filter(move |t| t.dest == id).map(move |t| t.from + (t.to - t.from) * v)
+            })
+            .sum()
+    }
+
+    /// Where patched destination `id` is now, in its knob's travel (0..1): what the synth reads
+    /// back for the voice it shows, else the knob plus the macros' offsets. `None` when nothing
+    /// drives it, or with Reduce motion.
+    pub fn live_pos(&self, id: &str) -> Option<f32> {
+        if !self.motion || !self.arcs.iter().any(|a| a.dest == id) {
+            return None;
+        }
+        if let Some(v) = self.live.as_ref().and_then(|l| l.dest(&self.ins.plugin, id)) {
+            return Some(v);
+        }
+        let info = self.param_info(id)?;
+        Some((info.to_normalized(self.value(id)) + self.macro_offset(id)).clamp(0.0, 1.0))
+    }
+
+    /// [`Ctx::live_pos`] in `id`'s own units.
+    pub fn live_value(&self, id: &str) -> Option<f32> {
+        let info = self.param_info(id)?;
+        self.live_pos(id).map(|v| info.clamp(info.from_normalized(v)))
+    }
+
+    /// Source `i`'s level now for its light (0..1; bipolar sources centred), `None` with
+    /// Reduce motion or no reading. Macros (from 7) read their knob.
+    pub fn source_level(&self, i: usize) -> Option<f32> {
+        if !self.motion {
+            return None;
+        }
+        let n = soundcraft_dsp::plugins::synth_mod::N_SOURCES;
+        if i >= n {
+            let id = soundcraft_dsp::plugins::synth_mod::MACRO_PARAMS.get(i - n)?;
+            return Some((self.value(id) / 100.0).clamp(0.0, 1.0));
+        }
+        let live = self.live.as_ref()?;
+        let src = soundcraft_dsp::plugins::synth_mod::SOURCES.get(i)?;
+        if src.per_voice && !live.sounding {
+            return Some(0.0);
+        }
+        let v = *live.sources.get(i)?;
+        Some(if src.lo < 0.0 { (v + 1.0) * 0.5 } else { v }.clamp(0.0, 1.0))
     }
 }
 
@@ -504,8 +574,17 @@ pub const KNOB_CELL: Pos2 = pos2(46.0, 60.0);
 const A0: f32 = PI * 0.75;
 const SWEEP: f32 = PI * 1.5;
 
+/// Where the live dot of a knob at `c`, `size` across, is drawn for a value at `v01` of its
+/// travel (on the outermost arc's ring).
+pub fn live_dot_at(c: Pos2, size: f32, v01: f32) -> Pos2 {
+    let a = A0 + SWEEP * v01.clamp(0.0, 1.0);
+    c + vec2(a.cos(), a.sin()) * 20.0 * size / 58.0
+}
+
 /// The knob itself at `c`, `size` across, at `v01` of its travel: printed ticks (`steps` of them
-/// for a stepped knob), modulation arcs, the cap with its shadow and gradient, the pointer.
+/// for a stepped knob), modulation arcs (bright and haloed when `lit`: a macro just turned), the
+/// cap with its shadow and gradient, the pointer, and where the modulated value is now (`live`,
+/// a bright dot riding the arcs).
 #[allow(clippy::too_many_arguments)]
 pub fn paint_knob(
     p: &Painter,
@@ -517,6 +596,7 @@ pub fn paint_knob(
     arcs: &[(Color32, f32, f32)],
     steps: usize,
     lit: bool,
+    live: Option<f32>,
 ) {
     let s = size / 58.0;
     let pt = |a: f32, r: f32| c + vec2(a.cos(), a.sin()) * r * s;
@@ -539,7 +619,18 @@ pub fn paint_knob(
         }
         let segs = (((to - from) / 0.06).ceil() as usize).max(1);
         let arc: Vec<Pos2> = (0..=segs).map(|i| pt(from + (to - from) * i as f32 / segs as f32, r)).collect();
-        p.add(Shape::line(arc, Stroke::new(3.2 * s, *col)));
+        if lit {
+            p.add(Shape::line(arc.clone(), Stroke::new(6.5 * s, alpha(*col, 0.35))));
+            p.add(Shape::line(arc, Stroke::new(3.6 * s, col.lerp_to_gamma(Color32::WHITE, 0.35))));
+        } else {
+            p.add(Shape::line(arc, Stroke::new(3.2 * s, *col)));
+        }
+    }
+    if let Some(v) = live.filter(|_| !arcs.is_empty()) {
+        let at = live_dot_at(c, size, v);
+        let rad = LIVE_DOT_R * size / KNOB;
+        p.circle_filled(at, rad + 1.1, alpha(Color32::BLACK, 0.55));
+        p.circle_filled(at, rad, LIVE_DOT);
     }
     let (hi_c, lo_c, ptr) = cap;
     let r = 17.0 * s;
@@ -653,7 +744,8 @@ pub fn knob_ex(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, cell: Rect, id: &str, 
     let caps = cap.unwrap_or((face.cap_hi, face.cap_lo, face.pointer));
     let p = ui.painter();
     let grow = if lit { 1.08 } else { 1.0 };
-    paint_knob(p, centre, KNOB * grow, shown, face, caps, &arcs, steps, false);
+    let flash = cx.flash.iter().any(|d| d == id);
+    paint_knob(p, centre, KNOB * grow, shown, face, caps, &arcs, steps, flash, cx.live_pos(id));
     let lr = label_row(cell, krect.bottom());
     tracked_text(p, lr, Align2::CENTER_CENTER, label, 10.0, 0.04, true, true, face.ink);
     let shown_text = if out.value.is_some() { short_value(info, info.from_normalized(shown)) } else { value_text.clone() };
@@ -844,9 +936,18 @@ pub fn fader(app: &mut SoundApp, ui: &mut Ui, cx: &Ctx, r: Rect, id: &str, label
 
 // ------------------------------------------------------------------------------- source chips
 
-/// A source chip: a jack-like ring in the source's colour and its name on a key. Returns the
-/// response (drag it onto a knob to patch).
-pub fn chip(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug, text: &str, colour: Color32, face: &Face) -> Response {
+/// A source chip: a jack-like ring in the source's colour and its name on a key, its middle lit
+/// by the source's level now (`level`, 0..1; `None`: dark). Returns the response (drag it onto a
+/// knob to patch).
+pub fn chip(
+    ui: &mut Ui,
+    r: Rect,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    text: &str,
+    colour: Color32,
+    face: &Face,
+    level: Option<f32>,
+) -> Response {
     let resp = ui.interact(r, Id::new(("synth-chip", salt)), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, text));
     let p = ui.painter();
@@ -861,8 +962,17 @@ pub fn chip(ui: &mut Ui, r: Rect, salt: impl std::hash::Hash + std::fmt::Debug, 
     p.circle_filled(jack, 5.5, Color32::from_rgb(0x16, 0x13, 0x0f));
     p.circle_stroke(jack, 4.2, Stroke::new(2.6, colour));
     p.circle_stroke(jack, 5.5, Stroke::new(1.0, alpha(Color32::BLACK, 0.3)));
+    level_light(p, jack, 3.4, colour, level);
     tracked_text(p, Rect::from_min_max(pos2(jack.x + 9.0, r.top()), r.max), Align2::LEFT_CENTER, text, 9.5, 0.05, true, true, face.ink);
     resp
+}
+
+/// A small light in a jack's middle at `c` glowing with a source's level (0..1): the source's
+/// colour, brighter and with a faint halo as it rises. Nothing when `level` is `None` or 0.
+pub fn level_light(p: &Painter, c: Pos2, rad: f32, colour: Color32, level: Option<f32>) {
+    let Some(l) = level.filter(|l| l.is_finite() && *l > 0.01).map(|l| l.clamp(0.0, 1.0)) else { return };
+    p.circle_filled(c, rad + 3.0 * l, alpha(colour, 0.22 * l));
+    p.circle_filled(c, rad, colour.lerp_to_gamma(Color32::WHITE, 0.5 * l).gamma_multiply(0.35 + 0.65 * l));
 }
 
 /// The width a [`chip`] needs for `text`.
@@ -987,7 +1097,9 @@ pub fn outputs_on(ui: &mut Ui, cx: &Ctx, s: Rect, which: &[usize]) {
         let w = tracked_width(&p, tag, 8.5, 0.06, true);
         let plate = Rect::from_min_max(pos2(c.x - 11.0 - w - 2.0, c.y - 6.5), pos2(c.x + 10.0, c.y + 6.5));
         p.rect_filled(plate, cr(3.0), alpha(cx.face.panel_at(0.5), 0.95));
-        output_jack(&p, c, SOURCE_COLOURS.get(i).copied().unwrap_or(Color32::WHITE));
+        let colour = SOURCE_COLOURS.get(i).copied().unwrap_or(Color32::WHITE);
+        output_jack(&p, c, colour);
+        level_light(&p, c, 2.6, colour, cx.source_level(i));
         tracked_text(
             &p,
             Rect::from_min_max(pos2(plate.left() + 2.0, c.y - 6.0), pos2(c.x - 10.0, c.y + 6.0)),
