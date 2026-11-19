@@ -375,13 +375,17 @@ pub struct Clip {
 /// An ARA plug-in on an audio clip (Clip › ARA Plug-in…). Stage one of ARA hosting: the plug-in
 /// reads the clip's audio and analyses it; the clip still plays its own audio (playback through
 /// the plug-in, and saving the plug-in's edits, come with stage two).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClipAra {
     /// The plug-in's id (`vst3:<class id>`).
     pub plugin: String,
     /// Its name, as shown when the plug-in is not installed.
     #[serde(default)]
     pub name: String,
+    /// Bypassed: the clip plays its own audio, the plug-in keeps its edits (Bypass in the clip
+    /// menu's ARA submenu and the ARA Plug-ins window).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
 }
 
 /// One step of a clip's process history ([`Clip::processes`]).

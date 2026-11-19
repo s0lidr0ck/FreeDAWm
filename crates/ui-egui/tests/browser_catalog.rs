@@ -194,6 +194,7 @@ fn failures_counted() {
         path: PathBuf::from("keys.vst3"),
         ara: None,
         ara_checked: true,
+        ara_note: String::new(),
     };
     let au = AuDescriptor {
         id: "au:aufx:dely:Acme".into(),

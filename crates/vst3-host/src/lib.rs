@@ -126,6 +126,9 @@ pub struct Vst3Descriptor {
     /// Scanned by a version that looks for ARA (older scan results are scanned again once).
     #[serde(default)]
     pub ara_checked: bool,
+    /// Why the scan found no ARA here (empty when `ara` is set), for the ARA log.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ara_note: String,
 }
 
 /// What a VST3 plug-in offers for ARA 2 (from its `ARA::IMainFactory` and its audio module's
@@ -187,6 +190,41 @@ pub fn ara_factory(id: &str) -> Result<AraFactory, Vst3Error> {
     let main = registry::ara_main(id)?;
     let factory = main.factory().ok_or_else(|| Vst3Error::Instantiate(id.to_string(), "no ARA factory".into()))?;
     Ok(AraFactory { main, factory })
+}
+
+/// The folders a scan looks in (the standard VST3 folders, `VST3_PATH`, added folders).
+pub fn search_dirs() -> Vec<PathBuf> {
+    registry::search_dirs()
+}
+
+/// One line per scanned VST3 module (and per file the scan could not use) saying whether it offers
+/// ARA 2 and, if not, why: for the ARA log, so a plug-in missing from the ARA list can be told
+/// apart from one never found. Never scans.
+pub fn ara_scan_report() -> Vec<String> {
+    let mut out: Vec<String> = cached()
+        .unwrap_or_default()
+        .iter()
+        .map(|d| {
+            let what = match &d.ara {
+                Some(a) if a.usable => format!(
+                    "ARA 2 found: \"{}\" {} {} (generations {} to {}; roles: {})",
+                    a.name,
+                    a.manufacturer,
+                    a.version,
+                    a.lowest_generation,
+                    a.highest_generation,
+                    if a.roles.is_empty() { "none".to_string() } else { a.roles.join(", ") }
+                ),
+                Some(a) => format!("ARA main factory found but not usable: {}", a.problem),
+                None if !d.ara_checked => "scanned before ARA was looked for (scanned again by the next scan)".to_string(),
+                None if d.ara_note.is_empty() => "no ARA".to_string(),
+                None => format!("no ARA: {}", d.ara_note),
+            };
+            format!("VST3 {} ({} {}) in {}: {what}", d.name, d.vendor, d.version, d.path.display())
+        })
+        .collect();
+    out.extend(scan_failures().into_iter().map(|(p, why)| format!("VST3 {}: not scanned: {why}", p.display())));
+    out
 }
 
 /// The plug-ins the scan found to offer usable ARA 2 (without scanning).

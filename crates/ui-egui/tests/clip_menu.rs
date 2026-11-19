@@ -69,3 +69,74 @@ fn clip_menu_stays_open_while_moving_onto_delete() {
 
     assert_eq!(kick_clip_count(&h), before - 1, "clicking Delete in the clip menu should remove the clip");
 }
+
+fn app_harness() -> Harness<'static, SoundApp> {
+    let engine = soundcraft_engine::demo::demo_engine();
+    let app = SoundApp::new(engine, None, Services::default());
+    Harness::builder().with_size(vec2(1600.0, 1000.0)).with_pixels_per_point(2.0).build_ui_state(
+        |ui, app: &mut SoundApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    )
+}
+
+fn kick_clips(h: &Harness<'_, SoundApp>) -> Vec<soundcraft_model::ClipId> {
+    let s = h.state().engine.session();
+    s.tracks.iter().find(|t| t.name == "Kick").map(|t| t.clips().iter().map(|c| c.id).collect()).unwrap_or_default()
+}
+
+/// An audio clip's menu has the ARA submenu: greyed, with a Rescan item, while no ARA plug-in was
+/// found.
+#[test]
+fn audio_clip_menu_has_the_ara_submenu() {
+    let mut h = app_harness();
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    press(&mut h, 880.0, 240.0, PointerButton::Secondary);
+    for _ in 0..10 {
+        step(&mut h);
+    }
+    // No ARA plug-in scanned in tests: the item is there, greyed, and a rescan is offered.
+    assert!(h.query_by_label("ARA").is_some(), "the ARA item is in the audio clip's menu");
+    assert!(h.query_by_label("Rescan plugins").is_some());
+}
+
+/// On a clip given to an ARA plug-in (here one this machine lacks): Open Editor, Bypass, Remove.
+#[test]
+fn an_ara_clip_menu_bypasses_and_removes() {
+    let mut h = app_harness();
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    // Every Kick clip, so the one under the pointer has it.
+    let ids = kick_clips(&h);
+    for id in &ids {
+        h.state_mut().engine.session_mut().find_clip_mut(*id).unwrap().ara =
+            Some(soundcraft_model::ClipAra { plugin: "vst3:00000000000000000000000000000001".into(), name: "Tuner".into(), ..Default::default() });
+    }
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    press(&mut h, 880.0, 240.0, PointerButton::Secondary);
+    for _ in 0..10 {
+        step(&mut h);
+    }
+    let ara = h.get(egui_kittest::kittest::By::new().label_contains("ARA")).rect();
+    press(&mut h, ara.center().x, ara.center().y, PointerButton::Primary);
+    for _ in 0..10 {
+        step(&mut h);
+    }
+    assert!(h.query_by_label("Open Tuner Editor").is_some());
+    assert!(h.query_by_label("Bypass Tuner").is_some());
+    let remove = h.get_by_label("Remove Tuner").rect();
+    press(&mut h, remove.center().x, remove.center().y, PointerButton::Primary);
+    for _ in 0..10 {
+        step(&mut h);
+    }
+    let left = ids.iter().filter(|id| h.state().engine.session().find_clip(**id).unwrap().1.ara.is_some()).count();
+    assert_eq!(left, ids.len() - 1, "Remove took the clicked clip back");
+}

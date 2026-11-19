@@ -81,12 +81,22 @@ pub fn load_bundle(path: &Path) -> Result<Vec<Vst3Descriptor>, Vst3Error> {
             // with one of each pairs them whatever their names.
             let main = mains.iter().find(|m| m.name == c.name).or_else(|| if mains.len() == 1 && modules == 1 { mains.first() } else { None });
             let ara = main.map(|m| describe_ara(&b, m, c));
+            // Why it offers no ARA, for the ARA log (a plug-in the owner expected to see).
+            let ara_note = match (&ara, mains.len()) {
+                (Some(_), _) => String::new(),
+                (None, 0) => "no ARA main factory class in its binary".to_string(),
+                (None, n) => format!(
+                    "its binary has {n} ARA main factory class(es) ({}), none named like this module and it is not the only module",
+                    mains.iter().map(|m| format!("\"{}\"", m.name)).collect::<Vec<_>>().join(", ")
+                ),
+            };
             let c = c.clone();
             let subs = paths::split_sub_categories(&c.sub_categories);
             let class_id = crate::ffi::hex(&c.cid);
             Vst3Descriptor {
                 ara,
                 ara_checked: true,
+                ara_note,
                 id: format!("{}{class_id}", crate::ID_PREFIX),
                 category: paths::category_from_sub_categories(&subs),
                 is_instrument: paths::is_instrument(&subs),
@@ -155,6 +165,15 @@ pub fn ara_main(id: &str) -> Result<AraMain, Vst3Error> {
     let cid = parse_id(&format!("{}{}", crate::ID_PREFIX, ara.main_class_id)).ok_or_else(|| err("bad ARA main factory class id".into()))?;
     let b = Bundle::load(&desc.path)?;
     b.ara_main_factory(&cid).map_err(err)
+}
+
+/// The folders a scan looks in: the standard VST3 folders, `VST3_PATH` and the folders added with
+/// [`add_search_dir`].
+pub fn search_dirs() -> Vec<PathBuf> {
+    let r = lock();
+    let mut dirs = paths::default_search_paths();
+    dirs.extend(r.extra_dirs.iter().cloned());
+    dirs
 }
 
 /// Scans `dirs` in this process (uncached). Unloadable files are logged and skipped; the first

@@ -28,6 +28,7 @@ fn fake_helper() {
                 path: b.clone(),
                 ara: None,
                 ara_checked: true,
+                ara_note: String::new(),
             }]
         } else {
             Vec::new()

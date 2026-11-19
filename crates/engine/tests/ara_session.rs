@@ -38,7 +38,7 @@ fn import(e: &mut Engine, dir: &std::path::Path, file: &str, format: FileFormat,
     let t = e.session().tracks.last().unwrap();
     let c = t.clips().first().unwrap();
     let (id, src) = (c.id, c.source().unwrap());
-    e.session_mut().find_clip_mut(id).unwrap().ara = Some(ClipAra { plugin: PLUGIN.into(), name: "Test ARA".into() });
+    e.session_mut().find_clip_mut(id).unwrap().ara = Some(ClipAra { plugin: PLUGIN.into(), name: "Test ARA".into(), ..ClipAra::default() });
     (id, src, bytes)
 }
 
@@ -145,7 +145,7 @@ fn a_missing_plug_in_or_an_unsupported_clip_says_why() {
     let buf = signal(10_000, 0.0);
     let (a, _, _) = import(&mut e, &dir, "x.wav", FileFormat::Wav, BitDepth::Int16, &buf);
     let (b, _, _) = import(&mut e, &dir, "y.wav", FileFormat::Wav, BitDepth::Int16, &buf);
-    e.session_mut().find_clip_mut(a).unwrap().ara = Some(ClipAra { plugin: "vst3:gone".into(), name: "Gone".into() });
+    e.session_mut().find_clip_mut(a).unwrap().ara = Some(ClipAra { plugin: "vst3:gone".into(), name: "Gone".into(), ..ClipAra::default() });
     e.session_mut().find_clip_mut(b).unwrap().reversed = true;
     let mut h = host();
     h.sync(&e);

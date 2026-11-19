@@ -30,6 +30,7 @@ fn descriptor(id: &str, name: &str, path: &Path) -> Vst3Descriptor {
         path: path.to_path_buf(),
         ara: None,
         ara_checked: true,
+        ara_note: String::new(),
     }
 }
 

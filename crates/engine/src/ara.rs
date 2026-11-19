@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 /// Where the ARA log goes (`<settings>/logs/ara.log` in the app): every ARA document made or
 /// refused, and every plug-in programming error ARA reports.
+pub use soundcraft_ara_host::log::line as log_line;
 pub use soundcraft_ara_host::{log_file, recent_log, set_log_file};
 
 /// A session file's audio as ARA reads it: the session's own decoded or disk-backed audio.
@@ -356,6 +357,15 @@ impl AraHost {
     /// Why a plug-in has no document, if it was refused.
     pub fn refused(&self, plugin: &str) -> Option<&str> {
         self.refused.get(plugin).map(String::as_str)
+    }
+
+    /// Whether the plug-in's editor window can be opened for `clip`, or why not.
+    pub fn can_open_editor(&self, clip: &Clip) -> Result<(), String> {
+        let a = clip.ara.as_ref().ok_or("The clip is not given to an ARA plug-in")?;
+        if let Some(why) = self.refused.get(&a.plugin) {
+            return Err(format!("The plug-in cannot be used: {why}"));
+        }
+        Err("The plug-in's editor window is not built yet (ARA stage three)".into())
     }
 
     /// Forgets the refusals, so the next change of the session tries those plug-ins again (after a

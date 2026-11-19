@@ -4879,6 +4879,7 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
             ui.close();
         }
     }
+    crate::ara_ui::clip_menu(app, ui, c);
     ui.separator();
     ml_menu(app, ui, json!({"clip": c.0}));
 }

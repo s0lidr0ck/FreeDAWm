@@ -63,6 +63,10 @@ fn the_scan_finds_ara_and_its_roles() {
     assert_eq!(a.main_class_id.len(), 32);
     let plain = find("Fixture Plain");
     assert!(plain.ara.is_none() && plain.ara_checked);
+    assert!(!plain.ara_note.is_empty(), "the scan says why it offers no ARA");
+    let report = soundcraft_vst3_host::ara_scan_report();
+    assert!(report.iter().any(|l| l.contains("Fixture Plain") && l.contains("no ARA")), "{report:?}");
+    assert!(report.iter().any(|l| l.contains("Fixture ARA") && l.contains("ARA 2 found")), "{report:?}");
     // Only the usable one is offered.
     let offered = soundcraft_vst3_host::ara_plugins();
     assert!(offered.iter().any(|p| p.name == "Fixture ARA"));

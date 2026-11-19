@@ -21,6 +21,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("clip.ara_remove", "Remove ARA Plug-in", [], None, "{clips?} — the clips are taken back from their ARA plug-in", has_ara_clip, remove),
         cmd!(
+            "clip.ara_bypass",
+            "Bypass ARA Plug-in",
+            [],
+            None,
+            "{clips?, on?: bool} — bypasses (or, with on false, un-bypasses; without on, toggles) the ARA plug-in of the clips: a bypassed clip plays its own audio and the plug-in keeps its edits",
+            has_ara_clip,
+            bypass
+        ),
+        cmd!(
             query "engine.ara_plugins",
             "List ARA Plug-ins",
             [],
@@ -72,7 +81,7 @@ fn add(e: &mut Engine, p: &Value) -> Result<Value> {
             left_out.push(json!({"clip": id.0, "why": why}));
             continue;
         }
-        c.ara = Some(ClipAra { plugin: plugin.clone(), name: name.clone() });
+        c.ara = Some(ClipAra { plugin: plugin.clone(), name: name.clone(), ..ClipAra::default() });
         given += 1;
     }
     if given == 0 {
@@ -97,6 +106,27 @@ fn remove(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({"clips": n}))
+}
+
+fn bypass(e: &mut Engine, p: &Value) -> Result<Value> {
+    let ids = clip_ids_param(e, p);
+    let s = e.session();
+    let given: Vec<ClipId> = ids.into_iter().filter(|id| s.find_clip(*id).is_some_and(|(_, c)| c.ara.is_some())).collect();
+    if given.is_empty() {
+        return Err(bad("clip.ara_bypass", "no selected clip is given to an ARA plug-in"));
+    }
+    // Without `on`: all bypassed when any is not, else all back on.
+    let on = p
+        .get("on")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| given.iter().any(|id| s.find_clip(*id).is_some_and(|(_, c)| c.ara.as_ref().is_some_and(|a| !a.bypass))));
+    let s = e.session_mut();
+    for id in &given {
+        if let Some(a) = s.find_clip_mut(*id).and_then(|c| c.ara.as_mut()) {
+            a.bypass = on;
+        }
+    }
+    Ok(json!({"clips": given.len(), "bypass": on}))
 }
 
 #[cfg(test)]
@@ -126,6 +156,12 @@ mod tests {
         assert_eq!(r["clips"], 1);
         let ara = e.session().find_clip(id).unwrap().1.ara.clone().unwrap();
         assert_eq!((ara.plugin.as_str(), ara.name.as_str()), ("test:Pitch Tool", "Pitch Tool"));
+        e.execute("clip.ara_bypass", &json!({})).unwrap();
+        assert!(e.session().find_clip(id).unwrap().1.ara.as_ref().unwrap().bypass);
+        e.execute("clip.ara_bypass", &json!({})).unwrap();
+        assert!(!e.session().find_clip(id).unwrap().1.ara.as_ref().unwrap().bypass);
+        e.execute("edit.undo", &json!({})).unwrap();
+        e.execute("edit.undo", &json!({})).unwrap();
         e.execute("clip.ara_remove", &json!({})).unwrap();
         assert!(e.session().find_clip(id).unwrap().1.ara.is_none());
         e.execute("edit.undo", &json!({})).unwrap();
