@@ -302,7 +302,7 @@ fn factory_slot(k: usize) -> MusicianSlot {
         (true, 0, "Clay", 1, 1, true, -1, 0, 0),
         (true, 5, "Benny", 8, 1, true, -2, 0, 0),
         (true, 2, "Cole", 41, 1, true, 0, 0, 0),
-        (true, 7, "Aria", 14, 4, true, 2, 1, -1),
+        (true, 7, "Aria", 14, 4, true, 0, 1, -1),
         (true, 9, "Duke", 16, 4, true, 0, 0, 0),
         (false, 0, "Session", 0, 3, false, 0, 1, 0),
     ];

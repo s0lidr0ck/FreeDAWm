@@ -106,7 +106,7 @@
         "dynamics": 50,
         "fills": 50,
         "respect": 1,
-        "octave": 2,
+        "octave": 0,
         "length": 100,
         "velocity": 96,
         "speed": 1,
