@@ -181,6 +181,11 @@ fn new_band(e: &mut Engine, p: &Value) -> Result<Value> {
     }
     s.edit.selected_tracks = tracks.clone();
     super::band::show_lane_rulers(e);
+    // The Band ruler too: who plays where, and the band's controls in its name cell.
+    let rulers = &mut e.session_mut().edit.rulers;
+    if !rulers.iter().any(|r| r == "band") {
+        super::view_more::set_ruler(rulers, "band", true);
+    }
     Ok(json!({"tracks": tracks, "song": laid.and_then(|v| v.get("song").cloned()), "musicians": musicians}))
 }
 

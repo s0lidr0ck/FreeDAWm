@@ -43,6 +43,7 @@ fn a_new_band_is_heard_with_no_plugins_installed_and_undoes_in_one_step() {
     assert_eq!(s.track_by_name("Bass").unwrap().instrument.as_ref().unwrap().preset, "Round Bass");
     assert!(!s.band.sections.is_empty() && !s.band.chords.is_empty());
     assert!(s.edit.rulers.iter().any(|r| r == "sections") && s.edit.rulers.iter().any(|r| r == "band_chords"));
+    assert!(s.edit.rulers.iter().any(|r| r == "band"), "the Band ruler shows: {:?}", s.edit.rulers);
     // Every musician is heard on their own.
     for t in &s.tracks {
         let a = render_alone(&e, t.id, 4);

@@ -273,6 +273,11 @@ pub enum Dialog {
         id: soundcraft_model::MarkerId,
         name: String,
     },
+    /// The Sections ruler's Rename…: a section definition's name (every block of that letter).
+    RenameSection {
+        letter: char,
+        name: String,
+    },
     /// A breakpoint's Set Value…: its value typed in the lane's unit.
     PointValue {
         track: TrackId,
@@ -464,6 +469,7 @@ impl Dialogs {
             Dialog::ClipNotes { .. } => "clip_notes",
             Dialog::SelectionField { .. } => "selection_field",
             Dialog::RenameMarker { .. } => "rename_marker",
+            Dialog::RenameSection { .. } => "rename_section",
             Dialog::PointValue { .. } => "point_value",
             Dialog::ClearClips { .. } => "clear_clips",
             Dialog::PathPrompt { .. } => "path",
@@ -503,6 +509,10 @@ impl Dialogs {
 
     pub fn open_clip_notes(&mut self, id: ClipId, text: &str) {
         self.open = Some(Dialog::ClipNotes { id, text: text.to_string() });
+    }
+
+    pub fn open_rename_section(&mut self, letter: char, name: &str) {
+        self.open = Some(Dialog::RenameSection { letter, name: name.to_string() });
     }
 
     pub fn open_rename_marker(&mut self, id: soundcraft_model::MarkerId, name: &str) {
@@ -914,6 +924,7 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::SelectionField { field, .. } if field == "length" => "Selection Length",
         Dialog::SelectionField { .. } => "Selection Start",
         Dialog::RenameMarker { .. } => "Rename Marker",
+        Dialog::RenameSection { .. } => "Rename Section",
         Dialog::PointValue { .. } => "Set Point Value",
         Dialog::ClearClips { .. } => "Clear",
         Dialog::PathPrompt { title, .. } | Dialog::Number { title, .. } => title.as_str(),
@@ -1263,6 +1274,14 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                     name_field(ui, name);
                     if buttons(ui, "OK", enter) {
                         action = Some(("markers.edit".into(), json!({"id": id.0, "rename": name})));
+                    }
+                }
+                Dialog::RenameSection { letter, name } => {
+                    ui.label(format!("Every {letter} block on the Sections ruler takes the name"));
+                    name_field(ui, name);
+                    let ok = !name.trim().is_empty();
+                    if buttons_enabled(ui, "OK", enter, ok) {
+                        action = Some(("band.def".into(), json!({"id": letter.to_string(), "name": name.trim()})));
                     }
                 }
                 Dialog::PointValue { track, param, at, text } => {

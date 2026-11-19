@@ -2,7 +2,7 @@
 //! section's state per musician, and the Energy each musician plays there.
 //!
 //! MS builds its map from an export render (note-ons per bar, fills, pickups, pushes, varied
-//! bars). That half needs the whole band rendered and is not ported here: the Studio's view shows
+//! bars). That half needs the whole band rendered and is not ported here: the Band ruler shows
 //! what the timeline decides, which is MS's section strip (`section`, `energyAdd`, `entry`) and
 //! its lane marks (sat out, kept), translated line by line, plus each musician's Energy there as
 //! the musician computes it on a section change (`MusicianCore.cpp`: a section's fixed Energy, else

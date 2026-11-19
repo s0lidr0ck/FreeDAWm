@@ -4,8 +4,9 @@
 //! Top to bottom: Enabled and Mute; Instrument and Player (a persona browser grouped by
 //! instrument, with a search box); Energy; the Swing, Humanize, Dynamics, Fills and (Natural feel
 //! only) Groove dials; Respect chords; Octave, Length and Velocity; Speed; Voice; the band's Take
-//! (MIDI Studio has no per-musician take); the Target (Auto and what it picked, or a name); then
-//! the rows the target's driver needs, as MIDI Studio's `MusicianTab` shows them.
+//! (MIDI Studio has no per-musician take); the Instrument plug-in (the musician's target: Auto and
+//! what it picked, or a name); then the rows the target's driver needs, as MIDI Studio's
+//! `MusicianTab` shows them.
 //!
 //! Every edit is `band.slot` (the Take `band.settings`); a drag is one undo step.
 
@@ -112,7 +113,7 @@ fn is_auto(m: &MusicianSlot) -> bool {
     m.target.trim().is_empty() || m.target.eq_ignore_ascii_case("auto")
 }
 
-/// The Target field's text: "Auto → MODO DRUM", or the chosen name.
+/// The Instrument plug-in field's text (the musician's target): "Auto → MODO DRUM", or the chosen name.
 pub(crate) fn target_text(lib: &LibraryData, m: &MusicianSlot, track: &Track) -> String {
     if is_auto(m) {
         let name = target_slot(lib, m, track).and_then(|s| lib.target(s as i32)).map_or("Generic", |t| t.name.as_str());
@@ -210,9 +211,9 @@ fn report(app: &mut SoundApp, r: Result<Value, String>) {
 }
 
 /// The drawer of musician `slot` (0-5) for `track`, a column [`BAND_DRAWER_W`] wide and as tall
-/// as the strips. `in_studio`: drawn in Window ▸ Studio (its fold closes the Studio's musician
-/// panel) rather than beside a Mix strip.
-pub fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: u8, in_studio: bool) {
+/// as the strips. `in_panel`: drawn in a musician's settings panel (its fold closes the panel)
+/// rather than beside a Mix strip.
+pub fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: u8, in_panel: bool) {
     let t = Tokens::current();
     let h = ui.available_height().max(560.0);
     let (r, _) = ui.allocate_exact_size(vec2(BAND_DRAWER_W, h), Sense::hover());
@@ -237,7 +238,7 @@ pub fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: u8, in_studi
     crate::widgets::vgradient(&p, wash, BAND_ACCENT.gamma_multiply(0.12), BAND_ACCENT.gamma_multiply(0.0));
 
     let inner = card.shrink(PAD);
-    let y = header(app, ui, track, usize::from(slot), m, inner, in_studio);
+    let y = header(app, ui, track, usize::from(slot), m, inner, in_panel);
     let body = Rect::from_x_y_ranges(inner.x_range(), (y + 8.0)..=inner.max.y);
     let mut body_ui = ui.new_child(UiBuilder::new().id_salt("band-body").max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)));
     body_ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -253,7 +254,7 @@ pub fn drawer(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: u8, in_studi
 }
 
 /// Track · musician, the player and instrument, and the fold button. Returns the y under it.
-fn header(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, m: &MusicianSlot, inner: Rect, in_studio: bool) -> f32 {
+fn header(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, m: &MusicianSlot, inner: Rect, in_panel: bool) -> f32 {
     let t = Tokens::current();
     let p = ui.painter().clone();
     let y = inner.min.y;
@@ -268,8 +269,8 @@ fn header(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, m: &Music
     p.line_segment([c - vec2(4.0, 4.0), c + vec2(4.0, 4.0)], Stroke::new(1.5, xc));
     p.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], Stroke::new(1.5, xc));
     if fresp.on_hover_text("Fold the band drawer").clicked() {
-        if in_studio {
-            app.studio.musician = None;
+        if in_panel {
+            app.band_ui.musician = None;
         } else {
             app.ui.band_drawers.remove(&track.id);
         }
@@ -487,10 +488,12 @@ impl Body<'_, '_> {
             self.app.engine.end_merge();
         }
         let right = Rect::from_min_max(pos2(take_r.max.x + 8.0, r.min.y), r.max);
-        self.caption(Rect::from_min_size(right.min, vec2(right.width(), CAPTION_H)), "Target");
+        self.caption(Rect::from_min_size(right.min, vec2(right.width(), CAPTION_H)), "Instrument plug-in");
         let target_r = Rect::from_min_size(pos2(right.min.x, right.min.y + CAPTION_H), vec2(right.width(), FIELD_H));
-        let tresp = field(self.ui, target_r, &target_text(lib, m, track), "Target");
-        let tresp = tresp.on_hover_text("The instrument this musician plays: Auto picks it by the track's instrument name");
+        let tresp = field(self.ui, target_r, &target_text(lib, m, track), "Instrument plug-in");
+        let tresp = tresp.on_hover_text(
+            "The plug-in this musician's notes are shaped for (its keyswitches and articulations): Auto picks it by the track's instrument; Generic sends plain General MIDI notes",
+        );
         egui::Popup::menu(&tresp).show(|ui| target_menu(self.app, ui, self.ctx, lib, m, track));
         self.gap(GAP);
 

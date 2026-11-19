@@ -524,6 +524,7 @@ fn ruler_label(id: &str) -> &'static str {
         "sections" => "Sections",
         // The Band's chord lane (the old Chord Symbols ruler, marker lane 2, is gone).
         "band_chords" => "Chords",
+        "band" => "Band",
         "lyrics" => "Lyrics",
         "timecode2" => "Timecode 2",
         "markers2" => "Markers 2",
@@ -539,6 +540,7 @@ pub fn ruler_height(id: &str) -> f32 {
     match id {
         "tempo_editor" => 56.0,
         "sections" | "band_chords" => crate::band::lanes::LANE_H,
+        "band" => crate::band::ruler::RULER_H,
         "lyrics" => 24.0,
         _ => RULER_H,
     }
@@ -613,7 +615,12 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
             crate::ruler_items::label_menu_head(app, ui, id, ruler_label(id));
             crate::menus::ruler_context_menu(app, ui, id);
         });
-        ui.painter().text(pos2(lab.max.x - 12.0, lab.center().y), Align2::RIGHT_CENTER, ruler_label(id), bold(11.0), t.ruler_text);
+        if id == "band" {
+            // The Band ruler's name cell holds the band's controls (the whole width left of the timeline).
+            crate::band::ruler::name_cell(app, ui, Rect::from_min_max(lab.min, pos2(tl.min.x - 1.0, lab.max.y)));
+        } else {
+            ui.painter().text(pos2(lab.max.x - 12.0, lab.center().y), Align2::RIGHT_CENTER, ruler_label(id), bold(11.0), t.ruler_text);
+        }
         let fmt = TimeFormat::from_id(id);
         match id.as_str() {
             "tempo" => crate::tempo_markers::tempo_ruler(app, ui, &painter, &s, tl, row),
@@ -636,6 +643,7 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
             }
             "sections" => crate::band::lanes::sections_ruler(app, ui, &painter, &s, tl, row),
             "band_chords" => crate::band::lanes::chords_ruler(app, ui, &painter, &s, tl, row),
+            "band" => crate::band::ruler::lanes(app, ui, &painter, &s, tl, row),
             "lyrics" => crate::lyric_ruler::lyrics_ruler(app, ui, &painter, &s, tl, row),
             "key" => crate::key_ruler::key_ruler(app, ui, &painter, &s, tl, row),
             "timecode2" => {
@@ -1352,6 +1360,15 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
         track.name.clone()
     };
     let name_color = if selected { t.text_dark } else { t.text.lerp_to_gamma(t.text_dim, 0.4) };
+    // A track playing a band musician: "♪ 2 · Benny" at the end of the name plate; a click opens
+    // that musician's settings.
+    let name_r = match crate::band::musician_of(track) {
+        Some(k) => {
+            let player = app.engine.session().band.slots.get(usize::from(k)).map(|m| crate::band::slot_player(m).to_string()).unwrap_or_default();
+            crate::band::ruler::header_badge(app, ui, track, name_r, k, &player)
+        }
+        None => name_r,
+    };
     // Frozen: a snowflake at the end of the name plate.
     let name_r = if track.frozen_audio().is_some() {
         let flake = Rect::from_min_max(pos2(name_r.max.x - 13.0, name_r.min.y), name_r.max);
@@ -2402,11 +2419,11 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
         let selected = crate::window_sync::selection_of(app, window);
         if selected.contains(&id) { selected.iter().map(|track| track.0).collect() } else { vec![tid] }
     };
-    // A track playing a band musician: that musician's controls, in Window ▸ Studio.
+    // A track playing a band musician: that musician's settings panel.
     if let Some(k) = app.engine.session().track(id).and_then(crate::band::musician_of) {
-        let tip = "The musician this track plays: player, Energy, feel and target, in Window ▸ Studio";
+        let tip = "The musician this track plays: player, Energy, feel and instrument plug-in";
         if ui.button("Musician Settings...").on_hover_text(tip).clicked() {
-            if let Err(e) = app.run("window.studio", json!({"value": true, "musician": k + 1})) {
+            if let Err(e) = app.run("window.musician", json!({"value": true, "musician": k + 1})) {
                 app.ui.status = e;
             }
             ui.close();

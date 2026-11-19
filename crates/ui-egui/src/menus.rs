@@ -95,7 +95,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.search", "Search", "Window > Pro Tools Search", Some("Cmd+Ctrl+S")),
     ("window.score", "Score Editor", "Window > Score Editor", Some("Cmd+Ctrl+=")),
     ("window.scout", "Scout", "Window > Scout", None),
-    ("window.studio", "Studio", "Window > Studio", None),
+    ("window.musician", "Musician Settings", "", None),
+    ("window.band_print", "Print Band to MIDI", "Track > Print Band to MIDI...", None),
+    ("ui.band.import_chords", "Import MIDI Chords", "File > Import > MIDI Chords...", None),
     ("ui.scout.copy", "Copy Scout Prompt + Package", "", None),
     ("ui.scout.package", "Scout Package", "", None),
     ("ui.scout.send", "Ask Claude (Scout)", "", None),
@@ -209,7 +211,7 @@ pub fn ui_aliases() -> Vec<(&'static str, &'static str)> {
 
 /// The Band's lanes in View › Rulers, right after Key Signature (not in the incumbent's catalog).
 /// The chord lane's ruler is labelled "Chords" (its id stays `band_chords`).
-const BAND_RULERS: [&str; 3] = ["View > Rulers > Sections", "View > Rulers > Chords", "View > Rulers > Lyrics"];
+const BAND_RULERS: [&str; 4] = ["View > Rulers > Sections", "View > Rulers > Chords", "View > Rulers > Band", "View > Rulers > Lyrics"];
 
 /// Tempo and Key Signature toggle their rulers like the others; their editor flags sit right after them.
 const PLAIN_RULERS: [&str; 2] = ["View > Rulers > Tempo", "View > Rulers > Key Signature"];
@@ -861,8 +863,21 @@ pub fn ruler_menu_head(app: &mut SoundApp, ui: &mut egui::Ui, ruler: &str) {
 }
 
 fn ruler_id_of(ruler: &str) -> Option<&str> {
-    const ALL: [&str; 12] =
-        ["bars_beats", "min_secs", "timecode", "feet_frames", "samples", "tempo", "meter", "markers", "key", "sections", "band_chords", "lyrics"];
+    const ALL: [&str; 13] = [
+        "bars_beats",
+        "min_secs",
+        "timecode",
+        "feet_frames",
+        "samples",
+        "tempo",
+        "meter",
+        "markers",
+        "key",
+        "sections",
+        "band_chords",
+        "band",
+        "lyrics",
+    ];
     ALL.contains(&ruler).then_some(ruler)
 }
 
@@ -906,6 +921,8 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
         {
             Ok(())
         }
+        // File › Import › MIDI Chords… asks for a file.
+        "ui.band.import_chords" => when(app.services.pick_open.is_some(), "No file dialog in this build"),
         // FireStation's own folder, where this platform keeps it; greyed out with where it looked.
         "presets.import_firestation" => crate::fs_presets::available(app),
         // The ML jobs need an audio track or clip to run on; Generate MIDI from Text and Generate
@@ -1164,7 +1181,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("ui.mix.slim_editors") => app.ui.slim_editors,
         Some("window.renderer") => app.extra.show_renderer,
         Some("window.scout") => app.scout.show,
-        Some("window.studio") => app.studio.show,
+        Some("window.band_print") => app.band_ui.print.open,
         Some("window.plugin_browser") => app.ui.show_plugin_browser,
         Some("window.ui_customization") => app.extra.show_ui_customization,
         Some("window.config_auto_update") => app.extra.auto_update_config,
@@ -1227,6 +1244,7 @@ fn ruler_id(label: &str) -> &'static str {
         "Key Signature" => "key",
         "Sections" => "sections",
         "Chords" => "band_chords",
+        "Band" => "band",
         "Lyrics" => "lyrics",
         _ => "",
     }
@@ -1527,7 +1545,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
+        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference" | "ui.band.import_chords")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
@@ -1637,8 +1655,14 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if let Some(r) = crate::ml_ui::run(app, id, p) {
         return Some(r);
     }
-    if id == "window.studio" {
-        return Some(crate::band::studio::command(app, p));
+    if id == "window.musician" {
+        return Some(crate::band::ruler::musician_command(app, p));
+    }
+    if id == "window.band_print" {
+        return Some(crate::band::ruler::print_command(app, p));
+    }
+    if id == "ui.band.import_chords" {
+        return Some(crate::band::ruler::import_chords(app));
     }
     if id == "ui.audio_device" {
         return Some(crate::windows::audio_device_command(app, p));
@@ -2098,13 +2122,15 @@ mod tests {
     #[test]
     fn the_menu_search_finds_items_by_any_words_of_their_path() {
         let extra = ui_aliases();
-        let studio = search_hits("studio", &extra);
-        assert!(studio.iter().any(|h| h.1 == "Window > Studio"), "{studio:?}");
-        assert!(studio.iter().any(|h| h.0 == "Vocal Studio"));
+        let band = search_hits("band", &extra);
+        assert!(band.iter().any(|h| h.1 == "View > Rulers > Band"), "{band:?}");
+        assert!(band.iter().any(|h| h.1 == "Track > New Band"), "{band:?}");
+        assert!(search_hits("studio", &extra).iter().any(|h| h.0 == "Vocal Studio"));
         // Words match anywhere in the path, in any order and case; a label that starts with
         // the query comes first.
         assert!(search_hits("WINDOW stud", &extra).iter().all(|h| h.1.starts_with("Window")));
-        assert_eq!(search_hits("studio", &extra)[0].0, "Studio");
+        assert!(search_hits("rulers BAND", &extra).iter().all(|h| h.1.starts_with("View > Rulers")));
+        assert_eq!(search_hits("band", &extra)[0].0, "Band");
         assert!(search_hits("", &extra).is_empty() && search_hits("   ", &extra).is_empty());
         assert!(search_hits("no such menu item anywhere", &extra).is_empty());
         // Every hit runs a command, and headings and separators are never hits.

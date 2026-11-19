@@ -749,13 +749,22 @@ The Edit window draws the lanes as the **Sections** and **Chords** rulers (`view
 | `band.library.reload` | `{}` | `{errors}`. Reads the Library again: the embedded players and targets, plus the user folder's. Not undoable. |
 | `band.list` | `{}` | `{state, players_by_instrument: {instrument: [player]}, targets: [{slot, name, instruments}], presets: [{name, factory}], factory_songs: [name], feel_presets: [{name, factory}], library_errors, user_folder}` |
 
-**The Studio window** is a UI command (in `UI_COMMANDS`; `engine.execute` runs it through the
-app, like the other `window.*` commands), with no undo step. Everything edited inside it is a
-`band.*` command above.
+**The band in the Edit window.** The Band ruler (`view.ruler {ruler: "band"}`, View > Rulers >
+Band) shows the Band view, bar by bar under the Sections and Chords rulers, and holds the
+band-wide controls in its name cell (band preset, Natural / Classic, Feel, Take, Musicians, New
+Band); the section definitions are edited from the Sections ruler's right-click. Every edit there
+is a `band.*` command above. The song has one key: the Key ruler's key change at bar 1 is the
+band's key (`band.settings {key, scale}` writes it there, and a key change at bar 1 sets the
+band's key, in the same undo step).
+
+These are UI commands (in `UI_COMMANDS`; `engine.execute` runs them through the app, like the
+other `window.*` commands), with no undo step of their own.
 
 | Command | Params | Result |
 |---|---|---|
-| `window.studio` | `{value?: bool, tab?: song\|sections\|feel\|band, def?: A-H}` | `{value, tab}`. Shows or hides *Window > Studio* (without `value` it toggles), on `tab` (any case). `def` opens that section definition in the Sections tab (the lane's "Edit definition…" does this). An unknown tab or a `def` outside A-H is refused with the allowed values. |
+| `window.musician` | `{musician?: 1-6, value?: bool}` | `{value, musician}`. Opens musician N's settings panel (the band drawer; the Edit track header's badge and its Musician Settings... item run this); `value: false` closes it; without `musician` it toggles the open one. A `musician` outside 1-6 is refused. |
+| `window.band_print` | `{value?: bool}` | `{value}`. Shows or hides *Track > Print Band to MIDI...* (without `value` it toggles): Song, a section block or the selection, and which musicians; its Print runs `band.print`. |
+| `ui.band.import_chords` | `{}` | `{chords, …}`. *File > Import > MIDI Chords...*: asks for a MIDI file and runs `band.chords.import` at the insertion point. Greyed out ("No file dialog in this build") without a file dialog. |
 
 In the Mix window, a strip whose input is a musician has a **Band** key (**B** on slim strips) that
 opens that musician's drawer beside the strip; the drawer's edits are `band.slot` (and the Take

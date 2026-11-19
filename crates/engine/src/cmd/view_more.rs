@@ -56,7 +56,7 @@ const SENDS: [&str; 10] = [
 
 /// Every ruler id, in display order (all but the timecode 2 and extra marker rulers are also
 /// served by `view.ruler`).
-pub const RULERS: [&str; 17] = [
+pub const RULERS: [&str; 18] = [
     "bars_beats",
     "min_secs",
     "timecode",
@@ -68,6 +68,7 @@ pub const RULERS: [&str; 17] = [
     "key",
     "sections",
     "band_chords",
+    "band",
     "markers",
     "markers2",
     "markers3",

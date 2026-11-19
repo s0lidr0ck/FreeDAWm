@@ -3,8 +3,10 @@
 //! - **Sections:** blocks of the song's section definitions (A–H), drawn `<letter> · <name>` in
 //!   the letter's colour. A drag on empty space draws a block with the last letter picked (A at
 //!   first); a drag on a body moves it (Ctrl copies it, as Ctrl-dragging a clip does) and a drag on
-//!   an edge resizes it. Right-click picks the letter, the arrangement chips (Energy, Take), opens
-//!   the definition or deletes.
+//!   an edge resizes it. Right-click picks the letter and the block's Energy (+ bigger, − smaller)
+//!   and Take; then the definition, every block of the letter: Energy, Shape, Role, Take, Who
+//!   Plays, Feel Here and Rename…; Delete; Lay Factory Song from the bar under the click; and
+//!   the arranger's items.
 //! - **Chords** (id `band_chords`): the chord lane, named by `chord_theory::name_for`. A
 //!   double-click opens the chord picker (`chord_picker`) on empty space or on a chord; a drag on a
 //!   body or an edge moves or resizes it (Alt: off the grid; Ctrl on a body: drops a copy and
@@ -30,9 +32,6 @@ use soundcraft_time::Samples;
 
 /// The height of both lanes.
 pub const LANE_H: f32 = 22.0;
-/// The definition "Edit definition…" asks the Studio window to show (a `char` in egui's temporary
-/// memory under `Id::new(STUDIO_DEF)`).
-pub const STUDIO_DEF: &str = "band.studio.def";
 /// Within this many points of a block's end a press grabs the edge (resize), not the body.
 const EDGE_PX: f32 = 5.0;
 /// How long "≈ nearest in key" shows after a typed chord the key doesn't hold.
@@ -312,9 +311,21 @@ pub fn sections_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Se
     }
     edge_cursor(ui, &resp, &g, &items, live);
     let target = menu_target(ui, &resp, &g, &items, ui.id().with(MENU).with(SECTIONS));
+    // Where the menu opened: Lay Factory Song lays from the bar there.
+    let at_key = ui.id().with(MENU).with(SECTIONS).with("at");
+    if resp.secondary_clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let bar = 2 * g.half;
+        let at = g.tick_at(p.x).div_euclid(bar).saturating_mul(bar);
+        ui.ctx().data_mut(|m| m.insert_temp(at_key, at));
+    }
+    let menu_at = ui.ctx().data(|m| m.get_temp::<i64>(at_key)).unwrap_or(0);
     resp.context_menu(|ui| {
         crate::menus::ruler_menu_head(app, ui, "sections");
         section_menu(app, ui, target);
+        ui.separator();
+        lay_song_menu(app, ui, g.samples(menu_at));
         crate::menus::rulers_submenu(app, ui);
     });
     if let Some(gh) = done {
@@ -344,7 +355,32 @@ fn commit_section(app: &mut SoundApp, ui: &Ui, g: &Grid, gh: Ghost, items: &[Ite
 enum Pick {
     Run(&'static str, Value),
     WithDef(char, &'static str, Value),
-    Studio(char),
+    Rename(char, String),
+}
+
+/// A row of choices, `label` first; the index clicked.
+fn choice_row(ui: &mut Ui, label: &str, options: &[String], current: Option<usize>, tip: &str) -> Option<usize> {
+    let mut out = None;
+    ui.horizontal(|ui| {
+        ui.label(label).on_hover_text(tip);
+        for (i, o) in options.iter().enumerate() {
+            if ui.selectable_label(current == Some(i), o.as_str()).on_hover_text(tip).clicked() {
+                out = Some(i);
+            }
+        }
+    });
+    out
+}
+
+fn energy_options() -> Vec<String> {
+    (-3i8..=3).map(|e| if e == 0 { "0".to_string() } else { format!("{e:+}").replace('-', "−") }).collect()
+}
+
+/// `band.def`'s `musicians` list that changes musician `k` only.
+fn one_musician(k: usize, m: Value) -> Vec<Value> {
+    let mut list = vec![json!({}); k];
+    list.push(m);
+    list
 }
 
 fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
@@ -361,6 +397,7 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
                 }
             }
         });
+        unused_defs_menu(app, ui);
         return;
     };
     let mut pick = None;
@@ -373,14 +410,10 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
             }
         }
     });
-    ui.horizontal(|ui| {
-        ui.label("Energy");
-        for e in -3i8..=3 {
-            if ui.selectable_label(b.energy == e, format!("{e:+}")).clicked() {
-                pick = Some(Pick::Run("band.section.set", json!({"block": b.id, "energy": e})));
-            }
-        }
-    });
+    let tip = "This block only: + bigger, − smaller";
+    if let Some(i) = choice_row(ui, "Energy (+ bigger, − smaller)", &energy_options(), usize::try_from(i32::from(b.energy) + 3).ok(), tip) {
+        pick = Some(Pick::Run("band.section.set", json!({"block": b.id, "energy": i as i64 - 3})));
+    }
     let take = if b.take == 0 { "Section's".to_string() } else { b.take.to_string() };
     ui.menu_button(format!("Take: {take}"), |ui| {
         if ui.selectable_label(b.take == 0, "Section's own").clicked() {
@@ -392,12 +425,88 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
             }
         }
     });
-    ui.separator();
-    let studio = crate::menus::UI_COMMANDS.iter().any(|c| c.0 == "window.studio");
-    if ui.add_enabled(studio, egui::Button::new("Edit definition…")).on_disabled_hover_text("Needs the Studio window").clicked() {
-        pick = Some(Pick::Studio(b.section));
+    // The definition: every block of this letter.
+    if let Some(d) = app.engine.session().band.def(b.section).cloned() {
+        ui.separator();
+        let every = format!("Every {} · {}", d.id, d.name);
+        ui.label(egui::RichText::new(every).color(Tokens::current().text_dim).small());
+        let id = d.id.to_string();
+        let def = |p: Value| {
+            let mut p = p;
+            if let Some(o) = p.as_object_mut() {
+                o.insert("id".into(), json!(id));
+            }
+            Pick::Run("band.def", p)
+        };
+        let tip = format!("Every {} block: + bigger, − smaller (a block's own Energy adds to it)", d.id);
+        if let Some(i) = choice_row(ui, "Energy, every block", &energy_options(), usize::try_from(i32::from(d.energy_shift) + 3).ok(), &tip) {
+            pick = Some(def(json!({"energy_shift": i as i64 - 3})));
+        }
+        let shapes = ["None", "Build", "Drop"].map(String::from);
+        let tip = "Build: the section grows towards its end; Drop: it falls back";
+        if let Some(i) = choice_row(ui, "Shape", &shapes, Some(usize::from(d.shape.min(2))), tip) {
+            pick = Some(def(json!({"shape": i})));
+        }
+        let roles = ["Normal", "Intro", "Ending"].map(String::from);
+        let tip = "Intro and Ending: the band plays it as the song's start or end";
+        if let Some(i) = choice_row(ui, "Role", &roles, Some(usize::from(d.role.min(2))), tip) {
+            pick = Some(def(json!({"role": i})));
+        }
+        let dtake = if d.take == 0 { "the band's".to_string() } else { d.take.to_string() };
+        ui.menu_button(format!("Take, every block: {dtake}"), |ui| {
+            if ui.selectable_label(d.take == 0, "The band's").clicked() {
+                pick = Some(def(json!({"take": 0})));
+            }
+            for k in 1u8..=16 {
+                if ui.selectable_label(d.take == k, k.to_string()).clicked() {
+                    pick = Some(def(json!({"take": k})));
+                }
+            }
+        });
+        ui.menu_button("Who Plays", |ui| {
+            ui.label(egui::RichText::new("Who plays, and at what Energy (Own: the musician's, moved by the section's)").small());
+            let slots = app.engine.session().band.slots.clone();
+            for (k, m) in slots.iter().enumerate() {
+                let Some(sm) = d.musicians.get(k).copied() else { continue };
+                ui.horizontal(|ui| {
+                    let name = super::ruler::musician_name(k, m);
+                    let mut plays = sm.plays;
+                    if ui.checkbox(&mut plays, name).changed() {
+                        pick = Some(def(json!({"musicians": one_musician(k, json!({"plays": plays}))})));
+                    }
+                    for (i, e) in ["Own", "1", "2", "3", "4"].iter().enumerate() {
+                        if ui.selectable_label(usize::from(sm.energy.min(4)) == i, *e).clicked() {
+                            pick = Some(def(json!({"musicians": one_musician(k, json!({"energy": i}))})));
+                        }
+                    }
+                });
+            }
+        });
+        ui.menu_button("Feel Here", |ui| {
+            use soundcraft_band::song_feel::{FEEL_DIAL_COUNT, dial_name, dial_positions, dial_title};
+            ui.label(egui::RichText::new("The section's own feel (Song's: the song's dial; Time is always the song's)").small());
+            for dd in 1..FEEL_DIAL_COUNT {
+                let mut options = vec!["Song's".to_string()];
+                options.extend((0..dial_positions(dd)).map(|i| dial_name(dd, i).to_string()));
+                let cur = d.feel.get(dd as usize).copied().unwrap_or(-1);
+                if let Some(i) = choice_row(ui, dial_title(dd), &options, usize::try_from(i32::from(cur) + 1).ok(), "This section's dial") {
+                    let mut feel = d.feel.map(i64::from);
+                    if let Some(time) = feel.first_mut() {
+                        *time = -1;
+                    }
+                    if let Some(f) = feel.get_mut(dd as usize) {
+                        *f = i as i64 - 1;
+                    }
+                    pick = Some(def(json!({"feel": feel})));
+                }
+            }
+        });
+        if ui.button("Rename...").on_hover_text(format!("Rename every {} block", d.id)).clicked() {
+            pick = Some(Pick::Rename(d.id, d.name.clone()));
+        }
     }
-    if ui.button("Delete").clicked() {
+    ui.separator();
+    if ui.button("Delete").on_hover_text("Delete this block").clicked() {
         pick = Some(Pick::Run("band.section.remove", json!({"block": b.id})));
     }
     // The arranger: the section as a handle on the whole song.
@@ -444,11 +553,58 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
             let _ = app.run(id, p);
         }
         Pick::WithDef(l, id, p) => run_with_def(app, l, id, p),
-        Pick::Studio(l) => {
-            ui.ctx().data_mut(|m| m.insert_temp(Id::new(STUDIO_DEF), l));
-            let _ = app.run("window.studio", json!({"value": true}));
+        Pick::Rename(l, name) => app.dialogs.open_rename_section(l, &name),
+    }
+}
+
+/// On empty Sections ruler space: definitions no block uses, to delete (one undo step each).
+fn unused_defs_menu(app: &mut SoundApp, ui: &mut Ui) {
+    let band = &app.engine.session().band;
+    let unused: Vec<(char, String)> =
+        band.defs.iter().filter(|d| !band.sections.iter().any(|b| b.section == d.id)).map(|d| (d.id, d.name.clone())).collect();
+    if unused.is_empty() || band.defs.len() <= 1 {
+        return;
+    }
+    let mut pick = None;
+    ui.menu_button("Delete Unused Section", |ui| {
+        for (l, name) in &unused {
+            if ui.button(format!("{l} · {name}")).clicked() {
+                pick = Some(*l);
+            }
+        }
+    });
+    if let Some(l) = pick {
+        ui.close();
+        if let Err(e) = app.run("band.def.delete", json!({"id": l.to_string()})) {
+            app.ui.status = e;
         }
     }
+}
+
+/// Lay Factory Song ▸: a factory song's sections, chords, key and feel onto the rulers from `at`
+/// (the bar under the right-click), replacing what the rulers hold there or laid over it.
+fn lay_song_menu(app: &mut SoundApp, ui: &mut Ui, at: Samples) {
+    ui.menu_button("Lay Factory Song", |ui| {
+        let songs = super::ruler::lists(app).songs;
+        let s = app.engine.session();
+        let bar = s.tempo.bar_beat_at_tick(s.tempo.samples_to_ticks(at, s.sample_rate)).bar;
+        ui.label(egui::RichText::new(format!("From bar {bar}: sections, chords, key, take and feel (not the players)")).small());
+        let mut over = app.band_ui.lay_over;
+        if ui.checkbox(&mut over, "Over what the rulers hold").on_hover_text("Off: the song replaces the sections and chords").changed() {
+            app.band_ui.lay_over = over;
+        }
+        ui.separator();
+        for name in songs {
+            if ui.button(name.as_str()).clicked() {
+                let replace = !app.band_ui.lay_over;
+                match app.run("band.song.factory", json!({"name": name, "at": at, "replace": replace})) {
+                    Ok(_) => app.ui.status = format!("{name} laid from bar {bar}"),
+                    Err(e) => app.ui.status = e,
+                }
+                ui.close();
+            }
+        }
+    });
 }
 
 // ---- Chords -------------------------------------------------------------------------------------

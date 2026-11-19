@@ -143,7 +143,7 @@ fn drawer_opens_beside_the_strip() {
     for row in ["Enabled", "Mute", "Instrument", "Player", "Energy", "Swing", "Humanize", "Dynamics", "Fills", "Groove", "Respect chords"] {
         assert!(shows(&h, row), "{row} row shown");
     }
-    for row in ["Octave", "Length", "Velocity", "Speed", "Voice", "Band take", "Target"] {
+    for row in ["Octave", "Length", "Velocity", "Speed", "Voice", "Band take", "Instrument plug-in"] {
         assert!(shows(&h, row), "{row} row shown");
     }
     assert!(shows(&h, "Auto → Generic"), "no instrument loaded: Auto plays Generic");

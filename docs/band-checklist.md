@@ -1,6 +1,6 @@
 # The Band: owner's checklist
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-19 · **Change:** minor (New Band, the Studio's musicians list and As a band; previously: copying chords) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-19 · **Change:** minor (the Band ruler replaces the Studio window; previously: New Band, the musicians list and As a band) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
 
 The owner's hands-on pass over the Band, MIDI Studio's six musicians inside the DAW
 ([design](superpowers/specs/2026-10-21-band-design.md), [plan](superpowers/plans/2026-10-21-band.md)).
@@ -23,14 +23,26 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 
 ## Where things are
 
-- **The quick start:** **Track › New Band** (or **New Band** in Window › Studio while no track
-  plays the band) makes a track for each musician who is on, playing them, on an installed
+- **The quick start:** **Track › New Band** (or **+ Band** in the Band ruler's name cell) makes a track for each musician who is on, playing them, on an installed
   instrument their target names (MODO DRUM for the drummer…) when the plug-in scan found it, else a
   built-in one (Juke for drums; piano, bass, organ, pad, brass and pluck presets on the built-in
   synths). With empty lanes it lays Pop Verse Chorus Bridge. One undo step.
-- **Who plays what:** Window › Studio › **Musicians** (the first tab): each musician's on/off, track,
+- **The Band ruler** (View › Rulers › **Band**; New Band shows it): one thin row per musician under
+  the Sections and Chords rulers, bar by bar, brighter for more Energy, hatched where they sit out,
+  dimmed when nobody hears them; hover a bar for who plays it. Its name cell, top to bottom: the
+  **band preset** (♪ Factory Band ▾: load one, Save as…, Reload Library); **Natural / Classic** and
+  **Feel** ▾ (Tension, As a band, Bass lock, Fills yield, Leave space, Dynamics together, the song
+  feel with its presets and dials, who ignores the feel); **Take** ▾; **Musicians** ▾ (reads heard /
+  on, e.g. 5/5; a yellow dot when someone who is on is not heard); **+ Band** (New Band).
+- **One key:** the song's key is the **Key Signature** ruler's key at bar 1. The band plays in it
+  and the Chords ruler names its chords in it; a factory song writes its key there. Key changes
+  later in the song are for the Vocal Editor and MIDI Cleanup; the band plays the whole song in the
+  bar-1 key.
+- **Who plays what:** the Band ruler's **Musicians** ▾: each musician's on/off, track,
   instrument and preset, target, and whether they are heard. **Settings** opens their drawer at
-  the Studio's right. In the Edit window, right-click a track name › **Musician Settings...**.
+  a small panel. In the Edit window, a track that plays a musician shows a badge at the end of its
+  name (**♪ 2 · Benny**): click it for the same panel (or right-click the name › **Musician
+  Settings...**).
 - **A track plays a musician:** on an Instrument or MIDI track, open the track's **input** menu
   (the input selector on the strip in the Mix window, or the I/O column in the Edit window). Under
   the heading **Musicians** are the six, each as `N · player (instrument)`. Pick one. A greyed
@@ -38,45 +50,56 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 - **The band drawer:** a strip whose input is a musician has a **Band** key (**B** on slim strips)
   in the Mix window. It opens that musician's drawer beside the strip: Enabled, Mute, Instrument,
   Player, Energy, the feel dials, Octave, Length, Velocity, Speed, Voice, the band's Take, and the
-  **Target** (Auto and what it picked, or a name) with the rows that target needs (keyswitch
+  **Instrument plug-in** (the target: Auto and what it picked, or a name) with the rows it needs (keyswitch
   octave, articulations, …).
 - **The song:** View › Rulers › **Sections** and View › Rulers › **Chords** show the two
   lanes in the Edit window. Drag on a lane to lay a block or a chord; right-click for its menu;
   double-click on Chords to type a chord. Chords copy as clips do: click one (Shift-click another
   for the run between), then Ctrl/Cmd+C, X, V (at the insertion point), D, or Ctrl-drag a chord
   to drop a copy; Left/Right move the pick.
-- **Window › Studio:** the song-wide controls. Key and Scale at the top, then five tabs:
-  **Musicians** (who plays, on which track and instrument; Settings), **Song** (the Band view, the factory songs, Import MIDI chords…, **Print…**), **Sections** (the
-  definitions A–H), **Feel** (Natural / Classic, Tension, As a band, the song feel and its presets) and
-  **Band** (band presets: Load, Save as…, Reload Library).
-- **Print:** Window › Studio › Song › **Print…**: the whole song, one section block, or the
+- **A section's settings:** right-click a block on the Sections ruler. For the block: its letter,
+  **Energy (+ bigger, − smaller)** and Take. For every block of its letter: Energy, **Shape**
+  (None / Build / Drop), **Role** (Normal / Intro / Ending), Take, **Who Plays** (each musician in
+  or out, and at what Energy), **Feel Here** (the section's own Density, Pocket, Groove, Touch) and
+  **Rename...**. **Lay Factory Song** lays a factory song from the bar you right-clicked (over what
+  is there, or replacing it). On empty ruler space: the letter new blocks take, and **Delete Unused
+  Section**.
+- **Import chords:** **File › Import › MIDI Chords...** reads a MIDI file's chords onto the Chords
+  ruler from the insertion point.
+- **Print:** **Track › Print Band to MIDI...** (or the Band ruler's right-click): the whole song, one section block, or the
   Edit selection, and which musicians.
 
 ## 1. Setup
 
 - [ ] After everything has merged: `cargo build --release -p soundcraft` from the repo root, then
-  start `target\release\freedawm.exe`. Expected: the app opens; Window › Studio is in the menu.
+  start `target\release\freedawm.exe`. Expected: the app opens; View › Rulers › Band and Track ›
+  New Band are in the menus (there is no Window › Studio any more).
 - [ ] macOS only: `cargo clippy -p soundcraft-au-host --all-targets -- -D warnings`. Expected: no
   warnings or errors (the Audio Units host's band changes have never been compiled on a Mac).
-- [ ] Window › Studio › Song: lay the factory song **Pop Verse Chorus Bridge** at bar 1. Expected:
-  the Sections and Chords rulers appear in the Edit window with the song's blocks and
-  chords, and the Band view in the Studio fills with bars.
+- [ ] View › Rulers › Sections, then right-click the Sections ruler at bar 1 › **Lay Factory Song**
+  › **Pop Verse Chorus Bridge**. Expected: the Sections and Chords rulers fill with the song's
+  blocks and chords, the Key Signature ruler reads the song's key at bar 1, and (View › Rulers ›
+  Band) the Band ruler fills with bars.
+- [ ] Key Signature ruler: double-click the song's key at bar 1 and pick **D major**. Expected: the
+  chord names on the Chords ruler move to D and the band plays in D; one Undo puts both back.
 
 ## 2. MODO DRUM and MODO BASS 2
 
 - [ ] With MODO DRUM and MODO BASS 2 scanned (the plug-in menus list them), in a new session:
   **Track › New Band**. Expected: five tracks (Piano, Drums, Bass, Strings, Brass); Drums plays
-  MODO DRUM and Bass MODO BASS 2, the others built-in instruments; the Studio's Musicians list says
-  so and the status line counts the built-in ones; Play is heard at once; one Undo removes it all.
+  MODO DRUM and Bass MODO BASS 2, the others built-in instruments; the Band ruler's Musicians list
+  says so and the status line counts the built-in ones; each track header shows its musician's
+  badge (♪ 1 · Clay, ♪ 2 · Benny…); the Band, Sections and Chords rulers show; Play is heard at
+  once; one Undo removes it all.
 - [ ] New Instrument track "Drums" with **MODO DRUM** on it; input → Musicians → the drummer
   (load the band preset **Factory Band** first if no slot plays Drums). New Instrument track
   "Bass" with **MODO BASS 2**; input → the bassist. Expected: each strip shows the Band key.
-- [ ] Open each strip's band drawer. Expected: the **Target** row reads **Auto** with
+- [ ] Open each strip's band drawer. Expected: the **Instrument plug-in** row reads **Auto** with
   "MODO DRUM" (and "MODO BASS 2") as what it picked, from the plugin on the track.
 - [ ] Play from bar 1. Expected: both musicians play along with the song, following its sections
-  (the Band view's playhead moves; Energy changes are heard at section changes). No other channel
+  (Energy changes on the Band ruler are heard at section changes). No other channel
   setup is needed.
-- [ ] Window › Studio › Feel: **Natural** (the default). Listen to a chorus and the ending.
+- [ ] Band ruler: **Natural** (the default). Listen to a chorus and the ending.
   Expected: Natural's extras are audible: on drums, cymbal chokes at breaks and the ending,
   rimshots on hard snare hits, open hats and the ride bell at Energy 4, flams; on bass, slides,
   hammer-ons, ghost notes in busy grooves and the occasional fall.
@@ -96,12 +119,12 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 
 - [ ] Instrument track with **Kontakt** loading your Evolution or Indiginus instrument (set up as
   its target's help text says: for Evolution, every articulation set to Keyswitch, Chords mode
-  off). Input → a guitar (or the matching instrument's) musician; in the drawer pick the Target
+  off). Input → a guitar (or the matching instrument's) musician; in the drawer pick the Instrument plug-in
   by name if Auto didn't. Expected: the drawer shows the target's rows (keyswitch octave,
   articulations), and the guitar plays with its articulations changing (the Kontakt keyboard shows
   the keyswitch keys being pressed). No stuck articulation after a stop.
 - [ ] Instrument track with **Hammond B-3X**; input → a musician playing Electric Keys (organ);
-  Target **Hammond B-3X**. For the lower manual, copy `crates\band\library\Targets\Hammond B-3X.json`
+  Instrument plug-in **Hammond B-3X**. For the lower manual, copy `crates\band\library\Targets\Hammond B-3X.json`
   to `%APPDATA%\FreeDAWm\Band\Targets`, set its `lowerManualChannel` to 2, and Reload Library
   (section 8). In B-3X (Controls › MIDI), set the Upper Manual to channel 1 and the Lower Manual to 2.
   Expected: the upper manual plays; in Natural feel the lower manual plays on some bars on its
@@ -127,7 +150,7 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 
 ## 6. Print, edit, undo
 
-- [ ] Window › Studio › Song › Print…: Song, all musicians, **Print**. Expected: the status reads
+- [ ] Track › **Print Band to MIDI...**: Song, all musicians, **Print**. Expected: the status reads
   "Printed N clip(s)"; each musician track gets one MIDI clip over the song and its input becomes
   **None**; playback sounds the same as before the print.
 - [ ] Open a printed clip in the MIDI editor and move or delete a few notes. Expected: the edit
@@ -144,7 +167,7 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 
 ## 7. Band presets
 
-- [ ] Window › Studio › Band: Load **Funk Machine**. Expected: the six slots change (instruments,
+- [ ] Band ruler › ♪ Factory Band ▾: click **Funk Machine**. Expected: the six slots change (instruments,
   players, names in the input menus); the song is unchanged; one Undo step brings the old band
   back.
 - [ ] Change a player or two, then **Save as…** "My Band". Expected: `%APPDATA%\FreeDAWm\Band\Bands\My Band.json`
@@ -154,14 +177,15 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 ## 8. Your own players (the user Library)
 
 - [ ] Copy a player JSON from MIDI Studio (or a copy of one from `crates\band\library\Players`
-  with its `name` changed) into `%APPDATA%\FreeDAWm\Band\Players`. Window › Studio › Band ›
+  with its `name` changed) into `%APPDATA%\FreeDAWm\Band\Players`. Band ruler › ♪ band preset ▾ ›
   **Reload Library** (or `band.library.reload` from the CLI/MCP). Expected: the new player is in
   the drawer's Player browser under its instrument, and plays. A broken JSON file is named in the
   status (skipped, with the reason) and nothing else changes.
 
 ## 9. Project round trip
 
-- [ ] With a song, a custom band, a section edited in the Studio's Sections tab and a feel preset
+- [ ] With a song, a custom band, a section edited from the Sections ruler's right-click (Shape
+  Build, a musician out in Who Plays) and a feel preset
   set: File › Save, close the project, open it again. Expected: the same six musicians, drawer
   values, targets, key, scale, Take, feel, sections and chords; it plays the same.
 
@@ -181,6 +205,7 @@ while stopped, a per-song meter override and MIDI Studio's MIDI export tabs come
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | The Band ruler replaces Window › Studio: band controls in its name cell, section settings on the Sections ruler's right-click, one key (the Key ruler at bar 1), track header badges, Print Band to MIDI and Import MIDI Chords as menu items, Instrument plug-in, strings at Octave 0 |
 | 2026-11-19 | minor | Track › New Band; the Studio's Musicians list and a musician's Settings in the Studio; Musician Settings... in the Edit window |
 | 2026-11-19 | minor | As a band: the band-feel layer on top of Natural (on in new sessions, off in older ones) |
 | 2026-11-18 | minor | Chords copy: Copy, Cut, Paste, Duplicate, Shift-click runs, arrows, Ctrl-drag copy (sections too) |

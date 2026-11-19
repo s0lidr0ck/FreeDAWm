@@ -21,7 +21,7 @@ const ROWS: [(&str, usize); 12] = [
     ("File", 14),
     ("Edit", 29),
     ("View", 11),
-    ("Track", 40),
+    ("Track", 41),
     ("Clip", 30),
     ("Event", 31),
     ("Process", 18),
@@ -29,7 +29,7 @@ const ROWS: [(&str, usize); 12] = [
     ("Transport", 28),
     ("Options", 14),
     ("Setup", 12),
-    ("Window", 13),
+    ("Window", 12),
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).
@@ -291,7 +291,7 @@ enum Answer {
 }
 
 fn answer(id: &str, label: &str) -> Option<Answer> {
-    const UI_TOGGLES: [&str; 33] = [
+    const UI_TOGGLES: [&str; 32] = [
         "window.mix_separate",
         "window.vocal_separate",
         "window.midi_editor_separate",
@@ -308,7 +308,6 @@ fn answer(id: &str, label: &str) -> Option<Answer> {
         "window.score",
         "window.event_list",
         "window.midi_keyboard",
-        "window.studio",
         "window.scout",
         "window.configurations",
         "window.config_auto_update",

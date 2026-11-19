@@ -1296,8 +1296,8 @@ pub struct SoundApp {
     pub tempo: tempo_ui::TempoUi,
     /// Scout: the panel, and the capture out on the audio side.
     pub scout: scout::ScoutUi,
-    /// Window ▸ Studio: the band's song-wide controls (not saved).
-    pub studio: band::studio::StudioUi,
+    /// The Band ruler's popovers, a musician's settings panel and Print Band to MIDI (not saved).
+    pub band_ui: band::ruler::BandUi,
     /// The plugin browser's catalog: built when the panel is first shown and again after a
     /// scan, never per frame.
     pub browser_catalog: Option<browser::catalog::Catalog>,
@@ -1472,7 +1472,7 @@ impl SoundApp {
             juke_kits: juke_kits_ui::KitDownloads::default(),
             tempo: tempo_ui::TempoUi::default(),
             scout: scout::ScoutUi::default(),
-            studio: band::studio::StudioUi::default(),
+            band_ui: band::ruler::BandUi::default(),
             browser_catalog: None,
             browser_hosts: (false, false),
             plugin_scan: None,
@@ -1651,8 +1651,8 @@ impl SoundApp {
                     juke_window::show_steps(self, TrackId(t), clip);
                 }
                 if id == "track.new_band" {
-                    // The band's window, on its musicians; the status says what they play on.
-                    crate::band::studio::after_new_band(self, &v);
+                    // The status says what they play on (the engine showed the Band ruler).
+                    crate::band::ruler::after_new_band(self, &v);
                 }
                 if id == "track.freeze" || id == "track.unfreeze" {
                     self.ui.status = freeze_status(&self.engine, &v);
@@ -3576,7 +3576,7 @@ impl SoundApp {
         wavetable_import::show(self, &ctx);
         scout::panel::show(self, &ctx);
         tour::show(self, &ctx);
-        band::studio::show(self, &ctx);
+        band::ruler::show(self, &ctx);
         palette::show(self, &ctx);
         window_sync::settle(self);
         dialogs::show(self, &ctx);
