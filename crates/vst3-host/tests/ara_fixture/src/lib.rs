@@ -234,9 +234,23 @@ impl IMainFactoryTrait for MainFactory {
     }
 }
 
-/// The audio module: a stereo pass-through.
+/// The audio module: bound to an ARA document, it renders its playback regions through the test
+/// plug-in's renderer (`test_plugin::render`); otherwise a stereo pass-through.
 struct Effect {
     factory: *const ARAFactory,
+    /// The renderer id its binding gave (0: not bound).
+    renderer: std::sync::atomic::AtomicUsize,
+    /// The sample rate `setupProcessing` gave.
+    rate: std::sync::Mutex<f64>,
+}
+
+impl Drop for Effect {
+    fn drop(&mut self) {
+        let r = self.renderer.load(std::sync::atomic::Ordering::SeqCst);
+        if r != 0 {
+            test_plugin::unbind(r);
+        }
+    }
 }
 unsafe impl Send for Effect {}
 unsafe impl Sync for Effect {}
@@ -250,6 +264,12 @@ unsafe impl Sync for OldEffect {}
 
 /// Without ARA.
 struct Plain;
+
+impl Effect {
+    fn new(factory: *const ARAFactory) -> Effect {
+        Effect { factory, renderer: std::sync::atomic::AtomicUsize::new(0), rate: std::sync::Mutex::new(48_000.0) }
+    }
+}
 
 impl Class for Effect {
     type Interfaces = (IComponent, IAudioProcessor, IPlugInEntryPoint, IPlugInEntryPoint2);
@@ -267,7 +287,9 @@ impl IPlugInEntryPointTrait for Effect {
     }
     unsafe fn bindToDocumentController(&self, dc: ARADocumentControllerRef) -> *const ARAPlugInExtensionInstance {
         let all = ara::kARAPlaybackRendererRole | ara::kARAEditorRendererRole | ara::kARAEditorViewRole;
-        test_plugin::bind(dc, all, all)
+        let (ext, id) = test_plugin::bind_id(dc, all, all);
+        self.renderer.store(id, std::sync::atomic::Ordering::SeqCst);
+        ext
     }
 }
 impl IPlugInEntryPoint2Trait for Effect {
@@ -277,7 +299,9 @@ impl IPlugInEntryPoint2Trait for Effect {
         known: ARAPlugInInstanceRoleFlags,
         assigned: ARAPlugInInstanceRoleFlags,
     ) -> *const ARAPlugInExtensionInstance {
-        test_plugin::bind(dc, known, assigned)
+        let (ext, id) = test_plugin::bind_id(dc, known, assigned);
+        self.renderer.store(id, std::sync::atomic::Ordering::SeqCst);
+        ext
     }
 }
 impl IPlugInEntryPointTrait for OldEffect {
@@ -286,6 +310,37 @@ impl IPlugInEntryPointTrait for OldEffect {
     }
     unsafe fn bindToDocumentController(&self, _dc: ARADocumentControllerRef) -> *const ARAPlugInExtensionInstance {
         std::ptr::null()
+    }
+}
+
+/// What the audio module renders: bound to ARA, its regions; else nothing (a pass-through).
+trait Render {
+    fn setup(&self, _rate: f64) {}
+    /// Renders the block into the output channels; `false`: pass the input through.
+    fn render(&self, _data: &mut ProcessData) -> bool {
+        false
+    }
+}
+impl Render for OldEffect {}
+impl Render for Plain {}
+impl Render for Effect {
+    fn setup(&self, rate: f64) {
+        *self.rate.lock().unwrap() = rate;
+    }
+    fn render(&self, data: &mut ProcessData) -> bool {
+        let r = self.renderer.load(std::sync::atomic::Ordering::SeqCst);
+        if r == 0 || data.numOutputs < 1 || data.outputs.is_null() {
+            return false;
+        }
+        let rate = *self.rate.lock().unwrap();
+        let pos = if data.processContext.is_null() { 0 } else { unsafe { (*data.processContext).projectTimeSamples } };
+        let frames = data.numSamples.max(0) as usize;
+        let bus = unsafe { &mut *data.outputs };
+        let n = bus.numChannels.max(0) as usize;
+        let mut chans: Vec<&mut [f32]> =
+            (0..n).map(|c| unsafe { std::slice::from_raw_parts_mut(*bus.__field0.channelBuffers32.add(c), frames) }).collect();
+        test_plugin::render(r, pos, rate, &mut chans);
+        true
     }
 }
 
@@ -351,13 +406,19 @@ macro_rules! pass_through {
             unsafe fn getLatencySamples(&self) -> u32 {
                 0
             }
-            unsafe fn setupProcessing(&self, _setup: *mut ProcessSetup) -> tresult {
+            unsafe fn setupProcessing(&self, setup: *mut ProcessSetup) -> tresult {
+                if !setup.is_null() {
+                    Render::setup(self, unsafe { (*setup).sampleRate });
+                }
                 kResultOk
             }
             unsafe fn setProcessing(&self, _state: TBool) -> tresult {
                 kResultOk
             }
-            unsafe fn process(&self, _data: *mut ProcessData) -> tresult {
+            unsafe fn process(&self, data: *mut ProcessData) -> tresult {
+                if !data.is_null() {
+                    Render::render(self, unsafe { &mut *data });
+                }
                 kResultOk
             }
             unsafe fn getTailSamples(&self) -> u32 {
@@ -404,9 +465,9 @@ impl IPluginFactoryTrait for Factory {
         let cid = unsafe { *(cid as *const TUID) };
         let good = test_plugin::factory(Behaviour::Good);
         let unknown = match cid {
-            c if c == ARA_CID => ComWrapper::new(Effect { factory: good }).to_com_ptr::<FUnknown>(),
-            c if c == NULL_CID => ComWrapper::new(Effect { factory: std::ptr::null() }).to_com_ptr::<FUnknown>(),
-            c if c == TINY_CID => ComWrapper::new(Effect { factory: test_plugin::factory(Behaviour::TinyFactory) }).to_com_ptr::<FUnknown>(),
+            c if c == ARA_CID => ComWrapper::new(Effect::new(good)).to_com_ptr::<FUnknown>(),
+            c if c == NULL_CID => ComWrapper::new(Effect::new(std::ptr::null())).to_com_ptr::<FUnknown>(),
+            c if c == TINY_CID => ComWrapper::new(Effect::new(test_plugin::factory(Behaviour::TinyFactory))).to_com_ptr::<FUnknown>(),
             c if c == ONE_CID => ComWrapper::new(OldEffect { factory: test_plugin::factory(Behaviour::Ara1) }).to_com_ptr::<FUnknown>(),
             c if c == PLAIN_CID => ComWrapper::new(Plain).to_com_ptr::<FUnknown>(),
             c if c == ARA_MAIN_CID => ComWrapper::new(MainFactory { factory: good }).to_com_ptr::<FUnknown>(),

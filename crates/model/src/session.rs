@@ -454,6 +454,14 @@ pub struct Session {
     /// the engine carries them across undo and redo.
     #[serde(skip)]
     pub pitch_renders: crate::PitchRenders,
+    /// Each ARA plug-in's saved document ([`crate::AraArchive`]), kept as it is while the plug-in
+    /// is not installed. Sessions without ARA have none and write none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ara_archives: Vec<crate::AraArchive>,
+    /// Clips' offline renders through their ARA plug-in ([`crate::AraRenders`]): derived, never
+    /// saved; the engine carries them across undo and redo.
+    #[serde(skip)]
+    pub ara_renders: crate::AraRenders,
 }
 
 /// An alternative arrangement of the session ([`Session::arrangements`]): the playlist each track
@@ -520,6 +528,8 @@ impl Session {
             vocal: crate::VocalCache::default(),
             live_stretch: std::collections::BTreeMap::new(),
             pitch_renders: crate::PitchRenders::default(),
+            ara_archives: Vec::new(),
+            ara_renders: crate::AraRenders::default(),
         };
         s.edit.pre_roll = sample_rate.samples(2.0);
         s.edit.post_roll = sample_rate.samples(2.0);

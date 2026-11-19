@@ -686,9 +686,17 @@ fn talk_into_stream(s: &Session, input: &[Vec<f32>], main: &[Vec<f32>], n: usize
     true
 }
 
+/// The board the realtime engines play clips' ARA voices from (one per process: the UI's ARA host
+/// puts each clip's playback renderer instance there, see `soundcraft_mix::ara`).
+pub fn ara_board() -> Arc<soundcraft_mix::ara::AraBoard> {
+    static BOARD: std::sync::OnceLock<Arc<soundcraft_mix::ara::AraBoard>> = std::sync::OnceLock::new();
+    BOARD.get_or_init(|| Arc::new(soundcraft_mix::ara::AraBoard::default())).clone()
+}
+
 fn new_engine(sr: f32, max_block: usize) -> MixEngine {
     let mut m = MixEngine::new(sr, max_block);
     m.set_external_instances(true);
+    m.set_ara_board(Some(ara_board()));
     // Built-in modules and Clip Effects come made from the UI thread too (`Side::builtins`).
     m.set_prepared_builtins(true);
     m.metronome = true;
@@ -2527,6 +2535,11 @@ pub struct Player {
 }
 
 impl Player {
+    /// The largest block the mix renders (what ARA voices and other instances are prepared for).
+    pub fn max_block(&self) -> usize {
+        self.max_block
+    }
+
     /// The device this player has open, for [`devices::audio_systems_with`] (the settings window
     /// must not probe a streaming ASIO driver). `in_channels` is unknown here: the recorder opens
     /// the input.

@@ -6241,6 +6241,7 @@ dependencies = [
  "rhai",
  "serde",
  "serde_json",
+ "soundcraft-ara-host",
  "soundcraft-au-host",
  "soundcraft-audio-io",
  "soundcraft-band",

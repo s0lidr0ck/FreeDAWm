@@ -32,6 +32,9 @@ fn region(key: u64, source: u64, sequence: u64, at: f64) -> RegionDesc {
         persistent_id: format!("clip-{key}"),
         start_in_source: 0.01,
         duration: 0.5,
+        source_duration: 0.5,
+        transformation: 0,
+        origin: None,
         start_in_song: at,
         color: None,
     }
@@ -153,6 +156,7 @@ fn edits_and_undo_follow_the_session() {
     g1.regions[0].start_in_song = 4.0;
     g1.regions[0].start_in_source = 0.1;
     g1.regions[0].duration = 0.2;
+    g1.regions[0].source_duration = 0.2;
     let rep = doc.sync(&g1);
     assert_eq!((rep.created, rep.removed, rep.updated), (0, 0, 1));
     // Delete a clip: its region goes, its modification is kept, deactivated.

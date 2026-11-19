@@ -5,6 +5,7 @@
 //! [`SourcePool`] behind `Arc`s, so cloning a session for undo is cheap.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod ara;
 mod automation;
 pub mod b64;
 mod band;
@@ -35,6 +36,7 @@ mod synth_mod;
 mod track;
 pub mod vocal;
 
+pub use ara::{AraArchive, AraRender, AraRenders, ara_fingerprint};
 pub use automation::{
     AutoParam, AutomationLane, AutomationMode, AutomationPoint, BYPASS_PARAM, CURVE_EPSILON, MIX_PARAM, PencilShape, SURROUND_AXES, curve_shape,
     letter_slot,

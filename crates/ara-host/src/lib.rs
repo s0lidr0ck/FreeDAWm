@@ -13,11 +13,15 @@
 //!   same bindings, which reads every audio source it is given through the host and reports what
 //!   it read as notes.
 //!
-//! Stage one of the plan in `docs/daw-parity/04-editing-audio.md` (J): bindings, discovery, the
-//! document model and audio access. Not yet: playback through the plug-in, bounce, freeze and
-//! saving the plug-in's document (stage two: the archiving controller answers "no archive" and
-//! playback requests are only recorded); the plug-in's editor window, selection and undo inside
-//! it (stage three).
+//! - [`BoundInstance`]: a plug-in instance bound to a document controller (playback renderer,
+//!   editor renderer, editor view roles) kept together with the extension its binding gave, so
+//!   the extension is never used once the instance is gone; [`InstanceCell`] shares the instance
+//!   with the audio thread, which never waits for it.
+//! - Archiving: [`Document::store`] and [`Document::restore_next_sync`] (ARA 2's
+//!   `storeObjectsToArchive` / `restoreObjectsFromArchive`, the deprecated ARA 1 calls for a
+//!   plug-in without them). Playback requests reach the host as [`PlaybackRequest`]s.
+//!
+//! What the user sees is in `docs/ara.md`.
 //!
 //! # Threads
 //!
@@ -30,8 +34,8 @@
 //!   per reader at a time). These callbacks only touch locked tables shared with the document and
 //!   read through [`AudioSource::read`], which must be safe from any thread; they never touch the
 //!   document itself and never run on the audio thread.
-//! - **The audio thread** never calls anything in this crate (stage one renders nothing through
-//!   ARA).
+//! - **The audio thread** only calls [`InstanceCell::try_with`] (a `try_lock`: it never waits) to
+//!   render with a bound instance; nothing in a document.
 //!
 //! # A misbehaving plug-in
 //!
@@ -58,7 +62,7 @@ pub mod test_plugin;
 #[allow(unsafe_code, non_upper_case_globals)]
 mod tests;
 
-pub use host::{Document, FactoryPtr, HOST_GENERATIONS, choose_generation, read_factory};
+pub use host::{BoundInstance, Document, FactoryPtr, HOST_GENERATIONS, InstanceCell, RawExtension, choose_generation, read_factory};
 pub use log::{log_file, recent as recent_log, set_log_file};
 
 use std::sync::Arc;
@@ -105,7 +109,9 @@ impl std::fmt::Debug for SourceDesc {
 }
 
 /// A clip: an ARA audio modification of its source with one playback region on its track's
-/// sequence. Times in seconds; no stretching (stage one).
+/// sequence. Times in seconds. A time-stretched clip plays `source_duration` of its source over
+/// `duration` (only offered with [`sys::kARAPlaybackTransformationTimestretch`] in
+/// `transformation`, for a plug-in that supports it).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegionDesc {
     pub key: u64,
@@ -116,8 +122,15 @@ pub struct RegionDesc {
     pub persistent_id: String,
     /// Where in the source the clip starts.
     pub start_in_source: f64,
-    /// How long it plays (in the source and on the timeline: no stretch).
+    /// How long it plays on the timeline.
     pub duration: f64,
+    /// How much of the source it plays (equal to `duration` unless time-stretched).
+    pub source_duration: f64,
+    /// `sys::kARAPlaybackTransformation*` flags of its playback region.
+    pub transformation: i32,
+    /// The region whose audio modification this one starts as a copy of (a duplicated or split
+    /// clip: `cloneAudioModification`, when the plug-in has it and that modification is live).
+    pub origin: Option<u64>,
     /// Where on the timeline it starts.
     pub start_in_song: f64,
     pub color: Option<[f32; 3]>,
@@ -167,9 +180,10 @@ impl Graph {
         }
         let mut seen = std::collections::BTreeSet::new();
         for r in self.regions.iter().take(MAX_OBJECTS) {
-            let times = [r.start_in_source, r.duration, r.start_in_song];
+            let times = [r.start_in_source, r.duration, r.start_in_song, r.source_duration];
             let ok = times.iter().all(|t| t.is_finite())
                 && r.duration > 0.0
+                && r.source_duration > 0.0
                 && r.start_in_source >= 0.0
                 && out.sources.iter().any(|s| s.key == r.source)
                 && out.sequences.iter().any(|s| s.key == r.sequence);
@@ -285,8 +299,34 @@ pub enum HostEvent {
     RegionContentChanged(u64),
     /// The plug-in's own document data changed (it wants saving: stage two).
     DocumentDataChanged,
-    /// The plug-in asked the host to do something with playback (not supported yet: stage two).
-    PlaybackRequest(&'static str),
+    /// The plug-in asked the host to do something with playback (ARA's playback controller).
+    PlaybackRequest(PlaybackRequest),
+}
+
+/// What a plug-in asked of the host's transport (ARA's playback controller interface).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PlaybackRequest {
+    Start,
+    Stop,
+    /// Locate to a song position (seconds).
+    Position(f64),
+    /// Set the loop range (start, duration in seconds).
+    Cycle(f64, f64),
+    /// Turn looping on or off.
+    EnableCycle(bool),
+}
+
+impl PlaybackRequest {
+    /// In words, for the log.
+    pub fn describe(&self) -> String {
+        match self {
+            PlaybackRequest::Start => "start playback".into(),
+            PlaybackRequest::Stop => "stop playback".into(),
+            PlaybackRequest::Position(t) => format!("set the playback position to {t:.3} s"),
+            PlaybackRequest::Cycle(s, d) => format!("set the loop to {s:.3} s for {d:.3} s"),
+            PlaybackRequest::EnableCycle(on) => format!("turn looping {}", if *on { "on" } else { "off" }),
+        }
+    }
 }
 
 /// A note the plug-in found (ARA's `ARAContentNote`: seconds, Hz, MIDI pitch).

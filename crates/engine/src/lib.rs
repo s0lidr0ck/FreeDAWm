@@ -452,6 +452,18 @@ impl Engine {
         Arc::make_mut(&mut self.doc)
     }
 
+    /// The clips' offline renders through their ARA plug-in (see [`ara::AraHost::prepare_offline`]):
+    /// derived data, no undo step and no revision bump (playback is not affected).
+    pub fn set_ara_renders(&mut self, renders: soundcraft_model::AraRenders) {
+        Arc::make_mut(&mut self.doc).ara_renders = renders;
+    }
+
+    /// The ARA plug-ins' saved documents (see [`ara::AraHost::store_archives`]): saved with the
+    /// session, no undo step.
+    pub fn set_ara_archives(&mut self, archives: Vec<soundcraft_model::AraArchive>) {
+        Arc::make_mut(&mut self.doc).ara_archives = archives;
+    }
+
     /// Keeps renders made ahead of the next `track.freeze` / `track.commit` (through a host's
     /// live instances) for that command: it takes them with [`Engine::take_prepared`] instead
     /// of rendering, as long as the session has not changed meanwhile.
@@ -771,6 +783,14 @@ impl Engine {
         // Transposed clips' renders are derived the same way: an undo or redo keeps them.
         if !Arc::ptr_eq(&self.doc.pitch_renders.0, &from.pitch_renders.0) {
             Arc::make_mut(&mut self.doc).pitch_renders = from.pitch_renders.clone();
+        }
+        // So are the ARA renders, and the ARA plug-ins' saved documents: the plug-ins keep their
+        // own undo, and their newest document is what a save must write.
+        if !Arc::ptr_eq(&self.doc.ara_renders.0, &from.ara_renders.0) {
+            Arc::make_mut(&mut self.doc).ara_renders = from.ara_renders.clone();
+        }
+        if self.doc.ara_archives != from.ara_archives {
+            Arc::make_mut(&mut self.doc).ara_archives = from.ara_archives.clone();
         }
     }
 

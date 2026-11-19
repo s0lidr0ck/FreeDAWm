@@ -619,6 +619,7 @@ impl Bundle {
             out_events: ComWrapper::new(EventList::new(EVENT_CAP)),
             // SAFETY: `ProcessContext` is plain data (numbers and small structs); all-zero is valid.
             context: unsafe { std::mem::zeroed() },
+            cycle: None,
             event_in: false,
             mode: sv::ProcessModes_::kRealtime as i32,
             editor: Arc::new(EditorLink::default()),
@@ -1638,6 +1639,9 @@ pub(crate) struct Instance {
     in_events: ComWrapper<EventList>,
     out_events: ComWrapper<EventList>,
     context: sv::ProcessContext,
+    /// The loop range in quarter notes while looping, given to the plug-in as the process
+    /// context's cycle (ARA playback renderers follow it).
+    cycle: Option<(f64, f64)>,
     event_in: bool,
     /// `kRealtime`, or `kOffline` for an offline render (set up in `configure`, repeated in
     /// every `ProcessData`).
@@ -1714,6 +1718,49 @@ impl Instance {
     }
 
     /// Copies the component's state into the controller (`getState` → `setComponentState`).
+    /// The loop range (quarter notes) the next blocks' process context carries, or none.
+    pub fn set_cycle(&mut self, cycle: Option<(f64, f64)>) {
+        self.cycle = cycle.filter(|(a, b)| a.is_finite() && b.is_finite() && b > a);
+    }
+
+    /// Binds this instance to an ARA document controller with roles (`ARA::IPlugInEntryPoint2::
+    /// bindToDocumentControllerWithRoles`), switching it to ARA mode for good. Call it once,
+    /// right after it is made: before it is activated, its state is set or its editor opened (as
+    /// ARA asks), on the document controller's thread. The extension it gives is valid while this
+    /// instance lives.
+    pub fn bind_ara(&self, dc: ara::ARADocumentControllerRef, known: i32, assigned: i32) -> Result<soundcraft_ara_host::RawExtension, String> {
+        if self.active {
+            return Err("the instance is active already".into());
+        }
+        let unknown = self.component.as_ptr().cast::<c_void>();
+        let iid = ara::vst3_tuid(ara::IPlugInEntryPoint2_iid);
+        let mut out: *mut c_void = std::ptr::null_mut();
+        // SAFETY: a live component (we hold a reference); every COM object starts with a vtable
+        // whose first function is `queryInterface`; `iid` and `out` are valid for the call.
+        let r = unsafe { ((*unknown.cast::<*const ara::FUnknownVtbl>().read()).queryInterface)(unknown, &iid, &mut out) };
+        if !ok(r) || out.is_null() {
+            return Err("its audio module has no ARA 2 entry point (IPlugInEntryPoint2)".into());
+        }
+        // SAFETY: on success `out` is an IPlugInEntryPoint2 with one reference we own; its vtable
+        // is FUnknown's three functions then `bindToDocumentControllerWithRoles` (ARAVST3.h).
+        let vtbl = unsafe { out.cast::<*const ara::IPlugInEntryPoint2Vtbl>().read() };
+        let ext = if vtbl.is_null() {
+            std::ptr::null()
+        } else {
+            // SAFETY: as above; `dc` is the caller's live document controller.
+            unsafe { ((*vtbl).bindToDocumentControllerWithRoles)(out, dc, known, assigned) }
+        };
+        // SAFETY: the reference `queryInterface` gave, released once (the vtable read from the
+        // live object).
+        unsafe { ((*out.cast::<*const ara::FUnknownVtbl>().read()).release)(out) };
+        if ext.is_null() {
+            return Err("the plug-in refused to be bound to the ARA document (bindToDocumentControllerWithRoles gave nothing)".into());
+        }
+        // SAFETY: what this instance's binding returned, valid while the instance (the
+        // `Instance` this method is on, which the caller keeps with it) lives: ARA's contract.
+        Ok(unsafe { soundcraft_ara_host::RawExtension::new(ext) })
+    }
+
     fn sync_controller_state(&self) {
         let Some(c) = &self.controller else { return };
         let stream = ComWrapper::new(MemoryStream { inner: Mutex::new((Vec::new(), 0)) });
@@ -2129,6 +2176,14 @@ impl Instance {
         match transport {
             Some(t) => apply_transport(&mut self.context, t),
             None => self.context.projectTimeSamples = project_time,
+        }
+        if let Some((start, end)) = self.cycle.filter(|_| transport.is_some()) {
+            use sv::ProcessContext_::StatesAndFlags_::{kCycleActive, kCycleValid};
+            #[allow(clippy::unnecessary_cast)]
+            let flags = (kCycleActive | kCycleValid) as u32;
+            self.context.state |= flags;
+            self.context.cycleStartMusic = start;
+            self.context.cycleEndMusic = end;
         }
         let mut data = sv::ProcessData {
             processMode: self.mode,

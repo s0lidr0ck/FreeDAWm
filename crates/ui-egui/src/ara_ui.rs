@@ -15,7 +15,41 @@ pub fn tick(app: &mut SoundApp) {
     if !LOGGED.swap(true, Ordering::Relaxed) {
         log_scan();
     }
+    // Clips play through their plug-in's voices on the playing engine (prepared at the rate the
+    // mix renders: the session's).
+    match &app.player {
+        Some(p) => app.ara.set_realtime(Some(soundcraft_playback::ara_board()), app.engine.session().sample_rate.hz() as f32, p.max_block()),
+        None => app.ara.set_realtime(None, 0.0, 0),
+    }
     app.ara.sync(&app.engine);
+    if app.ara.take_unsaved() {
+        app.engine.mark_unsaved();
+    }
+    for m in app.ara.take_messages() {
+        app.ui.status = m;
+    }
+    for r in app.ara.take_requests() {
+        playback_request(app, r);
+    }
+}
+
+/// Carries out what an ARA plug-in asked of the transport (its playback controller): play, stop,
+/// locate, the loop range (the edit selection on the clip's tracks, as Loop Playback plays it)
+/// and looping on or off.
+fn playback_request(app: &mut SoundApp, r: soundcraft_engine::ara::PlaybackRequest) {
+    use soundcraft_engine::ara::PlaybackRequest as R;
+    let hz = f64::from(app.engine.session().sample_rate.hz());
+    let at = |t: f64| (t.max(0.0) * hz).round() as i64;
+    let done = match r {
+        R::Start => app.run("transport.play", json!({})),
+        R::Stop => app.run("transport.stop", json!({})),
+        R::Position(t) => app.run("transport.locate", json!({"at": at(t)})),
+        R::Cycle(start, duration) => app.run("edit.select", json!({"start": at(start), "end": at(start + duration)})),
+        R::EnableCycle(on) => app.run("options.loop_playback", json!({"value": on})),
+    };
+    if let Err(e) = done {
+        soundcraft_engine::ara::log_line(&format!("a plug-in's request to {} was not carried out: {e}", r.describe()));
+    }
 }
 
 /// Writes to the ARA log, for every VST3 module the scan knows, whether it offers ARA 2 and why
@@ -31,6 +65,22 @@ pub fn log_scan() {
     for line in report {
         soundcraft_engine::ara::log_line(&line);
     }
+}
+
+/// `ui.ara_editor {clip?}`: opens the editor window of the clip's ARA plug-in (the first selected
+/// clip given to one when no clip is named), told the Edit window's selection.
+pub fn open_editor(app: &mut SoundApp, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let s = app.engine.session();
+    let clip = p
+        .get("clip")
+        .and_then(serde_json::Value::as_u64)
+        .map(ClipId)
+        .or_else(|| s.edit.selected_clips.iter().copied().find(|c| s.find_clip(*c).is_some_and(|(_, x)| x.ara.is_some())))
+        .ok_or("Select a clip given to an ARA plug-in")?;
+    app.ara.sync(&app.engine);
+    let s = app.engine.session_arc();
+    app.ara.open_editor(&s, clip)?;
+    Ok(json!({"clip": clip.0}))
 }
 
 /// Why Clip › ARA Plug-ins… is greyed out, if it is.
@@ -109,7 +159,7 @@ pub(crate) fn clip_menu(app: &mut SoundApp, ui: &mut egui::Ui, c: ClipId) {
                 Err(why) => open.on_disabled_hover_text(why),
             };
             if open.clicked() {
-                if let Err(e) = app.run("clip.ara_editor", json!({"clip": c.0})) {
+                if let Err(e) = open_editor(app, &json!({"clip": c.0})) {
                     app.ui.status = e;
                 }
                 ui.close();
@@ -134,9 +184,12 @@ pub(crate) fn clip_menu(app: &mut SoundApp, ui: &mut egui::Ui, c: ClipId) {
             if item.clicked() {
                 match app.run("clip.ara_add", json!({"clips": clips, "plugin": p.id})) {
                     Ok(_) => {
+                        app.ara.sync(&app.engine);
                         let given = app.engine.session().find_clip(c).map(|(_, x)| x.clone());
-                        if given.is_some_and(|x| app.ara.can_open_editor(&x).is_ok()) {
-                            let _ = app.run("clip.ara_editor", json!({"clip": c.0}));
+                        if given.is_some_and(|x| app.ara.can_open_editor(&x).is_ok())
+                            && let Err(e) = open_editor(app, &json!({"clip": c.0}))
+                        {
+                            app.ui.status = e;
                         }
                     }
                     Err(e) => app.ui.status = e,
@@ -220,7 +273,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                         Err(why) => b.on_disabled_hover_text(why),
                     };
                     if b.clicked() {
-                        run = Some(("clip.ara_editor", json!({"clip": c.id.0})));
+                        run = Some(("ui.ara_editor", json!({"clip": c.id.0})));
                     }
                     let mut bypass = a.bypass;
                     if ui.checkbox(&mut bypass, "Bypass").on_hover_text("The clip plays its own audio; the plug-in keeps its edits").changed() {

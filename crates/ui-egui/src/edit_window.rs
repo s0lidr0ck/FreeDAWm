@@ -4134,6 +4134,11 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
             crate::juke_window::show_steps(app, track.id, Some(c.id));
         } else if midi {
             app.ui.show_midi_editor = true;
+        } else if c.ara.as_ref().is_some_and(|a| !a.bypass) {
+            // A clip given to an ARA plug-in: its editor window.
+            if let Err(e) = crate::ara_ui::open_editor(app, &json!({"clip": c.id.0})) {
+                app.ui.status = e;
+            }
         }
     }
 }

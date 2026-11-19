@@ -65,6 +65,7 @@ use soundcraft_time::{Range, Samples, TICKS_PER_QUARTER};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub mod ara;
 pub mod band;
 pub use band::{
     BAND_SLOTS, BandSongCache, BandUpdate, SLOT_CAPACITY, SlotBuf, auto_target, band_transport, band_transport_within, new_band_runtime,
@@ -613,6 +614,9 @@ struct Strip {
     /// Per-clip effect chains (Clip Effects) and a scratch buffer to render clips into.
     clip_fx: HashMap<u64, ClipFx>,
     clipbuf: Vec<Vec<f32>>,
+    /// What a clip's ARA voice renders a block into (sized when the track has a clip given to an
+    /// ARA plug-in).
+    arabuf: Vec<Vec<f32>>,
     /// Total latency of the active inserts (samples).
     latency: usize,
     /// Of it, the post-fader modules' (`Insert::post_fader`): the pre-fader copy is that much
@@ -886,6 +890,7 @@ impl Strip {
             gr: 0.0,
             clip_fx: HashMap::new(),
             clipbuf: Vec::new(),
+            arabuf: Vec::new(),
             latency: 0,
             post_lat: 0,
             align: DelayLine::default(),
@@ -1143,6 +1148,8 @@ pub struct MixEngine {
     band_retired: soundcraft_band::runtime::Retired,
     band_out: [SlotBuf; BAND_SLOTS],
     band_playing: bool,
+    /// The clips' ARA voices (see [`ara`]): a realtime engine follows the host's board.
+    ara: Option<ara::AraCache>,
 }
 
 /// What `sync` needs to fill a slot.
@@ -1385,6 +1392,7 @@ impl MixEngine {
             band_retired: soundcraft_band::runtime::Retired::default(),
             band_out: band::new_slots(),
             band_playing: false,
+            ara: None,
         }
     }
 
@@ -1485,6 +1493,12 @@ impl MixEngine {
     /// [`MixEngine::adopt`] instead of being created in `sync` (see the crate docs).
     pub fn set_external_instances(&mut self, on: bool) {
         self.external = on;
+    }
+
+    /// The board of ARA voices this (realtime) engine plays clips given to ARA plug-ins through
+    /// (see [`ara`]); `None`: they play their offline renders or their files. Off the audio thread.
+    pub fn set_ara_board(&mut self, board: Option<Arc<ara::AraBoard>>) {
+        self.ara = board.map(ara::AraCache::new);
     }
 
     /// Measures the main mix's loudness and true peak (EBU R128) into `main_meter.loudness`
@@ -2074,6 +2088,7 @@ impl MixEngine {
             // Hosted clip modules are made here only by an offline engine (no realtime host).
             let hosted = !cx.external && !self.builtins;
             sync_clip_fx(strip, t, cx.sr, mb, cx.retired, host, cx.made, (hosted, cx.offline));
+            sync_arabuf(strip, t, mb);
             // Sidechain keys: one per keyed module, keeping a module's lines (and their history).
             strip.level = plan.level.get(ti).copied().unwrap_or(0);
             // Module MIDI inputs: the accepted sources, and room for the list (`process_strip`
@@ -2501,7 +2516,12 @@ impl MixEngine {
         let pdc = s.edit.delay_compensation;
         let xf = self.fade_len();
         let busses = std::mem::take(&mut self.busses);
+        if let Some(a) = self.ara.as_mut() {
+            a.refresh();
+        }
         let live_in = LiveInput {
+            ara: self.ara.as_ref().map_or(&[][..], |a| &a.voices),
+            ara_preview: self.ara.as_ref().is_some_and(|a| a.board.preview()),
             input: &self.input,
             monitor_only: self.monitor_only,
             recording: self.recording,
@@ -2707,6 +2727,8 @@ impl MixEngine {
             }
             {
                 let live_in = LiveInput {
+                    ara: self.ara.as_ref().map_or(&[][..], |a| &a.voices),
+                    ara_preview: self.ara.as_ref().is_some_and(|a| a.board.preview()),
                     input: &self.input,
                     monitor_only: self.monitor_only,
                     recording: self.recording,
@@ -3602,6 +3624,10 @@ struct LiveInput<'a> {
     feedback_frames: usize,
     /// Hardware Inserts play through the device (a live engine), else pass through.
     hw_inserts: bool,
+    /// The clips' ARA voices (a realtime engine with an [`ara::AraBoard`]), by clip id, and
+    /// whether they render while stopped (an ARA editor is open).
+    ara: &'a [(u64, Arc<ara::AraVoice>)],
+    ara_preview: bool,
 }
 
 /// One send per Hardware Insert module on `t`, `ch` channels of `mb` (off the audio thread's
@@ -3799,7 +3825,23 @@ fn process_strip(
             }
             feedback_guard(strip, frames, live.feedback_frames);
         }
-        TrackKind::Audio if live.monitor_only => {}
+        // Stopped, with an ARA plug-in's editor open: its voices are rendered all the same (ARA's
+        // editor rendering: the plug-in previews what is edited, say a note being dragged).
+        TrackKind::Audio if live.monitor_only => {
+            if live.ara_preview && strip.arabuf.len() == strip.buf.len() {
+                for clip in t.clips().iter().filter(|c| c.ara.as_ref().is_some_and(|a| !a.bypass)) {
+                    if let Some(v) = ara::voice(live.ara, clip)
+                        && v.render(s, pos, frames, None, false, &mut strip.arabuf)
+                    {
+                        for (d, a) in strip.buf.iter_mut().zip(strip.arabuf.iter()) {
+                            for (x, y) in d.iter_mut().zip(a.iter()).take(frames) {
+                                *x += *y;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Recording over them (input monitoring Off, or no input to hear): the clips under the
         // take are not heard, as the take will replace them.
         TrackKind::Audio if t.mixer.record_arm && live.auto_input => {}
@@ -3840,12 +3882,12 @@ fn process_strip(
                 });
                 match fx {
                     None if lat + tail > 0 => {}
-                    None => render_clip(s, clip, pos, frames, &mut strip.buf, edges, cover),
+                    None => clip_audio(s, clip, pos, frames, &mut strip.buf, edges, cover, live, &mut strip.arabuf),
                     Some(fx) => {
                         for c in strip.clipbuf.iter_mut() {
                             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
                         }
-                        render_clip(s, clip, at, frames, &mut strip.clipbuf, edges, cover);
+                        clip_audio(s, clip, at, frames, &mut strip.clipbuf, edges, cover, live, &mut strip.arabuf);
                         if live.reverse {
                             // The effects hear the clip backwards; turned round again here, it
                             // comes round once more with the track's other clips below.
@@ -4727,6 +4769,16 @@ fn sync_clip_fx(
     }
 }
 
+/// The scratch buffer a track's ARA voices render into: sized (off the audio thread's render) while
+/// the track has a clip given to an ARA plug-in.
+pub(crate) fn sync_arabuf(strip: &mut Strip, t: &Track, mb: usize) {
+    let ch = strip.buf.len();
+    let any = t.clips().iter().any(|c| c.ara.is_some());
+    if any && (strip.arabuf.len() != ch || strip.arabuf.iter().any(|c| c.len() < mb)) {
+        strip.arabuf = vec![vec![0.0; mb]; ch];
+    }
+}
+
 /// Hash of everything `sync`/`processing_order` depend on (tracks, kinds, routing, plugins, sends).
 fn structure_fingerprint(s: &Session) -> usize {
     use std::hash::{Hash, Hasher};
@@ -5205,6 +5257,75 @@ impl<'a> Cover<'a> {
             keep = keep.min(1.0 - c.clamp(0.0, 1.0));
         }
         keep
+    }
+}
+
+/// Adds `clip`'s audio for the block at `pos` to `buf`: through its ARA voice (a realtime engine),
+/// or its offline ARA render, or else its file ([`render_clip`]). Never allocates.
+fn clip_audio(
+    s: &Session,
+    clip: &Clip,
+    pos: Samples,
+    frames: usize,
+    buf: &mut [Vec<f32>],
+    auto: Edges,
+    cover: Option<Cover<'_>>,
+    live: &LiveInput<'_>,
+    arabuf: &mut [Vec<f32>],
+) {
+    if clip.ara.as_ref().is_some_and(|a| !a.bypass) {
+        let looping = live.looping.map(|l| (transport_at(s, l.start, true, false).quarters, transport_at(s, l.end, true, false).quarters));
+        if !live.reverse
+            && arabuf.len() == buf.len()
+            && let Some(v) = ara::voice(live.ara, clip)
+            && v.render(s, pos, frames, looping, true, arabuf)
+        {
+            add_ara(clip, pos, frames, buf, auto, cover, |c, p| {
+                arabuf.get(c).and_then(|x| x.get(usize::try_from(p - pos).ok()?)).copied().unwrap_or(0.0)
+            });
+            return;
+        }
+        if let Some(r) = ara::render_of(s, clip) {
+            let audio = &r.audio;
+            add_ara(clip, pos, frames, buf, auto, cover, |c, p| {
+                audio.get(c).and_then(|x| x.get(usize::try_from(p - clip.start).ok()?)).copied().unwrap_or(0.0)
+            });
+            return;
+        }
+    }
+    render_clip(s, clip, pos, frames, buf, auto, cover);
+}
+
+/// Adds what an ARA plug-in rendered for `clip` (`read(channel, timeline position)`) to the block
+/// at `pos`, with the clip's gain, fades and crossfades applied as [`render_clip`] applies them to
+/// a file. Never allocates.
+fn add_ara(
+    clip: &Clip,
+    pos: Samples,
+    frames: usize,
+    buf: &mut [Vec<f32>],
+    auto: Edges,
+    cover: Option<Cover<'_>>,
+    read: impl Fn(usize, Samples) -> f32,
+) {
+    let block = Range { start: pos, end: pos.saturating_add(frames as i64) };
+    let Some(isect) = clip.range().intersect(&block) else { return };
+    let i0 = usize::try_from(isect.start - pos).unwrap_or(0);
+    let i1 = usize::try_from(isect.end - pos).unwrap_or(0).min(frames);
+    for k in i0..i1 {
+        let p = pos.saturating_add(k as i64);
+        let mut g = clip.gain_at(p.saturating_sub(clip.start));
+        if !auto.is_none() {
+            g *= auto.gain(p);
+        }
+        if let Some(c) = cover {
+            g *= c.gain(p);
+        }
+        for (c, d) in buf.iter_mut().enumerate() {
+            if let Some(x) = d.get_mut(k) {
+                *x += read(c, p) * g;
+            }
+        }
     }
 }
 
@@ -6646,7 +6767,8 @@ fn keys_hash(ins: &soundcraft_model::Insert) -> u64 {
     h
 }
 
-pub(crate) fn transport_at(s: &Session, pos: Samples, playing: bool, recording: bool) -> Transport {
+/// The transport at timeline position `pos` (tempo, meter, bar and quarter position there).
+pub fn transport_at(s: &Session, pos: Samples, playing: bool, recording: bool) -> Transport {
     let sr = s.sample_rate;
     let ticks = Some(s.tempo.samples_to_ticks_f(pos, sr)).filter(|t| t.is_finite()).unwrap_or(0.0);
     let tick = ticks.floor() as i64;
@@ -7625,11 +7747,19 @@ fn render_clips_with(s: &Session, track: TrackId, range: Range, heard: bool) -> 
         } else {
             (Edges::default(), Cover::of(t.clips(), c, range, 0))
         };
+        // As heard (Consolidate): a clip given to an ARA plug-in plays its offline render.
+        let ara = if heard { ara::render_of(s, c) } else { None };
+        let render = |buf: &mut [Vec<f32>]| match ara {
+            Some(r) => add_ara(c, range.start, len, buf, edges, cover, |ch, p| {
+                r.audio.get(ch).and_then(|x| x.get(usize::try_from(p - c.start).ok()?)).copied().unwrap_or(0.0)
+            }),
+            None => render_clip(s, c, range.start, len, buf, edges, cover),
+        };
         match fx.as_mut() {
-            None => render_clip(s, c, range.start, len, &mut out, edges, cover),
+            None => render(&mut out),
             Some(fx) => {
                 let mut tmp = vec![vec![0.0f32; len]; out.len()];
-                render_clip(s, c, range.start, len, &mut tmp, edges, cover);
+                render(&mut tmp);
                 let mut done = 0;
                 while done < len {
                     let n = (len - done).min(4096);

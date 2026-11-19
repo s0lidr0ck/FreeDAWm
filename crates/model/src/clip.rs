@@ -372,9 +372,9 @@ pub struct Clip {
     pub ara: Option<ClipAra>,
 }
 
-/// An ARA plug-in on an audio clip (Clip › ARA Plug-in…). Stage one of ARA hosting: the plug-in
-/// reads the clip's audio and analyses it; the clip still plays its own audio (playback through
-/// the plug-in, and saving the plug-in's edits, come with stage two).
+/// An ARA plug-in on an audio clip (Clip › ARA Plug-ins…, the clip menu's ARA submenu): the
+/// plug-in reads the clip's audio, analyses it, and the clip plays through it (unless bypassed);
+/// the plug-in's edits are saved with the session (`Session::ara_archives`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClipAra {
     /// The plug-in's id (`vst3:<class id>`).
@@ -386,6 +386,11 @@ pub struct ClipAra {
     /// menu's ARA submenu and the ARA Plug-ins window).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
+    /// The clip whose ARA audio modification this clip's starts as a copy of: the clip it was
+    /// first given to, carried along when it is duplicated, copied or split, so the copy starts
+    /// with the plug-in's edits (ARA's `cloneAudioModification`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<u64>,
 }
 
 /// One step of a clip's process history ([`Clip::processes`]).

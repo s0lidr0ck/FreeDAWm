@@ -619,6 +619,10 @@ impl Plugin for Vst3Plugin {
         self.transport = Some(*transport);
     }
 
+    fn set_loop(&mut self, cycle: Option<(f64, f64)>) {
+        self.inst.set_cycle(cycle);
+    }
+
     fn set_offline(&mut self, offline: bool) {
         self.offline = offline;
     }

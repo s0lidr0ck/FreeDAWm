@@ -421,6 +421,22 @@ pub fn instantiate(id: &str) -> Result<Box<dyn Plugin>, Vst3Error> {
     api::instantiate(id)
 }
 
+/// Makes the `vst3:` plug-in `id` for ARA and binds it to the document controller `dc` with the
+/// roles `assigned` of `known` (`soundcraft_ara_host::sys::kARA*Role`), as ARA asks: right after
+/// it is made, before it is prepared (activated), its state is set or its editor opened. Returns
+/// it **unprepared**, with the ARA extension the binding gave (valid while the plug-in lives):
+/// give the extension's renderers their playback regions, then `prepare` it. Call on the
+/// document controller's thread. Fails with the reason (no ARA 2 entry point, the binding gave
+/// nothing, the plug-in cannot be made).
+pub fn instantiate_ara(
+    id: &str,
+    dc: soundcraft_ara_host::sys::ARADocumentControllerRef,
+    known: i32,
+    assigned: i32,
+) -> Result<(Vst3Plugin, soundcraft_ara_host::RawExtension), Vst3Error> {
+    registry::instantiate_ara(id, dc, known, assigned)
+}
+
 /// Like [`instantiate`], but returns the concrete [`Vst3Plugin`] (for its extra methods, such
 /// as [`Vst3Plugin::editor_size`]).
 pub fn instantiate_plugin(id: &str) -> Result<Vst3Plugin, Vst3Error> {
