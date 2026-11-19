@@ -51,6 +51,7 @@ pub mod render_job;
 pub mod score;
 pub mod scout_profiles;
 pub mod scout_prompt;
+pub mod song_key;
 pub mod spill;
 pub mod split_files;
 pub mod stretch_jobs;
@@ -531,6 +532,8 @@ impl Engine {
         // Vocal tuning fingerprints and caches are derived, not saved.
         crate::vocal::prune(&mut s);
         crate::vocal::refresh_fingerprints_in(&mut s);
+        // One key: the Key ruler's key at bar 1 is the band's.
+        crate::song_key::on_load(&mut s);
         self.transport = TransportStatus { position: s.edit.selection.start.max(0), ..TransportStatus::default() };
         self.transport_requests.clear();
         self.transport_requests.push(TransportRequest::ResetSession);
@@ -949,6 +952,14 @@ impl Engine {
                         let was = self.doc.edit.values.get(&key).copied().filter(|r| r.is_finite() && *r > 0.0).unwrap_or(1.0);
                         let _ = cmd::clip::elastic(self, &serde_json::json!({"clips": [clip.0], "ratio": was * ratio}));
                     }
+                }
+                // One key: the Key ruler's key at bar 1 and the band's key follow each other.
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && self.loads == loads
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && song_key::changed(&before, &self.doc)
+                {
+                    song_key::follow(&before, Arc::make_mut(&mut self.doc));
                 }
                 // MIDI clips set to follow the chord lane take its changes, in the same undo step.
                 if !Arc::ptr_eq(&before, &self.doc)
