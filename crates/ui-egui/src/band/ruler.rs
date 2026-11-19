@@ -717,21 +717,27 @@ pub fn badge_text(k: u8, player: &str) -> String {
     format!("♪ {} · {player}", k + 1)
 }
 
+/// The badge as the header draws it, compact for the name plate: `♪2 Benny`.
+pub fn badge_short(k: u8, player: &str) -> String {
+    format!("♪{} {player}", k + 1)
+}
+
 /// The musician badge at the end of an Edit track header's name plate `name_r` (musician `k`, 0-5):
 /// a click opens their settings, a right-click the track's menu. Returns what is left of the name
 /// plate (at least half of it: a long player name is clipped).
 pub fn header_badge(app: &mut SoundApp, ui: &mut Ui, track: &soundcraft_model::Track, name_r: Rect, k: u8, player: &str) -> Rect {
     let t = Tokens::current();
-    let text = badge_text(k, player);
-    let galley = ui.painter().layout_no_wrap(text.clone(), regular(9.5), t.text);
-    let w = (galley.size().x + 8.0).min(name_r.width() * 0.5);
+    // Dark ink on the solid accent: readable on a selected (light) name plate and on a plain one.
+    let ink = Color32::from_rgb(0x1A, 0x14, 0x33);
+    let galley = ui.painter().layout_no_wrap(badge_short(k, player), bold(9.0), ink);
+    let w = (galley.size().x + 8.0).min(name_r.width() * 0.55);
     let r = Rect::from_min_max(pos2(name_r.max.x - w, name_r.min.y + 1.0), pos2(name_r.max.x, name_r.max.y - 1.0));
     let resp = ui.interact(r, ui.id().with(("band-badge", track.id.0)), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} musician {}", track.name, k + 1)));
     let on = app.band_ui.musician == Some(k);
-    let fill = if on || resp.hovered() { BAND_ACCENT.gamma_multiply(0.55) } else { BAND_ACCENT.gamma_multiply(0.3) };
-    ui.painter().rect(r, CornerRadius::same(7), fill, Stroke::new(1.0, BAND_ACCENT.gamma_multiply(0.8)), StrokeKind::Inside);
-    ui.painter().with_clip_rect(r.shrink(1.0)).galley(pos2(r.min.x + 4.0, r.center().y - galley.size().y / 2.0), galley, t.text);
+    let fill = if on || resp.hovered() { BAND_ACCENT } else { BAND_ACCENT.lerp_to_gamma(Color32::WHITE, 0.25) };
+    ui.painter().rect(r, CornerRadius::same(7), fill, Stroke::new(1.0, BAND_ACCENT.lerp_to_gamma(t.text_dark, 0.3)), StrokeKind::Inside);
+    ui.painter().with_clip_rect(r.shrink(1.0)).galley(pos2(r.min.x + 4.0, r.center().y - galley.size().y / 2.0), galley, ink);
     let resp =
         resp.on_hover_text(format!("Plays musician {}: click for their settings (player, Energy, feel, instrument plug-in)", badge_text(k, player)));
     if resp.clicked() {
