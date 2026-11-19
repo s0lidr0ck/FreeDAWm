@@ -41,7 +41,7 @@ matches. When it doesn't, write what you saw under the line: the status bar text
 - **Who plays what:** the Band ruler's **Musicians** ▾: each musician's on/off, track,
   instrument and preset, target, and whether they are heard. **Settings** opens their drawer at
   a small panel. In the Edit window, a track that plays a musician shows a badge at the end of its
-  name (**♪ 2 · Benny**): click it for the same panel (or right-click the name › **Musician
+  name (**♪2**; hover names the player, ♪ 2 · Benny): click it for the same panel (or right-click the name › **Musician
   Settings...**).
 - **A track plays a musician:** on an Instrument or MIDI track, open the track's **input** menu
   (the input selector on the strip in the Mix window, or the I/O column in the Edit window). Under
@@ -89,7 +89,7 @@ matches. When it doesn't, write what you saw under the line: the status bar text
   **Track › New Band**. Expected: five tracks (Piano, Drums, Bass, Strings, Brass); Drums plays
   MODO DRUM and Bass MODO BASS 2, the others built-in instruments; the Band ruler's Musicians list
   says so and the status line counts the built-in ones; each track header shows its musician's
-  badge (♪ 1 · Clay, ♪ 2 · Benny…); the Band, Sections and Chords rulers show; Play is heard at
+  badge (♪1, ♪2…); the Band, Sections and Chords rulers show; Play is heard at
   once; one Undo removes it all.
 - [ ] New Instrument track "Drums" with **MODO DRUM** on it; input → Musicians → the drummer
   (load the band preset **Factory Band** first if no slot plays Drums). New Instrument track

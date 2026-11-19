@@ -717,19 +717,20 @@ pub fn badge_text(k: u8, player: &str) -> String {
     format!("♪ {} · {player}", k + 1)
 }
 
-/// The badge as the header draws it, compact for the name plate: `♪2 Benny`.
-pub fn badge_short(k: u8, player: &str) -> String {
-    format!("♪{} {player}", k + 1)
+/// The badge as the header draws it: just `♪2`, so the track's name always fits beside it (the
+/// player's name is in the tooltip).
+pub fn badge_short(k: u8) -> String {
+    format!("♪{}", k + 1)
 }
 
 /// The musician badge at the end of an Edit track header's name plate `name_r` (musician `k`, 0-5):
 /// a click opens their settings, a right-click the track's menu. Returns what is left of the name
-/// plate (at least half of it: a long player name is clipped).
+/// plate.
 pub fn header_badge(app: &mut SoundApp, ui: &mut Ui, track: &soundcraft_model::Track, name_r: Rect, k: u8, player: &str) -> Rect {
     let t = Tokens::current();
     // Dark ink on the solid accent: readable on a selected (light) name plate and on a plain one.
     let ink = Color32::from_rgb(0x1A, 0x14, 0x33);
-    let galley = ui.painter().layout_no_wrap(badge_short(k, player), bold(9.0), ink);
+    let galley = ui.painter().layout_no_wrap(badge_short(k), bold(9.0), ink);
     let w = (galley.size().x + 8.0).min(name_r.width() * 0.55);
     let r = Rect::from_min_max(pos2(name_r.max.x - w, name_r.min.y + 1.0), pos2(name_r.max.x, name_r.max.y - 1.0));
     let resp = ui.interact(r, ui.id().with(("band-badge", track.id.0)), Sense::click());

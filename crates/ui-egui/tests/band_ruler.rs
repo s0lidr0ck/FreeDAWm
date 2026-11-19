@@ -323,8 +323,8 @@ fn a_musicians_settings_open_from_the_list_the_badge_and_the_track_menu() {
     h.state_mut().run("track.new_band", json!({"installed": []})).unwrap();
     h.run_steps(4);
     assert!(h.query_by_label("Fold the band drawer").is_none());
-    // The Edit track header's badge: "♪ 2 · Benny".
-    assert!(has_text(&h, &ruler::badge_short(1, "Benny")), "{:?}", texts(&h));
+    // The Edit track header's badge: "♪2", with "♪ 2 · Benny" in its tooltip.
+    assert_eq!(ruler::badge_short(1), "♪2");
     assert_eq!(ruler::badge_text(1, "Benny"), "♪ 2 · Benny");
     h.get_by_label("Drums musician 2").click();
     h.run_steps(4);
