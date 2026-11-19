@@ -5,15 +5,20 @@
 //!
 //! Each file plays a short phrase suited to the preset's group three times: with the macros as
 //! saved, with Macro 1 at 0 %, and with Macro 1 at 100 %, a short gap between.
+//!
+//! A preset of the showcase set (the "Patched" group, whose point is what velocity and the mod
+//! wheel do) plays its phrase five times instead: soft (velocity 40), hard (velocity 120), with
+//! the mod wheel swept up and back down while it plays (velocity 90), then with Macro 1 at 0 %
+//! and at 100 %. Its phrase follows the job its description names (a bass, a lead, a pad...).
 
-use soundcraft_dsp::plugins::preset_lab::{Macros, Note, Preset, RATE, SYNTHS, State, presets, render, secs};
+use soundcraft_dsp::plugins::preset_lab::{Change, Macros, Note, Preset, RATE, SYNTHS, State, WHEEL, presets, render, render_changing, secs};
 use std::io::Write;
 use std::path::Path;
 
 /// The phrase a preset is heard on, and how long a pass lasts (seconds).
 fn phrase(p: &Preset) -> (Vec<Note>, f32) {
     let n = |at: f32, len: f32, key: u8, vel: u8| Note { at: secs(at), len: secs(len), key, vel };
-    let g = p.group.to_lowercase();
+    let g = if showcase(p) { job(p) } else { p.group.to_lowercase() };
     if g.contains("bass") {
         // A riff in C: C2 C2 Eb2 F2 G2 C3 Bb2 G2.
         let keys = [36u8, 36, 39, 41, 43, 48, 46, 43];
@@ -34,6 +39,41 @@ fn phrase(p: &Preset) -> (Vec<Note>, f32) {
         v.extend([48u8, 55, 60, 64].iter().map(|&k| n(2.2, 1.6, k, 95)));
         (v, 4.8)
     }
+}
+
+/// Whether `p` is in the showcase set (the "Patched" group).
+fn showcase(p: &Preset) -> bool {
+    p.group == "Patched"
+}
+
+/// The job a showcase preset's description names first (its group says only "Patched"), as a
+/// group name [`phrase`] knows.
+fn job(p: &Preset) -> String {
+    let d = p.desc.to_lowercase();
+    let first = d.split(':').next().unwrap_or(&d).to_string();
+    let jobs = [
+        ("struck", "keys"),
+        ("voice", "lead"),
+        ("bass", "bass"),
+        ("lead", "lead"),
+        ("pad", "pad"),
+        ("choir", "pad"),
+        ("strings", "pad"),
+        ("brass", "pad"),
+        ("riser", "pad"),
+        ("drone", "texture"),
+        ("texture", "texture"),
+        ("swarm", "texture"),
+        ("field", "texture"),
+        ("bells", "effects"),
+        ("hail", "effects"),
+    ];
+    jobs.iter().find(|(w, _)| first.contains(w)).map_or_else(|| "keys".to_string(), |(_, g)| (*g).to_string())
+}
+
+/// `notes` with every velocity set to `vel`.
+fn at_velocity(notes: &[Note], vel: u8) -> Vec<Note> {
+    notes.iter().map(|n| Note { vel, ..*n }).collect()
 }
 
 fn wav(path: &Path, x: &[Vec<f32>; 2]) -> std::io::Result<()> {
@@ -87,8 +127,28 @@ fn main() {
         };
         let (notes, len) = phrase(p);
         let mut out = [Vec::new(), Vec::new()];
-        for macros in [Macros::Saved, Macros::One(0, 0.0), Macros::One(0, 100.0)] {
-            let Some(x) = render(p, State { macros, wheel: 0.0 }, &notes, secs(len)) else { continue };
+        let mut passes: Vec<Option<[Vec<f32>; 2]>> = Vec::new();
+        if showcase(p) {
+            // Soft, then hard, then the wheel swept up and back down over the phrase.
+            passes.push(render(p, State::SAVED, &at_velocity(&notes, 40), secs(len)));
+            passes.push(render(p, State::SAVED, &at_velocity(&notes, 120), secs(len)));
+            let steps = 40;
+            let sweep: Vec<Change> = (0..=steps)
+                .map(|k| {
+                    let t = k as f32 / steps as f32;
+                    Change { at: secs(len * t), param: WHEEL, value: 1.0 - (2.0 * t - 1.0).abs() }
+                })
+                .collect();
+            passes.push(render_changing(p, RATE, State::SAVED, &at_velocity(&notes, 90), secs(len), &sweep));
+            for macros in [Macros::One(0, 0.0), Macros::One(0, 100.0)] {
+                passes.push(render(p, State { macros, wheel: 0.0 }, &notes, secs(len)));
+            }
+        } else {
+            for macros in [Macros::Saved, Macros::One(0, 0.0), Macros::One(0, 100.0)] {
+                passes.push(render(p, State { macros, wheel: 0.0 }, &notes, secs(len)));
+            }
+        }
+        for x in passes.into_iter().flatten() {
             for c in 0..2 {
                 out[c].extend_from_slice(&x[c]);
                 out[c].extend(std::iter::repeat_n(0.0, secs(0.5)));

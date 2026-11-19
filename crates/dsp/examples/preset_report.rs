@@ -4,7 +4,12 @@
 //! `cargo run --release -p soundcraft-dsp --example preset_report [-- <synth id> [name filter]] [--quick] [--calibrate]`
 //!
 //! `--quick` plays the held chords at hard velocity only; `--calibrate` also prints, per
-//! preset, the level that would put it at -13 dBFS with its peaks under -1.5 dBFS.
+//! preset, the level that would put it at -13 dBFS with its peaks under -1.5 dBFS. The filter
+//! matches a part of a preset's name or its whole group (`patched`).
+//!
+//! `--patching` counts the presets that patch the matrix and their slots by source and
+//! destination; `--slots` scores what each slot does when its source moves
+//! (`preset_lab::slot_effect`); `--macros` what each macro does.
 
 use soundcraft_dsp::plugins::preset_lab::{self as lab, HEADER, Report, SYNTHS, line, measure};
 
@@ -32,12 +37,76 @@ fn main() {
         return;
     }
     let filter = words.get(1).map(|s| s.to_lowercase());
+    // `--patching`: per synth, how many presets patch the matrix (slots, not only macros), and
+    // the slots counted by source and by destination.
+    if args.iter().any(|a| a == "--patching") {
+        for id in SYNTHS.iter().filter(|id| only.is_none_or(|o| o == **id)) {
+            let list = lab::presets(id);
+            let count = |min: usize| list.iter().filter(|p| p.slots >= min).count();
+            let sources: std::collections::BTreeSet<&str> = list.iter().flat_map(|p| p.slot_list.iter().map(|s| s.0.as_str())).collect();
+            println!(
+                "{id}: {} presets; with any slot {}, with 3 or more {}, with 3 or more sources {}; slots {}",
+                list.len(),
+                count(1),
+                count(3),
+                list.iter().filter(|p| p.slot_list.iter().map(|s| &s.0).collect::<std::collections::BTreeSet<_>>().len() >= 3).count(),
+                list.iter().map(|p| p.slots).sum::<usize>()
+            );
+            for s in sources {
+                let n = list.iter().map(|p| p.slot_list.iter().filter(|x| x.0 == s).count()).sum::<usize>();
+                let in_presets = list.iter().filter(|p| p.slot_list.iter().any(|x| x.0 == s)).count();
+                println!("  source {s}: {n} slots in {in_presets} presets");
+            }
+            let mut dests: Vec<(String, usize)> = Vec::new();
+            for d in list.iter().flat_map(|p| p.slot_list.iter().map(|s| s.1.clone())) {
+                match dests.iter_mut().find(|(x, _)| *x == d) {
+                    Some((_, n)) => *n += 1,
+                    None => dests.push((d, 1)),
+                }
+            }
+            dests.sort_by_key(|d| std::cmp::Reverse(d.1));
+            println!("  destinations: {}", dests.iter().map(|(d, n)| format!("{d} {n}")).collect::<Vec<_>>().join(", "));
+        }
+        return;
+    }
+    // `--slots`: what each slot of each preset does when its source moves (the `audible` score,
+    // see `preset_lab::slot_effect`).
+    if args.iter().any(|a| a == "--slots") {
+        for id in SYNTHS.iter().filter(|id| only.is_none_or(|o| o == **id)) {
+            let list: Vec<lab::Preset> = lab::presets(id)
+                .into_iter()
+                .filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f) || p.group.to_lowercase() == *f))
+                .collect();
+            let jobs: Vec<(usize, usize)> = list.iter().enumerate().flat_map(|(k, p)| (0..p.slots).map(move |i| (k, i))).collect();
+            let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).min(4);
+            let mut out: Vec<String> = vec![String::new(); jobs.len()];
+            let per = jobs.len().div_ceil(threads).max(1);
+            std::thread::scope(|s| {
+                for (part, js) in out.chunks_mut(per).zip(jobs.chunks(per)) {
+                    let list = &list;
+                    s.spawn(move || {
+                        for (o, &(k, i)) in part.iter_mut().zip(js) {
+                            let p = &list[k];
+                            let (src, dest, amount) = &p.slot_list[i];
+                            let (score, what) = lab::slot_effect(p, i).unwrap_or((0.0, "no render".into()));
+                            let flag = if score < 1.0 { "below" } else { "heard" };
+                            *o = format!("SLOT {id} | {} | {} | {src} -> {dest} {amount} | {score:.2} | {flag} | {what}", p.tier, p.name);
+                        }
+                    });
+                }
+            });
+            out.iter().for_each(|l| println!("{l}"));
+        }
+        return;
+    }
     // `--macros`: what each named macro does between 0 and 100 % (the `audible` score: 1.0 is
     // the clearly-heard line), and whether it follows while a chord is held.
     // `--pitch`: a held middle C's pitch traits with each macro at 0 and 100 % (the tracker's view).
     if args.iter().any(|a| a == "--pitch") {
         for id in SYNTHS.iter().filter(|id| only.is_none_or(|o| o == **id)) {
-            for p in lab::presets(id).iter().filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f))) {
+            for p in
+                lab::presets(id).iter().filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f) || p.group.to_lowercase() == *f))
+            {
                 for i in 0..p.macros.len() {
                     let one = [lab::Note { at: 0, len: lab::secs(2.5), key: 60, vel: 100 }];
                     let t = |v: f32| {
@@ -55,8 +124,10 @@ fn main() {
     }
     if args.iter().any(|a| a == "--macros") {
         for id in SYNTHS.iter().filter(|id| only.is_none_or(|o| o == **id)) {
-            let list: Vec<lab::Preset> =
-                lab::presets(id).into_iter().filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f))).collect();
+            let list: Vec<lab::Preset> = lab::presets(id)
+                .into_iter()
+                .filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f) || p.group.to_lowercase() == *f))
+                .collect();
             let jobs: Vec<(usize, usize)> = list.iter().enumerate().flat_map(|(k, p)| (0..p.macros.len()).map(move |i| (k, i))).collect();
             let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).min(4);
             let mut out: Vec<String> = vec![String::new(); jobs.len()];
@@ -94,7 +165,8 @@ fn main() {
         let base = lab::defaults(id).and_then(|p| measure(&p, false)).map_or(1.0, |r| r.seconds.max(1e-9));
         println!("\n{id}: {} presets\n{HEADER}", list.len());
         // Measured on a few threads at once.
-        let chosen: Vec<&lab::Preset> = list.iter().filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f))).collect();
+        let chosen: Vec<&lab::Preset> =
+            list.iter().filter(|p| filter.as_ref().is_none_or(|f| p.name.to_lowercase().contains(f) || p.group.to_lowercase() == *f)).collect();
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).min(4);
         let mut reports: Vec<Option<Report>> = vec![None; chosen.len()];
         std::thread::scope(|s| {
@@ -120,7 +192,7 @@ fn main() {
                         let delta = (-13.0 - r.loudness_db).min(-1.6 - r.worst_peak_db.max(r.peak_db));
                         let now = p.value("level").unwrap_or(-6.0);
                         let level = ((now + delta) * 2.0).round() / 2.0;
-                        println!("CAL\t{id}\t{}\t{:.1}", p.name, level.clamp(-48.0, 6.0));
+                        println!("CAL\t{id}\t{}\t{:.1}\tworst peak in {}", p.name, level.clamp(-48.0, 6.0), r.worst_state);
                     }
                     got.push(r);
                 }

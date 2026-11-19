@@ -46,6 +46,10 @@ pub struct Preset {
     /// The macros the preset names: (name, targets).
     pub macros: Vec<(String, usize)>,
     pub slots: usize,
+    /// The patch's slots as the preset names them: (source, destination, amount).
+    pub slot_list: Vec<(String, String, f32)>,
+    /// The macros' targets: (macro, 0-based; destination; from; to).
+    pub targets: Vec<(usize, String, f32, f32)>,
 }
 
 impl Preset {
@@ -91,6 +95,8 @@ pub fn parse(plugin: &'static str, json: &str) -> Option<Preset> {
         prepared,
         macros,
         slots: slots.len(),
+        slot_list: slots,
+        targets,
     })
 }
 
@@ -112,6 +118,8 @@ pub fn defaults(plugin: &'static str) -> Option<Preset> {
         prepared: Vec::new(),
         macros: Vec::new(),
         slots: 0,
+        slot_list: Vec::new(),
+        targets: Vec::new(),
     })
 }
 
@@ -166,13 +174,17 @@ pub fn secs(s: f32) -> usize {
 }
 
 /// A parameter moved during a render: from frame `at` (counted at 48 kHz, applied at the start
-/// of the block it falls in) parameter `param` is `value`.
+/// of the block it falls in) parameter `param` is `value`; with `param` [`WHEEL`], the mod wheel
+/// moves to `value` (0..1) instead.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Change {
     pub at: usize,
     pub param: &'static str,
     pub value: f32,
 }
+
+/// The [`Change`] that moves the mod wheel (CC 1) rather than a parameter.
+pub const WHEEL: &str = "@wheel";
 
 /// `p` playing `notes` for `frames` at `rate` in `state`: (left, right). `None` if the synth
 /// cannot be made.
@@ -238,7 +250,11 @@ pub fn render_changing(p: &Preset, rate: f32, state: State, notes: &[Note], fram
             if at(c.at) >= t + n {
                 break;
             }
-            s.set_param(c.param, c.value);
+            if c.param == WHEEL {
+                s.midi(0, [0xB0, 1, (c.value.clamp(0.0, 1.0) * 127.0).round() as u8]);
+            } else {
+                s.set_param(c.param, c.value);
+            }
             moved += 1;
         }
         while let Some(&(when, on, key, vel)) = ev.get(next) {
@@ -897,11 +913,23 @@ fn time_score(a: f32, b: f32, floor: f32) -> f32 {
 /// the [`audible`] score and what scored it, over a held chord (C3 G3 C4 E4, velocity 100,
 /// 2.5 s) and a short middle C (150 ms, for plucks and other sounds that die away).
 pub fn macro_effect(p: &Preset, i: usize) -> Option<(f32, String)> {
-    let held = chord(&MID_CHORD, 100, secs(2.5));
-    let short = [Note { at: 0, len: secs(0.15), key: 60, vel: 100 }];
-    let at = |v: f32, notes: &[Note], frames: usize| render(p, State { macros: Macros::One(i, v), wheel: 0.0 }, notes, frames);
-    let (h0, h1) = (at(0.0, &held, secs(2.5))?, at(100.0, &held, secs(2.5))?);
-    let (s0, s1) = (at(0.0, &short, secs(3.0))?, at(100.0, &short, secs(3.0))?);
+    let at = |up: bool, notes: &[Note], frames: usize| {
+        render(p, State { macros: Macros::One(i, if up { 100.0 } else { 0.0 }), wheel: 0.0 }, notes, frames)
+    };
+    compare(at, 100, 0)
+}
+
+/// How clearly two renders of the same music differ (`at(false, ..)` against `at(true, ..)`):
+/// the [`audible`] score and what scored it, over a held chord (C3 G3 C4 E4 moved by `shift`
+/// semitones, velocity `vel`, 2.5 s), a short note (the C in it, 150 ms) and that note held
+/// (its pitch and vibrato), with the chord's attack and the short note's tail. What
+/// [`macro_effect`] and [`slot_effect`] measure with.
+fn compare(at: impl Fn(bool, &[Note], usize) -> Option<[Vec<f32>; 2]>, vel: u8, shift: i8) -> Option<(f32, String)> {
+    let key = |k: u8| k.saturating_add_signed(shift);
+    let held: Vec<Note> = MID_CHORD.iter().map(|&k| Note { at: 0, len: secs(2.5), key: key(k), vel }).collect();
+    let short = [Note { at: 0, len: secs(0.15), key: key(60), vel }];
+    let (h0, h1) = (at(false, &held, secs(2.5))?, at(true, &held, secs(2.5))?);
+    let (s0, s1) = (at(false, &short, secs(3.0))?, at(true, &short, secs(3.0))?);
     let mut best = audible(&traits(&h0, secs(0.3), secs(2.5)), &traits(&h1, secs(0.3), secs(2.5)));
     best.1 = format!("held: {}", best.1);
     let (sc, what) = audible(&traits(&s0, 0, secs(0.6)), &traits(&s1, 0, secs(0.6)));
@@ -918,10 +946,10 @@ pub fn macro_effect(p: &Preset, i: usize) -> Option<(f32, String)> {
     if sc > best.0 {
         best = (sc, format!("tail {t0:.0} -> {t1:.0} ms"));
     }
-    // A held middle C: its pitch and vibrato.
-    let one = [Note { at: 0, len: secs(2.5), key: 60, vel: 100 }];
-    let (n0, n1) = (at(0.0, &one, secs(2.5))?, at(100.0, &one, secs(2.5))?);
-    let hint = crate::midi_to_hz(60.0) as f32;
+    // The C held: its pitch and vibrato.
+    let one = [Note { at: 0, len: secs(2.5), key: key(60), vel }];
+    let (n0, n1) = (at(false, &one, secs(2.5))?, at(true, &one, secs(2.5))?);
+    let hint = crate::midi_to_hz(f64::from(key(60))) as f32;
     let pt = |x: &[Vec<f32>; 2]| pitch_traits(mono(x).get(secs(0.3)..).unwrap_or(&[]), hint);
     if let (Some(a), Some(b)) = (pt(&n0), pt(&n1)) {
         let cents = 1200.0 * (b.0 / a.0).log2();
@@ -939,6 +967,74 @@ pub fn macro_effect(p: &Preset, i: usize) -> Option<(f32, String)> {
         }
     }
     Some(best)
+}
+
+/// `p` with slot `i` of its patch taken out (the other slots and the macros as they are);
+/// `None` if there is no such slot or the rest does not compile.
+pub fn without_slot(p: &Preset, i: usize) -> Option<Preset> {
+    if i >= p.slot_list.len() {
+        return None;
+    }
+    let mut q = p.clone();
+    q.slot_list.remove(i);
+    q.slots = q.slot_list.len();
+    let slots: Vec<SlotSpec<'_>> = q.slot_list.iter().map(|(s, d, a)| SlotSpec { source: s, dest: d, amount: *a }).collect();
+    let targets: Vec<TargetSpec<'_>> = q.targets.iter().map(|(m, d, f, t)| TargetSpec { macro_index: *m, dest: d, from: *f, to: *t }).collect();
+    let prepared = if slots.is_empty() && targets.is_empty() { Vec::new() } else { compile(p.plugin, &slots, &targets)? };
+    q.prepared = prepared;
+    Some(q)
+}
+
+/// What slot `i` (0-based) of `p`'s patch does when its source moves: `p` against `p` without
+/// that slot, measured as [`macro_effect`] measures a macro (the same [`audible`] score: 1.0 is
+/// the clearly-heard line), with the source at the end of the travel a player reaches:
+/// - **velocity**: every note struck at 127 (without the slot, the hardest note does through it
+///   what the softest would);
+/// - **mod wheel**: the wheel at full;
+/// - **key**: the music two octaves up and two octaves down (key ±0.4), the larger;
+/// - **random**: as the rest, and eight middle Cs in turn (a new value each), compared note by
+///   note (their brightness, bands, level and pitch), the largest;
+/// - **amp env, env 2, LFO**: they move by themselves while a note plays (velocity 100).
+///
+/// The macros stay as saved. `None` if there is no such slot or the synth cannot be made.
+pub fn slot_effect(p: &Preset, i: usize) -> Option<(f32, String)> {
+    let (source, _, _) = p.slot_list.get(i)?;
+    let id = crate::plugins::synth_mod::SOURCES.get(crate::plugins::synth_mod::source_index(source)?)?.id;
+    let off = without_slot(p, i)?;
+    let wheel = if id == "mod_wheel" { 1.0 } else { 0.0 };
+    let at = |with: bool, notes: &[Note], frames: usize| render(if with { p } else { &off }, State { macros: Macros::Saved, wheel }, notes, frames);
+    match id {
+        "velocity" => compare(at, 127, 0),
+        "key" => {
+            let up = compare(at, 100, 24)?;
+            let down = compare(at, 100, -24)?;
+            Some(if down.0 > up.0 { (down.0, format!("two octaves down, {}", down.1)) } else { (up.0, format!("two octaves up, {}", up.1)) })
+        }
+        "random" => {
+            let mut best = compare(at, 100, 0)?;
+            let notes: Vec<Note> = (0..8).map(|k| Note { at: k * secs(0.4), len: secs(0.3), key: 60, vel: 100 }).collect();
+            let (a, b) = (at(false, &notes, secs(3.2))?, at(true, &notes, secs(3.2))?);
+            let (ma, mb) = (mono(&a), mono(&b));
+            let hint = crate::midi_to_hz(60.0) as f32;
+            for k in 0..8 {
+                let (from, to) = (k * secs(0.4), k * secs(0.4) + secs(0.3));
+                let (sc, what) = audible(&traits(&a, from, to), &traits(&b, from, to));
+                if sc > best.0 {
+                    best = (sc, format!("note {}: {what}", k + 1));
+                }
+                let pa = pitch_traits(ma.get(from + secs(0.03)..to).unwrap_or(&[]), hint);
+                let pb = pitch_traits(mb.get(from + secs(0.03)..to).unwrap_or(&[]), hint);
+                if let (Some(x), Some(y)) = (pa, pb) {
+                    let cents = 1200.0 * (y.0 / x.0).log2();
+                    if cents.is_finite() && cents.abs() / 100.0 > best.0 {
+                        best = (cents.abs() / 100.0, format!("note {}: pitch {cents:+.0} cents", k + 1));
+                    }
+                }
+            }
+            Some(best)
+        }
+        _ => compare(at, 100, 0),
+    }
 }
 
 /// Macro `i` (0-based) of `p` turned from 0 to 100 % over 200 ms while a chord is held (from
