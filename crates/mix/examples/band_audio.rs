@@ -1,7 +1,11 @@
 //! A rough listen to the Band: the band-feel lab's test songs played by the band and rendered through the built-in
 //! instruments (the drum machine's synth kit, the FM and subtractive synths) to WAV files.
 //!
-//! `cargo run --release -p soundcraft-mix --example band_audio -- <out dir> [natural|band|classic ...]`
+//! `cargo run --release -p soundcraft-mix --example band_audio -- <out dir> [natural|band|classic ...] [factory]
+//! [--tag <name>]`
+//!
+//! `factory`: the factory song instead (played by the Factory Band, and by the Gospel Church band with its electric
+//! keys on the Hammond); `--tag` adds a name to the files (`<song>-<mode>-<tag>.wav`), to keep renders apart.
 //!
 //! The sounds are stand-ins (a synth piano, a synth bass, a pad for strings, a pluck for guitars, a synth kit): judge
 //! the playing (time, dynamics, phrasing), not the instruments. The sustain pedal holds notes; other controllers and
@@ -13,7 +17,7 @@ mod feel_support;
 use std::io::Write;
 use std::path::Path;
 
-use feel_support::{Mode, Take, is_drums, play, test_songs};
+use feel_support::{Mode, Take, factory_song, is_drums, play, test_songs};
 use soundcraft_dsp::plugins::preset_lab::{Note, Preset, RATE, State, defaults, presets, render};
 
 /// The stand-in instrument for a Band instrument index.
@@ -141,8 +145,16 @@ fn main() {
     if modes.is_empty() {
         modes = vec![Mode::Natural, Mode::Band];
     }
+    let tag = args.iter().position(|a| a == "--tag").and_then(|i| args.get(i + 1)).map(|t| format!("-{t}")).unwrap_or_default();
+    let songs = if args.iter().any(|a| a == "factory") {
+        let mut gospel = factory_song("Gospel Church", false, &[(1, "Hammond B-3X")]);
+        gospel.name = "factory-song-gospel-church";
+        vec![factory_song("Factory Band", false, &[]), gospel]
+    } else {
+        test_songs()
+    };
     let _ = std::fs::create_dir_all(dir);
-    for song in test_songs() {
+    for song in songs {
         for &mode in &modes {
             let t = play(&song, mode, 1);
             let len = ((t.events.last().map_or(0.0, |e| e.ms) / 1000.0 + 2.5) * f64::from(RATE)) as usize;
@@ -174,7 +186,7 @@ fn main() {
                 let g = 0.89 / peak;
                 mix.iter_mut().flatten().for_each(|x| *x *= g);
             }
-            let file = format!("{}-{}.wav", song.name, mode.name());
+            let file = format!("{}-{}{tag}.wav", song.name, mode.name());
             match wav(&Path::new(dir).join(&file), &mix) {
                 Ok(()) => println!("wrote {file}"),
                 Err(e) => eprintln!("{file}: {e}"),
