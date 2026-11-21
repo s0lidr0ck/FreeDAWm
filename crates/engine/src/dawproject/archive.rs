@@ -111,6 +111,20 @@ impl<W: Write + Seek> ArchiveWriter<W> {
         Ok(())
     }
 
+    /// Adds `name` with the bytes `write` writes, `len` of them (said ahead, for the zip's
+    /// large-file record), straight into the archive: never held whole in memory.
+    pub fn add_with(&mut self, name: &str, len: u64, write: impl FnOnce(&mut dyn Write) -> std::io::Result<u64>) -> Result<(), String> {
+        let name = normalise(name);
+        if self.written.contains(&name) {
+            return Err(format!("{name}: written twice"));
+        }
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).large_file(len >= u32::MAX as u64);
+        self.zip.start_file(name.as_str(), opts).map_err(|e| format!("{name}: {e}"))?;
+        write(&mut self.zip).map_err(|e| format!("{name}: {e}"))?;
+        self.written.push(name);
+        Ok(())
+    }
+
     pub fn finish(self) -> Result<W, String> {
         self.zip.finish().map_err(|e| format!("archive: {e}"))
     }

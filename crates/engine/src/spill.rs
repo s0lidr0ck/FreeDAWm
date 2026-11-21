@@ -28,9 +28,6 @@ pub const PROCESSED: &str = "Processed";
 pub const SPLIT: &str = "Split";
 pub const SUBFOLDERS: [&str; 6] = [STEMS, CLEAN_VOCAL, TUNING, FREEZE, PROCESSED, SPLIT];
 
-/// Sources smaller than this many samples (all channels) stay in memory: not worth a file.
-pub const MIN_SAMPLES: usize = 1 << 16;
-
 /// The subfolder for audio made by the step labelled `label` (an undo label or command label);
 /// `None`: `Audio Files/` itself (imports, recordings, sampler loads).
 pub fn subfolder_for(label: &str) -> Option<&'static str> {
@@ -166,7 +163,9 @@ pub(crate) fn spill_sources(e: &mut Engine, label: &str, only: Option<&[SourceId
         s.sources
             .iter()
             .filter(|src| only.map_or(src.unsaved, |ids| ids.contains(&src.id)) && !keep.contains(&src.id))
-            .filter(|src| s.pool.get(src.id).is_some_and(|a| a.in_memory().is_some() && a.frames().saturating_mul(a.num_channels()) >= MIN_SAMPLES))
+            .filter(|src| {
+                s.pool.get(src.id).is_some_and(|a| a.in_memory().is_some() && !soundcraft_model::disk::keeps_in_memory(a.frames(), a.num_channels()))
+            })
             .map(|src| src.id)
             .collect()
     };

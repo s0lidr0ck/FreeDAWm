@@ -3,7 +3,6 @@
 
 use crate::io::{Recording, open_session_linked, sanitize_name};
 use crate::{Engine, EngineError, Result};
-use soundcraft_audio_io::{BitDepth, EncodeOptions, FileFormat};
 use soundcraft_model::{Session, SourceAudio, SourceId};
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -327,10 +326,9 @@ impl Autosave {
                 _ => {
                     let name = format!("{} {}.wav", sanitize_name(&src.name), self.next);
                     self.next += 1;
-                    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
-                    let bytes = soundcraft_audio_io::encode(&audio.buffer(), &opts).map_err(|err| EngineError::Io(err.to_string()))?;
+                    // Written a block at a time: never the whole source in memory.
                     std::fs::create_dir_all(&audio_dir)
-                        .and_then(|()| write_synced(&audio_dir.join(&name), &bytes))
+                        .and_then(|()| write_source_synced(&audio_dir.join(&name), audio))
                         .map_err(|err| io_error(&audio_dir, err))?;
                     name
                 }
@@ -579,6 +577,15 @@ pub fn discard(left: &Leftover) {
     let _ = std::fs::remove_dir_all(&left.dir);
 }
 
+/// Writes `audio` to `path` as a float WAV a block at a time ([`crate::io::write_source_wav`]),
+/// synced to disk.
+fn write_source_synced(path: &Path, audio: &SourceAudio) -> std::io::Result<()> {
+    let mut w = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);
+    crate::io::write_source_wav(audio, &mut w)?;
+    w.flush()?;
+    w.get_ref().sync_all()
+}
+
 fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut f = std::fs::File::create(path)?;
     f.write_all(bytes)?;
@@ -603,6 +610,7 @@ mod tests {
     use crate::io::open_session;
     use serde_json::json;
     use soundcraft_audio_io::AudioBuffer;
+    use soundcraft_audio_io::FileFormat;
     use soundcraft_model::{ChannelFormat, Clip, TrackKind};
 
     #[test]

@@ -298,10 +298,7 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
     let target = import_audio_target(e, p)?;
     let mut out = Vec::new();
     for path in &paths {
-        let bytes = crate::io::read_file(path)?;
-        let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("Audio").to_string();
-        let r = crate::io::import_audio_bytes(e, &name, &bytes, Some(path.as_str()), target, at)?;
-        out.push(r);
+        out.push(crate::io::import_audio_file(e, path, target, at)?);
     }
     Ok(json!({"imported": out}))
 }
