@@ -91,7 +91,7 @@ fn a_hand_zoom_clears_the_factor_and_the_keys_step_it() {
     frame_m(
         &ctx,
         &mut app,
-        vec![Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, -200.0), phase: TouchPhase::Move, modifiers: Modifiers::CTRL }],
+        vec![Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, 200.0), phase: TouchPhase::Move, modifiers: Modifiers::CTRL }],
         Modifiers::CTRL,
     );
     settle(&ctx, &mut app);

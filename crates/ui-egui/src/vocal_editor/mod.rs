@@ -12,6 +12,7 @@ pub mod panel;
 pub mod presets;
 pub mod preview;
 pub mod roll;
+pub mod scroll;
 pub mod studio;
 pub mod window;
 
@@ -534,9 +535,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let track = editor_track(app);
     let panel_w = if app.vocal.show_panel { PANEL_W } else { 0.0 };
     if let Some(t) = track {
-        sync_view(app, t, body.width() - roll::KEY_W - panel_w);
+        sync_view(app, t, body.width() - roll::KEY_W - panel_w - scroll::BAR_W - 1.0);
     }
-    let (t0, t1) = view_range(app, body.width() - roll::KEY_W - panel_w);
+    let (t0, t1) = view_range(app, body.width() - roll::KEY_W - panel_w - scroll::BAR_W - 1.0);
     let empty = empty_state(app, track, Range::new(t0, t1));
     if let Some((msg, mark)) = empty {
         if msg.starts_with("Analysing")
@@ -569,17 +570,24 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     roll::prune(app, &editable);
     let right = (body.right() - panel_w).max(body.left() + roll::KEY_W + 60.0);
     let (l, top) = (body.left() + roll::KEY_W, body.top());
-    let chords = Rect::from_min_max(pos2(l, top), pos2(right, top + roll::CHORD_H));
-    let key = Rect::from_min_max(pos2(l, chords.bottom()), pos2(right, chords.bottom() + roll::KEY_STRIP_H));
-    let ruler = Rect::from_min_max(pos2(l, key.bottom()), pos2(right, key.bottom() + roll::RULER_H));
+    // The pitch bar takes a column at the roll's right, the time bar a row under it: the strips,
+    // the ruler and the roll end left of the column, so they keep one time mapping.
+    let bw = scroll::BAR_W;
+    let rr = right - bw - 1.0;
+    let chords = Rect::from_min_max(pos2(l, top), pos2(rr, top + roll::CHORD_H));
+    let key = Rect::from_min_max(pos2(l, chords.bottom()), pos2(rr, chords.bottom() + roll::KEY_STRIP_H));
+    let ruler = Rect::from_min_max(pos2(l, key.bottom()), pos2(rr, key.bottom() + roll::RULER_H));
     let lane_top = (body.bottom() - LEVEL_H).max(ruler.bottom() + 40.0);
-    let roll_r = Rect::from_min_max(pos2(l, ruler.bottom()), pos2(right, lane_top - 4.0));
+    let hbar = Rect::from_min_max(pos2(l, lane_top - 3.0 - bw), pos2(rr, lane_top - 3.0));
+    let roll_r = Rect::from_min_max(pos2(l, ruler.bottom()), pos2(rr, hbar.top() - 1.0));
+    let vbar = Rect::from_min_max(pos2(rr + 1.0, roll_r.top()), pos2(right, roll_r.bottom()));
     let keys = Rect::from_min_max(pos2(body.left(), roll_r.top()), pos2(l, roll_r.bottom()));
     let lane = Rect::from_min_max(pos2(body.left(), lane_top), pos2(right, body.bottom()));
     let areas = roll::Areas { chords, key, ruler, roll: roll_r, keys };
     sync_view(app, track, roll_r.width());
     centre_rows(app, track, roll_r.height());
-    wheel(app, ui, roll_r);
+    // The wheel over the roll, its bars and the Level lane, as over the MIDI Editor's.
+    wheel(app, ui, roll_r.union(hbar).union(vbar).union(lane), roll_r);
     follow_playhead(app, roll_r.width());
     let (t0, t1) = view_range(app, roll_r.width());
     let rows = roll_r.height() / app.vocal.row_h.max(1.0);
@@ -591,6 +599,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     note_bar::show(app, ui, &drawn);
     keyboard(app, ui, full, track, &drawn);
     level_lane::level_lane(app, ui, lane, &drawn.view);
+    scroll_bars(app, ui, &editable, (hbar, vbar), &drawn.view);
     if panel_w > 0.0 {
         panel::panel(app, ui, Rect::from_min_max(pos2(right, body.top()), body.max));
     }
@@ -661,11 +670,70 @@ fn centre_rows(app: &mut SoundApp, track: TrackId, roll_h: f32) {
     app.vocal.centred = Some(track);
 }
 
-/// The wheel over the roll: rows (plain), time (Shift or sideways), the roll's own zoom (Ctrl:
-/// a hand zoom, which deselects the factor) and row height (Ctrl+Shift, or Ctrl+Alt as in the
-/// MIDI Editor).
-fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
-    if !ui.rect_contains_pointer(roll) {
+/// Moves the roll `by` samples in time (negative: earlier). Unlinked (or following the
+/// playhead) the roll moves on its own; linked and stopped the Edit window scrolls and the roll
+/// follows it ([`sync_view`]), and what the Edit window can't take (it stops at 0) moves the roll
+/// itself, so the roll reaches the session start even when its edge is ahead of the Edit window's.
+fn pan_time(app: &mut SoundApp, by: Samples) {
+    if by == 0 {
+        return;
+    }
+    if !linked(app) || playing(app) {
+        app.vocal.follow.user_moved = true;
+        if let Some(t0) = app.vocal.t0 {
+            app.vocal.t0 = Some(t0.saturating_add(by).max(0));
+        }
+        return;
+    }
+    let before = app.engine.session().edit.zoom.scroll;
+    let _ = app.engine.execute("view.scroll", &json!({"to": before.saturating_add(by).max(0)}));
+    let moved = app.engine.session().edit.zoom.scroll.saturating_sub(before);
+    let rest = by.saturating_sub(moved);
+    if rest < 0
+        && let Some(t0) = app.vocal.t0
+    {
+        app.vocal.t0 = Some(t0.saturating_add(rest).max(0));
+    }
+}
+
+/// The time bar's range (session samples): the editable tracks' audio clips, with a sixteenth
+/// of their length of room either side (the MIDI Editor's Fit room), never before 0; `None`
+/// without clips.
+pub fn time_range(s: &Session, tracks: &[TrackId]) -> Option<(Samples, Samples)> {
+    let clips = tracks.iter().filter_map(|t| s.track(*t)).flat_map(|t| t.clips().iter().filter(|c| c.is_audio()));
+    let (lo, hi) =
+        clips.fold(None, |acc: Option<(Samples, Samples)>, c| Some(acc.map_or((c.start, c.end()), |(lo, hi)| (lo.min(c.start), hi.max(c.end())))))?;
+    let pad = hi.saturating_sub(lo).max(0) / 16;
+    Some((lo.saturating_sub(pad).max(0), hi.saturating_add(pad)))
+}
+
+/// The scroll bars: time under the roll (`bars.0`), pitch at its right (`bars.1`), for `view` as
+/// drawn this frame. Stores both bars and thumbs (`hbar`, `vbar`, `hbar-thumb`, `vbar-thumb`).
+fn scroll_bars(app: &mut SoundApp, ui: &Ui, tracks: &[TrackId], (hbar, vbar): (Rect, Rect), view: &layout::RollView) {
+    let (t0, t1) = (view.t0, view.t1);
+    let (lo, hi) = time_range(app.engine.session(), tracks).unwrap_or((t0, t1));
+    let h = scroll::Span::new(lo as f64, hi as f64, t0 as f64, t1.saturating_sub(t0) as f64);
+    let (by, h_thumb) = scroll::bar(ui, hbar, ui.id().with("vocal-hbar"), h, false);
+    let by = soundcraft_time::to_samples(by);
+    pan_time(app, by);
+    let rows = (view.rect.height() / app.vocal.row_h.max(1.0)).min(128.0);
+    let v = scroll::Span::new(0.0, 128.0, f64::from(app.vocal.scroll_rows), f64::from(rows));
+    let (dy, v_thumb) = scroll::bar(ui, vbar, ui.id().with("vocal-vbar"), v, true);
+    if dy != 0.0 {
+        app.vocal.scroll_rows = (app.vocal.scroll_rows + dy as f32).clamp(0.0, (128.0 - rows).max(0.0));
+    }
+    store(ui.ctx(), "hbar", hbar);
+    store(ui.ctx(), "vbar", vbar);
+    store(ui.ctx(), "hbar-thumb", h_thumb);
+    store(ui.ctx(), "vbar-thumb", v_thumb);
+    hook(ui.ctx(), "bar-spans", (h, v));
+}
+
+/// The wheel over `area` (the roll, its bars and the Level lane), as over the MIDI Editor: rows
+/// (plain), time (Shift or sideways), the roll's own zoom about the pointer (Ctrl, up zooms in:
+/// a hand zoom, which deselects the factor) and row height (Ctrl+Shift, or Ctrl+Alt).
+fn wheel(app: &mut SoundApp, ui: &Ui, area: Rect, roll: Rect) {
+    if !ui.rect_contains_pointer(area) {
         return;
     }
     let events: Vec<(egui::Vec2, egui::Modifiers, Pos2)> = ui.input(|i| {
@@ -690,13 +758,16 @@ fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
         let ctrl = m.command || m.ctrl;
         if ctrl && (m.shift || m.alt) {
             let dy = if d.y != 0.0 { d.y } else { d.x };
-            let h = app.vocal.row_h * (1.0 + dy * 0.004);
+            // The MIDI Editor's rate.
+            let h = app.vocal.row_h * 1.0015f32.powf(dy * 4.0);
             set_row_h(app, h);
         } else if ctrl {
-            // By hand: about the pointer, the factor buttons deselected.
-            let factor = 1.0015f64.powf(f64::from(d.y));
+            // By hand: about the pointer, the factor buttons deselected. Up zooms in (fewer
+            // samples per px) at the MIDI Editor's rate, as there and in the Edit window.
+            let dy = if d.y != 0.0 { d.y } else { d.x };
+            let factor = 1.0015f64.powf(-f64::from(dy) * 4.0);
             let (t0, spp) = (app.vocal.t0.unwrap_or(0), app.vocal.spp.unwrap_or_else(|| factor_spp(app)));
-            let x = f64::from(p.x - roll.left());
+            let x = f64::from((p.x - roll.left()).clamp(0.0, roll.width().max(0.0)));
             let at = t0 as f64 + x * spp;
             let new = (spp * factor).clamp(0.01, 1e9);
             app.vocal.spp = Some(new);
@@ -707,30 +778,12 @@ fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
             let dx = if m.shift { d.x + d.y } else { d.x };
             if dx != 0.0 && (!linked(app) || playing(app)) {
                 // Unlinked (or following the playhead): the roll pans on its own.
-                app.vocal.follow.user_moved = true;
                 let spp = app.vocal.spp.unwrap_or_else(|| factor_spp(app));
-                if let Some(t0) = app.vocal.t0 {
-                    let by = soundcraft_time::to_samples(f64::from(-dx) * spp);
-                    app.vocal.t0 = Some(t0.saturating_add(by).max(0));
-                }
+                pan_time(app, soundcraft_time::to_samples(f64::from(-dx) * spp));
             } else if dx != 0.0 {
-                let by_px = f64::from(-dx * to_edit_px);
-                let (before, edit_spp) = {
-                    let z = &app.engine.session().edit.zoom;
-                    (z.scroll, z.samples_per_px)
-                };
-                let _ = app.engine.execute("view.scroll", &json!({"by_px": by_px}));
-                // What the Edit window couldn't take (it stops at 0) moves the roll itself, so
-                // the roll reaches the session start even when its edge is ahead of the Edit
-                // window's.
-                let moved = app.engine.session().edit.zoom.scroll.saturating_sub(before);
-                let asked = soundcraft_time::to_samples(by_px * edit_spp);
-                let rest = asked.saturating_sub(moved);
-                if rest < 0
-                    && let Some(t0) = app.vocal.t0
-                {
-                    app.vocal.t0 = Some(t0.saturating_add(rest).max(0));
-                }
+                // Linked: the Edit window scrolls as far across its own timeline.
+                let edit_spp = app.engine.session().edit.zoom.samples_per_px;
+                pan_time(app, soundcraft_time::to_samples(f64::from(-dx * to_edit_px) * edit_spp));
             }
             if !m.shift && d.y != 0.0 {
                 app.vocal.scroll_rows -= d.y / app.vocal.row_h.max(1.0);
