@@ -21,6 +21,7 @@
 
 pub mod ample_slots;
 pub mod band;
+pub mod band_feel;
 pub mod band_map;
 pub mod band_preset;
 pub mod chord_match;
@@ -35,6 +36,7 @@ pub mod meter;
 pub mod midi_chord_import;
 pub mod midi_types;
 pub(crate) mod musician;
+pub mod offline;
 pub mod params;
 pub mod plucked_voice;
 pub mod presets;

@@ -41,7 +41,7 @@ const EDGE: Color32 = Color32::from_rgb(150, 112, 240);
 pub const EDGE_DOT: Color32 = Color32::from_rgb(96, 130, 255);
 const PICKED: Color32 = Color32::from_rgb(50, 110, 230);
 /// Pixels at each end of a marker that retime it.
-const END_PX: f32 = 5.0;
+const END_PX: f32 = 8.0;
 
 fn drag_key() -> egui::Id {
     egui::Id::new("soundcraft-lyric-ruler-drag")
@@ -52,10 +52,11 @@ pub fn jump_key() -> egui::Id {
     egui::Id::new("soundcraft-lyrics-jump")
 }
 
-/// The marker's title: "<n> <text>".
+/// The marker's title: "<n> <text>" (the words as sung: the line's chords left out).
 pub fn title(s: &Session, line: u64) -> String {
     let sheet = &s.lyric_sheet;
-    let text = sheet.lines.iter().find(|l| l.id == line).map_or("", |l| l.text.trim());
+    let text = sheet.lines.iter().find(|l| l.id == line).map_or(String::new(), |l| soundcraft_model::sung_text(&l.text).trim().to_string());
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     match sheet.number_of(line) {
         Some(n) => format!("{n}  {text}"),
         None => text.to_string(),
@@ -63,13 +64,21 @@ pub fn title(s: &Session, line: u64) -> String {
 }
 
 /// Which marker (and which part of it) is at `x`: ends first, then the latest-starting body.
+/// An end is taken from inside its own marker before from outside it, so where one line ends
+/// and the next begins the side the pointer is on decides: just left of the join is the first
+/// line's end, just right of it the second line's start.
 pub fn hit(places: &[(LyricPlace, f32, f32)], x: f32) -> Option<(u64, Grip)> {
-    for (p, x0, x1) in places.iter().rev() {
-        if (x - x0).abs() <= END_PX && x1 - x0 > 2.0 * END_PX {
-            return Some((p.line, Grip::Start));
-        }
-        if (x - x1).abs() <= END_PX {
-            return Some((p.line, Grip::End));
+    for inside in [true, false] {
+        for (p, x0, x1) in places.iter().rev() {
+            if (x >= *x0 && x <= *x1) != inside {
+                continue;
+            }
+            if (x - x0).abs() <= END_PX && x1 - x0 > 2.0 * END_PX {
+                return Some((p.line, Grip::Start));
+            }
+            if (x - x1).abs() <= END_PX {
+                return Some((p.line, Grip::End));
+            }
         }
     }
     places.iter().rev().find(|(_, x0, x1)| x >= *x0 && x <= *x1).map(|(p, _, _)| (p.line, Grip::Move))
@@ -119,7 +128,9 @@ pub(crate) fn lyrics_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &egui::Pain
         painter.rect_filled(r, 2.0, if picked { PICKED } else { FILL });
         painter
             .line_segment([pos2(r.min.x + 1.0, r.min.y), pos2(r.min.x + 1.0, r.max.y)], Stroke::new(2.0, if picked { Color32::WHITE } else { EDGE }));
-        painter.line_segment([pos2(r.max.x - 0.5, r.min.y), pos2(r.max.x - 0.5, r.max.y)], Stroke::new(1.0, EDGE.gamma_multiply(0.7)));
+        // The end is as plain to see as the start: it is the handle that sets how long the line runs.
+        painter
+            .line_segment([pos2(r.max.x - 1.0, r.min.y), pos2(r.max.x - 1.0, r.max.y)], Stroke::new(2.0, if picked { Color32::WHITE } else { EDGE }));
         let title = title(s, p.line);
         let inner = r.shrink2(vec2(6.0, 0.0));
         if inner.width() > 8.0 {
@@ -157,8 +168,11 @@ pub(crate) fn lyrics_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &egui::Pain
             None => {}
         }
     }
+    // What a drag holds is what was under the pointer when the button went down, not where the
+    // pointer is once it has moved far enough to count as a drag (by then it has left the end
+    // it pressed on, and the drag would move the line, or grab nothing, depending on direction).
     if resp.drag_started()
-        && let Some(pt) = resp.interact_pointer_pos()
+        && let Some(pt) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
         && let Some((line, grip)) = hit_at(pt.x)
         && let Some(p) = s.lyric_sheet.place_of(line)
     {
@@ -248,8 +262,13 @@ mod tests {
         let places = [(p(1), 10.0, 100.0), (p(2), 100.0, 200.0)];
         assert_eq!(hit(&places, 12.0), Some((1, Grip::Start)));
         assert_eq!(hit(&places, 50.0), Some((1, Grip::Move)));
-        // Where two meet, the later marker's start wins.
+        // Where two meet, the side the pointer is on decides: the first line's end can be
+        // dragged even though the second line starts on it.
+        assert_eq!(hit(&places, 97.0), Some((1, Grip::End)));
         assert_eq!(hit(&places, 101.0), Some((2, Grip::Start)));
+        // Just outside a marker still reaches its end.
+        assert_eq!(hit(&places, 5.0), Some((1, Grip::Start)));
+        assert_eq!(hit(&places, 206.0), Some((2, Grip::End)));
         assert_eq!(hit(&places, 198.0), Some((2, Grip::End)));
         assert_eq!(hit(&places, 300.0), None);
     }
@@ -263,5 +282,16 @@ mod tests {
         assert_eq!(dragged(&s, Drag { grip: Grip::Start, ..d }, 1500), (1500, 2000));
         assert_eq!(dragged(&s, Drag { grip: Grip::Start, ..d }, 9000), (1999, 2000));
         assert_eq!(dragged(&s, Drag { grip: Grip::End, ..d }, 500), (1000, 1001));
+    }
+
+    #[test]
+    fn marker_titles_leave_chords_out() {
+        let mut s = Session::default();
+        s.lyric_sheet.lines = ["{Verse 1}", "[Am] [G]", "[Am]Hello dark[G]ness my [C] old friend"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| soundcraft_model::SheetLine::new(1 + i as u64, *t))
+            .collect();
+        assert_eq!(title(&s, 3), "1  Hello darkness my old friend");
     }
 }

@@ -139,7 +139,8 @@ fn reset_is_enabled_and_resolves_in_native_and_in_window_menu_trees() {
     assert_eq!(menus::command_for_path(path, &extra).as_deref(), Some("ui.dock.reset"));
     let tree = menus::tree();
     let window = tree.iter().find(|node| node.label == "Window").unwrap();
-    assert!(window.children.iter().any(|node| node.path == path));
+    // The item sits in Window \u{203a} Layout; its path is still the command's own.
+    assert!(window.children.iter().any(|node| node.label == "Layout" && node.children.iter().any(|leaf| leaf.path == path)));
     assert!(menus::item_state(&app, path, Some("ui.dock.reset")).0);
     app.run("ui.dock", json!({"operation":"float","panel":"tracks","rect":[50,60,260,420]})).unwrap();
     menus::invoke_menu(&mut app, "ui.dock.reset", path);

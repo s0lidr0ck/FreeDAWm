@@ -43,7 +43,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     crate::docking::show(app, ui, crate::MainWindow::Mix);
 }
 
-/// The Mix window in its own native window (Window › Mix in Separate Window), so Edit and Mix can
+/// The Mix window in its own native window (Window › Separate Windows › Mix in Separate Window), so Edit and Mix can
 /// be seen at once, e.g. one per monitor. Closing that window brings Mix back into the main one.
 /// Backends without multiple windows show it as a floating egui window instead.
 pub fn show_separate(app: &mut SoundApp, ctx: &egui::Context) {
@@ -195,7 +195,7 @@ fn strip_and_drawers(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<
         if let Some(track) = session.track(id)
             && let Some(k) = crate::band::musician_of(track)
         {
-            crate::band::drawer(app, ui, track, k);
+            crate::band::drawer(app, ui, track, k, false);
         }
     }
     // An open drawer sits right of its strip; the strips after it shift right.

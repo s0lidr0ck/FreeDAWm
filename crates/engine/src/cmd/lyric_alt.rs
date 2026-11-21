@@ -1,4 +1,4 @@
-//! Alternate lines and drafts (Window › Lyrics): a line can hold alternate versions, one active
+//! Alternate lines and drafts (Window › Transport & Session › Lyrics): a line can hold alternate versions, one active
 //! (what the sheet, the Lyrics ruler marker and the Teleprompter show); a draft is a named
 //! snapshot of the whole sheet that can be restored (undoable) or compared.
 
@@ -207,7 +207,7 @@ mod tests {
     use crate::Engine;
     use serde_json::json;
 
-    const SONG: &str = "[Verse 1]\nWhen the night was long\nAnd my heart could not be still";
+    const SONG: &str = "{Verse 1}\nWhen the night was long\nAnd my heart could not be still";
 
     #[test]
     fn alternates_switch_and_the_ruler_marker_follows() {
@@ -251,14 +251,14 @@ mod tests {
         let d = e.execute("lyrics.draft_save", &json!({"name": "First take"})).unwrap();
         assert_eq!(d["name"], "First take");
         assert_eq!(d["lines"], 3);
-        e.execute("lyrics.sheet_set", &json!({"text": "[Verse 1]\nSomething new entirely"})).unwrap();
+        e.execute("lyrics.sheet_set", &json!({"text": "{Verse 1}\nSomething new entirely"})).unwrap();
         e.execute("lyrics.draft_save", &json!({})).unwrap();
         let list = e.execute("lyrics.drafts", &json!({})).unwrap();
         assert_eq!(list["drafts"][1]["name"], "Draft 2");
         e.execute("lyrics.draft_restore", &json!({"name": "First take"})).unwrap();
         assert_eq!(e.session().lyric_sheet.text(), SONG);
         e.execute("edit.undo", &json!({})).unwrap();
-        assert_eq!(e.session().lyric_sheet.text(), "[Verse 1]\nSomething new entirely");
+        assert_eq!(e.session().lyric_sheet.text(), "{Verse 1}\nSomething new entirely");
         // Saved with the session.
         let back: soundcraft_model::Session = serde_json::from_str(&serde_json::to_string(e.session()).unwrap()).unwrap();
         assert_eq!(back.lyric_sheet.drafts.len(), 2);

@@ -5,6 +5,7 @@
 //! [`SourcePool`] behind `Arc`s, so cloning a session for undo is cheap.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod ara;
 mod automation;
 pub mod b64;
 mod band;
@@ -27,19 +28,22 @@ pub mod rate_change;
 mod scout;
 mod session;
 mod sheet;
+pub mod sheet_chords;
 mod snapshot;
 mod solo;
 mod source;
+mod synth_mod;
 mod track;
 pub mod vocal;
 
+pub use ara::{AraArchive, AraRender, AraRenders, ara_fingerprint};
 pub use automation::{
     AutoParam, AutomationLane, AutomationMode, AutomationPoint, BYPASS_PARAM, CURVE_EPSILON, MIX_PARAM, PencilShape, SURROUND_AXES, curve_shape,
     letter_slot,
 };
 pub use band::{BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials};
 pub use clip::{
-    CleanAlt, CleanupPreview, Clip, ClipContent, ClipModule, Fade, FadeShape, FxRender, MAX_CLIP_MODULES, MAX_TRANSPOSE_CENTS, MidiCleanup,
+    CleanAlt, CleanupPreview, Clip, ClipAra, ClipContent, ClipModule, Fade, FadeShape, FxRender, MAX_CLIP_MODULES, MAX_TRANSPOSE_CENTS, MidiCleanup,
     MidiFxRender, PatternClip, ProcessStep,
 };
 pub use control_room::{ControlRoom, CueMix, MAX_CUES, MAX_MONITOR_SETS, MonitorSet, Talkback};
@@ -74,11 +78,13 @@ pub use session::{
 };
 pub use sheet::{
     Draft, LineKind, LyricPlace, LyricSheet, MAX_ALTERNATES, MAX_DRAFTS, MAX_SHEET_LINE_CHARS, MAX_SHEET_LINES, SheetLine, carry_ids, heading_name,
-    line_kinds, sheet_texts,
+    line_kinds, modern_line, sheet_texts,
 };
+pub use sheet_chords::{InlineChord, Stripped, inline_chords, is_chord_line, is_chord_name, legacy_heading, line_chords, strip_chords, sung_text};
 pub use snapshot::{MAX_SNAPSHOTS, MixSnapshot, SNAPSHOT_SECTIONS, SnapshotStrip};
 pub use solo::SoloScope;
 pub use source::{AssetData, AssetPool, SampleCursor, Source, SourceAudio, SourcePool, VideoSource};
+pub use synth_mod::{MAX_MACRO_NAME, MAX_MACRO_TARGETS, MAX_MACROS, MAX_MOD_SLOTS, MacroTarget, ModSlot, SynthMacro, SynthMod};
 pub use track::{
     Articulation, Articulations, FrozenAudio, InstrumentOut, MAX_ARTICULATIONS, MpeZone, Playlist, TRACK_COLORS, Track, TrackHeight, TrackKind,
 };

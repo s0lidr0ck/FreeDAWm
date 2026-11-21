@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod amp_irs;
+pub mod ara;
 pub mod auto_arm;
 pub mod autosave;
 pub mod band_print;
@@ -27,6 +28,7 @@ pub mod juke_kits;
 pub mod juke_presets;
 pub mod juke_styles;
 pub mod lexicon;
+pub mod lyric_chords;
 pub mod lyric_text;
 pub mod lyric_tools;
 pub mod lyrics;
@@ -49,6 +51,7 @@ pub mod render_job;
 pub mod score;
 pub mod scout_profiles;
 pub mod scout_prompt;
+pub mod song_key;
 pub mod spill;
 pub mod split_files;
 pub mod stretch_jobs;
@@ -198,6 +201,9 @@ pub struct Clipboard {
     /// from (`automation.paste` takes a lane of the same kind).
     pub auto_points: Vec<soundcraft_model::AutomationPoint>,
     pub auto_param: Option<soundcraft_model::AutoParam>,
+    /// `band.chords.copy`: Band chords, their ticks counted from the first one's start (slot,
+    /// bass and length as they were). A chord copy holds only these; any other copy clears them.
+    pub chords: Vec<soundcraft_model::ChordEvent>,
     /// Where the clips came from: set once the copying command returns ([`Engine::execute`]),
     /// so a paste into another session can bring their audio along ([`ClipOrigin`]).
     pub origin: Option<ClipOrigin>,
@@ -447,6 +453,18 @@ impl Engine {
         Arc::make_mut(&mut self.doc)
     }
 
+    /// The clips' offline renders through their ARA plug-in (see [`ara::AraHost::prepare_offline`]):
+    /// derived data, no undo step and no revision bump (playback is not affected).
+    pub fn set_ara_renders(&mut self, renders: soundcraft_model::AraRenders) {
+        Arc::make_mut(&mut self.doc).ara_renders = renders;
+    }
+
+    /// The ARA plug-ins' saved documents (see [`ara::AraHost::store_archives`]): saved with the
+    /// session, no undo step.
+    pub fn set_ara_archives(&mut self, archives: Vec<soundcraft_model::AraArchive>) {
+        Arc::make_mut(&mut self.doc).ara_archives = archives;
+    }
+
     /// Keeps renders made ahead of the next `track.freeze` / `track.commit` (through a host's
     /// live instances) for that command: it takes them with [`Engine::take_prepared`] instead
     /// of rendering, as long as the session has not changed meanwhile.
@@ -514,6 +532,8 @@ impl Engine {
         // Vocal tuning fingerprints and caches are derived, not saved.
         crate::vocal::prune(&mut s);
         crate::vocal::refresh_fingerprints_in(&mut s);
+        // One key: the Key ruler's key at bar 1 is the band's.
+        crate::song_key::on_load(&mut s);
         self.transport = TransportStatus { position: s.edit.selection.start.max(0), ..TransportStatus::default() };
         self.transport_requests.clear();
         self.transport_requests.push(TransportRequest::ResetSession);
@@ -767,6 +787,14 @@ impl Engine {
         if !Arc::ptr_eq(&self.doc.pitch_renders.0, &from.pitch_renders.0) {
             Arc::make_mut(&mut self.doc).pitch_renders = from.pitch_renders.clone();
         }
+        // So are the ARA renders, and the ARA plug-ins' saved documents: the plug-ins keep their
+        // own undo, and their newest document is what a save must write.
+        if !Arc::ptr_eq(&self.doc.ara_renders.0, &from.ara_renders.0) {
+            Arc::make_mut(&mut self.doc).ara_renders = from.ara_renders.clone();
+        }
+        if self.doc.ara_archives != from.ara_archives {
+            Arc::make_mut(&mut self.doc).ara_archives = from.ara_archives.clone();
+        }
     }
 
     /// Brings every vocal tuning's render fingerprint up to date (`VocalTune::fingerprint`), so
@@ -924,6 +952,14 @@ impl Engine {
                         let was = self.doc.edit.values.get(&key).copied().filter(|r| r.is_finite() && *r > 0.0).unwrap_or(1.0);
                         let _ = cmd::clip::elastic(self, &serde_json::json!({"clips": [clip.0], "ratio": was * ratio}));
                     }
+                }
+                // One key: the Key ruler's key at bar 1 and the band's key follow each other.
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && self.loads == loads
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && song_key::changed(&before, &self.doc)
+                {
+                    song_key::follow(&before, Arc::make_mut(&mut self.doc));
                 }
                 // MIDI clips set to follow the chord lane take its changes, in the same undo step.
                 if !Arc::ptr_eq(&before, &self.doc)

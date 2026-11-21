@@ -1,4 +1,4 @@
-//! The MIDI Editor in its own native window (Window › MIDI Editor in Separate Window, or the
+//! The MIDI Editor in its own native window (Window › Separate Windows › MIDI Editor in Separate Window, or the
 //! editor's Window button): a second egui viewport, as the Vocal Editor's. It is resizable, its
 //! position and size are remembered in `ui.json` (`midi_editor.window`), and closing it docks
 //! the editor back into the Edit window. Backends without multiple windows show it as a floating

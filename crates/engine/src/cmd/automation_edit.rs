@@ -235,6 +235,8 @@ fn copy(e: &mut Engine, p: &Value) -> Result<Value> {
     let n = pts.len();
     e.clipboard.auto_points = pts;
     e.clipboard.auto_param = Some(param.clone());
+    // The newest copy is what Paste pastes: copied Band chords give way.
+    e.clipboard.chords.clear();
     Ok(json!({"points": n}))
 }
 

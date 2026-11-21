@@ -51,6 +51,43 @@ pub fn factory_recall(info: &PluginInfo, list_name: &str, json: &str) -> Option<
     Some((name, params_of(info, &p)))
 }
 
+/// A factory preset's modulation patch (`"modulation"` beside its values: a built-in synth's
+/// matrix slots and macros, as `mix.instrument` takes it), if it has one.
+pub fn factory_modulation(json: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(json).ok()?.get("modulation").filter(|m| !m.is_null()).cloned()
+}
+
+/// Text field `key` of a factory preset's JSON (`"tier"`, `"desc"`) as it is written there,
+/// found without parsing (the menus ask every frame); `None` when it has none.
+pub fn preset_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let open = format!("\"{key}\":\"");
+    let start = json.find(&open)? + open.len();
+    let rest = json.get(start..)?;
+    let mut escaped = false;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '\\' if !escaped => escaped = true,
+            '"' if !escaped => return rest.get(..i),
+            _ => escaped = false,
+        }
+    }
+    None
+}
+
+/// The presets of one group's submenu: a small heading wherever the tier changes (Simple,
+/// Expected, Special, Wild: the built-in synths' presets carry one), then `row` for each.
+pub(crate) fn tiered_rows(ui: &mut egui::Ui, list: &[(&'static str, &'static str)], mut row: impl FnMut(&mut egui::Ui, &'static str, &'static str)) {
+    let mut last: Option<&str> = None;
+    for (name, json) in list {
+        let tier = preset_field(json, "tier");
+        if let Some(t) = tier.filter(|t| last != Some(*t)) {
+            ui.label(egui::RichText::new(t).small().weak());
+        }
+        last = tier;
+        row(ui, name, json);
+    }
+}
+
 /// A plugin's factory presets in one group: `(group, [(name, json)])`.
 pub type FactoryGroup = (String, Vec<(&'static str, &'static str)>);
 
@@ -93,8 +130,8 @@ pub(crate) fn factory_menu(
     for (group, list) in groups {
         ui.menu_button(group, |ui| {
             egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() - 80.0).max(160.0)).show(ui, |ui| {
-                for (name, json) in list {
-                    if ui.button(*name).clicked() {
+                tiered_rows(ui, list, |ui, name, json| {
+                    if ui.button(name).clicked() {
                         if let Some((preset, params)) = factory_recall(info, name, json) {
                             let r = app.run("mix.module_params", json!({"track": track.0, "module": module.0, "params": params, "preset": preset}));
                             if let Err(e) = r {
@@ -103,7 +140,7 @@ pub(crate) fn factory_menu(
                         }
                         ui.close();
                     }
-                }
+                });
             });
         });
     }
@@ -119,7 +156,7 @@ pub(crate) fn factory_menu(
 pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, track: soundcraft_model::TrackId, info: &PluginInfo) {
     for (group, list) in factory_groups(info) {
         ui.menu_button(group, |ui| {
-            for (name, json) in list {
+            tiered_rows(ui, list, |ui, name, json| {
                 ui.horizontal(|ui| {
                     let what = format!("preset:{}:{name}", info.id);
                     let on = app.audition.playing.as_deref() == Some(what.as_str());
@@ -130,16 +167,26 @@ pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, tra
                     {
                         crate::audition::preset(app, voice, name);
                     }
-                    if ui.button(*name).clicked() {
-                        if let Some((_, params)) = factory_recall(info, name, json)
-                            && let Err(e) = app.run("mix.instrument", json!({"track": track.0, "plugin": info.id, "params": params}))
-                        {
-                            app.ui.status = e;
+                    let load = ui.button(name);
+                    let load = match preset_field(json, "desc") {
+                        Some(d) => load.on_hover_text(d.replace("\\\"", "\"")),
+                        None => load,
+                    };
+                    if load.clicked() {
+                        if let Some((preset, params)) = factory_recall(info, name, json) {
+                            let mut args = json!({"track": track.0, "plugin": info.id, "params": params, "preset": preset});
+                            // A built-in synth's preset may patch its modulation matrix too.
+                            if let Some(m) = factory_modulation(json) {
+                                args["modulation"] = m;
+                            }
+                            if let Err(e) = app.run("mix.instrument", args) {
+                                app.ui.status = e;
+                            }
                         }
                         ui.close();
                     }
                 });
-            }
+            });
         });
     }
 }
@@ -149,7 +196,22 @@ pub(crate) fn instrument_factory_menu(app: &mut SoundApp, ui: &mut egui::Ui, tra
 pub(crate) fn preset_voice(info: &PluginInfo, name: &str, json: &str) -> Option<crate::audition::Voice> {
     let (_, params) = factory_recall(info, name, json)?;
     let params = params.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()? as f32))).collect();
-    Some(crate::audition::Voice { plugin: info.id.to_string(), params })
+    Some(crate::audition::Voice { plugin: info.id.to_string(), params, prepared: compiled_patch(info.id, factory_modulation(json).as_ref()) })
+}
+
+/// A preset's modulation patch (`{slots, macros}`, as the session keeps it) compiled for a
+/// preview copy of the synth; empty when there is none or it does not read.
+pub(crate) fn compiled_patch(plugin: &str, patch: Option<&Value>) -> Vec<f64> {
+    use soundcraft_dsp::plugins::synth_mod::{SlotSpec, TargetSpec, compile};
+    let Some(m) = patch.and_then(|v| serde_json::from_value::<soundcraft_model::SynthMod>(v.clone()).ok()) else { return Vec::new() };
+    let slots: Vec<SlotSpec<'_>> = m.slots.iter().map(|s| SlotSpec { source: &s.source, dest: &s.dest, amount: s.amount }).collect();
+    let targets: Vec<TargetSpec<'_>> = m
+        .macros
+        .iter()
+        .enumerate()
+        .flat_map(|(i, mac)| mac.targets.iter().map(move |t| TargetSpec { macro_index: i, dest: &t.dest, from: t.from, to: t.to }))
+        .collect();
+    compile(plugin, &slots, &targets).unwrap_or_default()
 }
 
 /// What an import did.

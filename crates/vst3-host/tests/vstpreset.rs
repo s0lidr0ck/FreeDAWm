@@ -108,6 +108,9 @@ fn desc(vendor: &str, name: &str) -> Vst3Descriptor {
         category: Category::Other,
         is_instrument: false,
         path: PathBuf::new(),
+        ara: None,
+        ara_checked: true,
+        ara_note: String::new(),
     }
 }
 

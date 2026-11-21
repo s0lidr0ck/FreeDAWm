@@ -15,6 +15,7 @@
 #![allow(clippy::unnecessary_cast)]
 
 use crate::{Vst3Error, scan};
+use soundcraft_ara_host::{FactoryPtr, sys as ara};
 use soundcraft_dsp::Transport;
 use std::ffi::{c_char, c_int, c_void};
 use std::mem::ManuallyDrop;
@@ -525,6 +526,57 @@ impl Bundle {
         out
     }
 
+    /// Makes the `ARA::IMainFactory` object of class `cid` (an "ARA Main Factory Class") and
+    /// asks it for its ARA factory. The object is kept (and this binary with it) for as long as
+    /// the returned value lives: the factory is only valid while the object that gave it is.
+    pub fn ara_main_factory(self: &Arc<Self>, cid: &[u8; 16]) -> Result<AraMain, String> {
+        let mut obj: *mut c_void = std::ptr::null_mut();
+        let iid = ara::vst3_tuid(ara::IMainFactory_iid);
+        // SAFETY: valid factory; `cid` and `iid` are 16 readable bytes each; `obj` is writable.
+        let r = unsafe { self.factory.createInstance(cid.as_ptr().cast::<c_char>(), iid.as_ptr().cast::<c_char>(), &mut obj) };
+        if !ok(r) || obj.is_null() {
+            return Err("its ARA main factory class cannot be created".into());
+        }
+        // SAFETY: a COM object starts with its vtable pointer; IMainFactory's vtable is FUnknown's
+        // three functions then `getFactory` (ARAVST3.h).
+        let vtbl = unsafe { obj.cast::<*const ara::IMainFactoryVtbl>().read() };
+        if vtbl.is_null() {
+            // An object without a vtable cannot even be released: leak it.
+            return Err("its ARA main factory object has no vtable".into());
+        }
+        let mut main = AraMain { obj, vtbl, factory: None, _bundle: self.clone() };
+        // SAFETY: `obj` is a live IMainFactory (we hold its one reference); `getFactory` takes
+        // nothing and returns a pointer valid while the object lives (kept in `main`).
+        let raw = unsafe { ((*vtbl).getFactory)(obj) };
+        // SAFETY: the ARA contract: null or a factory valid while `obj` lives; `main` keeps
+        // `obj` (and the binary, through the bundle) for as long as the pointer is used.
+        let factory = unsafe { FactoryPtr::new(raw) }.ok_or_else(|| "its ARA main factory gave no ARA factory".to_string())?;
+        main.factory = Some(factory);
+        Ok(main)
+    }
+
+    /// Which ARA entry interfaces the audio module class `cid` offers: `IPlugInEntryPoint`
+    /// (ARA 1 binding) and `IPlugInEntryPoint2` (ARA 2 binding with roles). The component is
+    /// created, asked, and released without being initialised (VST3 allows that).
+    pub fn ara_entry_points(&self, cid: &[u8; 16]) -> (bool, bool) {
+        let Some(component) = self.create::<sv::IComponent>(cid) else { return (false, false) };
+        let unknown = component.as_ptr().cast::<c_void>();
+        let has = |words: [u32; 4]| {
+            let iid = ara::vst3_tuid(words);
+            let mut out: *mut c_void = std::ptr::null_mut();
+            // SAFETY: a live component (we hold a reference); every COM object starts with a
+            // vtable whose first function is `queryInterface`; `iid` and `out` are valid.
+            let r = unsafe { ((*unknown.cast::<*const ara::FUnknownVtbl>().read()).queryInterface)(unknown, &iid, &mut out) };
+            if !ok(r) || out.is_null() {
+                return false;
+            }
+            // SAFETY: on success `out` holds one reference we own; give it back.
+            unsafe { ((*out.cast::<*const ara::FUnknownVtbl>().read()).release)(out) };
+            true
+        };
+        (has(ara::IPlugInEntryPoint_iid), has(ara::IPlugInEntryPoint2_iid))
+    }
+
     /// Creates an object of class `cid` and queries interface `I` on it.
     fn create<I: Interface>(&self, cid: &[u8; 16]) -> Option<ComPtr<I>> {
         let mut obj: *mut c_void = std::ptr::null_mut();
@@ -567,6 +619,7 @@ impl Bundle {
             out_events: ComWrapper::new(EventList::new(EVENT_CAP)),
             // SAFETY: `ProcessContext` is plain data (numbers and small structs); all-zero is valid.
             context: unsafe { std::mem::zeroed() },
+            cycle: None,
             event_in: false,
             mode: sv::ProcessModes_::kRealtime as i32,
             editor: Arc::new(EditorLink::default()),
@@ -633,6 +686,33 @@ impl Bundle {
             }),
         });
         Ok(inst)
+    }
+}
+
+/// A plug-in's `ARA::IMainFactory` object and the ARA factory it gave. Keeps the object (one
+/// reference, released on drop) and the binary loaded while it lives.
+pub(crate) struct AraMain {
+    obj: *mut c_void,
+    vtbl: *const ara::IMainFactoryVtbl,
+    factory: Option<FactoryPtr>,
+    _bundle: Arc<Bundle>,
+}
+
+// SAFETY: the object is only used to release it, once, in `drop`; VST3 reference counting is
+// thread-safe. The factory pointer is static data of the binary.
+unsafe impl Send for AraMain {}
+
+impl AraMain {
+    pub fn factory(&self) -> Option<FactoryPtr> {
+        self.factory
+    }
+}
+
+impl Drop for AraMain {
+    fn drop(&mut self) {
+        // SAFETY: the reference `ara_main_factory` got from `createInstance`, released once; the
+        // vtable pointer was read from the live object (checked non-null).
+        unsafe { ((*self.vtbl).base.release)(self.obj) };
     }
 }
 
@@ -1559,6 +1639,9 @@ pub(crate) struct Instance {
     in_events: ComWrapper<EventList>,
     out_events: ComWrapper<EventList>,
     context: sv::ProcessContext,
+    /// The loop range in quarter notes while looping, given to the plug-in as the process
+    /// context's cycle (ARA playback renderers follow it).
+    cycle: Option<(f64, f64)>,
     event_in: bool,
     /// `kRealtime`, or `kOffline` for an offline render (set up in `configure`, repeated in
     /// every `ProcessData`).
@@ -1635,6 +1718,49 @@ impl Instance {
     }
 
     /// Copies the component's state into the controller (`getState` → `setComponentState`).
+    /// The loop range (quarter notes) the next blocks' process context carries, or none.
+    pub fn set_cycle(&mut self, cycle: Option<(f64, f64)>) {
+        self.cycle = cycle.filter(|(a, b)| a.is_finite() && b.is_finite() && b > a);
+    }
+
+    /// Binds this instance to an ARA document controller with roles (`ARA::IPlugInEntryPoint2::
+    /// bindToDocumentControllerWithRoles`), switching it to ARA mode for good. Call it once,
+    /// right after it is made: before it is activated, its state is set or its editor opened (as
+    /// ARA asks), on the document controller's thread. The extension it gives is valid while this
+    /// instance lives.
+    pub fn bind_ara(&self, dc: ara::ARADocumentControllerRef, known: i32, assigned: i32) -> Result<soundcraft_ara_host::RawExtension, String> {
+        if self.active {
+            return Err("the instance is active already".into());
+        }
+        let unknown = self.component.as_ptr().cast::<c_void>();
+        let iid = ara::vst3_tuid(ara::IPlugInEntryPoint2_iid);
+        let mut out: *mut c_void = std::ptr::null_mut();
+        // SAFETY: a live component (we hold a reference); every COM object starts with a vtable
+        // whose first function is `queryInterface`; `iid` and `out` are valid for the call.
+        let r = unsafe { ((*unknown.cast::<*const ara::FUnknownVtbl>().read()).queryInterface)(unknown, &iid, &mut out) };
+        if !ok(r) || out.is_null() {
+            return Err("its audio module has no ARA 2 entry point (IPlugInEntryPoint2)".into());
+        }
+        // SAFETY: on success `out` is an IPlugInEntryPoint2 with one reference we own; its vtable
+        // is FUnknown's three functions then `bindToDocumentControllerWithRoles` (ARAVST3.h).
+        let vtbl = unsafe { out.cast::<*const ara::IPlugInEntryPoint2Vtbl>().read() };
+        let ext = if vtbl.is_null() {
+            std::ptr::null()
+        } else {
+            // SAFETY: as above; `dc` is the caller's live document controller.
+            unsafe { ((*vtbl).bindToDocumentControllerWithRoles)(out, dc, known, assigned) }
+        };
+        // SAFETY: the reference `queryInterface` gave, released once (the vtable read from the
+        // live object).
+        unsafe { ((*out.cast::<*const ara::FUnknownVtbl>().read()).release)(out) };
+        if ext.is_null() {
+            return Err("the plug-in refused to be bound to the ARA document (bindToDocumentControllerWithRoles gave nothing)".into());
+        }
+        // SAFETY: what this instance's binding returned, valid while the instance (the
+        // `Instance` this method is on, which the caller keeps with it) lives: ARA's contract.
+        Ok(unsafe { soundcraft_ara_host::RawExtension::new(ext) })
+    }
+
     fn sync_controller_state(&self) {
         let Some(c) = &self.controller else { return };
         let stream = ComWrapper::new(MemoryStream { inner: Mutex::new((Vec::new(), 0)) });
@@ -2050,6 +2176,14 @@ impl Instance {
         match transport {
             Some(t) => apply_transport(&mut self.context, t),
             None => self.context.projectTimeSamples = project_time,
+        }
+        if let Some((start, end)) = self.cycle.filter(|_| transport.is_some()) {
+            use sv::ProcessContext_::StatesAndFlags_::{kCycleActive, kCycleValid};
+            #[allow(clippy::unnecessary_cast)]
+            let flags = (kCycleActive | kCycleValid) as u32;
+            self.context.state |= flags;
+            self.context.cycleStartMusic = start;
+            self.context.cycleEndMusic = end;
         }
         let mut data = sv::ProcessData {
             processMode: self.mode,

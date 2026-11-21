@@ -1,9 +1,10 @@
 //! The process-wide VST3 registry: scan cache, leaked `PluginInfo`s, instantiation.
 
-use crate::ffi::{Bundle, Instance, PARAM_BYPASS, PARAM_HIDDEN, PARAM_PROGRAM_CHANGE, PARAM_READ_ONLY, RawParam};
+use crate::ffi::{AraMain, Bundle, Instance, PARAM_BYPASS, PARAM_HIDDEN, PARAM_PROGRAM_CHANGE, PARAM_READ_ONLY, RawClass, RawParam};
 use crate::plugin::Vst3Plugin;
 use crate::scan as paths;
-use crate::{AUDIO_MODULE_CLASS, Vst3Descriptor, Vst3Error, Vst3Programs, parse_id};
+use crate::{ARA_ROLES, AUDIO_MODULE_CLASS, Vst3Ara, Vst3Descriptor, Vst3Error, Vst3Programs, parse_id};
+use soundcraft_ara_host::sys as ara;
 use soundcraft_dsp::{ParamInfo, Plugin, PluginInfo, Taper, Unit};
 use soundcraft_plugin_scan::{CacheLock, HelperRunner, ScanCache, ScanOptions, ScanProgress, Stamp, file_stamp, helper_exe, run_scan};
 use std::collections::HashMap;
@@ -69,13 +70,33 @@ fn scanning() -> std::sync::MutexGuard<'static, ()> {
 /// Descriptors of every audio module class in one `.vst3` (loaded in this process).
 pub fn load_bundle(path: &Path) -> Result<Vec<Vst3Descriptor>, Vst3Error> {
     let b = Bundle::load(path)?;
-    Ok(b.classes()
-        .into_iter()
+    let classes = b.classes();
+    let mains: Vec<&RawClass> = classes.iter().filter(|c| c.category == ara::kARAMainFactoryClass).collect();
+    let modules = classes.iter().filter(|c| c.category == AUDIO_MODULE_CLASS).count();
+    Ok(classes
+        .iter()
         .filter(|c| c.category == AUDIO_MODULE_CLASS)
         .map(|c| {
+            // ARAVST3.h: an ARA main factory and its audio module share a class name; a binary
+            // with one of each pairs them whatever their names.
+            let main = mains.iter().find(|m| m.name == c.name).or_else(|| if mains.len() == 1 && modules == 1 { mains.first() } else { None });
+            let ara = main.map(|m| describe_ara(&b, m, c));
+            // Why it offers no ARA, for the ARA log (a plug-in the owner expected to see).
+            let ara_note = match (&ara, mains.len()) {
+                (Some(_), _) => String::new(),
+                (None, 0) => "no ARA main factory class in its binary".to_string(),
+                (None, n) => format!(
+                    "its binary has {n} ARA main factory class(es) ({}), none named like this module and it is not the only module",
+                    mains.iter().map(|m| format!("\"{}\"", m.name)).collect::<Vec<_>>().join(", ")
+                ),
+            };
+            let c = c.clone();
             let subs = paths::split_sub_categories(&c.sub_categories);
             let class_id = crate::ffi::hex(&c.cid);
             Vst3Descriptor {
+                ara,
+                ara_checked: true,
+                ara_note,
                 id: format!("{}{class_id}", crate::ID_PREFIX),
                 category: paths::category_from_sub_categories(&subs),
                 is_instrument: paths::is_instrument(&subs),
@@ -89,6 +110,70 @@ pub fn load_bundle(path: &Path) -> Result<Vec<Vst3Descriptor>, Vst3Error> {
             }
         })
         .collect())
+}
+
+/// What the ARA main factory class `main` offers for the audio module `module`: its factory's
+/// description (read without initialising ARA) and the module's ARA entry interfaces. A plug-in
+/// that gives no factory, a malformed one or an ARA 1 one is listed with the problem.
+fn describe_ara(b: &std::sync::Arc<Bundle>, main: &RawClass, module: &RawClass) -> Vst3Ara {
+    let mut out = Vst3Ara { main_class_id: crate::ffi::hex(&main.cid), ..Vst3Ara::default() };
+    // Read while the main factory object `m` lives (the factory is only valid that long).
+    let info = b.ara_main_factory(&main.cid).and_then(|m| {
+        let f = m.factory().ok_or_else(|| "no ARA factory".to_string())?;
+        soundcraft_ara_host::read_factory(f).map_err(|e| e.to_string())
+    });
+    let (entry1, entry2) = b.ara_entry_points(&module.cid);
+    out.ara1_binding = entry1;
+    if entry2 {
+        out.roles = ARA_ROLES.iter().map(|r| r.to_string()).collect();
+    }
+    match info {
+        Ok(i) => {
+            out.content = i.content_names().into_iter().map(str::to_string).collect();
+            out.usable = i.generation.is_some() && entry2;
+            out.problem = if i.generation.is_none() {
+                soundcraft_ara_host::AraError::Generation(i.lowest_generation, i.highest_generation).to_string()
+            } else if !entry2 {
+                "its audio module has no ARA 2 entry point (IPlugInEntryPoint2)".into()
+            } else {
+                String::new()
+            };
+            out.name = i.name;
+            out.manufacturer = i.manufacturer;
+            out.version = i.version;
+            out.factory_id = i.factory_id;
+            out.lowest_generation = i.lowest_generation;
+            out.highest_generation = i.highest_generation;
+            out.transformations = i.transformations;
+        }
+        Err(e) => {
+            log::warn!("vst3 {}: ARA: {e}", module.name);
+            out.problem = e;
+        }
+    }
+    out
+}
+
+/// The `ARA::IMainFactory` of the `vst3:` plug-in `id`, its binary loaded in this process.
+pub fn ara_main(id: &str) -> Result<AraMain, Vst3Error> {
+    let desc = find(id).ok_or_else(|| Vst3Error::NotFound(id.to_string()))?;
+    let err = |m: String| Vst3Error::Instantiate(id.to_string(), m);
+    let ara = desc.ara.as_ref().ok_or_else(|| err("it offers no ARA".into()))?;
+    if !ara.usable {
+        return Err(err(format!("its ARA cannot be used: {}", ara.problem)));
+    }
+    let cid = parse_id(&format!("{}{}", crate::ID_PREFIX, ara.main_class_id)).ok_or_else(|| err("bad ARA main factory class id".into()))?;
+    let b = Bundle::load(&desc.path)?;
+    b.ara_main_factory(&cid).map_err(err)
+}
+
+/// The folders a scan looks in: the standard VST3 folders, `VST3_PATH` and the folders added with
+/// [`add_search_dir`].
+pub fn search_dirs() -> Vec<PathBuf> {
+    let r = lock();
+    let mut dirs = paths::default_search_paths();
+    dirs.extend(r.extra_dirs.iter().cloned());
+    dirs
 }
 
 /// Scans `dirs` in this process (uncached). Unloadable files are logged and skipped; the first
@@ -195,6 +280,7 @@ pub fn scan_with(opts: &ScanOptions, progress: &ScanProgress) -> Result<Vec<Vst3
         Some(f) if f.is_file() => ScanCache::load(f),
         _ => memory.unwrap_or_default(),
     };
+    forget_pre_ara(&mut cache);
     let found = paths::find_bundles(&dirs);
     let mut runner = HelperRunner::new(exe, "vst3").on_spawn(crate::ffi::tie_to_this_process);
     let ran = run_scan(&mut cache, &found, &stamp, &mut runner, opts, progress, &mut |c| {
@@ -209,6 +295,18 @@ pub fn scan_with(opts: &ScanOptions, progress: &ScanProgress) -> Result<Vec<Vst3
     });
     ran.map_err(|e| e.to_string())?;
     Ok(lock().scanned.clone().unwrap_or_default())
+}
+
+/// Bundles scanned before scans looked for ARA are scanned again (once): their stamps are
+/// forgotten, so the next scan plans them as changed.
+fn forget_pre_ara(cache: &mut ScanCache<Vst3Descriptor>) {
+    for e in &mut cache.entries {
+        if let soundcraft_plugin_scan::Outcome::Plugins(ds) = &e.outcome
+            && ds.iter().any(|d| !d.ara_checked)
+        {
+            e.stamp = None;
+        }
+    }
 }
 
 /// [`scan_with`] without progress; on error, logs it and returns what is known.
@@ -497,6 +595,18 @@ pub fn instantiate(id: &str) -> Result<Box<dyn Plugin>, Vst3Error> {
     Ok(Box::new(instantiate_plugin(id)?))
 }
 
+/// Makes plug-in `id` and binds it to an ARA document controller (see [`crate::instantiate_ara`]).
+pub fn instantiate_ara(
+    id: &str,
+    dc: soundcraft_ara_host::sys::ARADocumentControllerRef,
+    known: i32,
+    assigned: i32,
+) -> Result<(Vst3Plugin, soundcraft_ara_host::RawExtension), Vst3Error> {
+    let (inst, info) = instantiate_raw(id)?;
+    let ext = inst.bind_ara(dc, known, assigned).map_err(|e| Vst3Error::Instantiate(id.to_string(), e))?;
+    Ok((Vst3Plugin::new(inst, info), ext))
+}
+
 pub fn instantiate_plugin(id: &str) -> Result<Vst3Plugin, Vst3Error> {
     let (inst, info) = instantiate_raw(id)?;
     let mut p = Vst3Plugin::new(inst, info);
@@ -584,5 +694,27 @@ mod tests {
             (PathBuf::from("b.vst3"), "b failed".into()),
         ];
         assert_eq!(failures_of(&r), want);
+    }
+
+    /// A scan cache written before scans looked for ARA still loads, and its plug-ins are
+    /// scanned again once (their stamps forgotten); failures and checked entries are kept.
+    #[test]
+    fn scan_results_from_before_ara_are_scanned_again_once() {
+        let old = r#"{"version":1,"entries":[
+            {"path":"a.vst3","stamp":{"modified_ms":5,"size":9},"outcome":{"plugins":[{"id":"vst3:00","class_id":"00","name":"A","vendor":"v","version":"1","sdk_version":"","sub_categories":["Fx"],"category":"Other","is_instrument":false,"path":"a.vst3"}]}},
+            {"path":"b.vst3","stamp":{"modified_ms":5,"size":9},"outcome":{"failed":{"reason":"x","kind":"load"}}}
+        ]}"#;
+        let mut cache: ScanCache<Vst3Descriptor> = serde_json::from_str(old).unwrap();
+        let soundcraft_plugin_scan::Outcome::Plugins(ds) = &cache.entries[0].outcome else { panic!() };
+        assert!(ds[0].ara.is_none() && !ds[0].ara_checked);
+        forget_pre_ara(&mut cache);
+        assert_eq!(cache.entries[0].stamp, None);
+        assert!(cache.entries[1].stamp.is_some());
+        if let soundcraft_plugin_scan::Outcome::Plugins(ds) = &mut cache.entries[0].outcome {
+            ds[0].ara_checked = true;
+        }
+        cache.entries[0].stamp = cache.entries[1].stamp;
+        forget_pre_ara(&mut cache);
+        assert!(cache.entries[0].stamp.is_some(), "scanned with ARA: kept");
     }
 }

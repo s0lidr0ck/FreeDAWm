@@ -1,4 +1,4 @@
-//! The control room (Window › Control Room, [`soundcraft_model::ControlRoom`]): monitor sets with
+//! The control room (Window › Transport & Session › Control Room, [`soundcraft_model::ControlRoom`]): monitor sets with
 //! level, dim, mono and mute; the listen bus of AFL/PFL solo; cue mixes fed by pre-fader sends to
 //! hardware outputs; a talkback microphone into the cues. Saved with the session. The moment-to-
 //! moment controls (level, dim, mono, mute, the set in use, talkback) are not undo steps; making

@@ -1,8 +1,9 @@
-//! The Teleprompter (Window › Teleprompter): a big, high-contrast lyric view for the singer. It
+//! The Teleprompter (Window › Transport & Session › Teleprompter): a big, high-contrast lyric view for the singer. It
 //! follows the playhead through the lines placed on the Lyrics ruler: the current line large and
 //! bright with a bar showing how far through it the playhead is, the next line below it, the
-//! section above. It docks as a tab, or lives in its own native window (Window › Teleprompter in
-//! Separate Window), sized and placed as last left; closing that window docks it back.
+//! section above. It docks as a tab, or lives in its own native window (Window › Transport & Session › Teleprompter in
+//! Separate Window), sized and placed as last left; closing that window docks it back. The lines'
+//! chords are left out unless Show chords is on (right-click): then each stands above its syllable.
 
 use crate::SoundApp;
 use crate::theme::{bold, regular};
@@ -27,11 +28,23 @@ pub struct Prompt {
     pub singing: bool,
     /// The line after it.
     pub next: Option<(u32, String)>,
+    /// The current and next lines' chords: (name, byte offset in the shown text it stands before).
+    pub current_chords: Vec<(String, usize)>,
+    pub next_chords: Vec<(String, usize)>,
+}
+
+/// A placed line as shown: its number, its words without chords, and the chords.
+fn line_and_chords(s: &Session, p: &LyricPlace) -> Option<(u32, String, Vec<(String, usize)>)> {
+    let sheet = &s.lyric_sheet;
+    let st = soundcraft_model::strip_chords(&sheet.lines.iter().find(|l| l.id == p.line)?.text);
+    let lead = st.text.len() - st.text.trim_start().len();
+    let text = st.text.trim().to_string();
+    let chords = st.chords.into_iter().map(|(n, at)| (n, at.saturating_sub(lead).min(text.len()))).collect();
+    Some((sheet.number_of(p.line)?, text, chords))
 }
 
 fn line(s: &Session, p: &LyricPlace) -> Option<(u32, String)> {
-    let sheet = &s.lyric_sheet;
-    Some((sheet.number_of(p.line)?, sheet.lines.iter().find(|l| l.id == p.line)?.text.trim().to_string()))
+    line_and_chords(s, p).map(|(n, t, _)| (n, t))
 }
 
 /// The prompt at `at`.
@@ -49,7 +62,44 @@ pub fn prompt(s: &Session, at: Samples) -> Prompt {
     });
     let next = cur.and_then(|i| placed.get(i + 1)).and_then(|p| line(s, p));
     let section = cur.and_then(|i| placed.get(i)).and_then(|p| s.lyric_sheet.section_of(p.line));
-    Prompt { section, current, singing, next }
+    let chords = |k: Option<usize>| k.and_then(|i| placed.get(i)).and_then(|p| line_and_chords(s, p)).map(|l| l.2).unwrap_or_default();
+    Prompt { section, current, singing, next, current_chords: chords(cur), next_chords: chords(cur.map(|i| i + 1)) }
+}
+
+/// Lays out `text` for the prompt; with chords, every row has room above its words for them
+/// (the words sit at the top of a taller row, the chords in the room the row above leaves), and
+/// the chords' positions come back: (name, where its text starts, relative to the galley).
+fn prompt_galley(
+    ui: &Ui,
+    text: &str,
+    chords: &[(String, usize)],
+    size: f32,
+    bold_font: bool,
+    col: Color32,
+    wrap: f32,
+) -> (std::sync::Arc<egui::Galley>, f32, Vec<(String, egui::Pos2)>) {
+    let font = if bold_font { bold(size) } else { regular(size) };
+    let room = if chords.is_empty() { 0.0 } else { (size * 0.62).round() };
+    let row = ui.fonts_mut(|f| f.row_height(&font));
+    let mut job = egui::text::LayoutJob::default();
+    let fmt = egui::text::TextFormat { font_id: font, color: col, line_height: (room > 0.0).then_some(row + room), ..Default::default() };
+    job.append(text, 0.0, fmt);
+    job.wrap.max_width = wrap;
+    let g = ui.fonts_mut(|f| f.layout_job(job));
+    let mut out: Vec<(String, egui::Pos2)> = Vec::new();
+    for (name, at) in chords {
+        let ci = text.get(..*at).map_or(0, |p| p.chars().count());
+        let r = g.pos_from_cursor(egui::text::CCursor::new(ci));
+        let mut x = r.min.x;
+        // Two chords over one word: the second one after the first.
+        if let Some((prev, p)) = out.last()
+            && (p.y - (r.min.y - room)).abs() < 1.0
+        {
+            x = x.max(p.x + (prev.chars().count() as f32 + 1.0) * room * 0.62);
+        }
+        out.push((name.clone(), pos2(x, r.min.y - room)));
+    }
+    (g, room, out)
 }
 
 /// The playhead the prompt follows: the transport while playing, else the insertion point.
@@ -58,9 +108,16 @@ fn playhead(app: &SoundApp) -> Samples {
     if e.transport.playing { e.transport.position } else { e.session().edit.selection.start }
 }
 
-/// Draws the prompt over the whole of `ui`.
+/// The colour chords are shown in on the prompt.
+const CHORD_PROMPT: Color32 = Color32::from_rgb(255, 200, 60);
+
+/// Draws the prompt over the whole of `ui`; right-click for its options.
 pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
     let r = ui.max_rect();
+    ui.interact(r, ui.id().with("teleprompter-options"), egui::Sense::click()).context_menu(|ui| {
+        ui.checkbox(&mut app.ui.teleprompter_chords, "Show chords")
+            .on_hover_text("Each line's chords ([Am] in the lyric sheet) above the words they fall on");
+    });
     let p = ui.painter().with_clip_rect(r);
     p.rect_filled(r, 0.0, Color32::BLACK);
     let at = playhead(app);
@@ -75,16 +132,22 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
     if let Some(sec) = &pr.section {
         p.text(pos2(r.min.x + pad, r.min.y + pad * 0.6), Align2::LEFT_TOP, sec.to_uppercase(), bold((big * 0.35).max(11.0)), Color32::from_gray(150));
     }
+    let show_chords = app.ui.teleprompter_chords;
+    let none: Vec<(String, usize)> = Vec::new();
     match &pr.current {
         Some((n, text, k)) => {
             let col = if pr.singing { Color32::WHITE } else { Color32::from_gray(170) };
-            let job = egui::text::LayoutJob::simple(text.clone(), bold(big), col, w - pad * 2.0 - big);
-            let g = ui.fonts_mut(|f| f.layout_job(job));
-            let top = cy - g.size().y / 2.0;
+            let cur_chords = if show_chords { &pr.current_chords } else { &none };
+            let (g, room, chords) = prompt_galley(ui, text, cur_chords, big, true, col, w - pad * 2.0 - big);
+            let top = cy - g.size().y / 2.0 + room;
             p.text(pos2(r.min.x + pad, top + big * 0.55), Align2::LEFT_CENTER, n.to_string(), regular(big * 0.4), Color32::from_gray(110));
             let x = r.min.x + pad + big;
-            let h = g.size().y;
+            // The last row's room for chords is not needed below it.
+            let h = g.size().y - room;
             p.galley(pos2(x, top), g, col);
+            for (name, at) in chords {
+                p.text(pos2(x, top) + at.to_vec2(), Align2::LEFT_TOP, name, bold(room.max(8.0)), CHORD_PROMPT);
+            }
             // How far through the line the playhead is.
             let bar = Rect::from_min_size(pos2(x, top + h + big * 0.25), vec2(w - pad * 2.0 - big, (big * 0.08).max(3.0)));
             p.rect_filled(bar, 2.0, Color32::from_gray(40));
@@ -94,7 +157,17 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
             if let Some((m, next)) = &pr.next {
                 let ny = bar.max.y + big * 0.9;
                 p.text(pos2(r.min.x + pad, ny), Align2::LEFT_CENTER, m.to_string(), regular(big * 0.3), Color32::from_gray(90));
-                p.text(pos2(x, ny), Align2::LEFT_CENTER, next, regular(big * 0.6), Color32::from_gray(140));
+                if show_chords && !pr.next_chords.is_empty() {
+                    let (g, room, chords) = prompt_galley(ui, next, &pr.next_chords, big * 0.6, false, Color32::from_gray(140), f32::INFINITY);
+                    let first = g.rows.first().map_or(big * 0.6, |r| r.rect().height() - room);
+                    let at = pos2(x, ny - first / 2.0);
+                    p.galley(at, g, Color32::from_gray(140));
+                    for (name, c) in chords {
+                        p.text(at + c.to_vec2(), Align2::LEFT_TOP, name, bold(room.max(8.0)), CHORD_PROMPT.gamma_multiply(0.7));
+                    }
+                } else {
+                    p.text(pos2(x, ny), Align2::LEFT_CENTER, next, regular(big * 0.6), Color32::from_gray(140));
+                }
             }
         }
         None => {
@@ -140,9 +213,9 @@ mod tests {
 
     fn session() -> Session {
         let mut s = Session::default();
-        let texts = ["[Chorus]", "Jesus, the only one", "Jesus, the only one", "Nothing else"];
+        let texts = ["{Chorus}", "[G]Jesus, the [D/F#]only one", "[Em] [C]", "Jesus, the only one", "Nothing else"];
         s.lyric_sheet.lines = texts.iter().enumerate().map(|(i, t)| SheetLine::new(10 + i as u64, *t)).collect();
-        s.lyric_sheet.placed = vec![LyricPlace { line: 11, start: 100, end: 200 }, LyricPlace { line: 12, start: 300, end: 400 }];
+        s.lyric_sheet.placed = vec![LyricPlace { line: 11, start: 100, end: 200 }, LyricPlace { line: 13, start: 300, end: 400 }];
         s
     }
 
@@ -154,6 +227,9 @@ mod tests {
         assert_eq!(p.current, Some((1, "Jesus, the only one".into(), 0.5)));
         assert_eq!(p.next, Some((2, "Jesus, the only one".into())));
         assert_eq!(p.section.as_deref(), Some("Chorus"));
+        // The words without their chords; the chords where they stand in them.
+        assert_eq!(p.current_chords, vec![("G".to_string(), 0), ("D/F#".to_string(), 11)]);
+        assert!(p.next_chords.is_empty());
         // Between lines: the next one waits, not yet lit.
         let p = prompt(&s, 250);
         assert!(!p.singing);

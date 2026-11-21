@@ -221,7 +221,9 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
     if ctx.egui_wants_keyboard_input() || dialog_here || capturing {
         return;
     }
-    let events: Vec<(Key, Modifiers)> = ctx.input(|i| {
+    // Cmd and Ctrl are separate keys only on macOS.
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let mut events: Vec<(Key, Modifiers)> = ctx.input(|i| {
         i.events
             .iter()
             .filter_map(|e| match e {
@@ -230,8 +232,26 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
             })
             .collect()
     });
-    // Cmd and Ctrl are separate keys only on macOS.
-    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    // The window system sends Cmd/Ctrl+C, X and V as copy, cut and paste events and NOT as key
+    // presses, so in the running app those three never arrive as keys. Each such event stands
+    // for its key here (unless the key came too), and then takes the same road as any shortcut.
+    let command = Modifiers { ctrl: !mac, mac_cmd: mac, command: true, ..Modifiers::NONE };
+    let clipboard: Vec<Key> = ctx.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::Copy => Some(Key::C),
+                egui::Event::Cut => Some(Key::X),
+                egui::Event::Paste(_) => Some(Key::V),
+                _ => None,
+            })
+            .collect()
+    });
+    for key in clipboard {
+        if !events.iter().any(|(k, m)| *k == key && m.command) {
+            events.push((key, command));
+        }
+    }
     // Typing over the plugin browser goes to its search field, not to the single-key commands.
     let over_browser = app
         .browser_rect
@@ -262,6 +282,16 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
         if crate::musical_typing::owns_key(app, key, mods) {
             continue;
         }
+        // A chord picked on the Chords ruler takes Copy, Cut, Paste, Duplicate and Left/Right.
+        if window == MainWindow::Edit
+            && let Some(k) = chord_key_of(app, key, mods, mac)
+            && crate::ruler_items::chord_key(app, ctx, k)
+        {
+            if matches!(k, crate::ruler_items::ChordKey::Copy | crate::ruler_items::ChordKey::Cut) {
+                own_the_clipboard(ctx, "FreeDAWm chords");
+            }
+            continue;
+        }
         if fixed(app, window, key, mods, mac) {
             continue;
         }
@@ -272,7 +302,10 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
             if shortcut_dialog(app, id) {
                 continue;
             }
-            let _ = app.run(id, selection_params(app, window, id));
+            let ran = app.run(id, selection_params(app, window, id));
+            if ran.is_ok() && matches!(id, "edit.copy" | "edit.cut") {
+                own_the_clipboard(ctx, "FreeDAWm clips");
+            }
         } else if let Some(id) = ui_command_for(&app.ui.shortcuts, key, mods, mac) {
             let _ = app.run(id, json!({}));
         }
@@ -281,6 +314,30 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
     ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     // A track selected from the keyboard scrolls into view in the other window.
     crate::window_sync::watch_selection(app, Some(window));
+}
+
+/// Puts a short text on the system clipboard after a Copy or Cut of the app's own things. The
+/// window system only sends a paste event when the clipboard holds text, so without this a
+/// Paste after copying clips would never arrive (the MIDI Editor does the same for notes).
+fn own_the_clipboard(ctx: &egui::Context, what: &str) {
+    ctx.copy_text(what.to_string());
+}
+
+/// What `key` with `m` does to a chord picked on the Chords ruler: the app's Copy, Cut, Paste and
+/// Duplicate shortcuts (as set in the shortcut editor), and Left / Right (Shift extends the run).
+fn chord_key_of(app: &SoundApp, key: Key, m: Modifiers, mac: bool) -> Option<crate::ruler_items::ChordKey> {
+    use crate::ruler_items::ChordKey;
+    let o = &app.ui.shortcuts;
+    match key {
+        Key::ArrowLeft | Key::ArrowRight if !m.command && !m.ctrl && !m.alt => {
+            Some(ChordKey::Step { forward: key == Key::ArrowRight, extend: m.shift })
+        }
+        _ if fires(o, "edit.copy", key, m, mac) => Some(ChordKey::Copy),
+        _ if fires(o, "edit.cut", key, m, mac) => Some(ChordKey::Cut),
+        _ if fires(o, "edit.paste", key, m, mac) => Some(ChordKey::Paste),
+        _ if fires(o, "edit.duplicate", key, m, mac) => Some(ChordKey::Duplicate),
+        _ => None,
+    }
 }
 
 /// A shortcut whose command opens a dialog first: opens it, unless a dialog is already open in the

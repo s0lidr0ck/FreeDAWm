@@ -689,7 +689,23 @@ fn tempo_meter(app: &mut SoundApp, ui: &mut Ui) {
     ui.painter().text(pos2(r.max.x - 8.0, co.center().y), Align2::RIGHT_CENTER, format!("{bars} bars"), mono(11.0), t.counter_text);
     ui.painter().text(pos2(r.min.x + 70.0, r.min.y + 32.0), Align2::RIGHT_CENTER, "Meter", regular(11.0), t.counter_label);
     ui.painter().text(pos2(r.max.x - 8.0, r.min.y + 32.0), Align2::RIGHT_CENTER, meter, mono(11.0), t.counter_text);
-    ui.painter().text(pos2(r.min.x + 70.0, r.min.y + 48.0), Align2::RIGHT_CENTER, "Tempo", regular(11.0), t.counter_label);
+    // The word "Tempo" is the Tap Tempo button: click it in time (as the Tempo Operations
+    // window's Tap), and it lights for a moment at each tap.
+    let tap = Rect::from_min_max(pos2(r.min.x + 30.0, r.min.y + 40.0), pos2(r.min.x + 72.0, r.min.y + 56.0));
+    let tapped = ui
+        .interact(tap, ui.id().with("tap_tempo"), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Tap Tempo: click in time; a pause of 2 s starts over");
+    let now = ui.input(|i| i.time);
+    if tapped.clicked() {
+        crate::ops_windows::tap_tempo(app, now);
+    }
+    let lit = app.ops.tap_times.last().is_some_and(|last| (now - last).abs() < 0.12);
+    if lit {
+        ui.ctx().request_repaint();
+    }
+    let label = if lit || tapped.hovered() { t.counter_text } else { t.counter_label };
+    ui.painter().text(pos2(r.min.x + 70.0, r.min.y + 48.0), Align2::RIGHT_CENTER, "Tempo", regular(11.0), label);
     icons::draw(ui.painter(), Rect::from_center_size(pos2(r.min.x + 82.0, r.min.y + 48.0), vec2(13.0, 13.0)), "note", t.counter_text);
     tempo_value(app, ui, r.max.x - 8.0, r.min.y + 48.0, bpm);
     let clk = Rect::from_min_size(pos2(r.min.x + 6.0, r.min.y + 40.0), vec2(18.0, 18.0));

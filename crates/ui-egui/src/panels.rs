@@ -846,6 +846,8 @@ fn plugin_window_size(v: &PluginView) -> egui::Vec2 {
         vec2(crate::sampler_window::EDITOR_WIDTH + 24.0, 640.0)
     } else if v.pantry {
         vec2(crate::pantry::W + 24.0, 660.0)
+    } else if let Some(s) = crate::synth_face::size(&v.ins.plugin).filter(|_| v.key == soundcraft_mix::SlotKey::Instrument) {
+        s + vec2(24.0, 24.0)
     } else {
         vec2(380.0, 520.0)
     }
@@ -869,6 +871,8 @@ fn docked_plugin_window(app: &mut SoundApp, ctx: &egui::Context, v: &PluginView,
             crate::sampler_window::EDITOR_WIDTH
         } else if v.pantry {
             crate::pantry::W
+        } else if let Some(s) = crate::synth_face::size(&v.ins.plugin).filter(|_| v.key == soundcraft_mix::SlotKey::Instrument) {
+            s.x + 12.0
         } else {
             340.0
         })
@@ -905,6 +909,10 @@ const DETACH_BAR_H: f32 = 22.0;
 
 /// The row over a plugin window's contents: Detach (in the main window) or Dock (in its own).
 fn detach_bar(app: &mut SoundApp, ui: &mut Ui, v: &PluginView, detached: bool) {
+    if v.key == soundcraft_mix::SlotKey::Instrument && crate::synth_face::has_panel(&v.ins.plugin) {
+        // A synth panel carries these switches in its own top strip.
+        return;
+    }
     let key = (v.tid, v.key);
     ui.horizontal(|ui| {
         ui.set_height(DETACH_BAR_H - 6.0);
@@ -1027,6 +1035,7 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
         // A built-in instrument's factory presets (the Subtractive Synth's).
         if instrument
             && let Some(info) = info
+            && !crate::synth_face::has_panel(info.id)
             && !crate::fs_presets::factory_groups(info).is_empty()
         {
             ui.menu_button("Presets ▾", |ui| crate::fs_presets::instrument_factory_menu(app, ui, tid, info));
@@ -1107,41 +1116,13 @@ fn plugin_contents(app: &mut SoundApp, ui: &mut Ui, v: &PluginView) {
     if info.id == "eq_7band" || info.id == "eq_1band" {
         eq_curve(ui, info.id, ins);
     }
-    if instrument && info.id == crate::synth_panel::SYNTH {
-        // The synth's panel: its filter and envelopes drawn, over the controls.
-        let r = ui.scope(|ui| {
-            if frozen {
-                ui.disable();
-            }
-            crate::synth_panel::draw(app, ui, tid, ins);
-        });
+    if instrument && crate::synth_face::has_panel(info.id) {
+        // A built-in synth drawn as an instrument: every parameter is on its panel.
+        let r = ui.scope(|ui| crate::synth_face::draw(app, ui, tid, ins, frozen));
         if frozen {
             r.response.on_disabled_hover_text(read_only.as_str());
         }
-    }
-    if instrument && info.id == crate::fm_panel::FM {
-        // The FM synth's panel: its algorithm and the operators' envelopes, over the controls.
-        let r = ui.scope(|ui| {
-            if frozen {
-                ui.disable();
-            }
-            crate::fm_panel::draw(app, ui, tid, ins);
-        });
-        if frozen {
-            r.response.on_disabled_hover_text(read_only.as_str());
-        }
-    }
-    if instrument && info.id == crate::wavetable_panel::WAVETABLE {
-        // The wavetable synth's panel: the current wave and its envelopes, over the controls.
-        let r = ui.scope(|ui| {
-            if frozen {
-                ui.disable();
-            }
-            crate::wavetable_panel::draw(app, ui, tid, ins);
-        });
-        if frozen {
-            r.response.on_disabled_hover_text(read_only.as_str());
-        }
+        return;
     }
     // What the drawer offers, by the drawer's names (a FireStation engine's own
     // bypass and a model's unused switches are not here).

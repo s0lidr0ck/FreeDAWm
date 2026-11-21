@@ -61,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             z.waveform_zoom = if w.is_finite() { w.clamp(0.25, 64.0) } else { 1.0 };
             Ok(json!({"waveform_zoom": z.waveform_zoom}))
         }),
-        cmd!(noundo "view.ruler", "Rulers", ["View", "Rulers"], None, "{ruler: bars_beats|min_secs|timecode|feet_frames|samples|tempo|meter|markers|key|chords|sections|band_chords, visible?: bool}", always, ruler),
+        cmd!(noundo "view.ruler", "Rulers", ["View", "Rulers"], None, "{ruler: bars_beats|min_secs|timecode|feet_frames|samples|tempo|meter|markers|key|chords|sections|band_chords|band|lyrics, visible?: bool}", always, ruler),
         cmd!(noundo "view.main_counter", "Main Counter", ["View", "Main Counter"], None, "{format: bars_beats|min_secs|timecode|feet_frames|samples}", always, |e, p| {
             let f = str_param(p, "format").and_then(TimeFormat::from_id).ok_or_else(|| bad("view.main_counter", "unknown format"))?;
             e.session_mut().edit.main_counter = f;
@@ -109,8 +109,21 @@ fn zoom(e: &mut Engine, f: f64, x: Option<f64>) -> Result<Value> {
 }
 
 fn ruler(e: &mut Engine, p: &Value) -> Result<Value> {
-    const ALL: [&str; 12] =
-        ["bars_beats", "min_secs", "timecode", "feet_frames", "samples", "tempo", "meter", "markers", "key", "sections", "band_chords", "lyrics"];
+    const ALL: [&str; 13] = [
+        "bars_beats",
+        "min_secs",
+        "timecode",
+        "feet_frames",
+        "samples",
+        "tempo",
+        "meter",
+        "markers",
+        "key",
+        "sections",
+        "band_chords",
+        "band",
+        "lyrics",
+    ];
     let r = str_param(p, "ruler").filter(|r| ALL.contains(r)).ok_or_else(|| bad("view.ruler", "unknown ruler"))?.to_string();
     let s = e.session_mut();
     let shown = s.edit.rulers.contains(&r);

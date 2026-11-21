@@ -419,6 +419,10 @@ pub trait Plugin: Send {
     }
     /// The transport for the next block, given before `process`.
     fn set_transport(&mut self, _transport: &Transport) {}
+    /// The loop range for the next block, in quarter notes (`None`: not looping), given with
+    /// [`Plugin::set_transport`]. Hosted VST3 plug-ins pass it on as the process context's cycle
+    /// (ARA playback renderers follow it). Must not allocate.
+    fn set_loop(&mut self, _cycle: Option<(f64, f64)>) {}
     /// Whether the next `prepare` is for an offline render (a bounce, freeze or print, run as
     /// fast as the thread goes) rather than realtime playback. Hosted plugins pass it on (VST3
     /// `kOffline`, CLAP `clap.render`): disk-streaming instruments wait for their data instead
@@ -652,6 +656,11 @@ impl<F: FnMut() -> Option<Vec<u8>> + Send> PluginStateReader for F {
 /// Recorded audio a sample-playing instrument reads: planar `f32` at its own sample rate (the
 /// instrument converts rates as it plays). Implementations must be cheap to read from the audio
 /// thread: no locks, no I/O.
+/// The [`Plugin::set_asset`] key under which a host hands a built-in plugin what it made ready
+/// from the module's stored state off the audio thread (the Wavetable Synth's user table: see
+/// `plugins::wavetable::user`), whenever that changes; `None` when the state has none.
+pub const PREPARED_ASSET_KEY: &str = "prepared";
+
 pub trait SampleSource: Send + Sync {
     /// Sample rate of the audio in Hz.
     fn sample_rate(&self) -> f32;

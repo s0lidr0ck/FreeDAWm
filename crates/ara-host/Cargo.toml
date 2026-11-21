@@ -1,0 +1,30 @@
+[package]
+name = "soundcraft-ara-host"
+description = "FreeDAWm ARA 2 hosting: hand-written Rust bindings to the ARA C API (Celemony's ARAInterface.h, Apache-2.0), the host side of an ARA document (audio access, archiving, content access, model update and playback controllers) and a test ARA plug-in (an isolated unsafe FFI crate)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# No dependencies on purpose: the test VST3 plug-in in `crates/vst3-host/tests/ara_fixture` (built
+# outside the workspace) uses these bindings too.
+[dependencies]
+
+[features]
+# The smallest ARA plug-in side, in Rust, against the same bindings: used by this crate's tests,
+# the engine's tests and the ARA VST3 test fixture. Never part of the app.
+test-plugin = []
+
+# An isolated unsafe helper crate (craftrules never-crash), like soundcraft-vst3-host: this crate
+# opts out of the workspace `unsafe_code = "forbid"` for itself only. It denies unsafe everywhere
+# and allows it solely on the FFI modules (`src/host.rs`, `src/test_plugin.rs`). The rest mirrors
+# `[workspace.lints]`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"

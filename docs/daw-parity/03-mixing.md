@@ -172,7 +172,7 @@ K-system scales, and the master a loudness meter.
 | Pre-fader metering | ● | ● | ● | ● | **Works**: Setup › Preferences… › Mixing › Pre-Fader Metering; track strips only (the master meter stays post-fader) |
 | RMS, and a choice of scales (VU, K-system, PPM) | ● | ● | ◐ | ● | **Works**: Preferences › Metering › Scale: peak, RMS (300 ms), peak with RMS inside, VU (0 VU = −18 dBFS), K-20, K-14, K-12, numbered from their reference; release and peak hold beside it; saved with this computer's settings. PPM (EBU, 0 = −18 dBFS) falls 24 dB in 2.8 s as EBU Tech 3205 times it; its rise follows the sample peak (no 10 ms integration) |
 | Gain reduction on the strip | ● | ● | ● | ● | **Works**: a number for the first dynamics module |
-| Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Works**: Window › Loudness Meter reads the master as it plays: momentary, short-term, integrated, loudness range (EBU Tech 3342, from the short-term value every 100 ms), maximum momentary and true peak, with Reset |
+| Loudness (LUFS) and true peak while mixing | ◐ | ● | ● | ● | **Works**: Window › Transport & Session › Loudness Meter reads the master as it plays: momentary, short-term, integrated, loudness range (EBU Tech 3342, from the short-term value every 100 ms), maximum momentary and true peak, with Reset |
 | Correlation, spectrum, vectorscope | ● | ● | ● | ● | **Works**: the Spectrum and Phase Meter plug-ins (Utilities in the insert menu), as well as inside the Sprawl and CleanQ modules and Scout |
 | Output meter free of the click | ● | ● | ● | ● | **Works** |
 | Meters while stopped | ● | ● | ● | ● | **Works**: armed and monitored tracks and live MIDI meter while stopped, and a Stop (or the end of play) lets the mix ring out, heard and metered, until it has been quiet 50 ms (at most 4 s, then faded); a second Stop cuts it. A stop while recording still cuts at once |
@@ -221,14 +221,14 @@ Atmos renderer, so this has moved from a post-production extra to common ground.
 |---|:-:|:-:|:-:|:-:|---|
 | Undo for mixer moves | ◐ | ● | ● | ● | **Works**: every move, one step per gesture |
 | Track presets | ● | ● | ● | ● | **Works** |
-| Snapshots or scenes of the whole mix | ○ | ● | ◐ | ● | **Works**: Window › Mix Snapshots stores every strip under a name and recalls it whole or by section (faders, pan, mutes, sends, inserts, routing, delay), on every track or the selected ones (`mix.snapshot_store`, `mix.snapshot_recall`), one undo step each; saved with the session |
+| Snapshots or scenes of the whole mix | ○ | ● | ◐ | ● | **Works**: Window › Transport & Session › Mix Snapshots stores every strip under a name and recalls it whole or by section (faders, pan, mutes, sends, inserts, routing, delay), on every track or the selected ones (`mix.snapshot_store`, `mix.snapshot_recall`), one undo step each; saved with the session |
 | Copy one channel's settings onto others | ● | ● | ● | ● | **Works**: Track › Copy Settings to Selected (inserts and sends, inserts, sends, fader with pan and mutes, or everything but routing; `mix.copy_strip`), one undo step; routing is never copied (it could feed a track into itself); also duplicate a track or apply a preset |
 | Import mixer settings from another session onto existing tracks | ● | ◐ | ● | ● | **Works** (2026-11-18, fb7c233): File › Import › Session Data… brings whole tracks as new ones, or (its "Onto tracks with the same names" choice, `file.import_session_data` `onto: true`) lands each of the other session's tracks on this session's track of the same name (case ignored), bringing only the parts ticked: inserts, sends, fader and trim, pan, mute and solo, track delay, automation (`sections`; inserts, sends, fader and pan at first), as Copy Settings to Selected does within a session, in one undo step. Sends go to this session's busses of the same names (made when missing); routing never comes; the clips and audio never come this way; a track with no namesake is listed as not matched. Automation replaces the track's lanes; an insert's lanes come only with the inserts (their modules are the other session's), and the instrument's stay. When importing whole tracks, groups, VCA and folder assignments are still dropped |
 | Narrow strips, show and hide sections | ● | ● | ● | ● | **Works** |
 | Module graphs and gain reduction on the strip | ◐ | ● | ● | ● | **Works**: live graphs on every built-in module tile |
 | Find and filter tracks in the mixer | ● | ● | ● | ● | **Works**: a Find field above the Mix window's strips keeps those whose name holds the text (this window's view: not saved, not undone) |
 | Spill a folder, VCA or bus | ● | ◐ | ○ | ◐ | **Works**: Spill in a VCA's, folder's or aux's strip menu shows only it and what it controls or sums (a VCA's members, nested VCAs' too; a folder's tracks at every depth, closed or not; what feeds an aux's bus by output or send), Unspill above the strips puts the rest back |
-| Several mixer windows | ○ | ● | ● | ● | **Works** (2026-11-18, 2f658cd): Window › New Mix Window… opens up to three more Mix windows (`window.new_mix`), each in its own native window ("Mix 2", "Mix 3", …), with its own find filter and spill (kept per window) and its own shown sections (its Sections menu; it starts with the first window's). The first Mix window, in the main window or Mix in Separate Window, keeps View › Mix Window Views. They are views only: not saved, closed with the app. Shared by all: strip width and the docked drawers' layout |
+| Several mixer windows | ○ | ● | ● | ● | **Works** (2026-11-18, 2f658cd): Window › Separate Windows › New Mix Window… opens up to three more Mix windows (`window.new_mix`), each in its own native window ("Mix 2", "Mix 3", …), with its own find filter and spill (kept per window) and its own shown sections (its Sections menu; it starts with the first window's). The first Mix window, in the main window or Mix in Separate Window, keeps View › Mix Window Views. They are views only: not saved, closed with the app. Shared by all: strip width and the docked drawers' layout |
 
 ## Bugs found on the way
 
@@ -269,7 +269,7 @@ one a mix engineer would not forgive.
 | Automate plug-in bypass, instrument parameters and surround pan; make the per-type enables real | 6–10 | **Per-type enables, bypass lanes and instrument lanes done** (2026-11-17; instrument lanes by the MIDI writing work); surround pan lanes done too |
 | Key inputs: on the stock compressor, gate and de-esser, and sidechain busses for CLAP, VST3 and AU | 12–20 | Part of G-13. **CLAP and VST3 keys, the generic routing and Comp's detector done**; AU key buses remain (macOS); a key taken from an aux by an ordinary track is done (built from the design below) |
 | Controller mapping (MIDI learn) for faders and plug-in parameters | 8–12 | **Done** (section 6, K): faders, pan, send levels and chain knobs; Mackie Control and HUI surfaces too |
-| Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU, K and PPM scales, and Window › Loudness Meter with the loudness range |
+| Metering: pre-fader option, RMS and scale choice, a loudness and true-peak meter on the master, output meter without the click | 8–12 | **Done**: RMS, VU, K and PPM scales, and Window › Transport & Session › Loudness Meter with the loudness range |
 | Pan law choice; balance and width for stereo; per-track delay | 6–10 | **Done**, width and balance automatable too |
 | Sends to tracks and hardware outputs, a return made with a new send, default send level, loop refusal | 6–10 | Shared with section 2's cue mixes. **Done**, with pan following the main pan and pre-fader sends that can ignore mute |
 | Bounce dialog: source, tail, sample rate, dither and mono options, metadata, add to session; stems as a background job with a choice of tracks and busses | 12–18 | **Done** (2026-11-17); tags in FLAC, AIFF and Opus remain |
@@ -405,7 +405,7 @@ a change part-way through a block.
 
 **Built:** `ControlRoom` in the session (`crates/model/src/control_room.rs`), the engine's monitor
 path, listen bus, cue levels and talkback (`crates/mix/src/monitor.rs`), the `monitor.*` commands
-(`crates/engine/src/cmd/monitor.rs`) and Window › Control Room (`crates/ui-egui/src/control_room.rs`,
+(`crates/engine/src/cmd/monitor.rs`) and Window › Transport & Session › Control Room (`crates/ui-egui/src/control_room.rs`,
 F11 held to talk). Differences from the design: sets and cues name their output (as routes do)
 rather than index it; a cue's sends are ordinary sends to its output (Add Cue Sends makes them,
 pre-fader, at the track's fader level), not extra slots; switching sets cuts rather than

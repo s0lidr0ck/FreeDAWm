@@ -44,6 +44,9 @@ pub struct FeelFlags {
     pub dynamics: bool,
     pub natural: bool,
     pub tension: bool,
+    /// The band plays as one (Natural only): a shared pocket, phrase-shaped dynamics and variation, fills the others
+    /// answer. Off in sessions saved before it existed.
+    pub band: bool,
 }
 
 /// What the processor holds and the audio thread reads: host parameter values (real units: choice index, integer,
@@ -579,8 +582,11 @@ impl BandRuntime {
         //    (289), A/B off (290-292: stopAB never runs).
         self.performer.set_settings(false, false, 4, 24);
         self.performer.set_mod_wheel(self.feel.mod_wheel);
-        self.performer.set_interplay(self.feel.bass_lock, self.feel.fills_yield, self.feel.leave_space, self.feel.dynamics);
+        // The band-feel layer plays with the others' answer to a drum fill (they yield to it) on.
+        let band = self.feel.band && self.feel.natural;
+        self.performer.set_interplay(self.feel.bass_lock, self.feel.fills_yield || band, self.feel.leave_space, self.feel.dynamics);
         self.performer.set_natural(self.feel.natural);
+        self.performer.set_band(band);
         self.performer.set_tension(self.feel.tension);
         self.performer.set_key(round_to_int(self.last_raw[0]), round_to_int(self.last_raw[1])); // key, scale
         self.performer.set_ab(false, '\0', 1, 1);

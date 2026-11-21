@@ -1,8 +1,13 @@
-//! The Lyrics tab (Window › Lyrics): a plain text editor bound to the session's lyric sheet. Each
+//! The Lyrics tab (Window › Transport & Session › Lyrics): a plain text editor bound to the session's lyric sheet. Each
 //! lyric line gets a dim number in the gutter; the right margin shows its syllable count and a
 //! rhyme letter (lines whose end words rhyme share a letter and colour, and the rhyme word is
-//! underlined in it). "[Verse 1]" lines are section headings. Right-click a line for rhyme
-//! suggestions. Typing is one undo step per line (Enter ends a step).
+//! underlined in it). "{Verse 1}" lines are section headings. Chords are written in square
+//! brackets before the syllable they fall on ("[Am]Hello dark[G]ness"): each is drawn above that
+//! syllable in the chord colour, its bracket text dimmed (lit while the cursor is in it); while
+//! the sheet has chords every row is taller by the room the chord names take, so the gutter and
+//! margin columns stay in line. A bracket that is not a chord name stays words, tinted.
+//! Right-click a line for rhyme suggestions and the Chords ruler actions. Typing is one undo step
+//! per line (Enter ends a step).
 
 use crate::SoundApp;
 use crate::theme::{Tokens, bold, regular};
@@ -11,7 +16,7 @@ use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, Rect, Stroke, Ui, pos2};
 use serde_json::{Value, json};
 use soundcraft_engine::lyric_text::{LineInfo, analyse, suggest_rhymes};
-use soundcraft_engine::lyric_tools::{LineFit, MarkKind, WordMark, find_phrase, line_fit, rhyme_marks, stress_text, word_spans};
+use soundcraft_engine::lyric_tools::{LineFit, MarkKind, WordMark, find_phrase, line_fit, rhyme_marks, stress_text, sung_word_spans};
 use std::sync::Arc;
 
 /// Gutter (line numbers) and right margin (syllables, rhyme letter, placed dot) widths.
@@ -22,6 +27,31 @@ const STRESS_W: f32 = 120.0;
 /// A fit flag's colour.
 pub const FIT_FLAG: Color32 = Color32::from_rgb(240, 150, 40);
 const LINE_FONT: f32 = 15.0;
+/// The colour chords are drawn in.
+pub const CHORD_COLOR: Color32 = Color32::from_rgb(224, 164, 58);
+/// Bracket text that is no chord name: read as words, tinted.
+const UNKNOWN_BRACKET: Color32 = Color32::from_rgb(214, 160, 120);
+/// The chord names' font size.
+const CHORD_FONT: f32 = 11.5;
+
+/// How the editor draws chords: `room` (0 while the sheet has no chords) is the height every row
+/// gets below its words, where the chord names of the row under it are drawn; `row_h` the row's
+/// height then; `cursor` the text cursor (a chord's bracket text is lit while the cursor is in it).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ChordView {
+    room: f32,
+    row_h: f32,
+    cursor: Option<usize>,
+}
+
+impl ChordView {
+    /// The view for `text` with the line font's natural row height `natural`.
+    fn of(text: &str, natural: f32, cursor: Option<usize>) -> ChordView {
+        let any = text.contains('[') && text.split('\n').any(|l| !soundcraft_model::line_chords(l).is_empty());
+        let room = if any { (CHORD_FONT * 1.35).round() } else { 0.0 };
+        ChordView { room, row_h: natural + room, cursor }
+    }
+}
 
 /// The editor's text between frames, and the sheet text it was last in step with.
 #[derive(Clone, Default)]
@@ -109,16 +139,26 @@ fn layout(
     rhymes: bool,
     kinds: u8,
     highlights: &[(usize, usize, usize)],
+    cv: ChordView,
     t: &Tokens,
 ) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let plain = TextFormat { font_id: regular(LINE_FONT), color: t.text, ..TextFormat::default() };
-    let heading = TextFormat { font_id: bold(12.0), color: t.text_dim, extra_letter_spacing: 0.5, ..TextFormat::default() };
+    let line_height = (cv.room > 0.0).then_some(cv.row_h);
+    let plain = TextFormat { font_id: regular(LINE_FONT), color: t.text, line_height, ..TextFormat::default() };
+    let heading = TextFormat { font_id: bold(12.0), color: t.text_dim, extra_letter_spacing: 0.5, line_height, ..TextFormat::default() };
     let mut lines = text.split('\n').peekable();
     let mut i = 0;
+    // The line's first character, counted in characters over the whole text (the cursor's unit).
+    let mut line_char = 0usize;
     while let Some(line) = lines.next() {
         let info = infos.get(i);
         let base = if info.is_some_and(|i| i.heading) { heading.clone() } else { plain.clone() };
+        // Bracketed text: chords (dimmed, lit while the cursor is in them) and other words.
+        let brackets = if line.contains('[') && !info.is_some_and(|i| i.heading) { soundcraft_model::inline_chords(line) } else { Vec::new() };
+        let cursor_in = |s: usize, e: usize| {
+            let at = |b: usize| line_char + line.get(..b).map_or(0, |p| p.chars().count());
+            cv.cursor.is_some_and(|c| at(s) < c && c < at(e))
+        };
         // The line's coloured runs: rhyming words (by type) and highlights.
         let words: Vec<(usize, usize, MarkKind)> =
             if rhymes { marks.iter().filter(|m| m.line == i).filter_map(|m| Some((m.start, m.end, m.shown(kinds)?))).collect() } else { Vec::new() };
@@ -129,6 +169,9 @@ fn layout(
         }
         for (s, e) in &lit {
             cuts.extend([*s, *e]);
+        }
+        for b in &brackets {
+            cuts.extend([b.start, b.end]);
         }
         cuts.retain(|c| *c <= line.len() && line.is_char_boundary(*c));
         cuts.sort_unstable();
@@ -146,14 +189,72 @@ fn layout(
                 fmt.background = t.accent.gamma_multiply(0.55);
                 fmt.color = Color32::WHITE;
             }
+            if let Some(br) = brackets.iter().find(|br| br.start <= a && b <= br.end) {
+                if br.known {
+                    fmt.color = if cursor_in(br.start, br.end) { CHORD_COLOR } else { CHORD_COLOR.gamma_multiply(0.4) };
+                    fmt.underline = Stroke::NONE;
+                    fmt.background = Color32::TRANSPARENT;
+                } else {
+                    // Not a chord name: words, gently marked (tinted; an underline would sit at the
+                    // bottom of a row made tall for chords).
+                    fmt.color = UNKNOWN_BRACKET;
+                }
+            }
             job.append(piece, 0.0, fmt);
         }
         if lines.peek().is_some() {
             job.append("\n", 0.0, base);
         }
+        line_char += line.chars().count() + 1;
         i += 1;
     }
     job
+}
+
+/// Where each chord's name goes over the laid-out editor text: (name, its top-left in galley
+/// coordinates), at the syllable after its bracket, in the room the row above leaves (the first
+/// row's above the galley). Names that would overlap on a row move right.
+fn chord_marks(text: &str, galley: &egui::Galley, room: f32, width_of: impl Fn(&str) -> f32) -> Vec<(String, egui::Pos2)> {
+    let mut out: Vec<(String, egui::Pos2)> = Vec::new();
+    let mut line_char = 0usize;
+    let mut row_end: Option<(f32, f32)> = None;
+    for line in text.split('\n') {
+        for c in soundcraft_model::line_chords(line) {
+            let ci = line_char + line.get(..c.end).map_or(0, |p| p.chars().count());
+            let r = galley.pos_from_cursor(egui::text::CCursor::new(ci));
+            let y = r.min.y - room;
+            let mut x = r.min.x;
+            if let Some((ry, end)) = row_end
+                && (ry - y).abs() < 0.5
+            {
+                x = x.max(end + 4.0);
+            }
+            row_end = Some((y, x + width_of(&c.name)));
+            out.push((c.name, pos2(x, y)));
+        }
+        line_char += line.chars().count() + 1;
+    }
+    out
+}
+
+/// Each bracket that is not a chord name: its rectangle in galley coordinates (for the gentle
+/// flag's tooltip), with its text.
+fn unknown_brackets(text: &str, galley: &egui::Galley) -> Vec<(Rect, String)> {
+    let mut out = Vec::new();
+    let mut line_char = 0usize;
+    for line in text.split('\n') {
+        if line.contains('[') && soundcraft_model::heading_name(line).is_none() {
+            for b in soundcraft_model::inline_chords(line).into_iter().filter(|b| !b.known) {
+                let at = |x: usize| egui::text::CCursor::new(line_char + line.get(..x).map_or(0, |p| p.chars().count()));
+                let (r0, r1) = (galley.pos_from_cursor(at(b.start)), galley.pos_from_cursor(at(b.end)));
+                if (r0.min.y - r1.min.y).abs() < 0.5 {
+                    out.push((Rect::from_min_max(r0.min, pos2(r1.max.x, r0.max.y)), b.name));
+                }
+            }
+        }
+        line_char += line.chars().count() + 1;
+    }
+    out
 }
 
 /// What the Lyrics tab highlights: the hook's occurrences, and/or a word from the Words list.
@@ -347,6 +448,9 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
     let hook = soundcraft_engine::cmd::lyric_check::hook_of(&app.engine);
     let first = analysis(ui.ctx(), &buf.text);
     let (mut infos, mut fits) = (first.infos, first.fit);
+    let natural = ui.fonts_mut(|f| f.row_height(&regular(LINE_FONT)));
+    let cursor =
+        egui::text_edit::TextEditState::load(ui.ctx(), editor_id).and_then(|st| st.cursor.char_range()).map(|c| usize::from(c.primary.index));
     egui::ScrollArea::vertical().id_salt("lyrics-scroll").auto_shrink([false, false]).show(ui, |ui| {
         let width = ui.available_width();
         let tk = t;
@@ -354,12 +458,17 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
             let s = text.as_str();
             let a = analysis(ui.ctx(), s);
             let lit = highlight_runs(s, &hook, &hl);
-            let mut job = layout(s, &a.infos, &a.marks, rhymes, kinds, &lit, &tk);
+            let mut job = layout(s, &a.infos, &a.marks, rhymes, kinds, &lit, ChordView::of(s, natural, cursor), &tk);
             job.wrap.max_width = wrap;
             ui.fonts_mut(|f| f.layout_job(job))
         };
         let left = ui.max_rect().min.x;
         let right = left + width;
+        // The first row's chords go above it.
+        let room = ChordView::of(&buf.text, natural, None).room;
+        if room > 0.0 {
+            ui.add_space(room);
+        }
         let out = ui
             .horizontal_top(|ui| {
                 ui.add_space(GUTTER);
@@ -369,7 +478,7 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
                     .desired_width((width - GUTTER - margin).max(80.0))
                     .desired_rows(12)
                     .lock_focus(true)
-                    .hint_text("Write the lyrics here. A line like [Verse 1] starts a section.")
+                    .hint_text("Write the lyrics here. A line like {Verse 1} starts a section; a chord goes in square brackets before its syllable: [Am]Hello")
                     .layouter(&mut layouter)
                     .show(ui)
             })
@@ -391,6 +500,21 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
         }
         // Gutter numbers and the right margin, row by row.
         let p = ui.painter().with_clip_rect(ui.clip_rect());
+        // The chord names over their syllables, and a tooltip on brackets that are no chord.
+        if room > 0.0 {
+            let width_of = |n: &str| ui.fonts_mut(|f| f.layout_no_wrap(n.to_string(), bold(CHORD_FONT), CHORD_COLOR).size().x);
+            for (name, at) in chord_marks(&buf.text, &out.galley, room, width_of) {
+                p.text(out.galley_pos + at.to_vec2(), Align2::LEFT_TOP, name, bold(CHORD_FONT), CHORD_COLOR);
+            }
+        }
+        if buf.text.contains('[') {
+            for (k, (rect, name)) in unknown_brackets(&buf.text, &out.galley).into_iter().enumerate() {
+                let rect = rect.translate(out.galley_pos.to_vec2());
+                ui.interact(rect, ui.id().with(("lyric-bracket", k)), egui::Sense::hover()).on_hover_text(format!(
+                    "\u{2018}[{name}]\u{2019} is not a chord name, so it is read as words. Chords look like [Am], [G/B], [F#m7]; a section heading is written {{Verse 1}}"
+                ));
+            }
+        }
         let mut hover_line: Option<usize> = None;
         let pointer = ui.ctx().pointer_hover_pos();
         let mut line = 0usize;
@@ -401,7 +525,8 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
                 hover_line = Some(line);
             }
             if let Some(info) = infos.get(line) {
-                let cy = rr.center().y;
+                // The middle of the row's words (with chords, the row's room is below them).
+                let cy = if room > 0.0 { rr.min.y + (rr.height() - room).max(0.0) * 0.5 } else { rr.center().y };
                 let row_line = rows.get(line).copied();
                 if let Some((id, _, selected)) = row_line {
                     if selected {
@@ -425,7 +550,7 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
                         {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                             let fg = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("lyric-line-drag")));
-                            let text = buf.text.split('\n').nth(line).unwrap_or("").trim().to_string();
+                            let text = soundcraft_model::sung_text(buf.text.split('\n').nth(line).unwrap_or("")).trim().to_string();
                             fg.text(pt + egui::vec2(12.0, 0.0), Align2::LEFT_CENTER, format!("{n}  {text}"), regular(12.0), Color32::WHITE);
                         }
                         if h.clicked() && placed {
@@ -520,7 +645,7 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
                 let n = l.chars().count();
                 if char_idx <= count + n {
                     let byte = l.char_indices().nth(char_idx - count).map_or(l.len(), |(b, _)| b);
-                    let (s, e) = word_spans(l).into_iter().find(|(s, e)| *s <= byte && byte <= *e)?;
+                    let (s, e) = sung_word_spans(l).into_iter().find(|(s, e)| *s <= byte && byte <= *e)?;
                     return Some(SheetWord { line: li, start: s, end: e, word: l.get(s..e)?.to_string() });
                 }
                 count += n + 1;
@@ -535,7 +660,8 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
             let (a, b) = (usize::from(c.primary.index), usize::from(c.secondary.index));
             let (a, b) = (a.min(b), a.max(b));
             let s: String = buf.text.chars().skip(a).take(b - a).collect();
-            let s = s.trim().to_string();
+            // The words as sung: chords in the selection are no part of the hook.
+            let s = soundcraft_model::sung_text(&s).split_whitespace().collect::<Vec<_>>().join(" ");
             (!s.is_empty() && !s.contains('\n') && s.chars().count() <= 80).then_some(s)
         });
         if r.secondary_clicked() {
@@ -573,7 +699,34 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
             Some((*id, alts.get(i).map_or(0, |a| a.0)))
         });
         let mut alt_action: Option<(&'static str, Value)> = None;
+        // The Chords ruler actions for the line: why each cannot run, if it cannot.
+        let ruler_why: Option<(Option<String>, Option<String>)> = menu_line.map(|(id, _)| chord_actions_refusal(app.engine.session(), id));
         r.context_menu(|ui| {
+            if let (Some((id, _)), Some((send_why, take_why))) = (menu_line, &ruler_why) {
+                let send = ui
+                    .add_enabled(send_why.is_none(), egui::Button::new("Send Chords to the Chords Ruler"))
+                    .on_hover_text("Lay this line's chords on the Chords ruler across its time on the Lyrics ruler (one undo step)");
+                let send = match send_why {
+                    Some(why) => send.on_disabled_hover_text(why.as_str()),
+                    None => send,
+                };
+                if send.clicked() {
+                    alt_action = Some(("lyrics.chords_to_ruler", json!({"line": id})));
+                    ui.close();
+                }
+                let take = ui
+                    .add_enabled(take_why.is_none(), egui::Button::new("Take Chords from the Chords Ruler"))
+                    .on_hover_text("Write the Chords ruler's chords under this line's time into it, at the nearest words (one undo step)");
+                let take = match take_why {
+                    Some(why) => take.on_disabled_hover_text(why.as_str()),
+                    None => take,
+                };
+                if take.clicked() {
+                    alt_action = Some(("lyrics.chords_from_ruler", json!({"line": id})));
+                    ui.close();
+                }
+                ui.separator();
+            }
             if let Some((id, n)) = menu_line {
                 if ui.button("Add Alternate").on_hover_text("Another version of this line; switch with the 1/2 box in the margin").clicked() {
                     alt_action = Some(("lyrics.alt_add", json!({"line": id})));
@@ -666,6 +819,7 @@ fn end_word_menu(ui: &mut Ui, word: Option<&str>) {
 /// AI, the Word Finder.
 fn tools(app: &mut SoundApp, ui: &mut Ui, t: &Tokens) {
     ui.add_space(8.0);
+    sheet_menu(app, ui);
     place_menu(app, ui);
     drafts_menu(app, ui);
     repetition_menus(app, ui);
@@ -850,9 +1004,48 @@ fn drafts_compare(app: &mut SoundApp, ctx: &egui::Context) {
     }
 }
 
-/// Whether a sheet line is a "[Section]" heading.
+/// Whether a sheet line is a "{Section}" heading.
 pub fn is_heading(line: &str) -> bool {
     soundcraft_model::heading_name(line).is_some()
+}
+
+/// Why the line `id` cannot send its chords to the Chords ruler, and why it cannot take them from
+/// it (`None`: it can).
+pub fn chord_actions_refusal(s: &soundcraft_model::Session, id: u64) -> (Option<String>, Option<String>) {
+    if let Some(why) = soundcraft_engine::lyric_chords::ruler_refusal(s, id) {
+        return (Some(why.to_string()), Some(why.to_string()));
+    }
+    let send = soundcraft_engine::lyric_chords::chords_to_send(s, id).err();
+    let take = soundcraft_engine::lyric_chords::line_with_ruler_chords(s, id).err();
+    (send, take)
+}
+
+/// The Sheet menu: import a text or ChordPro file, export as text (with or without chords) or
+/// ChordPro.
+fn sheet_menu(app: &mut SoundApp, ui: &mut Ui) {
+    ui.menu_button("Sheet", |ui| {
+        let empty = app.engine.session().lyric_sheet.lines.iter().all(|l| l.text.trim().is_empty());
+        for (id, label, tip) in [
+            ("lyrics.import_sheet", "Import Text or ChordPro\u{2026}", "Replace the sheet with a text or ChordPro file (Undo brings this one back)"),
+            ("lyrics.export_sheet_text", "Export as Text\u{2026}", "The words, without chords"),
+            (
+                "lyrics.export_sheet_chords",
+                "Export as Text with Chords\u{2026}",
+                "Each line's chords on a line above its words, lined up for a monospaced font",
+            ),
+            ("lyrics.export_chordpro", "Export as ChordPro\u{2026}", "A .cho file: sections from the headings, chords inline"),
+        ] {
+            let ok = id == "lyrics.import_sheet" || !empty;
+            let b = ui.add_enabled(ok, egui::Button::new(label)).on_hover_text(tip).on_disabled_hover_text("the lyric sheet is empty");
+            if b.clicked() {
+                app.engine.end_merge();
+                let _ = app.dialogs.open_for_command(&app.engine, id);
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("Import or export the lyric sheet");
 }
 
 /// "Place lines on ruler…": the next unplaced lines over the edit selection, spread evenly or at
@@ -904,10 +1097,10 @@ mod tests {
 
     #[test]
     fn layout_underlines_shared_rhyme_words_only() {
-        let text = "[Verse 1]\nWhen the night was long\nYou were there to sing the song\nNo rhyme here";
+        let text = "{Verse 1}\nWhen the night was long\nYou were there to sing the song\nNo rhyme here";
         let infos = analyse(text.split('\n'));
         let marks = rhyme_marks(text.split('\n'));
-        let job = layout(text, &infos, &marks, true, 0x0f, &[], &Tokens::current());
+        let job = layout(text, &infos, &marks, true, 0x0f, &[], ChordView::default(), &Tokens::current());
         let underlined: Vec<&str> = job
             .sections
             .iter()
@@ -916,15 +1109,15 @@ mod tests {
             .collect();
         assert_eq!(underlined, vec!["long", "song"]);
         assert_eq!(job.text, text);
-        let off = layout(text, &infos, &marks, false, 0x0f, &[], &Tokens::current());
+        let off = layout(text, &infos, &marks, false, 0x0f, &[], ChordView::default(), &Tokens::current());
         assert!(off.sections.iter().all(|s| s.format.underline.width == 0.0));
-        let none = layout(text, &infos, &marks, true, MarkKind::Slant.bit(), &[], &Tokens::current());
+        let none = layout(text, &infos, &marks, true, MarkKind::Slant.bit(), &[], ChordView::default(), &Tokens::current());
         assert!(none.sections.iter().all(|s| s.format.underline.width == 0.0));
         assert_eq!(none.text, text);
         // A highlighted hook run is boxed; the text is unchanged.
         let lit = highlight_runs(text, "sing the song", &Highlight { hook: true, word: None });
         assert_eq!(lit, vec![(2, 18, 31)]);
-        let job = layout(text, &infos, &marks, true, 0x0f, &lit, &Tokens::current());
+        let job = layout(text, &infos, &marks, true, 0x0f, &lit, ChordView::default(), &Tokens::current());
         assert_eq!(job.text, text);
         let boxed: String = job
             .sections
@@ -934,5 +1127,33 @@ mod tests {
             .collect();
         assert_eq!(boxed, "sing the song");
         assert_ne!(rhyme_color('A'), rhyme_color('B'));
+    }
+
+    #[test]
+    fn chords_are_dimmed_lit_at_the_cursor_and_rows_keep_one_height() {
+        let text = "{Verse 1}\n[Am]When the night was [G]long\n[F] [C]\nNo [chords] here";
+        let (infos, marks) = (analyse(text.split('\n')), rhyme_marks(text.split('\n')));
+        let t = Tokens::current();
+        // No chords in the sheet: rows as they were.
+        assert_eq!(ChordView::of("{Verse 1}\nla [x]", 18.0, None).room, 0.0);
+        let cv = ChordView::of(text, 18.0, None);
+        assert!(cv.room > 0.0 && cv.row_h == 18.0 + cv.room);
+        let job = layout(text, &infos, &marks, false, 0x0f, &[], cv, &t);
+        assert_eq!(job.text, text);
+        // Every section has the same row height, so every row is as tall.
+        assert!(job.sections.iter().all(|s| s.format.line_height == Some(cv.row_h)));
+        let colour_of = |job: &LayoutJob, piece: &str| {
+            job.sections.iter().find(|s| job.text.get(s.byte_range.start.0..s.byte_range.end.0) == Some(piece)).map(|s| s.format.color)
+        };
+        assert_eq!(colour_of(&job, "[Am]"), Some(CHORD_COLOR.gamma_multiply(0.4)));
+        // The cursor inside "[G]" (character 33 of the text is the G) lights it.
+        let at_g = text.find("[G]").map(|b| text[..b].chars().count() + 1).unwrap();
+        let lit = layout(text, &infos, &marks, false, 0x0f, &[], ChordView { cursor: Some(at_g), ..cv }, &t);
+        assert_eq!(colour_of(&lit, "[G]"), Some(CHORD_COLOR));
+        assert_eq!(colour_of(&lit, "[Am]"), Some(CHORD_COLOR.gamma_multiply(0.4)));
+        // A bracket that is no chord: words, gently tinted.
+        assert_eq!(colour_of(&job, "[chords]"), Some(UNKNOWN_BRACKET));
+        // Chord lines are not numbered.
+        assert_eq!(infos.iter().filter_map(|i| i.number).collect::<Vec<_>>(), vec![1, 2]);
     }
 }

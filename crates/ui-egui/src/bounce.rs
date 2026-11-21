@@ -18,6 +18,7 @@ pub fn start(app: &mut SoundApp, params: &Value) {
     app.stop_play();
     // Third-party plugins keep state the session can't see: store it first.
     app.capture_plugin_states();
+    app.prepare_ara_renders();
     match soundcraft_engine::cmd::bounce_job(&app.engine, params) {
         Ok(job) if params.get("realtime").and_then(Value::as_bool) == Some(true) && app.player.is_some() => start_print(app, job),
         Ok(job) => {
@@ -122,6 +123,7 @@ pub fn start_stems(app: &mut SoundApp, params: &Value) -> Result<Value, String> 
     }
     app.stop_play();
     app.capture_plugin_states();
+    app.prepare_ara_renders();
     match soundcraft_engine::cmd::stems_job(&app.engine, params) {
         Ok(job) => {
             let n = job.total();
@@ -162,6 +164,7 @@ pub fn start_movie(app: &mut SoundApp, params: &Value) {
     }
     app.stop_play();
     app.capture_plugin_states();
+    app.prepare_ara_renders();
     match soundcraft_engine::cmd::movie_bounce::movie_job(&app.engine, params) {
         Ok(job) => {
             app.movie = Some(job);

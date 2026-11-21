@@ -13,22 +13,23 @@ use std::collections::HashMap;
 /// Health, Tour of FreeDAWm, Quit) is drawn by hand ahead of these. The 2026-11 layout
 /// (Transport between AI and Options; the More submenus dissolved into named groups; set-once
 /// Options settings moved to Setup › Preferences…) set the counts below, plus Track › Capture to Pantry… (2026-11-17,
-/// `docs/pantry.md`), Track › Rename Selected Tracks… and Track › Pin, and Window › New Mix Window… (2026-11-18),
+/// `docs/pantry.md`), Track › Rename Selected Tracks… and Track › Pin, and Window › Separate Windows › New Mix Window… (2026-11-18),
 /// and in Event, MIDI editing: Give Notes Their Own Channels and Clear the Note's Expression
-/// (2026-11-18, before only in the MIDI Editor's Lanes menu).
+/// (2026-11-18, before only in the MIDI Editor's Lanes menu), and Track › Import Wavetable…
+/// (2026-11-18, `docs/wavetable-import.md`), and Track › New Band (2026-11-19, `docs/band-checklist.md`).
 const ROWS: [(&str, usize); 12] = [
     ("File", 14),
     ("Edit", 29),
     ("View", 11),
-    ("Track", 38),
-    ("Clip", 29),
+    ("Track", 41),
+    ("Clip", 30),
     ("Event", 31),
     ("Process", 18),
     ("AI", 12),
     ("Transport", 28),
     ("Options", 14),
     ("Setup", 12),
-    ("Window", 51),
+    ("Window", 12),
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).
@@ -270,11 +271,11 @@ fn rows_kind(n: &MenuNode) -> bool {
 #[test]
 fn shown_paths_resolve_like_catalog_paths() {
     let extra = menus::ui_aliases();
-    assert_eq!(menus::source_path("Window > Search"), "Window > Pro Tools Search");
-    assert_eq!(menus::command_for_path("Window > Search", &extra).as_deref(), Some("window.search"));
+    assert_eq!(menus::source_path("Window > Panels & Browsers > Search"), "Window > Pro Tools Search");
+    assert_eq!(menus::command_for_path("Window > Panels & Browsers > Search", &extra).as_deref(), Some("window.search"));
     assert_eq!(menus::command_for_path("Track > Rename...", &extra).as_deref(), Some("track.rename"));
     assert_eq!(menus::command_for_path("File > Export > Stems...", &extra).as_deref(), Some("file.bounce_stems"));
-    assert_eq!(menus::menu_location("window.track_list").as_deref(), Some("Window"));
+    assert_eq!(menus::menu_location("window.track_list").as_deref(), Some("Window \u{203a} Panels & Browsers"));
     assert_eq!(menus::menu_location("track.freeze").as_deref(), Some("Track"));
     assert_eq!(menus::menu_location("ui.ml.separate").as_deref(), Some("AI"));
     // Shortcuts stay next to their items.
@@ -290,7 +291,7 @@ enum Answer {
 }
 
 fn answer(id: &str, label: &str) -> Option<Answer> {
-    const UI_TOGGLES: [&str; 33] = [
+    const UI_TOGGLES: [&str; 32] = [
         "window.mix_separate",
         "window.vocal_separate",
         "window.midi_editor_separate",
@@ -307,7 +308,6 @@ fn answer(id: &str, label: &str) -> Option<Answer> {
         "window.score",
         "window.event_list",
         "window.midi_keyboard",
-        "window.studio",
         "window.scout",
         "window.configurations",
         "window.config_auto_update",

@@ -2,17 +2,24 @@
 //!
 //! - **Sections:** blocks of the song's section definitions (A–H), drawn `<letter> · <name>` in
 //!   the letter's colour. A drag on empty space draws a block with the last letter picked (A at
-//!   first); a drag on a body moves it (Alt copies it) and a drag on an edge resizes it. Right-click
-//!   picks the letter, the arrangement chips (Energy, Take), opens the definition or deletes.
+//!   first); a drag on a body moves it (Ctrl copies it, as Ctrl-dragging a clip does) and a drag on
+//!   an edge resizes it. Right-click picks the letter and the block's Energy (+ bigger, − smaller)
+//!   and Take; then the definition, every block of the letter: Energy, Shape, Role, Take, Who
+//!   Plays, Feel Here and Rename…; Delete; Lay Factory Song from the bar under the click; and
+//!   the arranger's items.
 //! - **Chords** (id `band_chords`): the chord lane, named by `chord_theory::name_for`. A
 //!   double-click opens the chord picker (`chord_picker`) on empty space or on a chord; a drag on a
-//!   body or an edge moves or resizes it (Alt: off the grid); a click picks it for Delete.
-//!   Right-click edits, deletes (one, those in the selection, or all: `ruler_items`) or picks the
-//!   bass.
+//!   body or an edge moves or resizes it (Alt: off the grid; Ctrl on a body: drops a copy and
+//!   leaves the chord, as Ctrl-dragging a clip does). A click picks a chord, a Shift-click the run
+//!   from the chord picked to it; the keys then act on the pick (`ruler_items::chord_key`: Delete,
+//!   Copy, Cut, Paste at the insertion, Duplicate, Left/Right). Right-click edits, copies, cuts,
+//!   pastes there, duplicates, deletes (the pick, those in the selection, or all: `ruler_items`) or
+//!   picks the bass.
 //!
 //! Every edit is a `band.*` command. Positions go out in samples and the engine snaps them to the
 //! half-bar grid ([`soundcraft_mix::half_ticks`]); the previews here snap the same way. An
-//! Alt-drag of a chord sends `snap: false` and keeps the tick under the pointer.
+//! Alt-drag of a chord sends `snap: false` and keeps the tick under the pointer. Ctrl and Alt can
+//! be pressed or let go during a drag: the ghost (with a "+" while it copies) follows.
 
 use crate::SoundApp;
 use crate::edit_window::{sample_at, x_of};
@@ -25,9 +32,6 @@ use soundcraft_time::Samples;
 
 /// The height of both lanes.
 pub const LANE_H: f32 = 22.0;
-/// The definition "Edit definition…" asks the Studio window to show (a `char` in egui's temporary
-/// memory under `Id::new(STUDIO_DEF)`).
-pub const STUDIO_DEF: &str = "band.studio.def";
 /// Within this many points of a block's end a press grabs the edge (resize), not the body.
 const EDGE_PX: f32 = 5.0;
 /// How long "≈ nearest in key" shows after a typed chord the key doesn't hold.
@@ -166,8 +170,9 @@ fn ghost(d: Drag, now: i64, g: &Grid, copy: bool, free: bool) -> Ghost {
     }
 }
 
-/// Runs a lane's drag: the ghost while dragging, and the finished one on release. Alt copies on a
-/// lane that `draws` (Sections) and frees the grid on one that doesn't (Chords).
+/// Runs a lane's drag: the ghost while dragging, and the finished one on release. Ctrl on a body
+/// copies (on both lanes, as a Ctrl-drag copies a clip); Alt frees the grid on a lane that doesn't
+/// `draw` (Chords). Both are read every frame, so they can change mid-drag.
 fn drag(ui: &Ui, resp: &Response, g: &Grid, items: &[Item], key: Id, draws: bool) -> (Option<Ghost>, Option<Ghost>) {
     if resp.drag_started() {
         let origin = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
@@ -191,8 +196,8 @@ fn drag(ui: &Ui, resp: &Response, g: &Grid, items: &[Item], key: Id, draws: bool
         ui.ctx().data_mut(|m| m.remove::<Drag>(key));
     }
     let Some(p) = pointer else { return (None, None) };
-    let alt = ui.input(|i| i.modifiers.alt);
-    let gh = ghost(d, g.tick_at(p.x), g, alt && draws, alt && !draws);
+    let (ctrl, alt) = ui.input(|i| (i.modifiers.ctrl, i.modifiers.alt));
+    let gh = ghost(d, g.tick_at(p.x), g, ctrl, alt && !draws);
     if stopped {
         (None, Some(gh))
     } else if going {
@@ -235,6 +240,12 @@ fn block(painter: &Painter, r: Rect, fill: Color32, stroke: Color32, label: impl
 fn draw_ghost(painter: &Painter, g: &Grid, row: Rect, gh: Ghost, color: Color32) {
     let r = span_rect(g, row, gh.start, gh.end);
     painter.rect(r, 2.0, color.gamma_multiply(0.35), Stroke::new(1.5, color), StrokeKind::Inside);
+    // A copy drops where the ghost is and leaves the original: a "+" says so.
+    if gh.copy {
+        let c = pos2(r.max.x - 7.0, r.center().y);
+        painter.circle_filled(c, 5.5, color);
+        painter.text(c, Align2::CENTER_CENTER, "+", bold(11.0), Color32::WHITE);
+    }
 }
 
 /// Runs `id` (one undo step), first making the section definition `letter` when it is missing.
@@ -300,9 +311,21 @@ pub fn sections_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Se
     }
     edge_cursor(ui, &resp, &g, &items, live);
     let target = menu_target(ui, &resp, &g, &items, ui.id().with(MENU).with(SECTIONS));
+    // Where the menu opened: Lay Factory Song lays from the bar there.
+    let at_key = ui.id().with(MENU).with(SECTIONS).with("at");
+    if resp.secondary_clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let bar = 2 * g.half;
+        let at = g.tick_at(p.x).div_euclid(bar).saturating_mul(bar);
+        ui.ctx().data_mut(|m| m.insert_temp(at_key, at));
+    }
+    let menu_at = ui.ctx().data(|m| m.get_temp::<i64>(at_key)).unwrap_or(0);
     resp.context_menu(|ui| {
         crate::menus::ruler_menu_head(app, ui, "sections");
         section_menu(app, ui, target);
+        ui.separator();
+        lay_song_menu(app, ui, g.samples(menu_at));
         crate::menus::rulers_submenu(app, ui);
     });
     if let Some(gh) = done {
@@ -332,7 +355,32 @@ fn commit_section(app: &mut SoundApp, ui: &Ui, g: &Grid, gh: Ghost, items: &[Ite
 enum Pick {
     Run(&'static str, Value),
     WithDef(char, &'static str, Value),
-    Studio(char),
+    Rename(char, String),
+}
+
+/// A row of choices, `label` first; the index clicked.
+fn choice_row(ui: &mut Ui, label: &str, options: &[String], current: Option<usize>, tip: &str) -> Option<usize> {
+    let mut out = None;
+    ui.horizontal(|ui| {
+        ui.label(label).on_hover_text(tip);
+        for (i, o) in options.iter().enumerate() {
+            if ui.selectable_label(current == Some(i), o.as_str()).on_hover_text(tip).clicked() {
+                out = Some(i);
+            }
+        }
+    });
+    out
+}
+
+fn energy_options() -> Vec<String> {
+    (-3i8..=3).map(|e| if e == 0 { "0".to_string() } else { format!("{e:+}").replace('-', "−") }).collect()
+}
+
+/// `band.def`'s `musicians` list that changes musician `k` only.
+fn one_musician(k: usize, m: Value) -> Vec<Value> {
+    let mut list = vec![json!({}); k];
+    list.push(m);
+    list
 }
 
 fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
@@ -349,6 +397,7 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
                 }
             }
         });
+        unused_defs_menu(app, ui);
         return;
     };
     let mut pick = None;
@@ -361,14 +410,10 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
             }
         }
     });
-    ui.horizontal(|ui| {
-        ui.label("Energy");
-        for e in -3i8..=3 {
-            if ui.selectable_label(b.energy == e, format!("{e:+}")).clicked() {
-                pick = Some(Pick::Run("band.section.set", json!({"block": b.id, "energy": e})));
-            }
-        }
-    });
+    let tip = "This block only: + bigger, − smaller";
+    if let Some(i) = choice_row(ui, "Energy (+ bigger, − smaller)", &energy_options(), usize::try_from(i32::from(b.energy) + 3).ok(), tip) {
+        pick = Some(Pick::Run("band.section.set", json!({"block": b.id, "energy": i as i64 - 3})));
+    }
     let take = if b.take == 0 { "Section's".to_string() } else { b.take.to_string() };
     ui.menu_button(format!("Take: {take}"), |ui| {
         if ui.selectable_label(b.take == 0, "Section's own").clicked() {
@@ -380,12 +425,88 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
             }
         }
     });
-    ui.separator();
-    let studio = crate::menus::UI_COMMANDS.iter().any(|c| c.0 == "window.studio");
-    if ui.add_enabled(studio, egui::Button::new("Edit definition…")).on_disabled_hover_text("Needs the Studio window").clicked() {
-        pick = Some(Pick::Studio(b.section));
+    // The definition: every block of this letter.
+    if let Some(d) = app.engine.session().band.def(b.section).cloned() {
+        ui.separator();
+        let every = format!("Every {} · {}", d.id, d.name);
+        ui.label(egui::RichText::new(every).color(Tokens::current().text_dim).small());
+        let id = d.id.to_string();
+        let def = |p: Value| {
+            let mut p = p;
+            if let Some(o) = p.as_object_mut() {
+                o.insert("id".into(), json!(id));
+            }
+            Pick::Run("band.def", p)
+        };
+        let tip = format!("Every {} block: + bigger, − smaller (a block's own Energy adds to it)", d.id);
+        if let Some(i) = choice_row(ui, "Energy, every block", &energy_options(), usize::try_from(i32::from(d.energy_shift) + 3).ok(), &tip) {
+            pick = Some(def(json!({"energy_shift": i as i64 - 3})));
+        }
+        let shapes = ["None", "Build", "Drop"].map(String::from);
+        let tip = "Build: the section grows towards its end; Drop: it falls back";
+        if let Some(i) = choice_row(ui, "Shape", &shapes, Some(usize::from(d.shape.min(2))), tip) {
+            pick = Some(def(json!({"shape": i})));
+        }
+        let roles = ["Normal", "Intro", "Ending"].map(String::from);
+        let tip = "Intro and Ending: the band plays it as the song's start or end";
+        if let Some(i) = choice_row(ui, "Role", &roles, Some(usize::from(d.role.min(2))), tip) {
+            pick = Some(def(json!({"role": i})));
+        }
+        let dtake = if d.take == 0 { "the band's".to_string() } else { d.take.to_string() };
+        ui.menu_button(format!("Take, every block: {dtake}"), |ui| {
+            if ui.selectable_label(d.take == 0, "The band's").clicked() {
+                pick = Some(def(json!({"take": 0})));
+            }
+            for k in 1u8..=16 {
+                if ui.selectable_label(d.take == k, k.to_string()).clicked() {
+                    pick = Some(def(json!({"take": k})));
+                }
+            }
+        });
+        ui.menu_button("Who Plays", |ui| {
+            ui.label(egui::RichText::new("Who plays, and at what Energy (Own: the musician's, moved by the section's)").small());
+            let slots = app.engine.session().band.slots.clone();
+            for (k, m) in slots.iter().enumerate() {
+                let Some(sm) = d.musicians.get(k).copied() else { continue };
+                ui.horizontal(|ui| {
+                    let name = super::ruler::musician_name(k, m);
+                    let mut plays = sm.plays;
+                    if ui.checkbox(&mut plays, name).changed() {
+                        pick = Some(def(json!({"musicians": one_musician(k, json!({"plays": plays}))})));
+                    }
+                    for (i, e) in ["Own", "1", "2", "3", "4"].iter().enumerate() {
+                        if ui.selectable_label(usize::from(sm.energy.min(4)) == i, *e).clicked() {
+                            pick = Some(def(json!({"musicians": one_musician(k, json!({"energy": i}))})));
+                        }
+                    }
+                });
+            }
+        });
+        ui.menu_button("Feel Here", |ui| {
+            use soundcraft_band::song_feel::{FEEL_DIAL_COUNT, dial_name, dial_positions, dial_title};
+            ui.label(egui::RichText::new("The section's own feel (Song's: the song's dial; Time is always the song's)").small());
+            for dd in 1..FEEL_DIAL_COUNT {
+                let mut options = vec!["Song's".to_string()];
+                options.extend((0..dial_positions(dd)).map(|i| dial_name(dd, i).to_string()));
+                let cur = d.feel.get(dd as usize).copied().unwrap_or(-1);
+                if let Some(i) = choice_row(ui, dial_title(dd), &options, usize::try_from(i32::from(cur) + 1).ok(), "This section's dial") {
+                    let mut feel = d.feel.map(i64::from);
+                    if let Some(time) = feel.first_mut() {
+                        *time = -1;
+                    }
+                    if let Some(f) = feel.get_mut(dd as usize) {
+                        *f = i as i64 - 1;
+                    }
+                    pick = Some(def(json!({"feel": feel})));
+                }
+            }
+        });
+        if ui.button("Rename...").on_hover_text(format!("Rename every {} block", d.id)).clicked() {
+            pick = Some(Pick::Rename(d.id, d.name.clone()));
+        }
     }
-    if ui.button("Delete").clicked() {
+    ui.separator();
+    if ui.button("Delete").on_hover_text("Delete this block").clicked() {
         pick = Some(Pick::Run("band.section.remove", json!({"block": b.id})));
     }
     // The arranger: the section as a handle on the whole song.
@@ -432,11 +553,58 @@ fn section_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
             let _ = app.run(id, p);
         }
         Pick::WithDef(l, id, p) => run_with_def(app, l, id, p),
-        Pick::Studio(l) => {
-            ui.ctx().data_mut(|m| m.insert_temp(Id::new(STUDIO_DEF), l));
-            let _ = app.run("window.studio", json!({"value": true}));
+        Pick::Rename(l, name) => app.dialogs.open_rename_section(l, &name),
+    }
+}
+
+/// On empty Sections ruler space: definitions no block uses, to delete (one undo step each).
+fn unused_defs_menu(app: &mut SoundApp, ui: &mut Ui) {
+    let band = &app.engine.session().band;
+    let unused: Vec<(char, String)> =
+        band.defs.iter().filter(|d| !band.sections.iter().any(|b| b.section == d.id)).map(|d| (d.id, d.name.clone())).collect();
+    if unused.is_empty() || band.defs.len() <= 1 {
+        return;
+    }
+    let mut pick = None;
+    ui.menu_button("Delete Unused Section", |ui| {
+        for (l, name) in &unused {
+            if ui.button(format!("{l} · {name}")).clicked() {
+                pick = Some(*l);
+            }
+        }
+    });
+    if let Some(l) = pick {
+        ui.close();
+        if let Err(e) = app.run("band.def.delete", json!({"id": l.to_string()})) {
+            app.ui.status = e;
         }
     }
+}
+
+/// Lay Factory Song ▸: a factory song's sections, chords, key and feel onto the rulers from `at`
+/// (the bar under the right-click), replacing what the rulers hold there or laid over it.
+fn lay_song_menu(app: &mut SoundApp, ui: &mut Ui, at: Samples) {
+    ui.menu_button("Lay Factory Song", |ui| {
+        let songs = super::ruler::lists(app).songs;
+        let s = app.engine.session();
+        let bar = s.tempo.bar_beat_at_tick(s.tempo.samples_to_ticks(at, s.sample_rate)).bar;
+        ui.label(egui::RichText::new(format!("From bar {bar}: sections, chords, key, take and feel (not the players)")).small());
+        let mut over = app.band_ui.lay_over;
+        if ui.checkbox(&mut over, "Over what the rulers hold").on_hover_text("Off: the song replaces the sections and chords").changed() {
+            app.band_ui.lay_over = over;
+        }
+        ui.separator();
+        for name in songs {
+            if ui.button(name.as_str()).clicked() {
+                let replace = !app.band_ui.lay_over;
+                match app.run("band.song.factory", json!({"name": name, "at": at, "replace": replace})) {
+                    Ok(_) => app.ui.status = format!("{name} laid from bar {bar}"),
+                    Err(e) => app.ui.status = e,
+                }
+                ui.close();
+            }
+        }
+    });
 }
 
 // ---- Chords -------------------------------------------------------------------------------------
@@ -451,8 +619,10 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
     let items: Vec<Item> = band.chords.iter().map(|c| Item { id: c.id, start: c.tick, end: c.tick.saturating_add(c.length_ticks) }).collect();
     let id = ui.id().with(CHORDS);
     let resp = ui.interact(row, id, Sense::click_and_drag());
+    let resp = resp.on_hover_text(CHORDS_HINT);
     let (live, done) = drag(ui, &resp, &g, &items, id, false);
-    let moving = live.and_then(|gh| gh.id);
+    let moving = live.filter(|gh| !gh.copy).and_then(|gh| gh.id);
+    let picked_run = crate::ruler_items::picked_chords(app);
     let (fill, stroke) = (t.button, t.border);
     // Chords narrower than this are drawn as one run each (thousands fit in a screen).
     let mut run: Option<Rect> = None;
@@ -473,7 +643,7 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
             continue;
         }
         let f = if moving == Some(c.id) { fill.gamma_multiply(0.4) } else { fill };
-        let picked = app.ui.ruler_item == Some(crate::ruler_items::RulerItem::Chord(c.id));
+        let picked = picked_run.contains(&c.id);
         block(painter, r, f, if picked { t.accent } else { stroke }, || name_for(i32::from(c.slot), key, scale, i32::from(c.bass)), t.text);
         if picked {
             painter.rect_stroke(r, 2.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
@@ -487,11 +657,15 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
     }
     flash(ui, painter, &g, row, s);
     edge_cursor(ui, &resp, &g, &items, live);
-    // A click picks a chord (Delete removes it).
+    // A click picks a chord, a Shift-click the run from the chord picked to it (Delete, Copy…).
     if resp.clicked()
         && let Some((it, _)) = resp.interact_pointer_pos().and_then(|p| hit(&items, &g, p.x))
     {
-        crate::ruler_items::pick(app, crate::ruler_items::RulerItem::Chord(it.id));
+        if ui.input(|i| i.modifiers.shift) {
+            crate::ruler_items::extend_chord_pick(app, it.id);
+        } else {
+            crate::ruler_items::pick(app, crate::ruler_items::RulerItem::Chord(it.id));
+        }
     }
     if resp.double_clicked()
         && let Some(p) = resp.interact_pointer_pos()
@@ -502,13 +676,24 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
         }
     }
     let target = menu_target(ui, &resp, &g, &items, ui.id().with(MENU).with(CHORDS));
+    // Where the menu opened, for Paste Here.
+    let at_key = ui.id().with(MENU).with(CHORDS).with("at");
+    if resp.secondary_clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let at = g.samples(g.tick_at(p.x));
+        ui.ctx().data_mut(|m| m.insert_temp(at_key, at));
+    }
+    let menu_at = ui.ctx().data(|m| m.get_temp::<Samples>(at_key)).unwrap_or(0);
+    // A right-click on a chord picks it, or keeps the run it is in.
     if resp.secondary_clicked()
         && let Some(id) = target
+        && !(crate::ruler_items::pick_is_live(app) && picked_run.contains(&id))
     {
         crate::ruler_items::pick(app, crate::ruler_items::RulerItem::Chord(id));
     }
     resp.context_menu(|ui| {
-        chord_menu(app, ui, target);
+        chord_menu(app, ui, target, menu_at);
         ui.separator();
         crate::menus::ruler_menu_head(app, ui, "band_chords");
         crate::menus::rulers_submenu(app, ui);
@@ -520,10 +705,21 @@ pub fn chords_ruler(app: &mut SoundApp, ui: &mut Ui, painter: &Painter, s: &Sess
         let (a, b) = (g.samples(gh.start), g.samples(gh.end));
         // The ghost is already where the chord goes (snapped, or off the grid with Alt): the engine
         // keeps it exactly, so a resize moves only the edge dragged.
-        let p = if gh.resize { json!({"chord": cid, "at": a, "end": b, "snap": false}) } else { json!({"chord": cid, "at": a, "snap": false}) };
-        let _ = app.run("band.chord.set", p);
+        if gh.copy && !gh.resize {
+            // Ctrl: a copy drops there (one undo step) and becomes the pick; the chord stays.
+            match app.run("band.chords.copy_to", json!({"chords": [cid], "to": a, "snap": false})) {
+                Ok(r) => crate::ruler_items::pick_chord_run(app, &crate::ruler_items::new_ids(&r)),
+                Err(e) => app.ui.status = e,
+            }
+        } else {
+            let p = if gh.resize { json!({"chord": cid, "at": a, "end": b, "snap": false}) } else { json!({"chord": cid, "at": a, "snap": false}) };
+            let _ = app.run("band.chord.set", p);
+        }
     }
 }
+
+/// The Chords ruler's hover text.
+const CHORDS_HINT: &str = "Click a chord to pick it, Shift-click another for the run between · Drag to move (Alt: off the grid, Ctrl: drop a copy) · Double-click to add or edit · Delete, Copy, Cut, Paste, Duplicate and Left/Right act on the pick";
 
 /// Where a double-click on empty Chords ruler space at `tick` starts a chord: the half bar
 /// `snapped`, kept out of the chords either side (off-grid ones, from Detect Chords "As played",
@@ -562,12 +758,34 @@ fn flash(ui: &Ui, painter: &Painter, g: &Grid, row: Rect, s: &Session) {
     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((until - now).max(0.0)));
 }
 
-/// A chord's right-click menu (Edit Chord…, Delete Chord, the clear items, then Bass); on
-/// empty space, the clear items and a hint.
-fn chord_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
+/// "Paste Here" at `at` (snapped to the half bar), greyed until chords are copied.
+fn paste_here(app: &mut SoundApp, ui: &mut Ui, at: Samples) {
+    let keys = crate::menus::shortcut_text(app, "edit.paste", ui.ctx().os().is_mac());
+    let can = crate::ruler_items::chords_copied(app);
+    let hint = if app.engine.clipboard.tracks.is_empty() { "Copy a chord first" } else { "The clipboard holds clips: copy a chord first" };
+    if ui.add_enabled(can, egui::Button::new("Paste Here").shortcut_text(keys)).on_disabled_hover_text(hint).clicked() {
+        ui.close();
+        crate::ruler_items::paste_chords(app, at);
+    }
+}
+
+/// What a chord menu's clipboard items do, once the menu is drawn.
+enum ChordPick {
+    Copy,
+    Cut,
+    Duplicate,
+    Delete,
+}
+
+/// A chord's right-click menu (Edit Chord…; Copy, Cut, Paste Here, Duplicate; Delete; the clear
+/// items, then Bass). Copy, Cut, Duplicate and Delete act on the pick: the chord, or the run it is
+/// in. On empty space: Paste Here, the clear items and a hint.
+fn chord_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>, at: Samples) {
     let band = &app.engine.session().band;
     let Some(c) = target.and_then(|id| band.chords.iter().find(|c| c.id == id).cloned()) else {
         ui.label("Double-click to add a chord");
+        ui.separator();
+        paste_here(app, ui, at);
         ui.separator();
         crate::ruler_items::chord_clear_items(app, ui);
         return;
@@ -579,7 +797,31 @@ fn chord_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
         super::chord_picker::open(app, c.tick, Some(c.id));
         ui.close();
     }
-    let delete = ui.add(egui::Button::new("Delete Chord").shortcut_text("Del")).clicked();
+    // The pick (the right-click made it, or kept the run the chord is in).
+    let run = Some(crate::ruler_items::picked_chords(app)).filter(|r| r.contains(&c.id)).unwrap_or_else(|| vec![c.id]);
+    let what = if run.len() > 1 { format!("{} Chords", run.len()) } else { "Chord".to_string() };
+    let mac = ui.ctx().os().is_mac();
+    let keys = |app: &SoundApp, id: &str| crate::menus::shortcut_text(app, id, mac);
+    ui.separator();
+    let mut clip = None;
+    if ui.add(egui::Button::new(format!("Copy {what}")).shortcut_text(keys(app, "edit.copy"))).clicked() {
+        clip = Some(ChordPick::Copy);
+    }
+    if ui.add(egui::Button::new(format!("Cut {what}")).shortcut_text(keys(app, "edit.cut"))).clicked() {
+        clip = Some(ChordPick::Cut);
+    }
+    paste_here(app, ui, at);
+    if ui
+        .add(egui::Button::new(format!("Duplicate {what}")).shortcut_text(keys(app, "edit.duplicate")))
+        .on_hover_text("A copy straight after it")
+        .clicked()
+    {
+        clip = Some(ChordPick::Duplicate);
+    }
+    ui.separator();
+    if ui.add(egui::Button::new(format!("Delete {what}")).shortcut_text("Del")).clicked() {
+        clip = Some(ChordPick::Delete);
+    }
     ui.separator();
     crate::ruler_items::chord_clear_items(app, ui);
     ui.separator();
@@ -593,10 +835,29 @@ fn chord_menu(app: &mut SoundApp, ui: &mut Ui, target: Option<u32>) {
             }
         }
     });
-    if delete {
+    if let Some(k) = clip {
         ui.close();
-        crate::ruler_items::unpick(app);
-        let _ = app.run("band.chord.remove", json!({"chord": c.id}));
+        let ctx = ui.ctx().clone();
+        match k {
+            ChordPick::Copy => {
+                crate::ruler_items::copy_chords(app, &ctx, &run);
+            }
+            ChordPick::Cut => {
+                if crate::ruler_items::copy_chords(app, &ctx, &run) {
+                    crate::ruler_items::unpick(app);
+                    let _ = app.run("band.chords.delete", json!({"chords": run}));
+                }
+            }
+            ChordPick::Duplicate => crate::ruler_items::duplicate_chords(app, &run),
+            ChordPick::Delete => {
+                crate::ruler_items::unpick(app);
+                let _ = if run.len() > 1 {
+                    app.run("band.chords.delete", json!({"chords": run}))
+                } else {
+                    app.run("band.chord.remove", json!({"chord": c.id}))
+                };
+            }
+        }
     } else if let Some(p) = pick {
         ui.close();
         let _ = app.run("band.chord.set", p);

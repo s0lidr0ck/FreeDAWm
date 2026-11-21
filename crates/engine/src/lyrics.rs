@@ -79,16 +79,25 @@ pub fn lrc(s: &Session, track: TrackId) -> String {
     let mut out = format!("[ti:{}]\n[re:FreeDAWm]\n", t.name.replace(['[', ']', '\n', '\r'], " "));
     for l in &track_lines(t) {
         out.push_str(&lrc_time(secs(l.start)));
-        let words: Vec<String> = l.words.iter().map(|w| format!("{}{}", word_time(secs(w.start)), w.text)).collect();
+        // Chords written into the words (`[Am]`) are not sung: left out.
+        let words: Vec<String> = l.words.iter().filter_map(|w| Some(format!("{}{}", word_time(secs(w.start)), sung_word(&w.text)?))).collect();
         out.push_str(&words.join(" "));
         out.push('\n');
     }
     out
 }
 
-/// The track's lyrics as plain text, one line per line.
+/// A word without any chord written into it (`[Am]`); `None` when nothing is left.
+fn sung_word(text: &str) -> Option<String> {
+    let t = soundcraft_model::sung_text(text);
+    (!t.trim().is_empty()).then_some(t)
+}
+
+/// The track's lyrics as plain text, one line per line (chords left out).
 pub fn plain_text(s: &Session, track: TrackId) -> String {
-    s.track(track).map(|t| track_lines(t).iter().map(|l| l.text() + "\n").collect()).unwrap_or_default()
+    s.track(track)
+        .map(|t| track_lines(t).iter().map(|l| l.words.iter().filter_map(|w| sung_word(&w.text)).collect::<Vec<_>>().join(" ") + "\n").collect())
+        .unwrap_or_default()
 }
 
 /// The track a lyrics command acts on: `track`, else the first selected track with lyrics, else
@@ -103,7 +112,11 @@ pub fn lyrics_track(s: &Session, asked: Option<TrackId>) -> Option<TrackId> {
 pub fn midi_lyrics(s: &Session, track: TrackId) -> Vec<(i64, String)> {
     s.track(track)
         .map(|t| {
-            track_lines(t).iter().flat_map(|l| l.words.iter()).map(|w| (s.tempo.samples_to_ticks(w.start, s.sample_rate), w.text.clone())).collect()
+            track_lines(t)
+                .iter()
+                .flat_map(|l| l.words.iter())
+                .filter_map(|w| Some((s.tempo.samples_to_ticks(w.start, s.sample_rate), sung_word(&w.text)?)))
+                .collect()
         })
         .unwrap_or_default()
 }
@@ -139,5 +152,26 @@ mod tests {
         assert_eq!(plain_text(&s, t), "Seek\nLord\n");
         assert_eq!(lrc_time(61.234), "[01:01.23]");
         assert_eq!(lyrics_track(&s, None), Some(t));
+    }
+
+    #[test]
+    fn lrc_text_and_midi_leave_chords_out() {
+        let mut s = Session { sample_rate: soundcraft_time::SampleRate::HZ_48000, ..Session::default() };
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Vox"));
+        let id = s.new_clip_id();
+        if let Some(pl) = s.track_mut(t).and_then(|t| t.playlist_mut()) {
+            pl.clips.push(soundcraft_model::Clip::midi(id, "Vox", 0, 48_000 * 30, Default::default()));
+        }
+        place_lyrics(
+            &mut s,
+            t,
+            0,
+            48_000 * 10,
+            &[vec![w(1.0, 1.4, "[Am]Hello"), w(1.5, 1.9, "[G]"), w(2.0, 2.4, "dark[C]ness"), w(2.5, 2.9, "[sic]")]],
+        );
+        assert_eq!(plain_text(&s, t), "Hello darkness [sic]\n");
+        assert_eq!(lrc(&s, t), "[ti:Vox]\n[re:FreeDAWm]\n[00:01.00]<00:01.00>Hello <00:02.00>darkness <00:02.50>[sic]\n");
+        let m: Vec<String> = midi_lyrics(&s, t).into_iter().map(|(_, w)| w).collect();
+        assert_eq!(m, vec!["Hello", "darkness", "[sic]"]);
     }
 }

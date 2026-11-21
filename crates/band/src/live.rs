@@ -153,6 +153,8 @@ pub struct PerformanceState {
     pub natural: bool,
     /// Tension and release (Band feel): the band reacts to harmonic tension
     pub tension: bool,
+    /// The band-feel layer (`band_feel`): the band plays as one. Only with Natural.
+    pub band: bool,
     /// a groove audition is playing (nothing it plays is kept)
     pub audition: bool,
     /// A/B Takes: the looped section alternates Take A and Take B per pass. abNowB: B is playing now; from abFlipAt
@@ -197,6 +199,7 @@ impl Default for PerformanceState {
             dynamics_together: false,
             natural: false,
             tension: false,
+            band: false,
             audition: false,
             ab_on: false,
             ab_now_b: false,
@@ -429,6 +432,10 @@ impl Performer {
     }
     pub fn set_tension(&mut self, on: bool) {
         self.st.tension = on;
+    }
+    /// The band-feel layer (on top of Natural).
+    pub fn set_band(&mut self, on: bool) {
+        self.st.band = on;
     }
     /// A/B Takes (message thread -> processor -> here once per block).
     pub fn set_ab(&mut self, on: bool, section: char, a: i32, b: i32) {

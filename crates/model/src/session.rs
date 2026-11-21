@@ -410,14 +410,14 @@ pub struct Session {
     /// The Band: six musicians, the section and chord lanes (omitted from the file while untouched).
     #[serde(default, skip_serializing_if = "crate::BandState::is_untouched", deserialize_with = "crate::band::lenient_state")]
     pub band: crate::BandState,
-    /// Session notes (Window › Notes), in list order (omitted from the file while empty).
+    /// Session notes (Window › Transport & Session › Notes), in list order (omitted from the file while empty).
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::notes::de_notes")]
     pub notes: Vec<crate::Note>,
     /// Grooves taken from clips (Groove from Clip), for Quantize and playback quantize; the
     /// built-in ones are made in code and not stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grooves: Vec<soundcraft_midi::ops::Groove>,
-    /// The lyric sheet (Window › Lyrics; omitted from the file while empty).
+    /// The lyric sheet (Window › Transport & Session › Lyrics; omitted from the file while empty).
     #[serde(default, skip_serializing_if = "crate::LyricSheet::is_empty", deserialize_with = "crate::sheet::de_sheet")]
     pub lyric_sheet: crate::LyricSheet,
     /// The Vocal Studio's Tune all tolerance and Fix to (omitted from the file while default).
@@ -430,7 +430,7 @@ pub struct Session {
     /// Mixer snapshots (`mix.snapshot_store`), in the order stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mix_snapshots: Vec<crate::MixSnapshot>,
-    /// The control room (Window › Control Room; omitted from the file while there is none).
+    /// The control room (Window › Transport & Session › Control Room; omitted from the file while there is none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_room: Option<crate::ControlRoom>,
     #[serde(skip)]
@@ -454,6 +454,14 @@ pub struct Session {
     /// the engine carries them across undo and redo.
     #[serde(skip)]
     pub pitch_renders: crate::PitchRenders,
+    /// Each ARA plug-in's saved document ([`crate::AraArchive`]), kept as it is while the plug-in
+    /// is not installed. Sessions without ARA have none and write none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ara_archives: Vec<crate::AraArchive>,
+    /// Clips' offline renders through their ARA plug-in ([`crate::AraRenders`]): derived, never
+    /// saved; the engine carries them across undo and redo.
+    #[serde(skip)]
+    pub ara_renders: crate::AraRenders,
 }
 
 /// An alternative arrangement of the session ([`Session::arrangements`]): the playlist each track
@@ -520,6 +528,8 @@ impl Session {
             vocal: crate::VocalCache::default(),
             live_stretch: std::collections::BTreeMap::new(),
             pitch_renders: crate::PitchRenders::default(),
+            ara_archives: Vec::new(),
+            ara_renders: crate::AraRenders::default(),
         };
         s.edit.pre_roll = sample_rate.samples(2.0);
         s.edit.post_roll = sample_rate.samples(2.0);
@@ -857,6 +867,7 @@ impl Session {
                 if let Some(k) = &mut ins.kit {
                     k.sanitize();
                 }
+                ins.modulation.sanitize();
             }
             // Only the instrument hosts kit effects.
             for ins in &mut t.mixer.inserts {

@@ -54,8 +54,17 @@ fn toggle_shows_and_hides_panel() {
     assert!(h.state().ui.docking.layout.contains(&Panel::Browser));
     assert!(has(&h, Role::Tab, "Plugin Browser"));
     // The menu item shows as checked while the panel is open.
+    // The item sits in Window › Panels & Browsers; its path is still the command's own.
     let path = "Window > Plugin Browser";
-    assert!(soundcraft_ui_egui::menus::tree().iter().any(|n| n.label == "Window" && n.children.iter().any(|c| c.path == path)));
+    fn paths(nodes: &[soundcraft_ui_egui::menus::MenuNode], out: &mut Vec<String>) {
+        for n in nodes {
+            out.push(n.path.clone());
+            paths(&n.children, out);
+        }
+    }
+    let mut all = Vec::new();
+    paths(&soundcraft_ui_egui::menus::tree(), &mut all);
+    assert!(all.iter().any(|p| p == path), "{:?}", all.iter().filter(|p| p.contains("Browser")).collect::<Vec<_>>());
     assert!(soundcraft_ui_egui::menus::item_state(h.state(), path, Some("window.plugin_browser")).1);
     h.state_mut().run("window.plugin_browser", json!({})).unwrap();
     h.run_steps(4);
@@ -77,14 +86,14 @@ fn toggle_shows_and_hides_panel() {
 fn tabs_switch_kind() {
     let mut h = browser(app_with_tracks(&["Voice"]));
     assert_eq!(h.state().ui.browser.tab, BrowserTab::Instruments);
-    assert!(has(&h, Role::Button, "Subtractive Synth"));
+    assert!(has(&h, Role::Button, "Burley"));
     assert!(!has(&h, Role::Button, "CleanQ"));
     h.get_by_role_and_label(Role::RadioButton, "Effects").click();
     h.run_steps(3);
     assert_eq!(h.state().ui.browser.tab, BrowserTab::Effects);
     set_text(&mut h, "Clean");
     assert!(has(&h, Role::Button, "CleanQ"));
-    assert!(!has(&h, Role::Button, "Subtractive Synth"));
+    assert!(!has(&h, Role::Button, "Burley"));
 }
 
 #[test]

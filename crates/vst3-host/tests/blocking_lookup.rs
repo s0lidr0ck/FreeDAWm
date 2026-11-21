@@ -26,6 +26,9 @@ fn fake_helper() {
                 category: Category::Other,
                 is_instrument: false,
                 path: b.clone(),
+                ara: None,
+                ara_checked: true,
+                ara_note: String::new(),
             }]
         } else {
             Vec::new()

@@ -76,6 +76,10 @@ impl SoundApp {
         if files.is_empty() {
             return files;
         }
+        // On a Wavetable Synth's wave display or its import window: Import Wavetable opens.
+        if crate::wavetable_import::drop_track(self, pos).is_some() {
+            return crate::wavetable_import::take_drop(self, files, pos);
+        }
         // Drum takes on a Juke pad card, or elsewhere in a Juke window (a cell there loads
         // into itself instead); files with full paths only.
         if let Some(p) = pos

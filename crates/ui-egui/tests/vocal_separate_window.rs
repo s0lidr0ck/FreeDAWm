@@ -1,4 +1,4 @@
-//! Window › Vocal Editor in Separate Window (and the title row's Window button): the editor
+//! Window › Separate Windows › Vocal Editor in Separate Window (and the title row's Window button): the editor
 //! leaves the Edit window's dock for its own window (embedded as a floating window here, where
 //! the test context has no second OS window), keeps following the Edit window, keeps its keys,
 //! remembers the window in ui.json, and docks back when that window closes.

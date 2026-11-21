@@ -42,6 +42,8 @@ pub(crate) enum Load {
     Params {
         name: String,
         params: Map<String, Value>,
+        /// A built-in synth's modulation patch (`{slots, macros}`), recalled with the values.
+        modulation: Option<Value>,
     },
     State {
         name: String,
@@ -282,14 +284,14 @@ pub(crate) fn resolve(app: &SoundApp, plugin: &str, preset: &PresetRef) -> Resul
                 .map(|(_, j)| *j)
                 .ok_or_else(|| format!("{}: no preset {name}", info.name))?;
             let (name, params) = crate::fs_presets::factory_recall(info, name, json).ok_or_else(|| format!("{name} is not a preset"))?;
-            Ok(Load::Params { name, params })
+            Ok(Load::Params { name, params, modulation: crate::fs_presets::factory_modulation(json) })
         }
         PresetRef::User { path } => {
             let info = builtin()?;
             let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
             let name = file_name(path);
             let params = params_of_json(info, &name, &text).ok_or_else(|| format!("{name} is not a preset"))?;
-            Ok(Load::Params { name, params })
+            Ok(Load::Params { name, params, modulation: crate::fs_presets::factory_modulation(&text) })
         }
         PresetRef::Vst3File { path } => {
             let d = vst3_desc(plugin).ok_or_else(|| format!("unknown plugin `{plugin}`"))?;
@@ -302,7 +304,7 @@ pub(crate) fn resolve(app: &SoundApp, plugin: &str, preset: &PresetRef) -> Resul
             let (Some(name), Some(value)) = (p.names.get(i), p.values.get(i)) else { return Err(format!("no program {}", i + 1)) };
             let mut params = Map::new();
             params.insert(p.param.clone(), json!(value));
-            Ok(Load::Params { name: name.clone(), params })
+            Ok(Load::Params { name: name.clone(), params, modulation: None })
         }
         PresetRef::Clap { location, load_key } => {
             let name = label(app, plugin, preset);
@@ -357,12 +359,18 @@ fn run_load(app: &mut SoundApp, t: TrackId, slot: SlotKey, load: &Load, joined: 
     let (id, params) = match (load, slot) {
         (Load::Clap { .. }, _) => return Err("not a state".into()),
         // A built-in module's preset (derived parameters recalled with it).
-        (Load::Params { name, params }, SlotKey::Module(_)) if !hosted => {
+        (Load::Params { name, params, .. }, SlotKey::Module(_)) if !hosted => {
             ("mix.module_params", json!({"track": t.0, "module": module, "params": params, "preset": name}))
         }
         // An instrument's, or a hosted plugin's program: a step that also reloads the state on
         // undo (the program change lives in the plugin's state).
-        (Load::Params { name, params }, _) => ("mix.module_preset", json!({"track": t.0, "module": module, "params": params, "preset": name})),
+        (Load::Params { name, params, modulation }, _) => {
+            let mut args = json!({"track": t.0, "module": module, "params": params, "preset": name});
+            if let Some(m) = modulation {
+                args["modulation"] = m.clone();
+            }
+            ("mix.module_preset", args)
+        }
         (Load::State { name, state }, _) => {
             ("mix.module_preset", json!({"track": t.0, "module": module, "state": soundcraft_model::b64::encode(state), "preset": name}))
         }
@@ -620,7 +628,7 @@ mod tests {
         *live.lock().unwrap() = b"tweaked again".to_vec();
         let mut params = Map::new();
         params.insert("2103".into(), json!(1.0));
-        apply(&mut app, a, slot, &Load::Params { name: "Prog 2".into(), params }, false).unwrap();
+        apply(&mut app, a, slot, &Load::Params { name: "Prog 2".into(), params, modulation: None }, false).unwrap();
         app.sync_player();
         *live.lock().unwrap() = b"program 2".to_vec();
         app.run("edit.undo", json!({})).unwrap();

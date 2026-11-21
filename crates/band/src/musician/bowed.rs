@@ -949,6 +949,26 @@ impl Musician {
         let pt_bar_len = f64::from(self.get_bar_length_ppq());
         let pt_bar_end = ((step_ppq / pt_bar_len + 1.0e-9).floor() + 1.0) * pt_bar_len;
 
+        // The band-feel layer: every note inside what the instrument can play (an Octave knob or a part written for
+        // another register folds back by octaves; a note that lands on one already there is dropped).
+        if self.bf.on && !self.is_drums() {
+            let (lo, hi) = crate::band_feel::playable_range(self.pattern);
+            let mut w = 0;
+            for k in 0..self.step_count {
+                let n = crate::band_feel::fold_into(self.step_note.val(k), lo, hi);
+                if (0..w).any(|j| self.step_note.val(j) == n) {
+                    continue;
+                }
+                self.step_note.set(w, n);
+                self.step_vel.set(w, self.step_vel.val(k));
+                self.step_len.set(w, self.step_len.val(k));
+                self.step_hand.set(w, self.step_hand.val(k));
+                self.step_shift_ms.set(w, self.step_shift_ms.val(k));
+                self.step_flags.set(w, self.step_flags.val(k));
+                w += 1;
+            }
+            self.step_count = w;
+        }
         // Voice balance for personas: top right-hand note sings, inner voices sit back.
         let mut top_rh = -1;
         let mut rh_count = 0;
@@ -960,6 +980,16 @@ impl Musician {
                 }
             }
         }
+
+        // The band-feel layer (Natural + band, song path): the shared breath, this player's drift, how a chord is struck.
+        let bf = self.bf;
+        let bf_take = if bf.on { self.effective_take(cx) } else { 0 };
+        let bf_role = if drums { crate::band_feel::ROLE_DRUMS } else { role };
+        // A section (strings, brass, organ) never rolls a chord; a pianist rolls on purpose only at a phrase's start.
+        let bf_section = role == crate::band_feel::ROLE_ENSEMBLE || organ;
+        let bf_deliberate_roll = bf.on && bf.phrase_start && !bf_section && self.rand01(pass, step, 1603, who, cx) < 0.5;
+        let bf_player_ms = if bf.on { bf.shared_ms + crate::band_feel::player_time_ms(bf_take, self.index, bf_role, bf.song_ppq) } else { 0.0 };
+        let bf_vel_drift = if bf.on { crate::band_feel::player_vel_drift(bf_take, self.index, bf.song_ppq, 1.0) } else { 0.0 };
 
         // slots mode: this step's notes, as one strum
         let mut sl_loud = 0.0f32;
@@ -990,7 +1020,21 @@ impl Musician {
                 ms += self.rand_bell(step, pass, 11, note, cx) * jitter * h;
             }
             ms += at_or_default(&fw.lane_ms, clamp(self.step_hand.val(i), 0, 3)) * h;
-            if !drums && role != 3 && (who > 0 || self.is_chordal(self.pattern)) {
+            let rolls = !drums && role != 3 && (who > 0 || self.is_chordal(self.pattern));
+            if bf.on {
+                ms += bf_player_ms + self.rand_bell(step, pass, 1601, note, cx) * crate::band_feel::hit_scatter_ms(bf_role, note) * min(h, 1.5f32);
+                if rolls && !bf_section {
+                    if bf_deliberate_roll {
+                        ms += fw.roll_ms * rank as f32 * 0.5f32 * h;
+                    } else if self.step_hand.val(i) == 0 {
+                        ms -= 1.0f32 * h; // the left hand sits a hair ahead
+                    } else if i == top_rh && rh_count >= 2 {
+                        ms -= 2.5f32 * h; // the top note leads
+                    } else {
+                        ms += self.rand01(step, pass, 1605, note, cx) * clamp(fw.roll_ms * 0.4f32 * h, 0.0f32, 6.0f32);
+                    }
+                }
+            } else if rolls {
                 ms += fw.roll_ms * rank as f32 * 0.5f32 * h;
             }
             if natural {
@@ -1017,7 +1061,13 @@ impl Musician {
             if role == 2 && self.step_hand.val(i) == 2 {
                 spread *= 1.5f32;
             }
-            v += self.rand_bell(step, pass, 23, note, cx) * spread * h;
+            if bf.on {
+                // Phrases breathe: the phrase's shape, the swell into a bigger section, a slow drift; less note-to-note noise.
+                v *= bf.vel_mul;
+                v += self.rand_bell(step, pass, 23, note, cx) * spread * h * 0.55f32 + bf_vel_drift * (1.5f32 + spread * 0.5f32) * min(h, 1.5f32);
+            } else {
+                v += self.rand_bell(step, pass, 23, note, cx) * spread * h;
+            }
 
             if self.ten_now > 0.0f32 {
                 v += 6.0f32 * min(1.0f32, self.ten_now / 0.8f32) * self.ten_ramp; // tension: swell into the release

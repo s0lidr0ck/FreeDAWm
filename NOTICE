@@ -40,6 +40,12 @@ source, license) is in ATTRIBUTION.md; in short:
   only): Bitwig GmbH, MIT.
 - The egui default fonts (Ubuntu-Light: Ubuntu Font Licence 1.0; Hack: MIT; Noto Emoji: OFL-1.1;
   emoji-icon-font: OFL-1.1/MIT) ship inside the egui crate under their own licenses.
+- The ARA API (Audio Random Access) specification, ARA SDK 2.3 (crates/ara-host/vendor/ARA_API,
+  unmodified, and its translation into Rust in crates/ara-host/src/sys.rs): "Copyright (c)
+  2012-2025, Celemony Software GmbH, All Rights Reserved. Developed in cooperation with PreSonus
+  Software Ltd." Apache License 2.0 (crates/ara-host/vendor/ARA_API/LICENSE.txt). ARA,
+  Celemony and Melodyne are trademarks of Celemony Software GmbH; VocAlign is a trademark of its
+  owner. FreeDAWm is not affiliated with or endorsed by them.
 
 Everything else bundled is original: icons drawn in code, demo audio synthesised in code, and the
 owner's own work (the FreeDAWm logo, wordmark and splash, the FireStation factory presets, the

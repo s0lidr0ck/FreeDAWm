@@ -79,7 +79,8 @@ ceiling shape; the ceiling is inert until then, its drawer tab greyed) and the P
 estimates are unchanged.
 
 The Band (2026-10-21, branch `feat/band`): MIDI Studio's six musicians inside the session, as track
-inputs with a drawer per musician, the Sections and Band Chords lanes, Window › Studio and Print to
+inputs with a drawer per musician, the Sections and Band Chords lanes, the band's song-wide
+controls (Window › Studio then; the Band ruler in the Edit window since 2026-11-19) and Print to
 MIDI clips; the engine is a line-by-line translation checked event for event against MIDI Studio.
 Design: [`superpowers/specs/2026-10-21-band-design.md`](superpowers/specs/2026-10-21-band-design.md);
 the owner's pass: [`band-checklist.md`](band-checklist.md). Round 2 (Live mode, which needs MIDI

@@ -12,6 +12,7 @@ pub use auto_write::{
     KEEP_PASS_POINTS, MAX_RETURN_MS, RETURN_MS, RETURN_SECONDS, TOUCH_HOLD_SECONDS, WRITE_ON_STOP, WRITE_ON_STOP_KEY, WRITE_TYPES,
     write_disabled_flag,
 };
+mod ara;
 mod arrangement;
 mod audiosuite;
 pub mod folder_block;
@@ -20,6 +21,7 @@ pub use sample_edit::MAX_DRAWN as MAX_DRAWN_SAMPLES;
 mod automation_edit;
 pub use automation_edit::current_pencil_shape;
 mod band;
+mod band_setup;
 pub mod chord_lane;
 mod clap;
 pub(crate) mod clip;
@@ -65,6 +67,7 @@ pub mod juke;
 mod looping;
 mod lyric_alt;
 pub mod lyric_check;
+pub mod lyric_chord_cmds;
 pub mod lyric_place;
 mod lyric_sheet;
 mod lyric_words;
@@ -110,6 +113,7 @@ mod scout_apply;
 pub mod scout_profile;
 mod setup_more;
 mod surround;
+pub mod synth_mod;
 mod tab;
 pub mod tap_tempo;
 pub mod tempo;
@@ -123,6 +127,7 @@ mod vocal;
 mod vocal_studio;
 mod vst3;
 pub mod warp;
+pub mod wavetable;
 mod zoom_toggle;
 
 pub use clap::plugin_info;
@@ -242,6 +247,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pattern::specs());
         v.extend(juke::specs());
         v.extend(multisample::specs());
+        v.extend(wavetable::specs());
         v.extend(clip_clean::specs());
         v.extend(clip_props::specs());
         v.extend(clip_automation::specs());
@@ -299,10 +305,12 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(setup_more::specs());
         v.extend(clap::specs());
         v.extend(vst3::specs());
+        v.extend(ara::specs());
         v.extend(surround::specs());
         v.extend(plugin_state::specs());
         v.extend(module::specs());
         v.extend(module_ceiling::specs());
+        v.extend(synth_mod::specs());
         v.extend(copyq::specs());
         v.extend(module_asset::specs());
         v.extend(module_link::specs());
@@ -324,6 +332,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(scout_profile::specs());
         v.extend(looping::specs());
         v.extend(band::specs());
+        v.extend(band_setup::specs());
         v.extend(lyrics::specs());
         v.extend(notes::specs());
         v.extend(lyric_sheet::specs());
@@ -331,6 +340,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lyric_alt::specs());
         v.extend(lyric_words::specs());
         v.extend(lyric_place::specs());
+        v.extend(lyric_chord_cmds::specs());
         v.extend(vocal::specs());
         v.extend(vocal_studio::specs());
         v.extend(comp::specs());

@@ -249,7 +249,8 @@ missing. Out of scope unless the owner decides otherwise.
 ### G-23. The Band, round 2
 
 Round 1 (2026-10-21, plan `2026-10-21-band`) brought MIDI Studio's six musicians into the session:
-musicians as track inputs, the band drawer, the Sections and Band Chords lanes, Window › Studio,
+musicians as track inputs, the band drawer, the Sections and Band Chords lanes, the band's
+song-wide controls (since 2026-11-19 the Band ruler in the Edit window, which replaced Window › Studio),
 Print, band and feel presets, the user Library, and event-for-event fidelity with MIDI Studio
 (owner's pass: [band-checklist.md](band-checklist.md)). Left for round 2, from the design's
 non-goals and the round's reviews. ≈ 30–50 h, judgement.
@@ -258,7 +259,7 @@ non-goals and the round's reviews. ≈ 30–50 h, judgement.
   the Mod wheel feel switch (hidden until then). The Performer (`Live.h`) is ported and runs with
   Live off; MIDI device input exists now (G-02), the Performer is not fed from it yet.
 - **Kept takes:** MIDI Studio's frozen / kept takes (`play_frozen`) are not reachable from the DAW
-  (the Studio's Band view only marks them).
+  (the Band ruler only marks them).
 - **Audition while stopped:** instruments sound only while the transport plays; MIDI Studio's
   groove audition while stopped is missing.
 - **Per-song meter override:** the session's meter rules (4/4, 3/4, 6/8; others play as 4/4);

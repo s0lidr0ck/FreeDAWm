@@ -1,4 +1,4 @@
-//! The Vocal Editor in its own native window (Window › Vocal Editor in Separate Window, or the
+//! The Vocal Editor in its own native window (Window › Separate Windows › Vocal Editor in Separate Window, or the
 //! title row's Window button): a second egui viewport, as the separate Mix window. It is
 //! resizable, its position and size are remembered in `ui.json`, and closing it docks the editor
 //! back into the Edit window. Backends without multiple windows show it as a floating egui window.

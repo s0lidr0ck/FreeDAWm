@@ -1,4 +1,4 @@
-//! Window › MIDI Editor in Separate Window (and the editor's Window button): the editor leaves
+//! Window › Separate Windows › MIDI Editor in Separate Window (and the editor's Window button): the editor leaves
 //! the Edit window's dock for its own window (embedded as a floating window here, where the test
 //! context has no second OS window), remembers the window in ui.json, and docks back when that
 //! window closes.

@@ -3,7 +3,7 @@
 //! do, checked by tests for level and range). No samples.
 
 use super::FM_INFO;
-use crate::plugins::synth::presets::{SynthPreset, pairs_for, preset};
+use crate::plugins::synth::presets::{PatchedPreset, SynthPreset, menu_pairs, patched, preset};
 use std::sync::OnceLock;
 
 // Algorithms (index): 0 4>3>2>1, 1 3+4>2>1, 2 3>2>1 4>1, 3 4>3>1 2>1, 4 2>1 4>3, 5 4>1,2,3,
@@ -276,8 +276,132 @@ pub static FM_PRESETS: [SynthPreset; 12] = [
     ),
 ];
 
-/// The factory presets as `(name, json)` pairs, in menu order (built once).
+/// The presets that use the modulation matrix, Env 2 and the macros (after [`FM_PRESETS`] in
+/// the menu): starting points written from what each slot does, not listened to; their levels
+/// are tested.
+pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
+    patched(
+        "Bells",
+        "Struck Bell",
+        "A bell whose inharmonic modulator is struck harder by harder keys and dies away on Env 2, each note's partials a little apart. Bell raises the high partial, Bite the strike, Shimmer a slow vibrato.",
+        &[
+            ("algorithm", 4.0),
+            ("op1_decay", 4000.0),
+            ("op1_sustain", 0.0),
+            ("op1_release", 1500.0),
+            ("op2_coarse", 4.0),
+            ("op2_fine", 14.0),
+            ("op2_level", 30.0),
+            ("op2_decay", 2500.0),
+            ("op2_sustain", 0.0),
+            ("op3_level", 60.0),
+            ("op3_decay", 3000.0),
+            ("op3_sustain", 0.0),
+            ("op3_release", 1500.0),
+            ("op4_coarse", 7.0),
+            ("op4_level", 20.0),
+            ("op4_decay", 1200.0),
+            ("op4_sustain", 0.0),
+            ("env2_attack", 1.0),
+            ("env2_decay", 400.0),
+            ("env2_sustain", 0.0),
+            ("lfo_rate", 4.5),
+            ("level", -10.0),
+        ],
+        &[("velocity", "op2_level", 0.2), ("env2", "op4_level", 0.25), ("random", "op4_detune", 0.15)],
+        &[
+            ("Bell", &[("op4_level", 0.0, 0.3)]),
+            ("Bite", &[("op2_level", 0.0, 0.2)]),
+            ("Shimmer", &[("lfo_pitch", 0.0, 0.06), ("op4_detune", 0.0, 0.3)]),
+        ],
+    ),
+    patched(
+        "Keys",
+        "Velocity Tine",
+        "An electric-piano pair whose bark follows velocity and calms higher up the keyboard. Bark adds edge to every note.",
+        &[
+            ("op1_decay", 3000.0),
+            ("op1_sustain", 0.0),
+            ("op1_release", 400.0),
+            ("op2_coarse", 1.0),
+            ("op2_level", 25.0),
+            ("op2_decay", 600.0),
+            ("op2_sustain", 10.0),
+            ("op2_velocity", 0.0),
+            ("level", -10.0),
+        ],
+        &[("velocity", "op2_level", 0.35), ("key", "op2_level", -0.15)],
+        &[("Bark", &[("op2_level", 0.0, 0.25), ("op2_feedback", 0.0, 0.2)])],
+    ),
+    patched(
+        "Brass",
+        "Swelling Brass",
+        "A ratio-1 pair that brightens as Env 2 swells in, as brass does; the mod wheel adds vibrato. Blare opens it further.",
+        &[
+            ("op1_attack", 40.0),
+            ("op1_sustain", 85.0),
+            ("op1_release", 200.0),
+            ("op2_level", 20.0),
+            ("op2_attack", 60.0),
+            ("op2_sustain", 80.0),
+            ("op2_feedback", 20.0),
+            ("env2_attack", 250.0),
+            ("env2_decay", 600.0),
+            ("env2_sustain", 60.0),
+            ("lfo_rate", 5.5),
+            ("level", -10.0),
+        ],
+        &[("env2", "op2_level", 0.3), ("mod_wheel", "lfo_pitch", 0.02)],
+        &[("Blare", &[("op2_level", 0.0, 0.25)])],
+    ),
+    patched(
+        "Pad",
+        "Drifting Glass",
+        "Four operators heard together, their fine ratios wandering with the LFO and a little per note: a glassy, moving bed. Drift deepens the wandering.",
+        &[
+            ("algorithm", 7.0),
+            ("op1_attack", 600.0),
+            ("op1_sustain", 80.0),
+            ("op1_release", 1500.0),
+            ("op2_coarse", 2.0),
+            ("op2_level", 50.0),
+            ("op2_attack", 800.0),
+            ("op2_sustain", 70.0),
+            ("op2_release", 1500.0),
+            ("op3_coarse", 3.0),
+            ("op3_level", 35.0),
+            ("op3_attack", 900.0),
+            ("op3_sustain", 60.0),
+            ("op3_release", 1500.0),
+            ("op4_coarse", 5.0),
+            ("op4_level", 25.0),
+            ("op4_attack", 1000.0),
+            ("op4_sustain", 50.0),
+            ("op4_release", 1500.0),
+            ("lfo_rate", 0.25),
+            ("level", -10.0),
+        ],
+        &[("lfo", "op3_fine", 0.02), ("lfo", "op4_detune", -0.1), ("random", "op2_detune", 0.1)],
+        &[(
+            "Drift",
+            &[
+                ("op3_detune", 0.0, 0.6),
+                ("op4_fine", 0.0, 0.06),
+                ("op2_detune", 0.0, -0.5),
+                ("lfo_pitch", 0.0, 0.015),
+                ("lfo_amp", 0.0, 0.7),
+                ("lfo_rate", 0.0, 0.2),
+            ],
+        )],
+    ),
+];
+
+/// The factory presets as `(name, json)` pairs, in menu order (built once): by group
+/// ([`super::suite::GROUPS`]), then by tier, the first presets before the suite's within a tier (the showcase set,
+/// [`super::showcase::SHOWCASE`], is its own group, "Patched").
 pub fn factory_presets() -> &'static [(&'static str, &'static str)] {
     static BUILT: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
-    BUILT.get_or_init(|| pairs_for(&FM_INFO, &FM_PRESETS))
+    BUILT.get_or_init(|| {
+        menu_pairs(&FM_INFO, &super::suite::GROUPS, &FM_PRESETS, &[&PATCHED_PRESETS, &super::suite::SUITE, &super::showcase::SHOWCASE])
+    })
 }

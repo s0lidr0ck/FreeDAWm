@@ -4,6 +4,7 @@
 //! executing commands. It can be replaced without touching anything below it.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod ara_ui;
 pub mod audition;
 pub mod auto_lanes;
 pub mod band;
@@ -117,6 +118,7 @@ pub mod step_input;
 pub mod stretch_worker;
 pub mod surfaces;
 pub mod swale_ui;
+pub mod synth_face;
 pub mod synth_panel;
 pub mod teleprompter;
 pub mod tempo_markers;
@@ -139,7 +141,7 @@ pub mod vocal_track;
 pub mod vocal_worker;
 mod wait_note;
 pub mod waveform;
-pub mod wavetable_panel;
+pub mod wavetable_import;
 pub mod widgets;
 pub mod window_sync;
 pub mod windows;
@@ -196,16 +198,16 @@ pub struct UiState {
     pub show_transport: bool,
     pub show_memory_locations: bool,
     pub show_big_counter: bool,
-    /// Window › Loudness Meter: the master's loudness and true peak.
+    /// Window › Transport & Session › Loudness Meter: the master's loudness and true peak.
     #[serde(default)]
     pub show_loudness: bool,
-    /// Window › Mix Snapshots.
+    /// Window › Transport & Session › Mix Snapshots.
     #[serde(default)]
     pub show_mix_snapshots: bool,
-    /// Window › Set List: the show's songs in order.
+    /// Window › Transport & Session › Set List: the show's songs in order.
     #[serde(default)]
     pub show_set_list: bool,
-    /// Window › Control Room.
+    /// Window › Transport & Session › Control Room.
     #[serde(default)]
     pub show_control_room: bool,
     /// Talkback is on because F11 is held, the Talk button is held, or Latch is on.
@@ -216,11 +218,11 @@ pub struct UiState {
     #[serde(skip)]
     pub talk_latched: bool,
     pub show_undo_history: bool,
-    /// The Notes tab (Window › Notes).
+    /// The Notes tab (Window › Transport & Session › Notes).
     pub show_notes: bool,
     /// What the Notes tab shows: open, done or all.
     pub notes_show: String,
-    /// The Lyrics tab (Window › Lyrics).
+    /// The Lyrics tab (Window › Transport & Session › Lyrics).
     pub show_lyrics: bool,
     /// The first-run tour's open card (see [`tour`]); not saved.
     #[serde(skip)]
@@ -237,14 +239,18 @@ pub struct UiState {
     /// The Lyrics tab flags lines that do not fit their partner line (syllables, stress).
     #[serde(default = "default_true")]
     pub lyrics_fit: bool,
-    /// The Teleprompter (Window › Teleprompter).
+    /// The Teleprompter (Window › Transport & Session › Teleprompter).
     pub show_teleprompter: bool,
     /// The Teleprompter in its own native window.
     pub teleprompter_separate: bool,
     /// That window's last position and inner size, `[x, y, w, h]`.
     pub teleprompter_window: Option<[f32; 4]>,
+    /// The Teleprompter shows the lines' chords above their words (right-click it; off by default).
+    pub teleprompter_chords: bool,
     pub show_session_info: bool,
     pub show_audio_health: bool,
+    /// Clip › ARA Plug-ins… (`window.ara`).
+    pub show_ara: bool,
     pub show_about: bool,
     pub show_midi_editor: bool,
     /// The Vocal Editor (AI › Tune Vocal › Open…); plan 3 draws it.
@@ -354,6 +360,10 @@ pub struct UiState {
     /// The marker or chord clicked on a ruler: Delete removes it (`ruler_items`).
     #[serde(skip)]
     pub ruler_item: Option<ruler_items::RulerItem>,
+    /// With a chord picked: the chord a Shift-click or Shift+arrow run started from (the pick is
+    /// every chord from it to `ruler_item`'s, `ruler_items::picked_chords`).
+    #[serde(skip)]
+    pub chord_anchor: Option<u32>,
     /// A drag of one end of the loop strip on the main ruler (`edit_window::loop_strip`).
     #[serde(skip)]
     pub loop_drag: Option<edit_window::LoopDrag>,
@@ -378,21 +388,21 @@ pub struct UiState {
     /// The record offset per audio system + device + buffer + rate (`record_offset`): per
     /// machine, because drivers add hidden latency that changes with each.
     pub record_offsets: std::collections::BTreeMap<String, RecordOffset>,
-    /// The Mix window lives in its own native window (Window › Mix in Separate Window); the main
+    /// The Mix window lives in its own native window (Window › Separate Windows › Mix in Separate Window); the main
     /// window then always shows Edit.
     pub mix_separate: bool,
-    /// More Mix windows (Window › New Mix Window…), each with its own find, spill and sections
+    /// More Mix windows (Window › Separate Windows › New Mix Window…), each with its own find, spill and sections
     /// ([`mix_more`]). Not kept: they close with the app.
     #[serde(skip)]
     pub more_mix: Vec<mix_more::MoreMix>,
-    /// The Vocal Editor lives in its own native window (Window › Vocal Editor in Separate
+    /// The Vocal Editor lives in its own native window (Window › Editors › Vocal Editor in Separate
     /// Window, `vocal.separate`); closing that window docks it back.
     #[serde(default, rename = "vocal.separate")]
     pub vocal_separate: bool,
     /// That window's last position and inner size, `[x, y, w, h]` (`vocal.window`).
     #[serde(default, rename = "vocal.window")]
     pub vocal_window: Option<[f32; 4]>,
-    /// The MIDI Editor lives in its own native window (Window › MIDI Editor in Separate Window,
+    /// The MIDI Editor lives in its own native window (Window › Separate Windows › MIDI Editor in Separate Window,
     /// `midi_editor.separate`); closing that window docks it back.
     #[serde(default, rename = "midi_editor.separate")]
     pub midi_editor_separate: bool,
@@ -615,8 +625,10 @@ impl Default for UiState {
             show_teleprompter: false,
             teleprompter_separate: false,
             teleprompter_window: None,
+            teleprompter_chords: false,
             show_session_info: false,
             show_audio_health: false,
+            show_ara: false,
             show_about: false,
             show_midi_editor: false,
             show_vocal_editor: false,
@@ -654,6 +666,7 @@ impl Default for UiState {
             preset_dirty: HashMap::new(),
             drawer_tab: None,
             ruler_item: None,
+            chord_anchor: None,
             loop_drag: None,
             ruler_pick_sel: None,
             send_window: None,
@@ -1129,6 +1142,11 @@ pub struct SoundApp {
     take_plan: Option<soundcraft_engine::io::Recording>,
     pub ui: UiState,
     pub audio_health_report: Option<Result<Value, String>>,
+    /// The session's ARA documents (Clip › ARA Plug-ins…), kept in line with the session every
+    /// frame on this thread ([`ara_ui::tick`]).
+    pub ara: soundcraft_engine::ara::AraHost,
+    /// The ARA plug-in picked in the ARA Plug-ins window.
+    pub ara_pick: Option<String>,
     pub services: Services,
     /// Set only by a desktop host after installing an OS menu bar.
     pub native_menu_bar: bool,
@@ -1191,6 +1209,11 @@ pub struct SoundApp {
     pub sample_drop_targets: Vec<(egui::Rect, TrackId)>,
     /// Juke pad slots `(pad, layer, robin)` drawn this frame that take a dropped audio file.
     pub kit_drop_targets: Vec<(egui::Rect, TrackId, (usize, usize, usize))>,
+    /// Where a dropped audio file opens Import Wavetable for a track's Wavetable Synth (its wave
+    /// display and the open import window; last frame's rects).
+    pub wavetable_drop_targets: Vec<(egui::Rect, TrackId)>,
+    /// The open Import Wavetable window.
+    pub wavetable_import: Option<wavetable_import::ImportWindow>,
     /// Places dropped drum takes are imported: a pad card (`Some(pad)`: the takes become the
     /// pad's layers and round-robins) or a Juke window (`None`: a kit, the takes to pads by name).
     pub kit_import_targets: Vec<(egui::Rect, TrackId, Option<usize>)>,
@@ -1273,8 +1296,8 @@ pub struct SoundApp {
     pub tempo: tempo_ui::TempoUi,
     /// Scout: the panel, and the capture out on the audio side.
     pub scout: scout::ScoutUi,
-    /// Window ▸ Studio: the band's song-wide controls (not saved).
-    pub studio: band::studio::StudioUi,
+    /// The Band ruler's popovers, a musician's settings panel and Print Band to MIDI (not saved).
+    pub band_ui: band::ruler::BandUi,
     /// The plugin browser's catalog: built when the panel is first shown and again after a
     /// scan, never per frame.
     pub browser_catalog: Option<browser::catalog::Catalog>,
@@ -1366,6 +1389,8 @@ impl SoundApp {
             take_plan: None,
             ui: UiState::default(),
             audio_health_report: None,
+            ara: soundcraft_engine::ara::AraHost::default(),
+            ara_pick: None,
             services,
             native_menu_bar: false,
             autosave_dir: None,
@@ -1402,6 +1427,8 @@ impl SoundApp {
             synthetic: Vec::new(),
             sample_drop_targets: Vec::new(),
             kit_drop_targets: Vec::new(),
+            wavetable_drop_targets: Vec::new(),
+            wavetable_import: None,
             kit_import_targets: Vec::new(),
             plugin_drop_targets: Vec::new(),
             synthetic_grace: 0,
@@ -1445,7 +1472,7 @@ impl SoundApp {
             juke_kits: juke_kits_ui::KitDownloads::default(),
             tempo: tempo_ui::TempoUi::default(),
             scout: scout::ScoutUi::default(),
-            studio: band::studio::StudioUi::default(),
+            band_ui: band::ruler::BandUi::default(),
             browser_catalog: None,
             browser_hosts: (false, false),
             plugin_scan: None,
@@ -1541,6 +1568,9 @@ impl SoundApp {
         if id == capture_progress::ID && open_behind_window {
             return capture_progress::start(self, &params);
         }
+        if id.starts_with("file.bounce") || matches!(id, "track.freeze" | "track.commit" | "track.bounce" | "edit.consolidate" | "process.run") {
+            self.prepare_ara_renders();
+        }
         if id.starts_with("session.save")
             || id.starts_with("file.bounce")
             || matches!(id, "track.freeze" | "track.commit" | "track.bounce" | "track.make_inactive" | "track.capture_multisample")
@@ -1619,6 +1649,10 @@ impl SoundApp {
                     // A new beat opens on its steps, in the Juke window.
                     let clip = v["clip"].as_u64().map(soundcraft_model::ClipId);
                     juke_window::show_steps(self, TrackId(t), clip);
+                }
+                if id == "track.new_band" {
+                    // The status says what they play on (the engine showed the Band ruler).
+                    crate::band::ruler::after_new_band(self, &v);
                 }
                 if id == "track.freeze" || id == "track.unfreeze" {
                     self.ui.status = freeze_status(&self.engine, &v);
@@ -2277,6 +2311,9 @@ impl SoundApp {
     /// Reads every live third-party plugin's state and stores it on its insert
     /// (`mix.insert_state`), so saves and bounces include it.
     pub fn capture_plugin_states(&mut self) {
+        // The ARA plug-ins' documents go into the session (saves, autosaves, bounces).
+        self.ara.sync(&self.engine);
+        self.ara.store_archives(&mut self.engine);
         self.sync_player();
         let Some(p) = &self.player else { return };
         let clips = p.capture_clip_states();
@@ -2293,6 +2330,17 @@ impl SoundApp {
         // The hosted Clip Effects modules' states too, on their clips.
         for (slot, data) in clips {
             self.store_clip_state(slot, &data);
+        }
+    }
+
+    /// Renders every clip given to an ARA plug-in through it, offline, unless its last render still
+    /// fits (see `AraHost::prepare_offline`): before a bounce, freeze, commit or consolidate,
+    /// which then hear the plug-in as playback does.
+    pub(crate) fn prepare_ara_renders(&mut self) {
+        self.ara.sync(&self.engine);
+        let n = self.ara.prepare_offline(&mut self.engine);
+        if n > 0 {
+            soundcraft_engine::ara::log_line(&format!("{n} clip(s) rendered through their ARA plug-in for an offline render"));
         }
     }
 
@@ -3356,8 +3404,11 @@ impl SoundApp {
                 // A Trim-mode fader let go: the trim lane plays again.
                 self.engine.automation_trim(track, None);
             }
-            // Keep a running automation pass merged until playback stops.
-            if !ctx.egui_wants_keyboard_input() && !self.engine.automation_pass_writing() {
+            // Keep a running automation pass merged until playback stops, and a run of Tap Tempo
+            // taps (clicks, each with the button let go in between) merged until it pauses.
+            let now = ctx.input(|i| i.time);
+            let tapping = self.ops.tap_times.last().is_some_and(|t| now - t < soundcraft_engine::cmd::tap_tempo::TAP_RESET_SECONDS);
+            if !ctx.egui_wants_keyboard_input() && !self.engine.automation_pass_writing() && !tapping {
                 self.engine.end_merge();
             }
         }
@@ -3477,6 +3528,7 @@ impl SoundApp {
             ctx.memory_mut(|m| m.reset_areas());
         }
         window_sync::tidy(self);
+        ara_ui::tick(self);
         // Musical Typing takes its letter keys first (while it is on).
         musical_typing::handle_keys(self, &ctx);
         shortcuts::handle(self, &ctx);
@@ -3485,6 +3537,7 @@ impl SoundApp {
         self.ui.wide_key_owner.remove(&ctx.viewport_id());
         self.sample_drop_targets.clear();
         self.kit_drop_targets.clear();
+        self.wavetable_drop_targets.clear();
         self.kit_import_targets.clear();
         self.plugin_drop_targets.clear();
         if !self.native_menu_bar {
@@ -3512,6 +3565,7 @@ impl SoundApp {
         }
         panels::floating(self, &ctx);
         windows::show(self, &ctx);
+        ara_ui::show(self, &ctx);
         video_window::show(self, &ctx);
         ops_windows::show(self, &ctx);
         sample_editor::show(self, &ctx);
@@ -3519,9 +3573,10 @@ impl SoundApp {
         extra_windows::show(self, &ctx);
         recovery::show(self, &ctx);
         score_editor::show(self, &ctx);
+        wavetable_import::show(self, &ctx);
         scout::panel::show(self, &ctx);
         tour::show(self, &ctx);
-        band::studio::show(self, &ctx);
+        band::ruler::show(self, &ctx);
         palette::show(self, &ctx);
         window_sync::settle(self);
         dialogs::show(self, &ctx);

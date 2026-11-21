@@ -1,5 +1,5 @@
 //! Keeping the Edit and Mix windows in step, above all while Mix has its own native window
-//! (Window › Mix in Separate Window): the folder tree in the Tracks list of both windows, folder
+//! (Window › Separate Windows › Mix in Separate Window): the folder tree in the Tracks list of both windows, folder
 //! collapse hiding strips, selection that brings a track into view in the other window, dialogs
 //! over the window that started them, and the Window › Sync options.
 
@@ -10,7 +10,7 @@ use soundcraft_model::{Session, Track, TrackId, TrackKind};
 use soundcraft_playback::SlotKey;
 use std::collections::HashMap;
 
-/// The separate Mix window's viewport (Window › Mix in Separate Window).
+/// The separate Mix window's viewport (Window › Separate Windows › Mix in Separate Window).
 pub fn mix_viewport() -> ViewportId {
     ViewportId::from_hash_of("soundcraft.mix")
 }

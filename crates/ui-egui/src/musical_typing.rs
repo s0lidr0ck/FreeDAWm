@@ -1,9 +1,9 @@
-//! Musical Typing: Window › Musical Typing's on-screen keys and the computer keyboard as a live
+//! Musical Typing: Window › Editors › Musical Typing's on-screen keys and the computer keyboard as a live
 //! MIDI input, the port "Musical Typing" (`midi_in::TYPING_NAME`). It plays and records through
 //! the same path as a hardware port: armed or input-monitored instrument tracks whose input is
 //! MIDI: All Inputs or MIDI: Musical Typing hear it, and a take records it.
 //!
-//! Opening the window (Shift+K, Window › Musical Typing) turns the computer keys on, and closing
+//! Opening the window (Shift+K, Window › Editors › Musical Typing) turns the computer keys on, and closing
 //! it turns them off, so one key gets straight to playing; the "Computer keys" checkbox (Ctrl+Alt+K
 //! / Cmd+Alt+K) still switches them while it is open.
 //!

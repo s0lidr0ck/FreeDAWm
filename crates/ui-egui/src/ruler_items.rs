@@ -5,6 +5,10 @@
 //! the edit selection, or all of them on that ruler after an in-app confirmation; a ruler's name
 //! label offers Clear All too. Every action is an engine command (`markers.delete`,
 //! `band.chord.remove`, `band.chords.delete`, `event.key_change_delete`), one undo step each.
+//!
+//! Chords also copy: a Shift-click picks the run between two chords, and while a chord is the live
+//! pick the app's Copy, Cut, Duplicate and Left/Right keys act on it ([`chord_key`]); Paste puts
+//! copied chords at the edit insertion (`band.chords.copy`, `paste`, `duplicate`).
 
 use crate::SoundApp;
 use crate::dialogs::Dialog;
@@ -43,12 +47,161 @@ pub fn pick(app: &mut SoundApp, item: RulerItem) {
     let ed = &app.engine.session().edit;
     app.ui.ruler_pick_sel = Some((ed.selection, ed.selected_clips.clone()));
     app.ui.ruler_item = Some(item);
+    app.ui.chord_anchor = None;
 }
 
 /// Drop the pick.
 pub fn unpick(app: &mut SoundApp) {
     app.ui.ruler_item = None;
     app.ui.ruler_pick_sel = None;
+    app.ui.chord_anchor = None;
+}
+
+/// The chords picked on the Chords ruler, in time order: the one picked, or after a Shift-click
+/// (or Shift+arrow) every chord from where the run started to the one picked. Empty when no chord
+/// is picked.
+pub fn picked_chords(app: &SoundApp) -> Vec<u32> {
+    let Some(RulerItem::Chord(focus)) = app.ui.ruler_item else { return Vec::new() };
+    let chords = &app.engine.session().band.chords;
+    let tick = |id: u32| chords.iter().find(|c| c.id == id).map(|c| c.tick);
+    let Some(to) = tick(focus) else { return Vec::new() };
+    let Some(from) = app.ui.chord_anchor.filter(|a| *a != focus).and_then(tick) else { return vec![focus] };
+    let (a, b) = (from.min(to), from.max(to));
+    let mut run: Vec<(i64, u32)> = chords.iter().filter(|c| c.tick >= a && c.tick <= b).map(|c| (c.tick, c.id)).collect();
+    run.sort_unstable();
+    run.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Picks the chords `ids` (in time order) as one run.
+pub fn pick_chord_run(app: &mut SoundApp, ids: &[u32]) {
+    let (Some(first), Some(last)) = (ids.first().copied(), ids.last().copied()) else { return };
+    pick(app, RulerItem::Chord(last));
+    app.ui.chord_anchor = (first != last).then_some(first);
+}
+
+/// A Shift-click on chord `id`: the run from the chord picked before it (else `id` alone).
+pub fn extend_chord_pick(app: &mut SoundApp, id: u32) {
+    prune(app);
+    let anchor = match app.ui.ruler_item {
+        Some(RulerItem::Chord(f)) => app.ui.chord_anchor.unwrap_or(f),
+        _ => id,
+    };
+    pick(app, RulerItem::Chord(id));
+    app.ui.chord_anchor = (anchor != id).then_some(anchor);
+}
+
+/// A key acting on the Chords ruler's pick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChordKey {
+    Copy,
+    Cut,
+    /// At the edit insertion point.
+    Paste,
+    Duplicate,
+    /// Left / Right: the neighbouring chord; `extend` (Shift) grows or shrinks the run.
+    Step {
+        forward: bool,
+        extend: bool,
+    },
+}
+
+/// Are chords on the clipboard (a chord copy is the newest copy)?
+pub fn chords_copied(app: &SoundApp) -> bool {
+    !app.engine.clipboard.chords.is_empty()
+}
+
+/// Runs `k` on the picked chords. False when it doesn't apply, so the key does what it would do
+/// otherwise: no chord is the live ruler pick (for Paste: no chords are on the clipboard).
+pub fn chord_key(app: &mut SoundApp, ctx: &egui::Context, k: ChordKey) -> bool {
+    prune(app);
+    let picked = picked_chords(app);
+    match k {
+        ChordKey::Paste => {
+            if !chords_copied(app) {
+                return false;
+            }
+            let at = app.engine.session().edit.selection.start;
+            paste_chords(app, at);
+        }
+        _ if picked.is_empty() => return false,
+        ChordKey::Copy => {
+            copy_chords(app, ctx, &picked);
+        }
+        ChordKey::Cut => {
+            if copy_chords(app, ctx, &picked) {
+                unpick(app);
+                run_reporting(app, "band.chords.delete", json!({"chords": picked}));
+            }
+        }
+        ChordKey::Duplicate => duplicate_chords(app, &picked),
+        ChordKey::Step { forward, extend } => step_chord(app, forward, extend),
+    }
+    true
+}
+
+/// The chords onto the clipboard, and their names onto the system clipboard as text (the window
+/// system only sends a paste while it holds some). True when copied.
+pub fn copy_chords(app: &mut SoundApp, ctx: &egui::Context, ids: &[u32]) -> bool {
+    match app.run("band.chords.copy", json!({"chords": ids})) {
+        Ok(_) => {
+            let band = &app.engine.session().band;
+            let (key, scale) = (i32::from(band.key), i32::from(band.scale));
+            let names: Vec<String> = app
+                .engine
+                .clipboard
+                .chords
+                .iter()
+                .map(|c| soundcraft_band::chord_theory::name_for(i32::from(c.slot), key, scale, i32::from(c.bass)))
+                .collect();
+            ctx.copy_text(names.join(" | "));
+            true
+        }
+        Err(e) => {
+            app.ui.status = e;
+            false
+        }
+    }
+}
+
+/// Pastes the copied chords from `at` (snapped to the half bar) and picks them.
+pub fn paste_chords(app: &mut SoundApp, at: soundcraft_time::Samples) {
+    match app.run("band.chords.paste", json!({"at": at})) {
+        Ok(r) => pick_chord_run(app, &new_ids(&r)),
+        Err(e) => app.ui.status = e,
+    }
+}
+
+/// Copies of the chords straight after the last of them; the copies become the pick, so the key
+/// pressed again repeats.
+pub fn duplicate_chords(app: &mut SoundApp, ids: &[u32]) {
+    match app.run("band.chords.duplicate", json!({"chords": ids})) {
+        Ok(r) => pick_chord_run(app, &new_ids(&r)),
+        Err(e) => app.ui.status = e,
+    }
+}
+
+/// The `chords` ids a paste, copy or duplicate returned.
+pub fn new_ids(r: &serde_json::Value) -> Vec<u32> {
+    r.get("chords")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok())).collect())
+        .unwrap_or_default()
+}
+
+/// Left / Right: the pick moves to the chord before or after the one picked (Shift: the run
+/// grows or shrinks that way). At either end of the lane it stays.
+fn step_chord(app: &mut SoundApp, forward: bool, extend: bool) {
+    let Some(RulerItem::Chord(focus)) = app.ui.ruler_item else { return };
+    let mut lane: Vec<(i64, u32)> = app.engine.session().band.chords.iter().map(|c| (c.tick, c.id)).collect();
+    lane.sort_unstable();
+    let Some(i) = lane.iter().position(|(_, id)| *id == focus) else { return };
+    let next = if forward { i.checked_add(1) } else { i.checked_sub(1) };
+    let Some(&(_, to)) = next.and_then(|n| lane.get(n)) else { return };
+    let anchor = app.ui.chord_anchor.unwrap_or(focus);
+    pick(app, RulerItem::Chord(to));
+    if extend {
+        app.ui.chord_anchor = (anchor != to).then_some(anchor);
+    }
 }
 
 /// Is the pick still what Delete should remove: the Edit window is showing, the item still
@@ -77,9 +230,11 @@ pub fn prune(app: &mut SoundApp) {
 pub fn delete_picked(app: &mut SoundApp) -> bool {
     prune(app);
     let Some(item) = app.ui.ruler_item else { return false };
+    let chords = picked_chords(app);
     unpick(app);
     let r = match item {
         RulerItem::Marker(id) => app.run("markers.delete", json!({"id": id.0})),
+        RulerItem::Chord(_) if chords.len() > 1 => app.run("band.chords.delete", json!({"chords": chords})),
         RulerItem::Chord(id) => app.run("band.chord.remove", json!({"chord": id})),
         RulerItem::Key(at) => app.run("event.key_change_delete", json!({"at": at})),
     };

@@ -26,7 +26,9 @@ use std::fmt::Write as _;
 /// leaves room under the same cap. Pantry (800: its eleven parameter lines and its line) raised it
 /// to 53 900. The Wavetable Synth fitted under it; the FM Synth (1 400: its ten global parameters,
 /// its thirteen per-operator ones collapsed to one line each, and its line) raised it to 55 500.
-pub const MAX_CHARS: usize = 55_500;
+/// The three synths' modulation patching (their four macros, one line each, the FM Synth's Env 2,
+/// the Subtractive Synth's X-Mod and the Wavetable Synth's Warp: 340) raised it to 56 000.
+pub const MAX_CHARS: usize = 56_000;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".

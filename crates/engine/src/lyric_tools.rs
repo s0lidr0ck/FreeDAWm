@@ -1,10 +1,10 @@
-//! Lyric writing tools (Window › Lyrics, round 2): rhyme types across all words of the sheet, and
+//! Lyric writing tools (Window › Transport & Session › Lyrics, round 2): rhyme types across all words of the sheet, and
 //! line-to-line fit (syllables and stress against the same line of the section's first take).
 //! Built on [`crate::lyric_text`] and the bundled [`crate::lexicon`].
 
 use crate::lexicon::{self, RhymeKind, WordLookup};
 use crate::lyric_text::{end_word, heuristic_rhyme_key, is_function_word, line_stresses};
-use soundcraft_model::{LineKind, heading_name, line_kinds};
+use soundcraft_model::{LineKind, heading_name, line_kinds, strip_chords, sung_text};
 
 /// A section's kind: its heading without a trailing number, lower case ("Verse 2" is "verse").
 pub fn section_kind(heading: &str) -> String {
@@ -56,7 +56,7 @@ pub fn line_fit<'a>(lines: impl IntoIterator<Item = &'a str> + Clone) -> Vec<Lin
                 if let Some(s) = sections.last_mut() {
                     s.2.push(i);
                 }
-                let stress = line_stresses(text);
+                let stress = line_stresses(&sung_text(text));
                 out.push(LineFit {
                     line: i,
                     syllables: stress.len() as u32,
@@ -67,7 +67,7 @@ pub fn line_fit<'a>(lines: impl IntoIterator<Item = &'a str> + Clone) -> Vec<Lin
                     flag: None,
                 });
             }
-            LineKind::Blank => {}
+            LineKind::Blank | LineKind::Chords => {}
         }
     }
     for (si, (kind, _, members)) in sections.iter().enumerate() {
@@ -203,6 +203,15 @@ pub fn word_spans(line: &str) -> Vec<(usize, usize)> {
     out
 }
 
+/// The sung words of a sheet line (its `[chords]` are no words), as byte ranges in the line.
+pub fn sung_word_spans(line: &str) -> Vec<(usize, usize)> {
+    if !line.contains('[') {
+        return word_spans(line);
+    }
+    let st = strip_chords(line);
+    word_spans(&st.text).into_iter().map(|(s, e)| (st.start_in_line(s), st.end_in_line(e))).collect()
+}
+
 /// How two words rhyme: the dictionary's verdict when it knows both, else the spelling key
 /// (perfect only).
 fn kind_of(lex: Option<&dyn WordLookup>, a: &Word, b: &Word) -> Option<RhymeKind> {
@@ -229,18 +238,22 @@ pub fn rhyme_marks<'a>(lines: impl IntoIterator<Item = &'a str> + Clone) -> Vec<
 /// [`rhyme_marks`] with an explicit word source (`None`: spelling only).
 pub fn rhyme_marks_with<'a>(lines: impl IntoIterator<Item = &'a str> + Clone, lex: Option<&dyn WordLookup>) -> Vec<WordMark> {
     let kinds = line_kinds(lines.clone());
+    // The lines as sung (chords are no words), mapped back to the lines' offsets at the end.
+    let sung: Vec<soundcraft_model::Stripped> = lines.into_iter().map(strip_chords).collect();
     let mut words: Vec<Word> = Vec::new();
     let (mut block, mut lyric) = (0usize, 0usize);
     let mut in_block = false;
-    for (i, (text, kind)) in lines.into_iter().zip(kinds).enumerate() {
+    for (i, (st, kind)) in sung.iter().zip(kinds).enumerate() {
         let LineKind::Lyric(_) = kind else {
-            if in_block {
+            // A bar of chords between lines is no break in the block.
+            if in_block && kind != LineKind::Chords {
                 block += 1;
                 in_block = false;
             }
             continue;
         };
         in_block = true;
+        let text = st.text.as_str();
         let spans = word_spans(text);
         let last = end_word(text).and_then(|w| text.rfind(w));
         for (s, e) in spans {
@@ -286,7 +299,16 @@ pub fn rhyme_marks_with<'a>(lines: impl IntoIterator<Item = &'a str> + Clone, le
             }
         }
     }
-    words.iter().zip(marks).filter(|(_, m)| *m != 0).map(|(w, kinds)| WordMark { line: w.line, start: w.start, end: w.end, kinds }).collect()
+    words
+        .iter()
+        .zip(marks)
+        .filter(|(_, m)| *m != 0)
+        .map(|(w, kinds)| {
+            let st = sung.get(w.line);
+            let (start, end) = st.map_or((w.start, w.end), |st| (st.start_in_line(w.start), st.end_in_line(w.end)));
+            WordMark { line: w.line, start, end, kinds }
+        })
+        .collect()
 }
 
 /// The repetition check: how often the hook phrase is sung, and the most repeated words.
@@ -307,9 +329,10 @@ fn lyric_words<'a>(lines: impl IntoIterator<Item = &'a str> + Clone) -> Vec<(usi
         if !matches!(kind, LineKind::Lyric(_)) {
             continue;
         }
-        for (s, e) in word_spans(text) {
-            if let Some(w) = text.get(s..e) {
-                out.push((i, s, e, lexicon::pron::normalise(w)));
+        let st = strip_chords(text);
+        for (s, e) in word_spans(&st.text) {
+            if let Some(w) = st.text.get(s..e) {
+                out.push((i, st.start_in_line(s), st.end_in_line(e), lexicon::pron::normalise(w)));
             }
         }
     }
@@ -405,7 +428,7 @@ pub fn ai_prompt<'a>(lines: impl IntoIterator<Item = &'a str> + Clone, title: &s
     let _ = writeln!(p, "## Lyrics");
     let _ = writeln!(
         p,
-        "Each lyric line: its number, the words, then [syllables | stress pattern (DUM stressed, da not) | rhyme letter]. Section headings in brackets."
+        "Each lyric line: its number, the words, then [syllables | stress pattern (DUM stressed, da not) | rhyme letter]. Section headings in braces."
     );
     let _ = writeln!(p);
     let mut scheme: Vec<(String, String)> = Vec::new();
@@ -416,14 +439,14 @@ pub fn ai_prompt<'a>(lines: impl IntoIterator<Item = &'a str> + Clone, title: &s
         } else if let Some(n) = info.number {
             let stress = fits.iter().find(|f| f.line == i).map(|f| stress_text(&f.stress)).unwrap_or_default();
             let letter = info.rhyme.map(String::from).unwrap_or_else(|| "-".into());
-            let _ = writeln!(p, "{n}. {} [{} | {stress} | {letter}]", text.trim(), info.syllables);
+            let _ = writeln!(p, "{n}. {} [{} | {stress} | {letter}]", sung_text(text).trim(), info.syllables);
             if scheme.is_empty() {
                 scheme.push((String::new(), String::new()));
             }
             if let Some(s) = scheme.last_mut() {
                 s.1.push(info.rhyme.unwrap_or('-'));
             }
-        } else {
+        } else if !info.chords {
             let _ = writeln!(p);
         }
     }
@@ -439,7 +462,11 @@ pub fn ai_prompt<'a>(lines: impl IntoIterator<Item = &'a str> + Clone, title: &s
             if let Some(i) = infos.iter().position(|x| x.number == Some(*n)) {
                 let stress = fits.iter().find(|f| f.line == i).map(|f| stress_text(&f.stress)).unwrap_or_default();
                 let syl = infos.get(i).map_or(0, |x| x.syllables);
-                let _ = writeln!(p, "{n}. \u{201C}{}\u{201D} ({syl} syllables, {stress})", texts.get(i).map_or("", |t| t.trim()));
+                let _ = writeln!(
+                    p,
+                    "{n}. \u{201C}{}\u{201D} ({syl} syllables, {stress})",
+                    texts.get(i).map_or(String::new(), |t| sung_text(t).trim().to_string())
+                );
             }
         }
     }
@@ -459,7 +486,7 @@ mod tests {
     fn copy_for_ai_prompt_has_structure_and_request() {
         lexicon::wait();
         let sheet = [
-            "[Verse 1]",
+            "{Verse 1}",
             "When the night was long",
             "And my heart could not be still",
             "You were there to sing the song",
@@ -469,7 +496,7 @@ mod tests {
         assert_eq!(req, "Suggest 5 alternatives for line 4 that keep 7 syllables and rhyme with \u{2018}still\u{2019}.");
         let p = ai_prompt(sheet, "Hill Song", &[4], &req);
         assert!(p.contains("\u{201C}Hill Song\u{201D}"));
-        assert!(p.contains("[Verse 1]"));
+        assert!(p.contains("{Verse 1}"));
         assert!(p.contains("1. When the night was long [5 | da-da-DUM-da-DUM | A]"), "{p}");
         assert!(p.contains("Verse 1: ABAB"), "{p}");
         assert!(p.contains("## Selected line\n4. \u{201C}Standing strong upon the hill\u{201D} (7 syllables"), "{p}");
@@ -480,7 +507,7 @@ mod tests {
 
     #[test]
     fn repetition_counts_the_hook_and_words() {
-        let sheet = ["[Chorus]", "Jesus, the only one", "You are the only one", "", "[Verse 2]", "The only ONE I need, Jesus", "only"];
+        let sheet = ["{Chorus}", "Jesus, the only one", "You are the only one", "", "{Verse 2}", "The only ONE I need, Jesus", "only"];
         let r = repetition(sheet, "the only one");
         assert_eq!(r.hits, vec![(1, 7, 19), (2, 8, 20), (5, 0, 12)]);
         assert_eq!(r.words.first(), Some(&("only".to_string(), 4)));
@@ -506,16 +533,16 @@ mod tests {
     fn line_fit_flags_a_mismatched_verse_two_line() {
         lexicon::wait();
         let sheet = [
-            "[Verse 1]",
+            "{Verse 1}",
             "When the night was long",
             "And my heart could not be still",
             "",
-            "[Chorus]",
+            "{Chorus}",
             "Jesus, the only one",
-            "[Verse 2]",
+            "{Verse 2}",
             "When the day was gone",
             "And my soul was wandering far away from home",
-            "[Chorus]",
+            "{Chorus}",
             "Jesus, the only one",
         ];
         let fit = line_fit(sheet);
@@ -534,13 +561,13 @@ mod tests {
         assert_eq!(stress_text(&at(1).stress), "da-da-DUM-da-DUM");
         assert_eq!(section_kind("Pre-Chorus 2"), "pre-chorus");
         // Same count, stresses elsewhere.
-        let f = line_fit(["[Verse 1]", "Over the river", "[Verse 2]", "Remember the night"]);
+        let f = line_fit(["{Verse 1}", "Over the river", "{Verse 2}", "Remember the night"]);
         assert!(f[1].flag.as_deref().is_some_and(|x| x.contains("stress")), "{f:?}");
     }
 
     #[test]
     fn classifies_rhyme_types_across_the_sheet() {
-        let m = marked(&["[Verse 1]", "When the night was long", "I was all alone", "You sang a song", "and called me home"]);
+        let m = marked(&["{Verse 1}", "When the night was long", "I was all alone", "You sang a song", "and called me home"]);
         assert!(m.contains(&("long", vec!["perfect"])), "{m:?}");
         assert!(m.contains(&("song", vec!["perfect"])), "{m:?}");
         assert!(m.contains(&("alone", vec!["slant"])), "{m:?}");
@@ -561,5 +588,45 @@ mod tests {
         let plain = rhyme_marks_with(["When the night was long", "You sang a song"], None);
         assert_eq!(plain.len(), 2);
         assert_eq!(word_spans("don't stop—now"), vec![(0, 5), (6, 10), (13, 16)]);
+    }
+
+    #[test]
+    fn chords_are_ignored_by_every_check() {
+        lexicon::wait();
+        let plain =
+            ["{Verse 1}", "When the night was long", "And my heart could not be still", "{Verse 2}", "When the day was gone", "And the night"];
+        let chorded = [
+            "{Verse 1}",
+            "[Am]When the night was [G]long",
+            "[F] [C]",
+            "And my [C]heart could not be [G/B]still",
+            "{Verse 2}",
+            "[Am]When the day was [G]gone",
+            "And the [Dm7]night",
+        ];
+        // Fit: the same syllables, stresses, partners and flags (the chord bar is no line).
+        let fa: Vec<_> = line_fit(plain).into_iter().map(|f| (f.syllables, f.stress, f.partner_number, f.flag)).collect();
+        let fb: Vec<_> = line_fit(chorded).into_iter().map(|f| (f.syllables, f.stress, f.partner_number, f.flag)).collect();
+        assert_eq!(fa, fb);
+        // Rhyme marks: the same words, found at their place in the chorded lines.
+        let words = |lines: &[&str]| -> Vec<String> {
+            rhyme_marks(lines.iter().copied()).iter().map(|m| lines[m.line].get(m.start..m.end).unwrap_or("?").to_string()).collect()
+        };
+        assert_eq!(words(&plain), words(&chorded));
+        assert_eq!(words(&["[Am]When the night was [G]long", "You sang a [C]song"]), vec!["long", "song"]);
+        // A chord bar between two rhyming lines does not part them.
+        assert_eq!(words(&["When the night was long", "[Am] [G]", "You sang a song"]), vec!["long", "song"]);
+        // Repetition: chord names are no words, the hook is found across a chord, in place.
+        let r = repetition(["[C]Jesus, the [G]only one", "[Am]Jesus"], "the only one");
+        assert_eq!(r.hits, vec![(0, 10, 25)]);
+        assert_eq!(&"[C]Jesus, the [G]only one"[10..25], "the [G]only one");
+        assert!(!r.words.iter().any(|(w, _)| w == "am" || w == "c" || w == "g"));
+        assert_eq!(r.words.first(), Some(&("jesus".to_string(), 2)));
+        // Copy for AI: the words without chords; the chord bar left out.
+        let p = ai_prompt(chorded, "", &[1], "x");
+        assert!(p.contains("1. When the night was long [5 |"), "{p}");
+        assert!(!p.contains("[Am]") && !p.contains("[F]"), "{p}");
+        assert!(p.contains("Verse 1: AB"), "{p}");
+        assert_eq!(default_ai_request(chorded, &[2]), default_ai_request(plain, &[2]));
     }
 }

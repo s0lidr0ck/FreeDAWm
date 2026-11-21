@@ -1,4 +1,4 @@
-//! The MIDI Event List (Window › MIDI Event List): every event of the edited MIDI clip, notes,
+//! The MIDI Event List (Window › Editors › MIDI Event List): every event of the edited MIDI clip, notes,
 //! controllers (CC, pitch bend, aftertouch, poly pressure, program change) and SysEx (its bytes
 //! as hex, typed anew to change them), in time order, with
 //! typed values to change, a row to insert a new event, and filters by kind and channel.

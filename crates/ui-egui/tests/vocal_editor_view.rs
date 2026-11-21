@@ -45,7 +45,7 @@ fn the_dock_has_a_vocal_editor_tab_beside_midi_editor() {
     let tab = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("soundcraft-dock-tab", "VOCAL EDITOR"))));
     let midi = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("soundcraft-dock-tab", "MIDI EDITOR"))));
     assert!(tab.unwrap().left() < midi.unwrap().left(), "VOCAL EDITOR comes first in the lower dock strip");
-    // Window › Vocal Editor toggles it.
+    // Window › Editors › Vocal Editor toggles it.
     app.run("window.vocal_editor", json!({})).unwrap();
     settle(&ctx, &mut app);
     assert!(!app.ui.docking.layout.contains(&Panel::Vocal));

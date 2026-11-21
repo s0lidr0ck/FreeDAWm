@@ -38,7 +38,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     crate::script_editor::show(app, ctx);
 }
 
-/// Window › Mix Snapshots: store the mix under a name, recall it whole or by section, on every
+/// Window › Transport & Session › Mix Snapshots: store the mix under a name, recall it whole or by section, on every
 /// track or the selected ones (`mix.snapshot_*`, one undo step each).
 fn mix_snapshots(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_mix_snapshots;
@@ -96,7 +96,7 @@ fn mix_snapshots(app: &mut SoundApp, ctx: &egui::Context) {
     }
 }
 
-/// Window › Loudness Meter: the master's loudness as EBU R128 reads it, while the transport
+/// Window › Transport & Session › Loudness Meter: the master's loudness as EBU R128 reads it, while the transport
 /// rolls: momentary (400 ms), short-term (3 s), integrated, the loudness range and the highest
 /// true peak since the last reset.
 fn loudness(app: &mut SoundApp, ctx: &egui::Context) {

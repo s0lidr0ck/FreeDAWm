@@ -719,6 +719,9 @@ fn main() -> eframe::Result {
     // The plugin scan cache (the plugin lists and where each plugin lives; scans run out of
     // process, see `soundcraft-plugin-scan`). Runs without preferences keep it in memory.
     soundcraft_engine::set_plugin_scan_cache_dir(if prefs_enabled() { config_dir().map(|d| d.join("PluginScan")) } else { None });
+    // The ARA log (each ARA plug-in given clips or refused, and what it reported): beside the
+    // app's log, as `ara.log`.
+    soundcraft_engine::ara::set_log_file(if prefs_enabled() { config_dir().map(|d| d.join(logging::LOG_DIR).join("ara.log")) } else { None });
     // No settings saved yet: the first start, which opens the tour once.
     let first_run = prefs_enabled() && prefs_path().is_some_and(|p| !p.exists());
     let mut prefs = load_prefs().unwrap_or_default();

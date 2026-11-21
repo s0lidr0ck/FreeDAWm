@@ -16,6 +16,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.midi_clear_expression", "Clear the Note's Expression", "", None),
     ("window.step_input", "Step Input", "Event > More MIDI > Step Input", None),
     ("ui.quantize_audio", "Quantize Audio...", "Clip > Quantize Audio...", None),
+    ("ui.wavetable_import", "Import Wavetable...", "", None),
     ("ui.dock.reset", "Reset Panel Layout", "Window > Reset Panel Layout", None),
     ("window.mix", "Mix", "Window > Mix", Some("Cmd+=")),
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
@@ -50,6 +51,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.narrow_mix", "Narrow Mix", "View > Narrow Mix", Some("Cmd+Alt+M")),
     ("window.session_info", "Session Info", "", None),
     ("window.audio_health", "Session Audio Health", "", None),
+    ("window.ara", "ARA Plug-ins...", "", None),
     ("window.about", "About FreeDAWm", "", None),
     ("window.close", "Close Window", "Window > Close Window", Some("Cmd+W")),
     ("window.hide_floating", "Hide All Floating Windows", "Window > Hide All Floating Windows", Some("Cmd+Ctrl+W")),
@@ -93,7 +95,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.search", "Search", "Window > Pro Tools Search", Some("Cmd+Ctrl+S")),
     ("window.score", "Score Editor", "Window > Score Editor", Some("Cmd+Ctrl+=")),
     ("window.scout", "Scout", "Window > Scout", None),
-    ("window.studio", "Studio", "Window > Studio", None),
+    ("window.musician", "Musician Settings", "", None),
+    ("window.band_print", "Print Band to MIDI", "Track > Print Band to MIDI...", None),
+    ("ui.band.import_chords", "Import MIDI Chords", "File > Import > MIDI Chords...", None),
     ("ui.scout.copy", "Copy Scout Prompt + Package", "", None),
     ("ui.scout.package", "Scout Package", "", None),
     ("ui.scout.send", "Ask Claude (Scout)", "", None),
@@ -207,7 +211,7 @@ pub fn ui_aliases() -> Vec<(&'static str, &'static str)> {
 
 /// The Band's lanes in View › Rulers, right after Key Signature (not in the incumbent's catalog).
 /// The chord lane's ruler is labelled "Chords" (its id stays `band_chords`).
-const BAND_RULERS: [&str; 3] = ["View > Rulers > Sections", "View > Rulers > Chords", "View > Rulers > Lyrics"];
+const BAND_RULERS: [&str; 4] = ["View > Rulers > Sections", "View > Rulers > Chords", "View > Rulers > Band", "View > Rulers > Lyrics"];
 
 /// Tempo and Key Signature toggle their rulers like the others; their editor flags sit right after them.
 const PLAIN_RULERS: [&str; 2] = ["View > Rulers > Tempo", "View > Rulers > Key Signature"];
@@ -563,11 +567,13 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                 let extra = ui_aliases();
                 for root in tree() {
                     ui.menu_button(&root.label, |ui| {
-                        menu_items(app, ui, &root.children, &extra);
-                        if root.label == "Process" {
-                            ui.separator();
-                            ui.label(egui::RichText::new("Processes selected clips offline").small().color(t.text_dim));
-                        }
+                        scrolling(ui, |ui| {
+                            menu_items(app, ui, &root.children, &extra);
+                            if root.label == "Process" {
+                                ui.separator();
+                                ui.label(egui::RichText::new("Processes selected clips offline").small().color(t.text_dim));
+                            }
+                        });
                     });
                 }
                 let title = format!(
@@ -577,11 +583,156 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     if app.ui.window == MainWindow::Edit || app.ui.mix_separate { "Edit" } else { "Mix" }
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    menu_search(app, ui);
                     ui.label(egui::RichText::new(title).color(t.text_dim));
                 });
             });
         },
     );
+}
+
+/// A menu taller than the room under it scrolls instead of running off the bottom of the window.
+fn scrolling(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let room = (ui.ctx().content_rect().bottom() - ui.cursor().top() - 12.0).max(120.0);
+    egui::ScrollArea::vertical().max_height(room).show(ui, add);
+}
+
+/// The most matches the menu bar's search lists.
+const SEARCH_SHOWN: usize = 14;
+
+/// The menu items matching every word of `query` (in the item's whole menu path, any case), as
+/// (label, path, command); items whose label starts with the query come first.
+pub fn search_hits(query: &str, extra: &[(&str, &str)]) -> Vec<(String, String, String)> {
+    let words: Vec<String> = query.to_lowercase().split_whitespace().map(str::to_owned).collect();
+    let mut out = Vec::new();
+    if words.is_empty() {
+        return out;
+    }
+    search_walk(&tree(), &words, extra, &mut out);
+    let q = words.join(" ");
+    out.sort_by_key(|h| !h.0.to_lowercase().starts_with(&q));
+    out
+}
+
+fn search_walk(nodes: &[MenuNode], words: &[String], extra: &[(&str, &str)], out: &mut Vec<(String, String, String)>) {
+    for n in nodes {
+        if !n.children.is_empty() {
+            search_walk(&n.children, words, extra, out);
+            continue;
+        }
+        if n.kind != MenuKind::Item {
+            continue;
+        }
+        let hay = n.path.to_lowercase();
+        if words.iter().all(|w| hay.contains(w.as_str()))
+            && let Some(id) = command_for_path(&n.path, extra)
+        {
+            out.push((n.label.clone(), n.path.clone(), id));
+        }
+    }
+}
+
+/// The search field at the right of the menu bar: type a few letters of any menu item and pick
+/// it from the list under the field. Up and Down move through the matches that can run, Enter
+/// runs the lit one, Esc clears. Each row shows the item's name on the left and the menu it
+/// lives in on the right; one that cannot run now is greyed and says why when hovered.
+fn menu_search(app: &mut SoundApp, ui: &mut egui::Ui) {
+    let t = crate::theme::Tokens::current();
+    let id = egui::Id::new("menu_bar_search");
+    let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let mut pick: usize = ui.data(|d| d.get_temp(id.with("pick"))).unwrap_or(0);
+    // The field is a box of its own on the bar, so it reads as a place to type while empty.
+    let resp = ui
+        .scope(|ui| {
+            let v = ui.visuals_mut();
+            v.extreme_bg_color = t.panel_bg;
+            v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, t.text_dim.gamma_multiply(0.5));
+            v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, t.text_dim);
+            ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .id(id.with("field"))
+                    .hint_text("\u{1F50D} Search menus")
+                    .desired_width(190.0)
+                    .margin(egui::Margin::symmetric(6, 1)),
+            )
+        })
+        .inner;
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search menus"));
+    let mut done = false;
+    if resp.changed() {
+        pick = 0;
+    }
+    if !text.trim().is_empty() {
+        let extra = ui_aliases();
+        let hits = search_hits(&text, &extra);
+        let shown = &hits[..hits.len().min(SEARCH_SHOWN)];
+        let usable: Vec<usize> = (0..shown.len()).filter(|&i| item_state(app, &shown[i].1, Some(&shown[i].2)).0).collect();
+        let (down, up, enter) =
+            ui.input(|i| (i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::Enter)));
+        if !usable.is_empty() {
+            let at = usable.iter().position(|&i| i == pick).unwrap_or(0);
+            let at = if down {
+                (at + 1) % usable.len()
+            } else if up {
+                (at + usable.len() - 1) % usable.len()
+            } else {
+                at
+            };
+            pick = usable[at];
+        }
+        let enter = enter && (resp.lost_focus() || resp.has_focus());
+        let list = egui::Area::new(id.with("hits"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(resp.rect.right_bottom() + egui::vec2(0.0, 4.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(380.0);
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                        if shown.is_empty() {
+                            ui.label(egui::RichText::new("No menu item matches").color(t.text_dim));
+                        }
+                        for (i, (label, path, cmd)) in shown.iter().enumerate() {
+                            let enabled = usable.contains(&i);
+                            let menu = path.rsplit_once(" > ").map_or("", |(m, _)| m).replace(" > ", " \u{203a} ");
+                            let row = egui::Button::new(label.as_str())
+                                .shortcut_text(egui::RichText::new(menu).color(t.text_dim))
+                                .selected(enabled && i == pick);
+                            let mut r = ui.add_enabled(enabled, row);
+                            if let Some(why) = disabled_reason(app, Some(cmd)) {
+                                r = r.on_disabled_hover_text(why);
+                            }
+                            if r.hovered() && enabled {
+                                pick = i;
+                            }
+                            if !done && (r.clicked() || (enter && enabled && i == pick)) {
+                                invoke_menu(app, cmd, path);
+                                done = true;
+                            }
+                        }
+                        if hits.len() > SEARCH_SHOWN {
+                            ui.label(egui::RichText::new(format!("{} more: keep typing", hits.len() - SEARCH_SHOWN)).small().color(t.text_dim));
+                        }
+                    });
+                });
+            });
+        let away = resp.clicked_elsewhere() && list.response.clicked_elsewhere();
+        if away || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            done = true;
+        } else if (down || up) && !resp.has_focus() {
+            // The arrows move through the list, not out of the field.
+            resp.request_focus();
+        }
+    }
+    if done {
+        text.clear();
+        pick = 0;
+        resp.surrender_focus();
+    }
+    ui.data_mut(|d| {
+        d.insert_temp(id, text);
+        d.insert_temp(id.with("pick"), pick);
+    });
 }
 
 /// Track › Instrument: the instrument picker for the selected instrument track (#374).
@@ -635,7 +786,7 @@ pub(crate) fn tick_label(ui: &egui::Ui, label: &str, checked: bool, reserve: boo
 fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str, &str)], reserve: bool) {
     if !n.children.is_empty() {
         ui.menu_button(tick_label(ui, &n.label, false, reserve), |ui| {
-            menu_items(app, ui, &n.children, extra);
+            scrolling(ui, |ui| menu_items(app, ui, &n.children, extra));
         });
         return;
     }
@@ -712,8 +863,21 @@ pub fn ruler_menu_head(app: &mut SoundApp, ui: &mut egui::Ui, ruler: &str) {
 }
 
 fn ruler_id_of(ruler: &str) -> Option<&str> {
-    const ALL: [&str; 12] =
-        ["bars_beats", "min_secs", "timecode", "feet_frames", "samples", "tempo", "meter", "markers", "key", "sections", "band_chords", "lyrics"];
+    const ALL: [&str; 13] = [
+        "bars_beats",
+        "min_secs",
+        "timecode",
+        "feet_frames",
+        "samples",
+        "tempo",
+        "meter",
+        "markers",
+        "key",
+        "sections",
+        "band_chords",
+        "band",
+        "lyrics",
+    ];
     ALL.contains(&ruler).then_some(ruler)
 }
 
@@ -746,6 +910,8 @@ pub fn is_ui_command(id: &str) -> bool {
 pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
     let when = |ok: bool, why: &str| if ok { Ok(()) } else { Err(why.to_string()) };
     match id {
+        // Clip › ARA Plug-ins…: greyed out until the scan has found an ARA 2 plug-in.
+        "window.ara" => crate::ara_ui::availability(),
         i if i.starts_with("window.")
             || i.starts_with("view.mix_section")
             || i == "view.mix_slim"
@@ -755,6 +921,8 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
         {
             Ok(())
         }
+        // File › Import › MIDI Chords… asks for a file.
+        "ui.band.import_chords" => when(app.services.pick_open.is_some(), "No file dialog in this build"),
         // FireStation's own folder, where this platform keeps it; greyed out with where it looked.
         "presets.import_firestation" => crate::fs_presets::available(app),
         // The ML jobs need an audio track or clip to run on; Generate MIDI from Text and Generate
@@ -775,6 +943,8 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
         }
         "ui.mix.editors_actual" => when((app.ui.editor_scale - 1.0).abs() > 1e-3, "Plugin editors are at their actual size"),
         i if i.starts_with("ui.mix.width.") => when(crate::channel_width::enabled(app, i), "Select channels in the Mix window"),
+        // Import Wavetable… acts on a selected track playing the Wavetable Synth.
+        "ui.wavetable_import" => when(crate::wavetable_import::target(app).is_some(), "Select a track playing Cicada (the wavetable synth)"),
         // Rename… opens its dialog on the first selected track.
         "track.rename" => when(!app.engine.target_tracks().is_empty(), "Select a track"),
         // Clean Vocal's follow-ups act on a cleaned clip only.
@@ -1011,7 +1181,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("ui.mix.slim_editors") => app.ui.slim_editors,
         Some("window.renderer") => app.extra.show_renderer,
         Some("window.scout") => app.scout.show,
-        Some("window.studio") => app.studio.show,
+        Some("window.band_print") => app.band_ui.print.open,
         Some("window.plugin_browser") => app.ui.show_plugin_browser,
         Some("window.ui_customization") => app.extra.show_ui_customization,
         Some("window.config_auto_update") => app.extra.auto_update_config,
@@ -1074,6 +1244,7 @@ fn ruler_id(label: &str) -> &'static str {
         "Key Signature" => "key",
         "Sections" => "sections",
         "Chords" => "band_chords",
+        "Band" => "band",
         "Lyrics" => "lyrics",
         _ => "",
     }
@@ -1374,7 +1545,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "ui.quantize_audio" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference")
+        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference" | "ui.band.import_chords")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
@@ -1384,6 +1555,12 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.capture_midi" {
         return Some(crate::midi_devices::capture(app));
+    }
+    if id == "ui.wavetable_import" {
+        return Some(crate::wavetable_import::open_for_selection(app));
+    }
+    if id == "ui.ara_editor" {
+        return Some(crate::ara_ui::open_editor(app, p));
     }
     if id == "window.new_mix" {
         return Some(crate::mix_more::open(app));
@@ -1433,7 +1610,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if id == "ui.vocal_editor" {
         return Some(crate::vocal_editor::open_command(app, p));
     }
-    // The Vocal Studio: the editor over every vocal track (Window › Vocal Studio toggles it).
+    // The Vocal Studio: the editor over every vocal track (Window › Editors › Vocal Studio toggles it).
     if id == "ui.vocal_studio" {
         return Some(crate::vocal_editor::studio::command(app, p));
     }
@@ -1478,8 +1655,14 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if let Some(r) = crate::ml_ui::run(app, id, p) {
         return Some(r);
     }
-    if id == "window.studio" {
-        return Some(crate::band::studio::command(app, p));
+    if id == "window.musician" {
+        return Some(crate::band::ruler::musician_command(app, p));
+    }
+    if id == "window.band_print" {
+        return Some(crate::band::ruler::print_command(app, p));
+    }
+    if id == "ui.band.import_chords" {
+        return Some(crate::band::ruler::import_chords(app));
     }
     if id == "ui.audio_device" {
         return Some(crate::windows::audio_device_command(app, p));
@@ -1596,6 +1779,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.track_list" => toggle(&mut app.ui.show_tracks_list),
         "window.narrow_mix" | "view.mix_slim" => toggle(&mut app.ui.narrow_mix),
         "window.session_info" => toggle(&mut app.ui.show_session_info),
+        "window.ara" => toggle(&mut app.ui.show_ara),
         "window.audio_health" => {
             app.audio_health_report = None;
             toggle(&mut app.ui.show_audio_health)
@@ -1700,6 +1884,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             app.ui.show_undo_history = false;
             app.ui.show_session_info = false;
             app.ui.show_audio_health = false;
+            app.ui.show_ara = false;
             app.ui.show_automation = false;
             app.ui.plugin_windows.clear();
             app.ui.full_editors.clear();
@@ -1933,6 +2118,24 @@ pub fn parity() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_menu_search_finds_items_by_any_words_of_their_path() {
+        let extra = ui_aliases();
+        let band = search_hits("band", &extra);
+        assert!(band.iter().any(|h| h.1 == "View > Rulers > Band"), "{band:?}");
+        assert!(band.iter().any(|h| h.1 == "Track > New Band"), "{band:?}");
+        assert!(search_hits("studio", &extra).iter().any(|h| h.0 == "Vocal Studio"));
+        // Words match anywhere in the path, in any order and case; a label that starts with
+        // the query comes first.
+        assert!(search_hits("WINDOW stud", &extra).iter().all(|h| h.1.starts_with("Window")));
+        assert!(search_hits("rulers BAND", &extra).iter().all(|h| h.1.starts_with("View > Rulers")));
+        assert_eq!(search_hits("band", &extra)[0].0, "Band");
+        assert!(search_hits("", &extra).is_empty() && search_hits("   ", &extra).is_empty());
+        assert!(search_hits("no such menu item anywhere", &extra).is_empty());
+        // Every hit runs a command, and headings and separators are never hits.
+        assert!(search_hits("e", &extra).iter().all(|h| !h.2.is_empty() && !h.0.is_empty()));
+    }
     use crate::{Services, SoundApp};
 
     /// Every command a "changed nothing" reason is written for exists, and the message names the

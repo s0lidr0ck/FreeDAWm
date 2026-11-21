@@ -92,6 +92,8 @@ available (never redistributed).
 | `crates/engine/tests/fixtures/dawproject/studio-one-style.xml` | FreeDAWm contributors (Claude) | original: a song laid out as Studio One's DAWproject export, written for the tests | MIT OR Apache-2.0 |
 | Steinberg ASIO SDK 2.3.4 (`ASIO-SDK_2.3.4_2025-10-15.zip`, not in the repo; downloaded by `release.yml` and compiled into the Windows release builds) | Steinberg Media Technologies GmbH | ASIO audio device support on Windows | GPL-3.0 (dual-licensed by Steinberg: GPLv3 or the Steinberg ASIO License; used under GPLv3) |
 | `packaging/windows/GPL-3.0.txt` | Free Software Foundation | Licence text shipped with the Windows ASIO builds | verbatim copying permitted |
+| `crates/ara-host/vendor/ARA_API/` (`ARAInterface.h`, `ARAVST3.h`, `README.md`, `LICENSE.txt`, unmodified, for review; not compiled) | Celemony Software GmbH, developed in cooperation with PreSonus Software Ltd. | The ARA API specification, https://github.com/Celemony/ARA_API, commit `65ec5c43b943a48cb5446f448a0492db6af8534b` (tag `releases/2.3.0`, ARA SDK 2.3) | Apache-2.0 (`crates/ara-host/vendor/ARA_API/LICENSE.txt`) |
+| `crates/ara-host/src/sys.rs` | FreeDAWm contributors (Claude), translating Celemony's headers above | Hand-written Rust bindings to `ARAInterface.h` and the VST3 ids of `ARAVST3.h` (a derivative of the headers; the changes are listed at the top of the file) | Apache-2.0 (as the headers); the rest of `crates/ara-host` is MIT OR Apache-2.0 |
 
 ## Recorded drum kits (not bundled)
 

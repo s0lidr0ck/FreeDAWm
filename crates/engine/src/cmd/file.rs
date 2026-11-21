@@ -931,7 +931,11 @@ mod tests {
             }
             let value = e.execute("file.bounce_mix", &params).unwrap();
             let peak = value.get("peak_db").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-            (std::fs::read(&path).unwrap(), peak)
+            // The samples only: the file's header carries the time of day (BWF `bext`), which
+            // differs between two bounces made either side of a second's tick.
+            let bytes = std::fs::read(&path).unwrap();
+            let data = bytes.windows(4).position(|w| w == b"data").expect("a data chunk");
+            (bytes[data..].to_vec(), peak)
         };
         let (main_bytes, main_peak) = bounce(&mut e, "main.wav", None);
         let (named_main, named_peak) = bounce(&mut e, "named-main.wav", Some("main"));

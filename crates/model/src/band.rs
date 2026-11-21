@@ -129,11 +129,15 @@ pub struct BandFeel {
     pub fills_yield: bool,
     pub leave_space: bool,
     pub dynamics: bool,
+    /// The band plays as one (on top of Natural): a shared pulse, phrase-shaped dynamics, fills the others answer.
+    /// New sessions play it; a session saved before it existed reads `false` and plays as it did.
+    #[serde(default)]
+    pub band: bool,
 }
 
 impl Default for BandFeel {
     fn default() -> Self {
-        BandFeel { natural: true, tension: true, bass_lock: false, fills_yield: false, leave_space: false, dynamics: false }
+        BandFeel { natural: true, tension: true, bass_lock: false, fills_yield: false, leave_space: false, dynamics: false, band: true }
     }
 }
 
@@ -298,7 +302,7 @@ fn factory_slot(k: usize) -> MusicianSlot {
         (true, 0, "Clay", 1, 1, true, -1, 0, 0),
         (true, 5, "Benny", 8, 1, true, -2, 0, 0),
         (true, 2, "Cole", 41, 1, true, 0, 0, 0),
-        (true, 7, "Aria", 14, 4, true, 2, 1, -1),
+        (true, 7, "Aria", 14, 4, true, 0, 1, -1),
         (true, 9, "Duke", 16, 4, true, 0, 0, 0),
         (false, 0, "Session", 0, 3, false, 0, 1, 0),
     ];
@@ -504,6 +508,20 @@ mod tests {
         assert!(!loaded.band.slots[5].enabled);
         assert_eq!(loaded.band.defs.len(), 1);
         assert_eq!(loaded.band.defs[0].name, "Verse");
+    }
+
+    #[test]
+    fn a_band_saved_before_playing_as_a_band_keeps_playing_as_it_did() {
+        // A session saved before the switch existed has a `feel` without `band`: it stays off (Natural as it was).
+        let old = band_from(json!({"key": 2, "feel": {"natural": true, "tension": true, "bass_lock": false}}));
+        assert!(old.feel.natural && !old.feel.band);
+        // A new band plays as a band; a saved one keeps what it was.
+        assert!(BandState::default().feel.band);
+        let mut s = Session::default();
+        s.band.key = 3;
+        s.band.feel.band = false;
+        let back: Session = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert!(!back.band.feel.band);
     }
 
     #[test]

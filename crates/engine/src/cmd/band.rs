@@ -39,7 +39,7 @@ pub fn specs() -> Vec<super::CommandSpec> {
             "Band Settings",
             [],
             None,
-            "{key?: 0-11|\"C\"..\"B\", scale?: major|minor, take?: 1-16, feel?: {natural?, tension?, bass_lock?, fills_yield?, leave_space?, dynamics?}, song_feel?: {on?, time?, density?, pocket?, groove?, touch?}, feel_preset?: name, feel_ignore?: [slot]}",
+            "{key?: 0-11|\"C\"..\"B\", scale?: major|minor, take?: 1-16, feel?: {natural?, tension?, band?, bass_lock?, fills_yield?, leave_space?, dynamics?}, song_feel?: {on?, time?, density?, pocket?, groove?, touch?}, feel_preset?: name, feel_ignore?: [slot]}",
             always,
             settings
         ),
@@ -66,6 +66,10 @@ pub fn specs() -> Vec<super::CommandSpec> {
         cmd!("band.chord.set", "Edit Chord", [], None, "{chord, at?, end?, chord_text?|slot?: 0-111, bass?: -1-11, snap?: true}", always, chord_set),
         cmd!("band.chord.remove", "Remove Chord", [], None, "{chord}", always, chord_remove),
         cmd!("band.chords.delete", "Delete Chords", [], None, "{chords?: [id], range?: {start, end}, all?: bool} → {deleted}", always, chords_delete),
+        cmd!(noundo "band.chords.copy", "Copy Chords", [], None, "{chords: [id]} → {copied}", always, chords_copy),
+        cmd!("band.chords.paste", "Paste Chords", [], None, "{at, snap?: true} → {chords: [id]}", always, chords_paste),
+        cmd!("band.chords.copy_to", "Copy Chords To", [], None, "{chords: [id], to, snap?: true} → {chords: [id]}", always, chords_copy_to),
+        cmd!("band.chords.duplicate", "Duplicate Chords", [], None, "{chords: [id]} → {chords: [id]}", always, chords_duplicate),
         cmd!("band.song.factory", "Factory Song", [], None, "{name, at?: 0, replace?: true}", always, song_factory),
         cmd!("band.chords.import", "Import Chords", [], None, "{path, at?: 0, key?: 0-11|\"C\"..\"B\", scale?: major|minor}", always, chords_import),
         cmd!(
@@ -498,6 +502,7 @@ fn settings(e: &mut Engine, p: &Value) -> Result<Value> {
                 let slot = match k.as_str() {
                     "natural" => &mut st.feel.natural,
                     "tension" => &mut st.feel.tension,
+                    "band" => &mut st.feel.band,
                     "bass_lock" => &mut st.feel.bass_lock,
                     "fills_yield" => &mut st.feel.fills_yield,
                     "leave_space" => &mut st.feel.leave_space,
@@ -1099,6 +1104,84 @@ fn chords_delete(e: &mut Engine, p: &Value) -> Result<Value> {
     })
 }
 
+/// `p[key]`: chord ids, at least one and at most a full lane's worth.
+fn chord_ids(cmd: &str, p: &Value, key: &str) -> Result<Vec<u32>> {
+    let Some(Value::Array(a)) = p.get(key) else { return Err(bad(cmd, format!("`{key}` must be an array of chord ids"))) };
+    if a.is_empty() {
+        return Err(bad(cmd, format!("`{key}` names no chords")));
+    }
+    if a.len() > MAX_CHORDS {
+        return Err(bad(cmd, format!("`{key}` names more than {MAX_CHORDS} chords")));
+    }
+    a.iter().map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad(cmd, format!("`{key}` must be chord ids (got {v})")))).collect()
+}
+
+/// The chords `p[chords]` names (each must be on the lane), in time order, their ticks counted
+/// from the first one's start; and where the last one ends.
+fn chords_named(cmd: &str, st: &BandState, p: &Value) -> Result<(Vec<ChordEvent>, i64)> {
+    let ids = chord_ids(cmd, p, "chords")?;
+    let mut picked: Vec<ChordEvent> = Vec::with_capacity(ids.len());
+    for id in ids {
+        let c = st.chords.iter().find(|c| c.id == id).ok_or_else(|| bad(cmd, format!("no chord {id}")))?;
+        if !picked.iter().any(|x| x.id == id) {
+            picked.push(c.clone());
+        }
+    }
+    picked.sort_by_key(|c| c.tick);
+    let first = picked.first().map_or(0, |c| c.tick);
+    let end = picked.iter().map(|c| c.tick.saturating_add(c.length_ticks)).max().unwrap_or(first);
+    for c in &mut picked {
+        c.tick = c.tick.saturating_sub(first);
+    }
+    Ok((picked, end))
+}
+
+/// Lays copies of `rel` (ticks from the first one's start) from tick `at`, each cutting what it
+/// covers as any chord laid on the lane does; their new ids.
+fn lay_copies(cmd: &str, st: &mut BandState, rel: &[ChordEvent], at: i64) -> Result<Vec<u32>> {
+    rel.iter().map(|c| lay_chord(cmd, st, ChordEvent { tick: at.max(0).saturating_add(c.tick), ..c.clone() })).collect()
+}
+
+/// `band.chords.copy`: the chords onto the clipboard, in place of whatever it held.
+fn chords_copy(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "band.chords.copy";
+    let (chords, _) = chords_named(C, &e.session().band, p)?;
+    let n = chords.len();
+    e.clipboard = crate::Clipboard { chords, ..crate::Clipboard::default() };
+    Ok(json!({"copied": n}))
+}
+
+/// `band.chords.paste`: the copied chords from `at` (the nearest half bar unless `snap: false`),
+/// their lengths and the gaps between them kept.
+fn chords_paste(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "band.chords.paste";
+    let at = position(e, C, p, "at")?;
+    let exact = exact(C, p)?;
+    let rel = e.clipboard.chords.clone();
+    if rel.is_empty() {
+        return Err(bad(C, "no chords copied"));
+    }
+    let a = tick_at(e.session(), at, exact);
+    edit_band(e, |_, st| Ok(json!({"chords": lay_copies(C, st, &rel, a)?}))).inspect(|_| show_lane_rulers(e))
+}
+
+/// `band.chords.copy_to`: copies of the chords with the first at `to`, gaps kept; the originals stay
+/// (unless the copies land on them).
+fn chords_copy_to(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "band.chords.copy_to";
+    let (rel, _) = chords_named(C, &e.session().band, p)?;
+    let to = position(e, C, p, "to")?;
+    let a = tick_at(e.session(), to, exact(C, p)?);
+    edit_band(e, |_, st| Ok(json!({"chords": lay_copies(C, st, &rel, a)?})))
+}
+
+/// `band.chords.duplicate`: copies of the chords straight after the last one ends, gaps kept.
+fn chords_duplicate(e: &mut Engine, p: &Value) -> Result<Value> {
+    const C: &str = "band.chords.duplicate";
+    let (rel, end) = chords_named(C, &e.session().band, p)?;
+    edit_band(e, |_, st| Ok(json!({"chords": lay_copies(C, st, &rel, end)?})))
+}
+
 // ---- songs --------------------------------------------------------------------------------------
 
 /// Where laid items span, in ticks (`None` when there are none).
@@ -1125,7 +1208,7 @@ fn bump_next_id(st: &mut BandState) {
     st.next_id = st.next_id.max(top.saturating_add(1)).max(1);
 }
 
-fn song_factory(e: &mut Engine, p: &Value) -> Result<Value> {
+pub(super) fn song_factory(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "band.song.factory";
     let name = name_in(C, p)?.to_string();
     let songs = factory_songs();

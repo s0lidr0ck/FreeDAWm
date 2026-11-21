@@ -14,10 +14,48 @@ pub struct SynthPreset {
     pub group: &'static str,
     pub desc: &'static str,
     pub set: &'static [(&'static str, f32)],
+    /// How far it goes (the menus show it as a heading inside each group).
+    pub tier: Tier,
+}
+
+/// The four tiers of the factory suite, in the order the menus list them inside a group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tier {
+    /// Honest starting points a beginner can read: few knobs off their defaults.
+    Simple,
+    /// The bread and butter people look for by name.
+    Expected,
+    /// What these synths do that a plain one does not: named macros, velocity, key, wheel and
+    /// random routed with intent, the sound-rate cables.
+    Special,
+    /// Out-there sound design that still plays; Macro 1 takes each from tame to wild.
+    Wild,
+}
+
+impl Tier {
+    /// Every tier, in menu order.
+    pub const ALL: [Tier; 4] = [Tier::Simple, Tier::Expected, Tier::Special, Tier::Wild];
+
+    /// The name the menus show.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Tier::Simple => "Simple",
+            Tier::Expected => "Expected",
+            Tier::Special => "Special",
+            Tier::Wild => "Wild",
+        }
+    }
 }
 
 pub(crate) const fn preset(group: &'static str, name: &'static str, desc: &'static str, set: &'static [(&'static str, f32)]) -> SynthPreset {
-    SynthPreset { name, group, desc, set }
+    SynthPreset { name, group, desc, set, tier: Tier::Expected }
+}
+
+impl SynthPreset {
+    /// The same preset in tier `tier`.
+    pub(crate) const fn tier(self, tier: Tier) -> Self {
+        SynthPreset { tier, ..self }
+    }
 }
 
 // Waves: 0 saw, 1 square, 2 sine, 3 triangle.
@@ -56,7 +94,8 @@ pub static SYNTH_PRESETS: [SynthPreset; 15] = [
             ("amp_sustain", 100.0),
             ("amp_release", 60.0),
         ],
-    ),
+    )
+    .tier(Tier::Simple),
     preset(
         "Bass",
         "Acid Line",
@@ -204,7 +243,8 @@ pub static SYNTH_PRESETS: [SynthPreset; 15] = [
             ("amp_release", 250.0),
             ("velocity", 80.0),
         ],
-    ),
+    )
+    .tier(Tier::Simple),
     preset(
         "Pluck",
         "Bell Pluck",
@@ -305,10 +345,6 @@ fn quoted(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn json_of(p: &SynthPreset) -> String {
-    json_for(&SYNTH_INFO, p)
-}
-
 /// A preset's JSON for `info`'s instrument (every parameter, the preset's values over the
 /// defaults): shared by the synths' preset lists.
 pub(crate) fn json_for(info: &crate::PluginInfo, p: &SynthPreset) -> String {
@@ -320,14 +356,213 @@ pub(crate) fn json_for(info: &crate::PluginInfo, p: &SynthPreset) -> String {
             format!("{}:{v}", quoted(info.id))
         })
         .collect();
-    format!("{{\"name\":{},\"group\":{},\"desc\":{},\"values\":{{{}}}}}", quoted(p.name), quoted(p.group), quoted(p.desc), values.join(","))
+    format!(
+        "{{\"name\":{},\"group\":{},\"tier\":{},\"desc\":{},\"values\":{{{}}}}}",
+        quoted(p.name),
+        quoted(p.group),
+        quoted(p.tier.name()),
+        quoted(p.desc),
+        values.join(",")
+    )
 }
 
-/// The factory presets as `(name, json)` pairs, in menu order (built once).
+/// The factory presets as `(name, json)` pairs, in menu order (built once): by group
+/// ([`super::suite::GROUPS`]), then by tier, the first presets ([`SYNTH_PRESETS`],
+/// [`PATCHED_PRESETS`]) before the suite's ([`super::suite::SUITE`]) within a tier (the showcase set,
+/// [`super::showcase::SHOWCASE`], is its own group, "Patched").
 pub fn factory_presets() -> &'static [(&'static str, &'static str)] {
     static BUILT: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
-    BUILT.get_or_init(|| SYNTH_PRESETS.iter().map(|p| (p.name, &*Box::leak(json_of(p).into_boxed_str()))).collect())
+    BUILT.get_or_init(|| {
+        menu_pairs(&SYNTH_INFO, &super::suite::GROUPS, &SYNTH_PRESETS, &[&PATCHED_PRESETS, &super::suite::SUITE, &super::showcase::SHOWCASE])
+    })
 }
+
+/// A factory preset that patches the modulation matrix: its parameters, its slots
+/// (source, destination, amount) and its macros (name, targets of destination, from, to; the
+/// macros' values are parameters, `macro1`..`macro4`, in `preset.set`).
+pub struct PatchedPreset {
+    pub preset: SynthPreset,
+    pub slots: &'static [(&'static str, &'static str, f32)],
+    pub macros: &'static [MacroSpec],
+}
+
+/// A macro of a [`PatchedPreset`]: its name and its targets (destination, from, to).
+pub type MacroSpec = (&'static str, &'static [(&'static str, f32, f32)]);
+
+pub(crate) const fn patched(
+    group: &'static str,
+    name: &'static str,
+    desc: &'static str,
+    set: &'static [(&'static str, f32)],
+    slots: &'static [(&'static str, &'static str, f32)],
+    macros: &'static [MacroSpec],
+) -> PatchedPreset {
+    PatchedPreset { preset: SynthPreset { name, group, desc, set, tier: Tier::Special }, slots, macros }
+}
+
+/// A preset of the factory suite (tiered, grouped, each with its own patch; `slots` and
+/// `macros` may be empty).
+pub(crate) const fn suite(
+    tier: Tier,
+    group: &'static str,
+    name: &'static str,
+    desc: &'static str,
+    set: &'static [(&'static str, f32)],
+    slots: &'static [(&'static str, &'static str, f32)],
+    macros: &'static [MacroSpec],
+) -> PatchedPreset {
+    PatchedPreset { preset: SynthPreset { name, group, desc, set, tier }, slots, macros }
+}
+
+/// Every factory preset of `info`'s synth as `(name, json)` pairs in menu order: by group (in
+/// `groups`' order; any other group after them), then by tier, then as listed (`plain` first,
+/// then each of `patched`).
+pub(crate) fn menu_pairs(
+    info: &crate::PluginInfo,
+    groups: &[&str],
+    plain: &[SynthPreset],
+    patched: &[&[PatchedPreset]],
+) -> Vec<(&'static str, &'static str)> {
+    let mut all: Vec<(usize, Tier, usize, (&'static str, &'static str))> = Vec::new();
+    let rank = |g: &str| groups.iter().position(|x| *x == g).unwrap_or(groups.len());
+    for (p, pair) in plain.iter().zip(pairs_for(info, plain)) {
+        all.push((rank(p.group), p.tier, all.len(), pair));
+    }
+    for list in patched {
+        for (p, pair) in list.iter().zip(patched_pairs_for(info, list)) {
+            all.push((rank(p.preset.group), p.preset.tier, all.len(), pair));
+        }
+    }
+    all.sort_by_key(|(g, t, i, _)| (*g, *t, *i));
+    all.into_iter().map(|(_, _, _, pair)| pair).collect()
+}
+
+impl PatchedPreset {
+    /// The patch as the session stores it (`{"slots": [...], "macros": [...]}`).
+    pub fn modulation_json(&self) -> String {
+        let slots: Vec<String> =
+            self.slots.iter().map(|(s, d, a)| format!("{{\"source\":{},\"dest\":{},\"amount\":{a}}}", quoted(s), quoted(d))).collect();
+        let macros: Vec<String> = self
+            .macros
+            .iter()
+            .map(|(name, targets)| {
+                let t: Vec<String> = targets.iter().map(|(d, f, to)| format!("{{\"dest\":{},\"from\":{f},\"to\":{to}}}", quoted(d))).collect();
+                format!("{{\"name\":{},\"targets\":[{}]}}", quoted(name), t.join(","))
+            })
+            .collect();
+        format!("{{\"slots\":[{}],\"macros\":[{}]}}", slots.join(","), macros.join(","))
+    }
+
+    /// The numbers the synth takes for this patch (as the engine compiles a session's).
+    pub fn compiled(&self, plugin: &str) -> Option<Vec<f64>> {
+        use crate::plugins::synth_mod::{SlotSpec, TargetSpec, compile};
+        let slots: Vec<SlotSpec<'_>> = self.slots.iter().map(|(s, d, a)| SlotSpec { source: s, dest: d, amount: *a }).collect();
+        let targets: Vec<TargetSpec<'_>> = self
+            .macros
+            .iter()
+            .enumerate()
+            .flat_map(|(i, (_, t))| t.iter().map(move |(d, f, to)| TargetSpec { macro_index: i, dest: d, from: *f, to: *to }))
+            .collect();
+        compile(plugin, &slots, &targets)
+    }
+}
+
+/// `list` as `(name, json)` pairs for `info`, each JSON carrying its `"modulation"` beside its
+/// values.
+pub(crate) fn patched_pairs_for(info: &crate::PluginInfo, list: &[PatchedPreset]) -> Vec<(&'static str, &'static str)> {
+    list.iter()
+        .map(|p| {
+            let base = json_for(info, &p.preset);
+            let json = format!("{},\"modulation\":{}}}", base.strip_suffix('}').unwrap_or(&base), p.modulation_json());
+            (p.preset.name, &*Box::leak(json.into_boxed_str()))
+        })
+        .collect()
+}
+
+/// The presets that use the matrix and the macros (after [`SYNTH_PRESETS`] in the menu):
+/// starting points written from what each slot does, not listened to; their levels are tested.
+pub static PATCHED_PRESETS: [PatchedPreset; 4] = [
+    patched(
+        "Pad",
+        "Breathing Pad",
+        "Three detuned saws under a dark filter that the LFO opens and closes slowly, each note a hair off pitch. Open turns up the filter, Wobble the LFO's sweep, Grit the resonance and a growl from the sub, Space the unison's width.",
+        &[
+            ("osc2_detune", 14.0),
+            ("unison", 2.0),
+            ("unison_spread", 30.0),
+            ("cutoff", 700.0),
+            ("resonance", 15.0),
+            ("filter_env_amount", 15.0),
+            ("amp_attack", 600.0),
+            ("amp_sustain", 85.0),
+            ("amp_release", 1500.0),
+            ("lfo_rate", 0.2),
+            ("velocity", 30.0),
+            ("level", -10.0),
+            ("xmod_source", 1.0),
+            ("macro1", 30.0),
+        ],
+        &[("lfo", "cutoff", 0.1), ("random", "pitch", 0.002), ("random", "osc_mix", 0.1)],
+        &[
+            ("Open", &[("cutoff", 0.0, 0.35)]),
+            ("Wobble", &[("lfo_cutoff", 0.0, 0.5)]),
+            ("Grit", &[("resonance", 0.0, 0.4), ("xmod_cutoff", 0.0, 0.25)]),
+            ("Space", &[("unison_spread", 0.0, 0.6)]),
+        ],
+    ),
+    patched(
+        "Keys",
+        "Velocity Pluck",
+        "A short saw-and-square pluck whose filter opens with how hard the key is struck and a little more up the keyboard. Bright opens it for every note.",
+        &[
+            ("osc2_wave", 1.0),
+            ("osc2_semitones", 12.0),
+            ("osc_mix", 35.0),
+            ("cutoff", 500.0),
+            ("resonance", 20.0),
+            ("filter_env_amount", 40.0),
+            ("filter_decay", 250.0),
+            ("filter_sustain", 0.0),
+            ("amp_decay", 600.0),
+            ("amp_sustain", 0.0),
+            ("amp_release", 250.0),
+        ],
+        &[("velocity", "cutoff", 0.3), ("velocity", "filter_env_amount", 0.15), ("key", "cutoff", 0.12)],
+        &[("Bright", &[("cutoff", 0.0, 0.3)])],
+    ),
+    patched(
+        "Bass",
+        "Growl Bass",
+        "A saw an octave down, its pitch shaken by the sub at audio rate for a gritty edge, the filter wobbling with the mod wheel. Growl deepens the cross-modulation.",
+        &[
+            ("osc2_semitones", -12.0),
+            ("osc2_detune", 0.0),
+            ("osc_mix", 40.0),
+            ("sub_level", 40.0),
+            ("xmod_source", 1.0),
+            ("xmod_pitch", 12.0),
+            ("cutoff", 450.0),
+            ("resonance", 30.0),
+            ("filter_env_amount", 40.0),
+            ("filter_decay", 220.0),
+            ("filter_sustain", 15.0),
+            ("amp_sustain", 90.0),
+            ("amp_release", 90.0),
+            ("lfo_rate", 4.0),
+            ("level", -8.0),
+        ],
+        &[("mod_wheel", "lfo_cutoff", 0.5), ("env2", "xmod_cutoff", 0.2)],
+        &[("Growl", &[("xmod_pitch", 0.0, 0.8), ("xmod_cutoff", 0.0, 0.3)])],
+    ),
+    patched(
+        "Lead",
+        "Drift Lead",
+        "Two saws whose detune breathes with the amp envelope and wanders a little per note; the mod wheel brings in vibrato. Bite raises the resonance and the filter envelope.",
+        &[("osc2_detune", 8.0), ("cutoff", 2800.0), ("resonance", 20.0), ("filter_env_amount", 20.0), ("amp_release", 200.0), ("glide", 20.0)],
+        &[("amp_env", "osc2_detune", -0.05), ("random", "osc2_detune", 0.04), ("mod_wheel", "lfo_pitch", 0.03)],
+        &[("Bite", &[("resonance", 0.0, 0.4), ("filter_env_amount", 0.0, 0.2)])],
+    ),
+];
 
 /// `list` as `(name, json)` pairs for `info` (each JSON made once, kept for the program's life).
 pub(crate) fn pairs_for(info: &crate::PluginInfo, list: &[SynthPreset]) -> Vec<(&'static str, &'static str)> {
@@ -357,6 +592,9 @@ mod tests {
             assert_eq!(&p.name, name);
             assert_eq!(p.values.len(), SYNTH_INFO.params.len());
         }
-        assert_eq!(crate::plugins::fs::factory_presets(SYNTH_INFO.id).len(), SYNTH_PRESETS.len());
+        assert_eq!(
+            crate::plugins::fs::factory_presets(SYNTH_INFO.id).len(),
+            SYNTH_PRESETS.len() + PATCHED_PRESETS.len() + super::super::suite::SUITE.len() + super::super::showcase::SHOWCASE.len()
+        );
     }
 }

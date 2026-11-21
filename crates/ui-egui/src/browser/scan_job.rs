@@ -181,6 +181,8 @@ pub(crate) fn step(app: &mut SoundApp, ctx: &egui::Context) {
         p.retry_missing_plugins(app.engine.session_arc());
     }
     super::panel::rebuild_catalog(app);
+    crate::ara_ui::log_scan();
+    app.ara.retry();
     let n = app.browser_catalog.as_ref().map_or(0, |c| c.items.len());
     app.ui.status = match outcome {
         Ok(()) if resolving => "Plugins resolved".to_string(),

@@ -33,6 +33,7 @@ File > Bounce Mix...
 File > Import > Session Data...
 File > Import > Audio...
 File > Import > MIDI...
+File > Import > MIDI Chords... = @ui.band.import_chords
 File > Import > MusicXML...
 File > Import > Video...
 File > Import > Clip Groups...
@@ -195,6 +196,7 @@ View > Rulers > Meter
 View > Rulers > Key Signature
 View > Rulers > Sections
 View > Rulers > Chords
+View > Rulers > Band
 View > Rulers > Lyrics
 View > Rulers > ---
 View > Rulers > Markers
@@ -299,6 +301,7 @@ Track > New...
 Track > Duplicate = Track > Duplicate...
 Track > Create Click Track
 Track > New Beat = @track.new_beat
+Track > New Band = @track.new_band
 Track > Vocal Track = @track.vocal
 Track > ---
 Track > ## Organise
@@ -348,6 +351,7 @@ Track > Change Track Width > More > 2nd Order Ambisonics = Track > Change Track 
 Track > Change Track Width > More > 3rd Order Ambisonics = Track > Change Track Width > 3rd Order Ambisonics
 Track > Split into Mono
 Track > Instrument = !instrument
+Track > Import Wavetable... = @ui.wavetable_import
 Track > ---
 Track > ## Freeze & render
 Track > Freeze
@@ -355,6 +359,7 @@ Track > Commit = Track > Commit...
 Track > Bounce = Track > Bounce...
 Track > Capture to Pantry... = @track.capture_multisample
 Track > Extract MIDI to New Track
+Track > Print Band to MIDI... = @window.band_print
 Track > ---
 Track > ## Inserts & sends
 Track > Bypass Inserts > All
@@ -436,6 +441,7 @@ Clip > Quantize Audio... = @ui.quantize_audio
 Clip > Conform to Tempo
 Clip > Identify Sync Point
 Clip > Elastic Properties... = Clip > Elastic Properties
+Clip > ARA Plug-ins... = @window.ara
 Clip > Real-Time > Transpose... = @clip.transpose
 Clip > Real-Time > Reverse in Place = @clip.play_reversed
 Clip > Real-Time > Loop in Place... = @clip.loop_in_place
@@ -681,74 +687,60 @@ Setup > ML Models…
 Window > ## Main windows
 Window > Mix
 Window > Edit
-Window > Mix in Separate Window = @window.mix_separate
-Window > New Mix Window... = @window.new_mix
-Window > Vocal Editor in Separate Window = @window.vocal_separate
-Window > Teleprompter in Separate Window = @window.teleprompter_separate
-Window > MIDI Editor in Separate Window = @window.midi_editor_separate
+Window > ---
+Window > Scout
+Window > ---
+Window > Editors > MIDI Editor = Window > MIDI Editor
+Window > Editors > Vocal Editor = Window > Vocal Editor
+Window > Editors > Vocal Studio = @window.vocal_studio
+Window > Editors > Score Editor = Window > Score Editor
+Window > Editors > MIDI Event List = Window > MIDI Event List
+Window > Editors > Musical Typing = Window > Musical Typing
+Window > Editors > Chord Pads... = @window.chord_pads
+Window > Transport & Session > Transport = Window > Transport
+Window > Transport & Session > Big Counter = Window > Big Counter
+Window > Transport & Session > Loudness Meter = @window.loudness
+Window > Transport & Session > Mix Snapshots = @window.mix_snapshots
+Window > Transport & Session > Control Room = @window.control_room
+Window > Transport & Session > Memory Locations = Window > Memory Locations
+Window > Transport & Session > Set List = @window.set_list
+Window > Transport & Session > Notes = @window.notes
+Window > Transport & Session > Lyrics = @window.lyrics
+Window > Transport & Session > Teleprompter = @window.teleprompter
+Window > Transport & Session > Automation = Window > Automation
+Window > Monitoring > Hearing Test... = @window.hearing_test
+Window > Monitoring > Ear Profile... = @window.ear_profile
+Window > Panels & Browsers > Clip List = Window > Clip List
+Window > Panels & Browsers > Track List = View > Other Displays > Track List
+Window > Panels & Browsers > Clip Effects = Window > Clip Effects
+Window > Panels & Browsers > Plugin Browser = Window > Plugin Browser
+Window > Panels & Browsers > Workspace Browser = Window > New Workspace > Default
+Window > Panels & Browsers > Undo History = Window > Undo History
+Window > Panels & Browsers > Session Overview = View > Other Displays > Universe
+Window > Panels & Browsers > Search = Window > Pro Tools Search
+Window > Panels & Browsers > Color Palette = Window > Color Palette
+Window > Panels & Browsers > UI Customization = Window > UI Customization
+Window > Panels & Browsers > Metadata Inspector = Window > Metadata Inspector
+Window > Video > Video Window = Window > Video
+Window > Video > Video Universe = Window > Video Universe
+Window > System > Task Manager = Window > Task Manager
+Window > System > Disk Usage = Window > Disk Usage
+Window > System > System Usage = Window > System Usage
+Window > ---
+Window > Separate Windows > Mix in Separate Window = @window.mix_separate
+Window > Separate Windows > New Mix Window... = @window.new_mix
+Window > Separate Windows > Vocal Editor in Separate Window = @window.vocal_separate
+Window > Separate Windows > Teleprompter in Separate Window = @window.teleprompter_separate
+Window > Separate Windows > MIDI Editor in Separate Window = @window.midi_editor_separate
 Window > Sync > Sync Selection = @window.sync_selection
 Window > Sync > Scroll to Selected Track = @window.sync_scroll
 Window > Sync > Follow Folder Collapse = @window.sync_folders
 Window > Sync > Sync Track Visibility = @window.sync_visibility
-Window > ---
-Window > ## Editors
-Window > MIDI Editor
-Window > Vocal Editor
-Window > Vocal Studio = @window.vocal_studio
-Window > Score Editor
-Window > MIDI Event List
-Window > Musical Typing
-Window > Chord Pads... = @window.chord_pads
-Window > ---
-Window > ## Transport & session
-Window > Transport
-Window > Big Counter
-Window > Loudness Meter = @window.loudness
-Window > Mix Snapshots = @window.mix_snapshots
-Window > Control Room = @window.control_room
-Window > Memory Locations
-Window > Set List = @window.set_list
-Window > Notes = @window.notes
-Window > Lyrics = @window.lyrics
-Window > Teleprompter = @window.teleprompter
-Window > Automation
-Window > ---
-Window > ## Monitoring
-Window > Hearing Test... = @window.hearing_test
-Window > Ear Profile... = @window.ear_profile
-Window > ---
-Window > ## Panels & browsers
-Window > Clip List
-Window > Track List = View > Other Displays > Track List
-Window > Clip Effects
-Window > Plugin Browser
-Window > Workspace Browser = Window > New Workspace > Default
-Window > Undo History
-Window > Session Overview = View > Other Displays > Universe
-Window > Search = Window > Pro Tools Search
-Window > Color Palette
-Window > UI Customization
-Window > Metadata Inspector
-Window > ---
-Window > ## Video
-Window > Video
-Window > Video Universe
-Window > ---
-Window > ## Band & capture
-Window > Studio
-Window > Scout
-Window > ---
-Window > ## System
-Window > Task Manager
-Window > Disk Usage
-Window > System Usage
-Window > ---
-Window > ## Layout
-Window > Configurations > Window Configuration List
-Window > Configurations > New Configuration = Window > Configurations > New Configuration...
-Window > Configurations > Update Active Configuration
-Window > Configurations > Auto-Update Active Configuration
-Window > Tile = Window > Arrange > Tile
-Window > Reset Panel Layout
-Window > Close Floating Windows = Window > Close Window
-Window > Close All Workspaces = Window > Workspaces > Close All Workspaces
+Window > Layout > Configurations > Window Configuration List = Window > Configurations > Window Configuration List
+Window > Layout > Configurations > New Configuration = Window > Configurations > New Configuration...
+Window > Layout > Configurations > Update Active Configuration = Window > Configurations > Update Active Configuration
+Window > Layout > Configurations > Auto-Update Active Configuration = Window > Configurations > Auto-Update Active Configuration
+Window > Layout > Tile = Window > Arrange > Tile
+Window > Layout > Reset Panel Layout = Window > Reset Panel Layout
+Window > Layout > Close Floating Windows = Window > Close Window
+Window > Layout > Close All Workspaces = Window > Workspaces > Close All Workspaces

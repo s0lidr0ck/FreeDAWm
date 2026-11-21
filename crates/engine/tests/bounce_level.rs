@@ -184,7 +184,7 @@ fn the_demo_keys_bounce_at_their_playback_level() {
 /// preset name), and a bounce of a track playing one comes out at playback's level.
 #[test]
 fn the_wavetable_and_fm_synths_save_and_bounce_at_their_playback_level() {
-    for (id, preset) in [("wavetable_synth", 3usize), ("fm_synth", 0)] {
+    for (id, preset) in [("wavetable_synth", "Vowel Lead"), ("fm_synth", "Tine Piano")] {
         let mut s = piano_session();
         let t = s.tracks[0].id;
         let info = soundcraft_dsp::plugin_info(id).unwrap();
@@ -193,7 +193,7 @@ fn the_wavetable_and_fm_synths_save_and_bounce_at_their_playback_level() {
             ins.params.insert(pi.id.to_string(), pi.default);
         }
         // One of its factory presets, as the Presets menu recalls it.
-        let (name, json) = soundcraft_dsp::plugins::fs::factory_presets(id)[preset];
+        let (name, json) = *soundcraft_dsp::plugins::fs::factory_presets(id).iter().find(|(n, _)| *n == preset).unwrap();
         let p = soundcraft_dsp::plugins::fs::FsPreset::parse(json, info).unwrap();
         ins.params.extend(p.values.clone());
         ins.preset = name.to_string();

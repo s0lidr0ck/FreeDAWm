@@ -1,13 +1,14 @@
 //! The Band in the UI: its timeline lanes ([`lanes`]); in the Mix window, the six musicians as
 //! track inputs (the input menu's Musicians section), the Band key on a musician strip, and the
-//! band drawer beside it ([`drawer`]); Window ▸ Studio, the band's song-wide controls ([`studio`]).
+//! band drawer beside it ([`drawer`]); in the Edit window, the Band ruler with the band's
+//! song-wide controls, a musician's settings panel and Print Band to MIDI ([`ruler`]).
 //!
 //! No MIDI channel is shown anywhere: a track plays a musician, by number and name.
 
 pub mod chord_picker;
 pub mod drawer;
 pub mod lanes;
-pub mod studio;
+pub mod ruler;
 
 pub use drawer::{BAND_ACCENT, BAND_DRAWER_W, DrawerRow, drawer, driver_rows, loaded_instrument, target_rows, target_slot};
 

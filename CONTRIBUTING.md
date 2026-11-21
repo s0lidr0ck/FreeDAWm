@@ -45,7 +45,8 @@ One topic per pull request, with tests for the behaviour you add or fix.
   `unimplemented!`. Errors are `Result` values and `?`. Every production crate root denies these
   with clippy lints.
 - No `unsafe`, except in the isolated FFI helper crates (`crates/clap-host`, `crates/vst3-host`,
-  `crates/au-host`, `crates/asio-latency`), where each block carries a `// SAFETY:` comment.
+  `crates/au-host`, `crates/asio-latency`, `crates/ara-host`), where each block carries a
+  `// SAFETY:` comment.
 - Input-derived numbers (files, commands, control/MCP parameters) are hostile: use `get()` rather
   than indexing, checked or saturating arithmetic, cap allocations.
 - The audio callback never blocks, never allocates in steady state and never panics.

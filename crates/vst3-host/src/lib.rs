@@ -119,6 +119,117 @@ pub struct Vst3Descriptor {
     pub is_instrument: bool,
     /// The `.vst3` bundle or file it lives in.
     pub path: PathBuf,
+    /// What it offers for ARA (Audio Random Access), when its binary has an ARA main factory
+    /// class matching it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ara: Option<Vst3Ara>,
+    /// Scanned by a version that looks for ARA (older scan results are scanned again once).
+    #[serde(default)]
+    pub ara_checked: bool,
+    /// Why the scan found no ARA here (empty when `ara` is set), for the ARA log.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ara_note: String,
+}
+
+/// What a VST3 plug-in offers for ARA 2 (from its `ARA::IMainFactory` and its audio module's
+/// ARA entry interfaces), found by the scan without initialising ARA or the plug-in.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Vst3Ara {
+    /// The "ARA Main Factory Class" id (32 upper-case hex digits).
+    pub main_class_id: String,
+    /// The ARA factory's own name, maker and version.
+    pub name: String,
+    pub manufacturer: String,
+    pub version: String,
+    /// Unique, versioned id of its ARA document controller.
+    pub factory_id: String,
+    /// The ARA API generations it supports.
+    pub lowest_generation: i32,
+    pub highest_generation: i32,
+    /// FreeDAWm can host it (ARA 2, a usable factory, the ARA 2 entry point); else `problem`.
+    pub usable: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub problem: String,
+    /// The roles its instances can be bound with ("playback renderer", "editor renderer",
+    /// "editor view"): all three through `IPlugInEntryPoint2`; none without it.
+    pub roles: Vec<String>,
+    /// Its audio module also offers the ARA 1 binding (`IPlugInEntryPoint`).
+    pub ara1_binding: bool,
+    /// What it can analyse ("notes", "tempo", …).
+    pub content: Vec<String>,
+    /// The playback transformations it supports (`kARAPlaybackTransformation*` flags).
+    pub transformations: i32,
+}
+
+/// The ARA roles of a plug-in instance bound through `IPlugInEntryPoint2`, as the scan lists them.
+pub const ARA_ROLES: [&str; 3] = ["playback renderer", "editor renderer", "editor view"];
+
+/// A plug-in's ARA factory, ready for [`soundcraft_ara_host::Document::new`]: holds the plug-in's
+/// `ARA::IMainFactory` object (the factory is valid only while it lives) and its binary loaded.
+/// Keep it for as long as any document made from it exists, on the thread the documents live on.
+pub struct AraFactory {
+    main: ffi::AraMain,
+    factory: soundcraft_ara_host::FactoryPtr,
+}
+
+impl AraFactory {
+    pub fn ptr(&self) -> soundcraft_ara_host::FactoryPtr {
+        self.factory
+    }
+}
+
+impl std::fmt::Debug for AraFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AraFactory({:#x}, kept {})", self.factory.addr(), self.main.factory().is_some())
+    }
+}
+
+/// Loads the ARA factory of the `vst3:` plug-in `id` (in this process; its scan said it offers a
+/// usable ARA factory). Fails with the reason.
+pub fn ara_factory(id: &str) -> Result<AraFactory, Vst3Error> {
+    let main = registry::ara_main(id)?;
+    let factory = main.factory().ok_or_else(|| Vst3Error::Instantiate(id.to_string(), "no ARA factory".into()))?;
+    Ok(AraFactory { main, factory })
+}
+
+/// The folders a scan looks in (the standard VST3 folders, `VST3_PATH`, added folders).
+pub fn search_dirs() -> Vec<PathBuf> {
+    registry::search_dirs()
+}
+
+/// One line per scanned VST3 module (and per file the scan could not use) saying whether it offers
+/// ARA 2 and, if not, why: for the ARA log, so a plug-in missing from the ARA list can be told
+/// apart from one never found. Never scans.
+pub fn ara_scan_report() -> Vec<String> {
+    let mut out: Vec<String> = cached()
+        .unwrap_or_default()
+        .iter()
+        .map(|d| {
+            let what = match &d.ara {
+                Some(a) if a.usable => format!(
+                    "ARA 2 found: \"{}\" {} {} (generations {} to {}; roles: {})",
+                    a.name,
+                    a.manufacturer,
+                    a.version,
+                    a.lowest_generation,
+                    a.highest_generation,
+                    if a.roles.is_empty() { "none".to_string() } else { a.roles.join(", ") }
+                ),
+                Some(a) => format!("ARA main factory found but not usable: {}", a.problem),
+                None if !d.ara_checked => "scanned before ARA was looked for (scanned again by the next scan)".to_string(),
+                None if d.ara_note.is_empty() => "no ARA".to_string(),
+                None => format!("no ARA: {}", d.ara_note),
+            };
+            format!("VST3 {} ({} {}) in {}: {what}", d.name, d.vendor, d.version, d.path.display())
+        })
+        .collect();
+    out.extend(scan_failures().into_iter().map(|(p, why)| format!("VST3 {}: not scanned: {why}", p.display())));
+    out
+}
+
+/// The plug-ins the scan found to offer usable ARA 2 (without scanning).
+pub fn ara_plugins() -> Vec<Vst3Descriptor> {
+    cached().unwrap_or_default().into_iter().filter(|d| d.ara.as_ref().is_some_and(|a| a.usable)).collect()
 }
 
 /// A plugin's built-in programs (`IUnitInfo` program list), selected through its program-change
@@ -308,6 +419,22 @@ pub fn load_bundle(path: &Path) -> Result<Vec<Vst3Descriptor>, Vst3Error> {
 /// `soundcraft_dsp::create`), with the reason when it fails.
 pub fn instantiate(id: &str) -> Result<Box<dyn Plugin>, Vst3Error> {
     api::instantiate(id)
+}
+
+/// Makes the `vst3:` plug-in `id` for ARA and binds it to the document controller `dc` with the
+/// roles `assigned` of `known` (`soundcraft_ara_host::sys::kARA*Role`), as ARA asks: right after
+/// it is made, before it is prepared (activated), its state is set or its editor opened. Returns
+/// it **unprepared**, with the ARA extension the binding gave (valid while the plug-in lives):
+/// give the extension's renderers their playback regions, then `prepare` it. Call on the
+/// document controller's thread. Fails with the reason (no ARA 2 entry point, the binding gave
+/// nothing, the plug-in cannot be made).
+pub fn instantiate_ara(
+    id: &str,
+    dc: soundcraft_ara_host::sys::ARADocumentControllerRef,
+    known: i32,
+    assigned: i32,
+) -> Result<(Vst3Plugin, soundcraft_ara_host::RawExtension), Vst3Error> {
+    registry::instantiate_ara(id, dc, known, assigned)
 }
 
 /// Like [`instantiate`], but returns the concrete [`Vst3Plugin`] (for its extra methods, such

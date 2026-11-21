@@ -119,7 +119,7 @@ fn populated_mix_instrument_uses_readable_palette_in_real_frames() {
         for _ in 0..4 {
             harness.step();
         }
-        let ordinary = slot(harness.output(), "SubSynth");
+        let ordinary = slot(harness.output(), "Burley");
         let palette = if light { soundcraft_ui_egui::theme::Tokens::LIGHT } else { soundcraft_ui_egui::theme::Tokens::DARK };
         let face = palette.slot_face;
         // The empty instrument track's slot sits beside the populated one, drawn as an empty cell.
@@ -140,7 +140,7 @@ fn populated_mix_instrument_uses_readable_palette_in_real_frames() {
                 harness.step();
                 harness.step();
             }
-            let painted = slot(harness.output(), "SubSynth");
+            let painted = slot(harness.output(), "Burley");
             let ratio = contrast(painted.text, painted.fill);
             println!(
                 "{name} hover={hovered}: foreground={:?}, fill={:?}, contrast={ratio:.6}:1, rect={:?}",
@@ -163,7 +163,7 @@ fn populated_mix_instrument_uses_readable_palette_in_real_frames() {
 
     // Exercise the same painted control's picker path after palette changes (a filled slot's
     // picker is on right-click; a click opens the instrument).
-    let at = slot(harness.output(), "SubSynth").rect.center();
+    let at = slot(harness.output(), "Burley").rect.center();
     for pressed in [true, false] {
         harness.input_mut().events.push(Event::PointerButton {
             pos: at,

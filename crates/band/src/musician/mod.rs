@@ -605,6 +605,8 @@ pub(crate) struct Musician {
     // generated step, like the section's Energy; neutral outside one).
     speed_knob: i32,
     step_shift: FeelShift,
+    /// The band-feel layer's view of this step (song path, Natural + band only).
+    bf: crate::band_feel::BandStep,
     respect: bool,
     target: i32,
     ks_octave: i32,
@@ -1213,6 +1215,7 @@ impl Musician {
             fills: d.fills,
             speed_knob: d.speed,
             step_shift: FeelShift::default(),
+            bf: crate::band_feel::BandStep::default(),
             respect: d.respect,
             target: d.target,
             ks_octave: d.ks,
@@ -1740,7 +1743,7 @@ impl Musician {
         consider(p.break_at, p.break_at != o.break_at);
         consider(p.end_at, p.end_at != o.end_at);
         consider(p.wheel_land, p.wheel_land != o.wheel_land || p.wheel_next != o.wheel_next);
-        consider(self.current_ppq, p.natural != o.natural); // Feel switched: steps ahead are made again
+        consider(self.current_ppq, p.natural != o.natural || p.band != o.band); // Feel switched: steps ahead are made again
         consider(self.current_ppq, p.tension != o.tension || p.ab_on != o.ab_on || p.ab_a != o.ab_a || p.ab_b != o.ab_b);
         consider(p.ab_flip_at, p.ab_flip_at != o.ab_flip_at); // A/B: the next pass's Take
         if self.perf.natural && !p.natural {

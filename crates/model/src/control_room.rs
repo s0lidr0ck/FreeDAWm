@@ -1,4 +1,4 @@
-//! The control room (Window › Control Room): what the engineer hears, apart from what the mix
+//! The control room (Window › Transport & Session › Control Room): what the engineer hears, apart from what the mix
 //! is. Monitor sets (the speakers the main mix, or the listen bus, plays on, with level, dim,
 //! mono and mute), cue mixes (hardware outputs fed by sends, with a level each) and a talkback
 //! input routed to the cues. None of it reaches a bounce, the main meters or the loudness meter:

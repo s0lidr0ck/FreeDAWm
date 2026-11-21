@@ -65,6 +65,7 @@ use soundcraft_time::{Range, Samples, TICKS_PER_QUARTER};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub mod ara;
 pub mod band;
 pub use band::{
     BAND_SLOTS, BandSongCache, BandUpdate, SLOT_CAPACITY, SlotBuf, auto_target, band_transport, band_transport_within, new_band_runtime,
@@ -251,6 +252,11 @@ pub fn create_instance_for(id: &str, state: Option<&[u8]>, sample_rate: f32, max
     Some(NewInstance { plugin, refused_state })
 }
 
+/// The key of the instrument's analysis handle in [`StripMeter::analysis`]: the id the
+/// instrument goes by as a key source (`sidechain::INSTRUMENT_OUT`), which no chain module has
+/// (`Mixer::sanitize` renumbers one that claims it).
+pub const INSTRUMENT_ANALYSIS: ModuleId = sidechain::INSTRUMENT_OUT;
+
 /// Peak meter values for one strip (linear, per channel, max over the last block).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StripMeter {
@@ -271,9 +277,9 @@ pub struct StripMeter {
     /// One entry per chain module, in chain order (resized only when the chain's structure
     /// changes, never while rendering).
     pub modules: Vec<ModuleMeter>,
-    /// Sample streams of the chain modules whose plugin has any, in chain order (filled in
-    /// `sync`, never while rendering). The `Arc` lives as long as the instance, so it survives
-    /// reorders.
+    /// Sample streams of the chain modules whose plugin has any, in chain order, then the
+    /// instrument's under [`INSTRUMENT_ANALYSIS`] (filled in `sync`, never while rendering). The
+    /// `Arc` lives as long as the instance, so it survives reorders.
     pub analysis: Vec<(ModuleId, Arc<soundcraft_dsp::analysis::Analysis>)>,
     /// Low-latency monitoring: bit `i` set means chain module `i` is bypassed by it (modules
     /// from 64 on aren't reported). Zero while it's off.
@@ -504,6 +510,9 @@ struct PluginSlot {
     /// The [`PreparedState::rev`](soundcraft_model::PreparedState) last handed to the plugin
     /// (`Plugin::set_prepared_state`); 0: none.
     prepared: u64,
+    /// The plugin holds an object from that preparation (`PreparedState::shared`, handed over
+    /// with `Plugin::set_asset` under `PREPARED_ASSET_KEY`).
+    prepared_shared: bool,
     /// The assets handed to the plugin (`Plugin::set_asset`), by key: the engine's own references,
     /// so the plugin never holds the last one.
     assets: Vec<(String, Arc<dyn SampleSource>)>,
@@ -610,6 +619,9 @@ struct Strip {
     /// Per-clip effect chains (Clip Effects) and a scratch buffer to render clips into.
     clip_fx: HashMap<u64, ClipFx>,
     clipbuf: Vec<Vec<f32>>,
+    /// What a clip's ARA voice renders a block into (sized when the track has a clip given to an
+    /// ARA plug-in).
+    arabuf: Vec<Vec<f32>>,
     /// Total latency of the active inserts (samples).
     latency: usize,
     /// Of it, the post-fader modules' (`Insert::post_fader`): the pre-fader copy is that much
@@ -883,6 +895,7 @@ impl Strip {
             gr: 0.0,
             clip_fx: HashMap::new(),
             clipbuf: Vec::new(),
+            arabuf: Vec::new(),
             latency: 0,
             post_lat: 0,
             align: DelayLine::default(),
@@ -1140,6 +1153,8 @@ pub struct MixEngine {
     band_retired: soundcraft_band::runtime::Retired,
     band_out: [SlotBuf; BAND_SLOTS],
     band_playing: bool,
+    /// The clips' ARA voices (see [`ara`]): a realtime engine follows the host's board.
+    ara: Option<ara::AraCache>,
 }
 
 /// What `sync` needs to fill a slot.
@@ -1277,6 +1292,7 @@ impl SlotCtx<'_> {
             keys,
             failed: false,
             prepared: 0,
+            prepared_shared: false,
             assets: Vec::new(),
             link: None,
             kit_fx: Vec::new(),
@@ -1381,6 +1397,7 @@ impl MixEngine {
             band_retired: soundcraft_band::runtime::Retired::default(),
             band_out: band::new_slots(),
             band_playing: false,
+            ara: None,
         }
     }
 
@@ -1481,6 +1498,12 @@ impl MixEngine {
     /// [`MixEngine::adopt`] instead of being created in `sync` (see the crate docs).
     pub fn set_external_instances(&mut self, on: bool) {
         self.external = on;
+    }
+
+    /// The board of ARA voices this (realtime) engine plays clips given to ARA plug-ins through
+    /// (see [`ara`]); `None`: they play their offline renders or their files. Off the audio thread.
+    pub fn set_ara_board(&mut self, board: Option<Arc<ara::AraBoard>>) {
+        self.ara = board.map(ara::AraCache::new);
     }
 
     /// Measures the main mix's loudness and true peak (EBU R128) into `main_meter.loudness`
@@ -2070,6 +2093,7 @@ impl MixEngine {
             // Hosted clip modules are made here only by an offline engine (no realtime host).
             let hosted = !cx.external && !self.builtins;
             sync_clip_fx(strip, t, cx.sr, mb, cx.retired, host, cx.made, (hosted, cx.offline));
+            sync_arabuf(strip, t, mb);
             // Sidechain keys: one per keyed module, keeping a module's lines (and their history).
             strip.level = plan.level.get(ti).copied().unwrap_or(0);
             // Module MIDI inputs: the accepted sources, and room for the list (`process_strip`
@@ -2160,20 +2184,6 @@ impl MixEngine {
             }
             strip.plugins = chain;
             strip.mods.resize(t.mixer.inserts.len(), ModuleMeter::default());
-            // Handles of instances that left the chain go with them, so the last reference is
-            // never dropped on the audio thread (see `take_retired_analysis`).
-            let old_analysis = std::mem::take(&mut strip.analysis);
-            strip.analysis.extend(strip.plugins.iter().flatten().filter_map(|p| Some((p.module, p.plugin.analysis()?))));
-            for (_, a) in old_analysis {
-                if !strip.analysis.iter().any(|(_, b)| Arc::ptr_eq(&a, b)) {
-                    cx.retired_analysis.push(a);
-                }
-            }
-            // The meter's copies of retired handles go now, while the retired ones are still held
-            // (an inactive track's meter is not refreshed by `render`).
-            if let Some(m) = self.meters.get_mut(&t.id) {
-                m.analysis.clone_from(&strip.analysis);
-            }
             for (m, ins) in strip.mods.iter_mut().zip(&t.mixer.inserts) {
                 m.module = ins.id;
             }
@@ -2204,6 +2214,23 @@ impl MixEngine {
                 if t.midi_fx.iter().any(|f| f.kind == soundcraft_model::MidiFxKind::Scale && f.follow > 0) {
                     midi_fx::sync_chords(&mut *slot.plugin, &midi_fx::chord_table(s));
                 }
+            }
+            // The chain's analysis handles, and the instrument's under [`INSTRUMENT_ANALYSIS`]
+            // (a synth's live modulation values for its panel). Handles of instances that left go
+            // with them, so the last reference is never dropped on the audio thread (see
+            // `take_retired_analysis`).
+            let old_analysis = std::mem::take(&mut strip.analysis);
+            strip.analysis.extend(strip.plugins.iter().flatten().filter_map(|p| Some((p.module, p.plugin.analysis()?))));
+            strip.analysis.extend(strip.instrument.as_ref().and_then(|p| p.plugin.analysis()).map(|a| (INSTRUMENT_ANALYSIS, a)));
+            for (_, a) in old_analysis {
+                if !strip.analysis.iter().any(|(_, b)| Arc::ptr_eq(&a, b)) {
+                    cx.retired_analysis.push(a);
+                }
+            }
+            // The meter's copies of retired handles go now, while the retired ones are still held
+            // (an inactive track's meter is not refreshed by `render`).
+            if let Some(m) = self.meters.get_mut(&t.id) {
+                m.analysis.clone_from(&strip.analysis);
             }
             let n = if t.mixer.inserts.is_empty() { 0 } else { ch };
             if strip.llm_dry.len() != n || strip.llm_dry.iter().any(|b| b.len() != mb) {
@@ -2497,7 +2524,12 @@ impl MixEngine {
         let pdc = s.edit.delay_compensation;
         let xf = self.fade_len();
         let busses = std::mem::take(&mut self.busses);
+        if let Some(a) = self.ara.as_mut() {
+            a.refresh();
+        }
         let live_in = LiveInput {
+            ara: self.ara.as_ref().map_or(&[][..], |a| &a.voices),
+            ara_preview: self.ara.as_ref().is_some_and(|a| a.board.preview()),
             input: &self.input,
             monitor_only: self.monitor_only,
             recording: self.recording,
@@ -2703,6 +2735,8 @@ impl MixEngine {
             }
             {
                 let live_in = LiveInput {
+                    ara: self.ara.as_ref().map_or(&[][..], |a| &a.voices),
+                    ara_preview: self.ara.as_ref().is_some_and(|a| a.board.preview()),
                     input: &self.input,
                     monitor_only: self.monitor_only,
                     recording: self.recording,
@@ -3598,6 +3632,10 @@ struct LiveInput<'a> {
     feedback_frames: usize,
     /// Hardware Inserts play through the device (a live engine), else pass through.
     hw_inserts: bool,
+    /// The clips' ARA voices (a realtime engine with an [`ara::AraBoard`]), by clip id, and
+    /// whether they render while stopped (an ARA editor is open).
+    ara: &'a [(u64, Arc<ara::AraVoice>)],
+    ara_preview: bool,
 }
 
 /// One send per Hardware Insert module on `t`, `ch` channels of `mb` (off the audio thread's
@@ -3795,7 +3833,23 @@ fn process_strip(
             }
             feedback_guard(strip, frames, live.feedback_frames);
         }
-        TrackKind::Audio if live.monitor_only => {}
+        // Stopped, with an ARA plug-in's editor open: its voices are rendered all the same (ARA's
+        // editor rendering: the plug-in previews what is edited, say a note being dragged).
+        TrackKind::Audio if live.monitor_only => {
+            if live.ara_preview && strip.arabuf.len() == strip.buf.len() {
+                for clip in t.clips().iter().filter(|c| c.ara.as_ref().is_some_and(|a| !a.bypass)) {
+                    if let Some(v) = ara::voice(live.ara, clip)
+                        && v.render(s, pos, frames, None, false, &mut strip.arabuf)
+                    {
+                        for (d, a) in strip.buf.iter_mut().zip(strip.arabuf.iter()) {
+                            for (x, y) in d.iter_mut().zip(a.iter()).take(frames) {
+                                *x += *y;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Recording over them (input monitoring Off, or no input to hear): the clips under the
         // take are not heard, as the take will replace them.
         TrackKind::Audio if t.mixer.record_arm && live.auto_input => {}
@@ -3836,12 +3890,12 @@ fn process_strip(
                 });
                 match fx {
                     None if lat + tail > 0 => {}
-                    None => render_clip(s, clip, pos, frames, &mut strip.buf, edges, cover),
+                    None => clip_audio(s, clip, pos, frames, &mut strip.buf, edges, cover, live, &mut strip.arabuf),
                     Some(fx) => {
                         for c in strip.clipbuf.iter_mut() {
                             c.iter_mut().take(frames).for_each(|x| *x = 0.0);
                         }
-                        render_clip(s, clip, at, frames, &mut strip.clipbuf, edges, cover);
+                        clip_audio(s, clip, at, frames, &mut strip.clipbuf, edges, cover, live, &mut strip.arabuf);
                         if live.reverse {
                             // The effects hear the clip backwards; turned round again here, it
                             // comes round once more with the track's other clips below.
@@ -3966,6 +4020,8 @@ fn process_strip(
                 if inst.emits {
                     inst.plugin.midi_out(&mut inst.midi);
                 }
+                // A user wavetable the synth let go of (`apply_prepared`), dropped off this thread.
+                collect_released(inst, &mut strip.released);
                 if contain_failure(inst, &mut strip.buf, frames) {
                     strip.failures.record(SlotKey::Instrument);
                 }
@@ -4721,6 +4777,16 @@ fn sync_clip_fx(
     }
 }
 
+/// The scratch buffer a track's ARA voices render into: sized (off the audio thread's render) while
+/// the track has a clip given to an ARA plug-in.
+pub(crate) fn sync_arabuf(strip: &mut Strip, t: &Track, mb: usize) {
+    let ch = strip.buf.len();
+    let any = t.clips().iter().any(|c| c.ara.is_some());
+    if any && (strip.arabuf.len() != ch || strip.arabuf.iter().any(|c| c.len() < mb)) {
+        strip.arabuf = vec![vec![0.0; mb]; ch];
+    }
+}
+
 /// Hash of everything `sync`/`processing_order` depend on (tracks, kinds, routing, plugins, sends).
 fn structure_fingerprint(s: &Session) -> usize {
     use std::hash::{Hash, Hasher};
@@ -5199,6 +5265,75 @@ impl<'a> Cover<'a> {
             keep = keep.min(1.0 - c.clamp(0.0, 1.0));
         }
         keep
+    }
+}
+
+/// Adds `clip`'s audio for the block at `pos` to `buf`: through its ARA voice (a realtime engine),
+/// or its offline ARA render, or else its file ([`render_clip`]). Never allocates.
+fn clip_audio(
+    s: &Session,
+    clip: &Clip,
+    pos: Samples,
+    frames: usize,
+    buf: &mut [Vec<f32>],
+    auto: Edges,
+    cover: Option<Cover<'_>>,
+    live: &LiveInput<'_>,
+    arabuf: &mut [Vec<f32>],
+) {
+    if clip.ara.as_ref().is_some_and(|a| !a.bypass) {
+        let looping = live.looping.map(|l| (transport_at(s, l.start, true, false).quarters, transport_at(s, l.end, true, false).quarters));
+        if !live.reverse
+            && arabuf.len() == buf.len()
+            && let Some(v) = ara::voice(live.ara, clip)
+            && v.render(s, pos, frames, looping, true, arabuf)
+        {
+            add_ara(clip, pos, frames, buf, auto, cover, |c, p| {
+                arabuf.get(c).and_then(|x| x.get(usize::try_from(p - pos).ok()?)).copied().unwrap_or(0.0)
+            });
+            return;
+        }
+        if let Some(r) = ara::render_of(s, clip) {
+            let audio = &r.audio;
+            add_ara(clip, pos, frames, buf, auto, cover, |c, p| {
+                audio.get(c).and_then(|x| x.get(usize::try_from(p - clip.start).ok()?)).copied().unwrap_or(0.0)
+            });
+            return;
+        }
+    }
+    render_clip(s, clip, pos, frames, buf, auto, cover);
+}
+
+/// Adds what an ARA plug-in rendered for `clip` (`read(channel, timeline position)`) to the block
+/// at `pos`, with the clip's gain, fades and crossfades applied as [`render_clip`] applies them to
+/// a file. Never allocates.
+fn add_ara(
+    clip: &Clip,
+    pos: Samples,
+    frames: usize,
+    buf: &mut [Vec<f32>],
+    auto: Edges,
+    cover: Option<Cover<'_>>,
+    read: impl Fn(usize, Samples) -> f32,
+) {
+    let block = Range { start: pos, end: pos.saturating_add(frames as i64) };
+    let Some(isect) = clip.range().intersect(&block) else { return };
+    let i0 = usize::try_from(isect.start - pos).unwrap_or(0);
+    let i1 = usize::try_from(isect.end - pos).unwrap_or(0).min(frames);
+    for k in i0..i1 {
+        let p = pos.saturating_add(k as i64);
+        let mut g = clip.gain_at(p.saturating_sub(clip.start));
+        if !auto.is_none() {
+            g *= auto.gain(p);
+        }
+        if let Some(c) = cover {
+            g *= c.gain(p);
+        }
+        for (c, d) in buf.iter_mut().enumerate() {
+            if let Some(x) = d.get_mut(k) {
+                *x += read(c, p) * g;
+            }
+        }
     }
 }
 
@@ -6573,6 +6708,16 @@ fn apply_prepared(slot: &mut PluginSlot, ins: &soundcraft_model::Insert) {
     if rev != slot.prepared {
         let data: &[f64] = ins.prepared.as_ref().map_or(&[], |p| &p.data);
         slot.plugin.set_prepared_state(data);
+        // An object made ready with it (a user wavetable) goes over by reference: a clone of the
+        // snapshot's `Arc` (no allocation). The plugin gives back what it lets go of through
+        // `take_released_asset` (collected off the audio thread); one that has no room to do so
+        // yet refuses, and it is handed over again next block.
+        let shared = ins.prepared.as_ref().and_then(|p| p.shared.as_ref()).and_then(|a| a.downcast_ref::<Arc<dyn SampleSource>>()).map(Arc::clone);
+        let has = shared.is_some();
+        if (has || slot.prepared_shared) && !slot.plugin.set_asset(soundcraft_dsp::PREPARED_ASSET_KEY, shared) {
+            return;
+        }
+        slot.prepared_shared = has;
         slot.prepared = rev;
     }
 }
@@ -6630,7 +6775,8 @@ fn keys_hash(ins: &soundcraft_model::Insert) -> u64 {
     h
 }
 
-pub(crate) fn transport_at(s: &Session, pos: Samples, playing: bool, recording: bool) -> Transport {
+/// The transport at timeline position `pos` (tempo, meter, bar and quarter position there).
+pub fn transport_at(s: &Session, pos: Samples, playing: bool, recording: bool) -> Transport {
     let sr = s.sample_rate;
     let ticks = Some(s.tempo.samples_to_ticks_f(pos, sr)).filter(|t| t.is_finite()).unwrap_or(0.0);
     let tick = ticks.floor() as i64;
@@ -7609,11 +7755,19 @@ fn render_clips_with(s: &Session, track: TrackId, range: Range, heard: bool) -> 
         } else {
             (Edges::default(), Cover::of(t.clips(), c, range, 0))
         };
+        // As heard (Consolidate): a clip given to an ARA plug-in plays its offline render.
+        let ara = if heard { ara::render_of(s, c) } else { None };
+        let render = |buf: &mut [Vec<f32>]| match ara {
+            Some(r) => add_ara(c, range.start, len, buf, edges, cover, |ch, p| {
+                r.audio.get(ch).and_then(|x| x.get(usize::try_from(p - c.start).ok()?)).copied().unwrap_or(0.0)
+            }),
+            None => render_clip(s, c, range.start, len, buf, edges, cover),
+        };
         match fx.as_mut() {
-            None => render_clip(s, c, range.start, len, &mut out, edges, cover),
+            None => render(&mut out),
             Some(fx) => {
                 let mut tmp = vec![vec![0.0f32; len]; out.len()];
-                render_clip(s, c, range.start, len, &mut tmp, edges, cover);
+                render(&mut tmp);
                 let mut done = 0;
                 while done < len {
                     let n = (len - done).min(4096);
@@ -8214,6 +8368,7 @@ mod tests {
             keys: 0,
             failed: false,
             prepared: 0,
+            prepared_shared: false,
             assets: Vec::new(),
             link: None,
             kit_fx: Vec::new(),
@@ -8334,6 +8489,7 @@ mod tests {
             keys: 0,
             failed: false,
             prepared: 0,
+            prepared_shared: false,
             assets: Vec::new(),
             link: None,
             kit_fx: Vec::new(),
@@ -8430,6 +8586,7 @@ mod tests {
             keys: 0,
             failed: false,
             prepared: 0,
+            prepared_shared: false,
             assets: Vec::new(),
             link: None,
             kit_fx: Vec::new(),
