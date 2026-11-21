@@ -951,6 +951,7 @@ impl Musician {
 
         if perf.band && perf.natural {
             self.bf = self.band_step_here(loc.idx, step_ppq, off, cx);
+            self.ph = self.phrase_step_here(who, step, step_ppq, e, loc.loop_, cx);
         }
         if self.ujam_active(lib) {
             self.ujam_step(who, step, pass, prog_bar, sib, step_ppq, cx, out);
@@ -960,6 +961,7 @@ impl Musician {
             self.persona_step(who, step, pass, prog_bar, sib, step_ppq, cx, out);
         }
         self.bf = crate::band_feel::BandStep::default();
+        self.ph = crate::band_phrase::PhraseStep::default();
         self.energy = base_energy;
         self.fills = kept_fills;
         self.length = kept_length;

@@ -47,6 +47,8 @@ pub struct TestSong {
     pub bars: i32,
     pub feel: &'static str,
     pub band: &'static str,
+    /// Lab targets set over the band's (musician, target): e.g. an Electric Keys player on the Hammond, as an organ.
+    pub retarget: &'static [(usize, &'static str)],
 }
 
 fn ch(slot: i32, length: i32) -> SongChord {
@@ -119,6 +121,7 @@ pub fn test_songs() -> Vec<TestSong> {
             bars: 24,
             feel: "Blues shuffle",
             band: "Delta Blues",
+            retarget: &[],
         },
         TestSong {
             name: "pop-verse-chorus-bridge",
@@ -131,6 +134,7 @@ pub fn test_songs() -> Vec<TestSong> {
             bars: 24,
             feel: "Pop",
             band: "Factory Band",
+            retarget: &[],
         },
         TestSong {
             name: "slow-ballad",
@@ -143,6 +147,7 @@ pub fn test_songs() -> Vec<TestSong> {
             bars: 22,
             feel: "Ballad",
             band: "Acoustic Worship",
+            retarget: &[],
         },
         TestSong {
             name: "six-eight",
@@ -155,6 +160,7 @@ pub fn test_songs() -> Vec<TestSong> {
             bars: 16,
             feel: "Folk / acoustic",
             band: "Folk Roots",
+            retarget: &[],
         },
         TestSong {
             name: "country-two-beat",
@@ -167,6 +173,7 @@ pub fn test_songs() -> Vec<TestSong> {
             bars: 32,
             feel: "Country two-step",
             band: "Nashville Country",
+            retarget: &[],
         },
     ]
 }
@@ -203,6 +210,9 @@ pub fn settings_for(t: &TestSong, mode: Mode, take: i32, lib: &Arc<LibraryData>)
             s.set_param(&p("enabled"), if m.enabled { 1.0 } else { 0.0 });
             s.set_param(&p("mute"), 0.0);
         }
+    }
+    for &(k, target) in t.retarget {
+        s.set_target(k, target);
     }
     let mut song = t.song.clone();
     if let Some(fp) = factory_feel_presets().iter().find(|p| p.name == t.feel) {
@@ -714,5 +724,188 @@ pub fn report(t: &Take) -> String {
         }
     }
     let _ = writeln!(s, "overlapping notes between players {pairs}: unisons and minor 2nds/9ths {clashes}");
+    s
+}
+
+// ---- phrases: how much a musician repeats himself -----------------------------------------------------------------
+
+/// The factory song a new session gets ("Pop Verse Chorus Bridge": verse, chorus, verse, chorus, bridge, chorus, four
+/// bars each), played by `band` at 104 bpm. With `double`, every section is played twice as long (each chord row
+/// twice: eight-bar sections, 48 bars), the way most songs lay out a verse.
+pub fn factory_song(band: &'static str, double: bool, retarget: &'static [(usize, &'static str)]) -> TestSong {
+    let f = soundcraft_band::song_file::factory_songs().into_iter().find(|f| f.name == "Pop Verse Chorus Bridge");
+    let mut song = f.as_ref().map(|f| f.song.clone()).unwrap_or_default();
+    if double {
+        for s in &mut song.sections {
+            let row = s.chords.clone();
+            s.chords.extend(row);
+        }
+    }
+    let section_bars = |id: char| song.sections.iter().find(|s| s.id == id).map_or(0, |s| s.chords.iter().map(|c| c.length).sum::<i32>() / 2);
+    let total: i32 = song.arrangement.iter().map(|&id| section_bars(id)).sum();
+    TestSong {
+        name: if double { "factory-song-8-bar-sections" } else { "factory-song" },
+        key: f.as_ref().map_or(0, |f| f.key),
+        scale: f.as_ref().map_or(0, |f| f.scale),
+        song,
+        bpm: 104.0,
+        num: 4,
+        den: 4,
+        bars: total.max(1),
+        feel: "",
+        band,
+        retarget,
+    }
+}
+
+/// The root (pitch class) of the chord sounding at 16th `pos16` of bar `bar`.
+pub fn root_pc_at(t: &Take, bar: i64, pos16: i64) -> i32 {
+    let tl = &t.timeline;
+    let spb = (bar_quarters(t) * 4.0) as i64;
+    let total = i64::from(tl.total_half.max(1));
+    let half = (bar * 2 + if pos16 >= spb / 2 { 1 } else { 0 }).rem_euclid(total) as i32;
+    let e = tl.entries.iter().find(|e| half >= e.start_half && half < e.start_half + e.len_half);
+    let slot = e.map_or(0, |e| e.slot);
+    (t.song.key + soundcraft_band::chord_theory::scale_offset(t.song.scale, slot / 16)).rem_euclid(12)
+}
+
+/// One musician's bar as he plays it, ignoring velocity and micro-timing: (16th, pitch) of every onset, the pitch
+/// taken from the chord's root for everyone but the drummer (so the same part over another chord reads the same).
+/// With `register` the octave counts (an inversion or an octave jump is another bar); without, only which note of
+/// the chord it is (voice leading moving a chord's notes up or down does not make a new bar).
+pub fn bar_shape(t: &Take, ns: &[&Note], k: usize, bar: i64, register: bool) -> Vec<(i64, i32)> {
+    let bar_ms = ms_per_quarter(t) * bar_quarters(t);
+    let q = ms_per_quarter(t) / 4.0;
+    let spb = (bar_quarters(t) * 4.0) as i64;
+    let drums = is_drums(t, k);
+    let mut v: Vec<(i64, i32)> = ns
+        .iter()
+        .filter(|n| bar_of(t, n) == bar)
+        .map(|n| {
+            let pos = (((n.ms - bar as f64 * bar_ms) / q).round() as i64).clamp(0, spb - 1);
+            let p = i32::from(n.pitch);
+            let rel = p - root_pc_at(t, bar, pos);
+            (
+                pos,
+                if drums {
+                    p
+                } else if register {
+                    rel
+                } else {
+                    rel.rem_euclid(12)
+                },
+            )
+        })
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Every bar's shape for musician `k`, over the whole take.
+pub fn bar_shapes(t: &Take, k: usize, register: bool) -> Vec<Vec<(i64, i32)>> {
+    let all = notes(&t.events);
+    let ns: Vec<&Note> = all.iter().filter(|n| n.musician == k).collect();
+    (0..i64::from(t.song.bars)).map(|b| bar_shape(t, &ns, k, b, register)).collect()
+}
+
+/// (distinct bars, bars played) among `shapes[from..to]` (silent bars left out).
+pub fn distinct_bars(shapes: &[Vec<(i64, i32)>], from: usize, to: usize) -> (usize, usize) {
+    let mut v: Vec<&Vec<(i64, i32)>> = shapes.iter().take(to).skip(from).filter(|x| !x.is_empty()).collect();
+    let played = v.len();
+    v.sort();
+    v.dedup();
+    (v.len(), played)
+}
+
+/// How alike two bars are: onsets in common over onsets in either (1 = the same bar).
+pub fn bar_likeness(a: &[(i64, i32)], b: &[(i64, i32)]) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    let common = a.iter().filter(|x| b.contains(x)).count();
+    common as f64 / (a.len() + b.len() - common).max(1) as f64
+}
+
+/// The bar each pass of every section starts on, by section id: [(id, [start bars])].
+pub fn section_passes(t: &Take) -> Vec<(char, Vec<i64>)> {
+    let mut out: Vec<(char, Vec<i64>)> = Vec::new();
+    let mut bar = 0i64;
+    for &id in &t.song.song.arrangement {
+        let len = section_len(t, id) as i64;
+        match out.iter_mut().find(|x| x.0 == id) {
+            Some(x) => x.1.push(bar),
+            None => out.push((id, vec![bar])),
+        }
+        bar += len;
+    }
+    out
+}
+
+/// The length in bars of the section `id`.
+pub fn section_len(t: &Take, id: char) -> usize {
+    t.song.song.sections.iter().find(|s| s.id == id).map_or(0, |s| s.chords.iter().map(|c| c.length.max(0) as usize).sum::<usize>() / 2)
+}
+
+/// How alike the passes of each section are for musician `k`: the mean likeness of bar i of a pass to bar i of the
+/// pass before.
+pub fn passes_alike(t: &Take, k: usize) -> f64 {
+    let shapes = bar_shapes(t, k, false);
+    let mut alike = Vec::new();
+    for (id, starts) in section_passes(t) {
+        let len = section_len(t, id);
+        for w in starts.windows(2) {
+            for i in 0..len {
+                let (x, y) = (w[0] as usize + i, w[1] as usize + i);
+                if let (Some(a), Some(b)) = (shapes.get(x), shapes.get(y)) {
+                    alike.push(bar_likeness(a, b));
+                }
+            }
+        }
+    }
+    mean(&alike)
+}
+
+/// The phrase report of one take, as Markdown: per musician, distinct bars in each 8-bar stretch and over the whole
+/// song, and how alike the passes of a section are. `register`: see [`bar_shape`].
+pub fn phrase_report(t: &Take, register: bool) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    let bars = t.song.bars.max(0) as usize;
+    let windows: Vec<(usize, usize)> = (0..bars.div_ceil(8)).map(|w| (w * 8, (w * 8 + 8).min(bars))).collect();
+    let _ = writeln!(
+        s,
+        "### {} - {} ({} bars, sections {:?}){}\n",
+        t.song.name,
+        t.song.band,
+        bars,
+        t.song.song.arrangement,
+        if register { ", octaves counted" } else { "" }
+    );
+    let mut head = String::from("| musician |");
+    let mut rule = String::from("|---|");
+    for (a, b) in &windows {
+        let _ = write!(head, " {}-{} |", a + 1, b);
+        rule.push_str("---|");
+    }
+    head.push_str(" whole song | passes alike |");
+    rule.push_str("---|---|");
+    let _ = writeln!(s, "{head}\n{rule}");
+    for k in 0..6 {
+        if !t.enabled[k] {
+            continue;
+        }
+        let shapes = bar_shapes(t, k, register);
+        if shapes.iter().all(|x| x.is_empty()) {
+            continue;
+        }
+        let mut row = format!("| {} |", t.names[k]);
+        for (a, b) in &windows {
+            let (d, p) = distinct_bars(&shapes, *a, *b);
+            let _ = write!(row, " {d}/{p} |");
+        }
+        let (d, p) = distinct_bars(&shapes, 0, bars);
+        let _ = writeln!(s, "{row} {d}/{p} | {:.0}% |", passes_alike(t, k) * 100.0);
+    }
     s
 }

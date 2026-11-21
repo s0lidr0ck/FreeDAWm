@@ -41,6 +41,7 @@ mod indiginus;
 mod keys;
 mod keyswitch;
 mod organ;
+mod phrase;
 mod queue;
 
 use std::sync::OnceLock;
@@ -607,6 +608,25 @@ pub(crate) struct Musician {
     step_shift: FeelShift,
     /// The band-feel layer's view of this step (song path, Natural + band only).
     bf: crate::band_feel::BandStep,
+    /// The phrase layer's view of this step (song path, Natural + band only), and what it keeps through a bar: the bar
+    /// it is in, whether its held chord was struck, the lowest and highest notes lately played and their velocity.
+    ph: crate::band_phrase::PhraseStep,
+    ph_bar: i32,
+    ph_struck: bool,
+    ph_low: i32,
+    ph_top: i32,
+    ph_vel: f32,
+    ph_strikes: i32,
+    ph_prev_strikes: i32,
+    ph_chord: CArr<i32, 8>,
+    ph_chord_hand: CArr<i32, 8>,
+    ph_chord_n: i32,
+    ph_chord_vel: f32,
+    ph_push: CArr<i32, 8>,
+    ph_push_hand: CArr<i32, 8>,
+    ph_push_n: i32,
+    ph_push_vel: f32,
+    ph_pushed_in: bool,
     respect: bool,
     target: i32,
     ks_octave: i32,
@@ -1216,6 +1236,23 @@ impl Musician {
             speed_knob: d.speed,
             step_shift: FeelShift::default(),
             bf: crate::band_feel::BandStep::default(),
+            ph: crate::band_phrase::PhraseStep::default(),
+            ph_bar: i32::MIN,
+            ph_struck: false,
+            ph_low: -1,
+            ph_top: -1,
+            ph_vel: 80.0,
+            ph_strikes: 0,
+            ph_prev_strikes: 0,
+            ph_chord: CArr::default(),
+            ph_chord_hand: CArr::default(),
+            ph_chord_n: 0,
+            ph_chord_vel: 0.0,
+            ph_push: CArr::default(),
+            ph_push_hand: CArr::default(),
+            ph_push_n: 0,
+            ph_push_vel: 0.0,
+            ph_pushed_in: false,
             respect: d.respect,
             target: d.target,
             ks_octave: d.ks,

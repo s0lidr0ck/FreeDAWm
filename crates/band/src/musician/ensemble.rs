@@ -1096,7 +1096,8 @@ impl Musician {
         if grid_rh {
             let rs = self.keys_hand_step(who, 1, prog_bar, sib, hemiola, lib); // the meter's oom-pah-pah (4/4: gstep)
             let prob = if rs < 0 { 0 } else { self.grid_at(who, 1, rs, 0, lib) };
-            if prob > 0 && self.rand01(step, pass, 601, who, cx) * 100.0f32 < prob as f32 {
+            let (hs, hp) = self.hit_keys(step, pass);
+            if prob > 0 && self.rand01(hs, hp, 601, who, cx) * 100.0f32 < prob as f32 {
                 let type_ = self.grid_at(who, 1, rs, 3, lib);
                 let vel = self.grid_at(who, 1, rs, 1, lib) as f32;
                 let len = self.grid_at(who, 1, rs, 2, lib) as f32 * tick * self.length;
@@ -1130,7 +1131,8 @@ impl Musician {
         } else {
             let ls = self.keys_hand_step(who, 0, prog_bar, sib, hemiola, lib);
             let prob = if ls < 0 { 0 } else { self.grid_at(who, 0, ls, 0, lib) };
-            if prob > 0 && self.rand01(step, pass, 607, who, cx) * 100.0f32 < prob as f32 {
+            let (hs, hp) = self.hit_keys(step, pass);
+            if prob > 0 && self.rand01(hs, hp, 607, who, cx) * 100.0f32 < prob as f32 {
                 let type_ = self.grid_at(who, 0, ls, 3, lib);
                 let vel = self.grid_at(who, 0, ls, 1, lib) as f32;
                 let len = self.grid_at(who, 0, ls, 2, lib) as f32 * tick * self.length;
