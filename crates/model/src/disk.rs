@@ -139,6 +139,42 @@ pub fn streaming_enabled() -> bool {
     })
 }
 
+/// Sources holding fewer samples than this (frames × channels) stay decoded in memory instead of
+/// playing from disk, by default: about 1.4 s of mono at 48 kHz. Such a file costs a whole cache
+/// page per channel and an open file handle when streamed, for nothing.
+pub const DEFAULT_MEMORY_THRESHOLD: usize = 1 << 16;
+
+/// [`memory_threshold`]'s value once set (`usize::MAX` stands for "not set yet").
+static THRESHOLD: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Sources with fewer samples (frames × channels) than this stay decoded in memory; larger ones
+/// play from disk. An engine setting ([`set_memory_threshold`]); `FREEDAWM_STREAM_MIN_SAMPLES`
+/// sets where it starts, else [`DEFAULT_MEMORY_THRESHOLD`]. 0 streams everything that can be
+/// streamed; `usize::MAX` keeps everything in memory, as `FREEDAWM_STREAM=0` does.
+pub fn memory_threshold() -> usize {
+    match THRESHOLD.load(Ordering::Relaxed) {
+        usize::MAX => {
+            static FROM_ENV: OnceLock<usize> = OnceLock::new();
+            *FROM_ENV.get_or_init(|| {
+                std::env::var("FREEDAWM_STREAM_MIN_SAMPLES").ok().and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(DEFAULT_MEMORY_THRESHOLD)
+            })
+        }
+        n => n,
+    }
+}
+
+/// Sets [`memory_threshold`] for sources opened, imported or made from now on (those already in
+/// a session keep how they play). `usize::MAX` keeps everything in memory.
+pub fn set_memory_threshold(samples: usize) {
+    // One less than the "not set" sentinel is as good as everything.
+    THRESHOLD.store(samples.min(usize::MAX - 1), Ordering::Relaxed);
+}
+
+/// Whether audio of `frames` frames of `channels` channels stays in memory ([`memory_threshold`]).
+pub fn keeps_in_memory(frames: usize, channels: usize) -> bool {
+    !streaming_enabled() || frames.saturating_mul(channels) < memory_threshold()
+}
+
 fn cache() -> &'static Cache {
     CACHE.get_or_init(|| {
         let pages = (budget_bytes() / PAGE_BYTES).max(64);
@@ -171,6 +207,19 @@ fn key_file(key: u64) -> u32 {
 /// one clip): "disk too slow" when it grows while playing.
 pub fn underruns() -> u64 {
     CACHE.get().map_or(0, |c| c.underruns.load(Ordering::Relaxed))
+}
+
+/// [`underruns`] when [`reset_underruns`] was last called.
+static UNDERRUNS_AT_RESET: AtomicU64 = AtomicU64::new(0);
+
+/// [`underruns`] since [`reset_underruns`] (what the status bar shows next to the device's).
+pub fn underruns_since_reset() -> u64 {
+    underruns().saturating_sub(UNDERRUNS_AT_RESET.load(Ordering::Relaxed))
+}
+
+/// Starts [`underruns_since_reset`] from 0 (Reset Underruns); [`underruns`] keeps counting.
+pub fn reset_underruns() {
+    UNDERRUNS_AT_RESET.store(underruns(), Ordering::Relaxed);
 }
 
 /// What the cache holds now: (bytes of decoded audio held, bytes allowed).
