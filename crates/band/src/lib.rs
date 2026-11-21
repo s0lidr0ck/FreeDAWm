@@ -15,6 +15,7 @@
 //! - `musician` (crate-private): `Musician.h` and its `.cpp` files, one file each.
 //! - [`band_map`]: `BandMap.cpp`, the compute half (the Band view's bars).
 //! - [`band`]: `Band.h` (six musicians, frame by frame); [`params`]: `Parameters.h` (host parameters, packing).
+//! - [`band_feel`], [`band_phrase`]: "As a band" (not a port): the band's shared time and dynamics, and phrases.
 //! - [`runtime`]: `BandRuntime`, the processor's audio path (`MidiStudioProcessor::processBlock`), and `BandSettings`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
@@ -23,6 +24,7 @@ pub mod ample_slots;
 pub mod band;
 pub mod band_feel;
 pub mod band_map;
+pub mod band_phrase;
 pub mod band_preset;
 pub mod chord_match;
 pub mod chord_theory;

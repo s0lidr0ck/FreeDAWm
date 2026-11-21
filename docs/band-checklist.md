@@ -1,6 +1,6 @@
 # The Band: owner's checklist
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-19 · **Change:** minor (the Band ruler replaces the Studio window; previously: New Band, the musicians list and As a band) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-21 · **Change:** minor (As a band plays phrases; previously: the Band ruler replaces the Studio window) · **Target:** MIDI Studio (the owner's C++/JUCE plugin) inside FreeDAWm
 
 The owner's hands-on pass over the Band, MIDI Studio's six musicians inside the DAW
 ([design](superpowers/specs/2026-10-21-band-design.md), [plan](superpowers/plans/2026-10-21-band.md)).
@@ -110,6 +110,18 @@ matches. When it doesn't, write what you saw under the line: the status bar text
   piano chords are struck, not rolled up every time. Switch **As a band** off and play the same
   bars: Natural as before (tighter, every bar's timing alike, every chord rolled from the bottom).
   The same Take plays the same every time.
+- [ ] Still with **As a band** on, on the Factory Band, play the factory song (Pop Verse Chorus
+  Bridge) through twice. Expected: nobody plays the same bar over and over. Each four bars sound
+  like a phrase: the first bar as written, the next answering it, the third the first again with
+  a small change, the last turning into what comes next. The drummer adds a kick, a ghost note,
+  an open hi-hat or a little snare pick-up now and then; the bass an approach note, an octave or a
+  short walk into the next chord; the piano now and then strikes its chord again, revoices it or
+  plays a pick-up note; strings and brass hold a chord, strike it again or revoice it. Downbeats
+  stay solid: the kick on 1 and the bass's note on 1 are as before. Only one player does
+  something busy in a bar; when the drummer fills, the others keep to the beats. The second verse
+  and chorus are recognisably the same parts as the first, with a bar here and there played a
+  little differently. Change the Take: other variations, in other bars. Switch **As a band** off:
+  the parts repeat as before.
 - [ ] Switch to **Classic** and play the same bars. Expected: the extras stop (plain MODO maps,
   as MIDI Studio's Classic plays them); back to Natural, they return.
 - [ ] In the bass drawer, change Energy 2 → 4 while playing. Expected: the bass gets busier from
@@ -205,6 +217,7 @@ while stopped, a per-song meter override and MIDI Studio's MIDI export tabs come
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | As a band plays phrases: statement, answer, restatement and turnaround; one change per player per bar that varies (drums, bass, keys, strings, brass); the spotlight moves; a repeat of a section is the same part with a bar played differently |
 | 2026-11-19 | minor | The Band ruler replaces Window › Studio: band controls in its name cell, section settings on the Sections ruler's right-click, one key (the Key ruler at bar 1), track header badges, Print Band to MIDI and Import MIDI Chords as menu items, Instrument plug-in, strings at Octave 0 |
 | 2026-11-19 | minor | Track › New Band; the Studio's Musicians list and a musician's Settings in the Studio; Musician Settings... in the Edit window |
 | 2026-11-19 | minor | As a band: the band-feel layer on top of Natural (on in new sessions, off in older ones) |

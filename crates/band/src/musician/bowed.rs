@@ -699,6 +699,13 @@ impl Musician {
     ) {
         let lib = cx.lib;
         self.bowed_lick_step(who, step, pass, prog_bar, sib, step_ppq, cx);
+        // "As a band": the phrase's variation on this step (not on a push's look-ahead or a pushed chord, a lick, the
+        // band's Fill / Break / Ending hits).
+        if self.ph.on && self.push_now && !self.dry_run {
+            self.phrase_note_push();
+        } else if self.ph.on && !self.dry_run && !self.lick_now.on && !self.perf_fill && !self.hold_step && !self.stop_hit {
+            self.phrase_vary(prog_bar, step_ppq, cx);
+        }
         // Tension: chordal players thin to their outer notes in the beat before a release.
         if self.ten_tail && self.pattern != 2 && !self.is_drums() && Self::chordal_instrument(self.pattern) && self.step_count >= 3 {
             let mut lo = 0;
