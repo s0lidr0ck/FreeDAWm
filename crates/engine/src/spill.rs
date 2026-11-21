@@ -202,10 +202,17 @@ pub(crate) fn spill_sources(e: &mut Engine, label: &str, only: Option<&[SourceId
         } else {
             file.to_string_lossy().into_owned()
         };
-        // The waveform cache gets it now (a saved project), so a reopen reads no audio for it.
-        if in_project {
+        // The waveform cache gets it now (a saved project), so a reopen reads no audio for it,
+        // and its fine levels are read from there from now on.
+        let streamed = if in_project {
             crate::peak_cache::store(&base, &file, rate, &streamed.peaks);
-        }
+            match Arc::try_unwrap(streamed) {
+                Ok(a) => Arc::new(crate::peak_pages::paged_audio(&base, &file, rate, a)),
+                Err(a) => a,
+            }
+        } else {
+            streamed
+        };
         files.push(file);
         written.push((Arc::as_ptr(audio), Arc::clone(&streamed), stored.clone()));
         done.push((id, streamed, stored));
@@ -261,9 +268,12 @@ pub(crate) fn write_generated(
         let _ = crate::io::remove_path(&file);
         return None;
     };
-    if in_project {
+    let audio = if in_project {
         crate::peak_cache::store(&base, &file, rate, &audio.peaks);
-    }
+        crate::peak_pages::paged_audio(&base, &file, rate, audio)
+    } else {
+        audio
+    };
     let stored = if in_project {
         sub.map_or_else(|| format!("Audio Files/{fname}"), |sub| format!("Audio Files/{sub}/{fname}"))
     } else {

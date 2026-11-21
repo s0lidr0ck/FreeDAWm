@@ -200,12 +200,19 @@ fn channel(
     // Zoomed far out the overview alone draws it (the samples are only read at column edges, and
     // those few don't show then).
     let span = |a, c, from| samples_for(a, c, from, last.saturating_sub(first), g.step);
+    // An overview whose fine levels are read from disk draws its coarser levels where a page
+    // isn't loaded yet, and is drawn again once it is.
     let spans_of = |peaks: &soundcraft_audio_io::peaks::Peaks, samples: &[f32], at: usize, start: f64| -> Vec<Option<(f32, f32)>> {
-        if power {
-            peaks.rms_spans_in(samples, at, start, g.step, overlap, g.cols).into_iter().map(|r| r.map(|r| (-r, r))).collect()
+        let (spans, complete) = if power {
+            let (r, done) = peaks.rms_spans_in_checked(samples, at, start, g.step, overlap, g.cols);
+            (r.into_iter().map(|r| r.map(|r| (-r, r))).collect(), done)
         } else {
-            peaks.spans_in(samples, at, start, g.step, overlap, g.cols)
+            peaks.spans_in_checked(samples, at, start, g.step, overlap, g.cols)
+        };
+        if !complete {
+            painter.ctx().request_repaint_after(REDRAW_WHILE_LOADING);
         }
+        spans
     };
     let (samples, at) = span(audio, ch, start);
     let mut spans = spans_of(peaks, &samples, at, start);
@@ -237,6 +244,8 @@ fn channel(
 
 /// Samples per column up to which a waveform reads the samples at its columns' edges.
 const FINE_STEP: f64 = 64.0;
+/// How soon a waveform drawn while its overview's pages load is drawn again.
+pub const REDRAW_WHILE_LOADING: std::time::Duration = std::time::Duration::from_millis(16);
 /// Margin read around the visible samples (a peak block each side and more).
 const BLOCK_MARGIN: usize = 256;
 

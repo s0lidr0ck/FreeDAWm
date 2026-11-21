@@ -44,8 +44,23 @@ never has gaps. Sources smaller than `disk::memory_threshold()` (65536 samples b
 decoded in memory; so do the samples of instruments that read them whole (Lift, Juke). Other
 formats and rates are decoded once into the project's `Decoded/` folder and stream from there;
 generated audio (Process, consolidate, freeze, stems, takes) is written to WAV when it is made.
-Waveform overviews are built in one streaming pass and cached in `Waveforms/`. Saves, autosaves
-and exports write sources a block at a time.
+Saves, autosaves and exports write sources a block at a time.
+
+Waveform overviews (`audio_io::peaks`: min, max and sum of squares per 32 samples, then levels
+merging four blocks each) are built in one streaming pass and cached in `Waveforms/`, every level
+stored (`engine::peak_cache`; a file holding level 0 only, as older versions write it, is
+completed in place, and older versions still read the new files). A source played from disk in a
+saved project holds only the levels from 8192 samples a block up (about 1/256 of the whole
+overview); the four fine levels are read from the cache file 4096 blocks at a time on the
+`peak-pages` thread into one page cache (96 MiB, `FREEDAWM_PEAK_CACHE_MB`, least recently used
+out first; `engine::peak_pages`). Drawing never waits: where a page is not loaded the finest
+coarser block at hand stands in and the waveform is drawn again in 16 ms. Zoomed out, a column
+`step` samples wide is summed from whole blocks of the finest level at most `step / 8` long (its
+ends rounded outward by under 1/8 of a pixel), so the pages read are those of the visible range
+however far out the zoom, and once its pages are in a paged overview draws exactly the pixels the
+same overview held whole draws (`ui-egui/tests/waveform_paged.rs`). A cache
+file that goes missing or is damaged while open is made again from the audio once, then the
+overview is held whole. Without a project folder overviews are held whole as before.
 
 ## Commands and undo
 
@@ -108,6 +123,7 @@ app as an MCP server. See `control-protocol.md` and `mcp.md`.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | Waveform overviews read their fine levels from the `Waveforms/` cache on demand (the page cache) |
 | 2026-11-21 | minor | Sources play from disk through the block cache; the in-memory threshold; recordings go to their files |
 | 2026-11-16 | minor | The monitor stage (EAR and SIM): heard on the device only, never rendered |
 | 2026-10-13 | trivial | delay compensation includes the master faders' inserts (#351) |

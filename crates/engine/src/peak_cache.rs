@@ -4,6 +4,13 @@
 //! file's size and modified time and the session rate the overview was made at; one that doesn't
 //! match (the file changed) or doesn't read is made again. The folder is safe to delete. A
 //! session never saved keeps its overviews in memory only.
+//!
+//! The file: a header (magic `FDWPEAK1`, the audio file's size and modified time, the rate and
+//! the channel count), then each channel's level 0 ([`Peaks::to_bytes`]), then [`TRAILER`] and
+//! every channel's levels above level 0 in order, so a source played from disk reads its fine
+//! levels from here a page at a time ([`crate::peak_pages`]). A file without the levels above (as
+//! older versions write it) still reads, and is completed when a paged overview opens it; older
+//! versions read a new file too (they stop after level 0).
 
 use soundcraft_audio_io::AudioBuffer;
 use soundcraft_audio_io::peaks::Peaks;
@@ -12,7 +19,9 @@ use std::path::{Path, PathBuf};
 /// The folder in a project that holds the cache.
 pub const FOLDER: &str = "Waveforms";
 const MAGIC: &[u8; 8] = b"FDWPEAK1";
-const HEADER: usize = 8 + 8 + 8 + 4 + 4;
+pub(crate) const HEADER: usize = 8 + 8 + 8 + 4 + 4;
+/// Marks the levels above level 0, after every channel's level 0.
+pub(crate) const TRAILER: &[u8; 8] = b"FDWLVLS1";
 
 /// The cache file for the audio file `file` in the project folder `project`.
 pub fn path_for(project: &Path, file: &Path) -> Option<PathBuf> {
@@ -39,7 +48,7 @@ fn header(stamp: (u64, u64), rate: u32, channels: usize) -> Vec<u8> {
 }
 
 /// The header the cache file for `file` must start with, or `None` when `file` can't be read.
-fn expected(file: &Path, rate: u32, channels: usize) -> Option<Vec<u8>> {
+pub(crate) fn expected(file: &Path, rate: u32, channels: usize) -> Option<Vec<u8>> {
     stamp(file).map(|s| header(s, rate, channels))
 }
 
@@ -84,23 +93,36 @@ pub fn fresh(project: &Path, file: &Path, rate: u32, channels: usize) -> bool {
     std::fs::File::open(cache).and_then(|mut f| f.read_exact(&mut got)).is_ok() && got.as_slice() == want.as_slice()
 }
 
-/// Keeps `peaks` (the overviews of `file` decoded at `rate`) in `project`'s cache. Best effort:
-/// a cache that can't be written is made again next time.
+/// Keeps `peaks` (the overviews of `file` decoded at `rate`) in `project`'s cache, every level,
+/// written a page at a time (a paged overview from another project's cache is read through as it
+/// is written). Best effort: a cache that can't be written is made again next time.
 pub fn store(project: &Path, file: &Path, rate: u32, peaks: &[Peaks]) {
-    let (Some(cache), Some(mut bytes)) = (path_for(project, file), expected(file, rate, peaks.len())) else { return };
+    let (Some(cache), Some(header)) = (path_for(project, file), expected(file, rate, peaks.len())) else { return };
     if crate::file_access::check_write(&cache).is_err() {
         return;
     }
-    for p in peaks {
-        bytes.extend_from_slice(&p.to_bytes());
-    }
     let tmp = cache.with_extension("peaks.tmp");
-    let written = cache
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| std::fs::write(&tmp, &bytes))
-        .and_then(|()| std::fs::rename(&tmp, &cache));
-    if let Err(e) = written {
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(dir) = cache.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut w = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&tmp)?);
+        w.write_all(&header)?;
+        for p in peaks {
+            p.write_level0(&mut w)?;
+        }
+        w.write_all(TRAILER)?;
+        for p in peaks {
+            for level in 1..p.num_levels() {
+                p.write_level(level, &mut w)?;
+            }
+        }
+        w.flush()?;
+        drop(w);
+        std::fs::rename(&tmp, &cache)
+    };
+    if let Err(e) = write() {
         let _ = std::fs::remove_file(&tmp);
         log::debug!("waveform cache {}: {e}", cache.display());
     }
