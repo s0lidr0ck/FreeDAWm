@@ -22,6 +22,7 @@ soundcraft-sysmem.workspace = true
 soundcraft-mix.workspace = true
 soundcraft-band.workspace = true
 soundcraft-video.workspace = true
+soundcraft-aaf.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -36,6 +37,7 @@ soundcraft-ml.workspace = true
 soundcraft-dsp = { workspace = true, features = ["test-plugins"] }
 soundcraft-ara-host = { workspace = true, features = ["test-plugin"] }
 proptest.workspace = true
+soundcraft-aaf = { workspace = true, features = ["test-writer"] }
 
 [lints]
 workspace = true

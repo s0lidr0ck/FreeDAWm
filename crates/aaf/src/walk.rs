@@ -30,12 +30,20 @@ pub struct Options {
     pub pt_true_fades: bool,
     /// Pro Tools' one-frame "sample accurate edit" clips merged into the clip beside them.
     pub pt_remove_sae: bool,
+    /// `pt_true_fades` for files Pro Tools wrote (whatever the two fields above say).
+    pub pt_auto: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { sample_rate: 48_000, max_embedded: 2 << 30, pt_true_fades: false, pt_remove_sae: false }
+        Options { sample_rate: 48_000, max_embedded: 2 << 30, pt_true_fades: false, pt_remove_sae: false, pt_auto: false }
     }
+}
+
+/// Whether the writer named in the header is Pro Tools.
+pub fn is_pro_tools(writer: &str) -> bool {
+    let w = writer.to_ascii_lowercase().replace(' ', "");
+    w.contains("protools") || w.contains("digidesign")
 }
 
 /// Deepest nesting followed (segments inside segments, mob to mob).
@@ -52,6 +60,9 @@ pub fn read(bytes: &[u8], opts: &Options) -> Result<Import, Error> {
     let mut w = Walk { r: &r, sr, opts: *opts, imp: Import { sample_rate: sr, ..Import::default() }, media: HashMap::new(), clips: 0 };
     let (company, product, version) = r.writer();
     w.imp.writer = [company, product, version].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+    if opts.pt_auto && is_pro_tools(&w.imp.writer) {
+        w.opts.pt_true_fades = true;
+    }
     let top = w.top_composition().ok_or_else(|| Error::new("the file holds no composition"))?;
     w.imp.name = top.string(pid::MOB_NAME).unwrap_or_default();
     w.composition(&top);
@@ -63,7 +74,7 @@ pub fn read(bytes: &[u8], opts: &Options) -> Result<Import, Error> {
 #[derive(Debug, Clone)]
 enum Source {
     /// A channel of a media file, `offset` seconds in.
-    Media { media: usize, channel: u16, offset: f64, name: String },
+    Media { media: usize, channel: u16, offset: f64, name: String, original: Option<(usize, u16, f64)> },
     /// A slot of another composition (a nested sequence or a subclip), `offset` edit units of
     /// that slot in.
     Nested { mob: MobId, slot: u32, offset: f64 },
@@ -557,9 +568,17 @@ impl<'r, 'a> Walk<'r, 'a> {
         }
         let src = self.resolve(id, slot, start_eu as f64 * f64::from(rate.1) / f64::from(rate.0), depth);
         let mut out = match src {
-            Source::Media { media, channel, offset, name } => {
+            Source::Media { media, channel, offset, name, original } => {
                 let off = samples_f(offset * f64::from(self.sr));
-                vec![Clip { name, start: at, len, offset: off, channels: vec![Some(ChannelRef { media, channel, offset: off })], ..Clip::default() }]
+                let original = original.map(|(m, c, o)| (m, c, samples_f(o * f64::from(self.sr))));
+                vec![Clip {
+                    name,
+                    start: at,
+                    len,
+                    offset: off,
+                    channels: vec![Some(ChannelRef { media, channel, offset: off, original })],
+                    ..Clip::default()
+                }]
             }
             Source::Missing { name } => {
                 vec![Clip { name, start: at, len, channels: vec![None], ..Clip::default() }]
@@ -600,7 +619,7 @@ impl<'r, 'a> Walk<'r, 'a> {
             let cut = s - c.start;
             c.offset += cut;
             for ch in c.channels.iter_mut().flatten() {
-                ch.offset += cut;
+                ch.shift(cut);
             }
             c.gain_env = c.gain_env.iter().map(|(t, v)| (t - cut, *v)).collect();
             if cut > 0 {
@@ -652,7 +671,8 @@ impl<'r, 'a> Walk<'r, 'a> {
                 let Some(media) = self.media_of(&m, &desc, &name) else { return Source::Missing { name } };
                 let chans = self.imp.media.get(media).map_or(1, |x| x.channels.max(1));
                 let channel = if chans > 1 { u16::try_from(phys - 1).unwrap_or(0).min(chans - 1) } else { 0 };
-                return Source::Media { media, channel, offset: here, name };
+                let original = self.original(slot, rate, here);
+                return Source::Media { media, channel, offset: here, name, original };
             }
             let Some(seg) = self.r.store.strong(slot, pid::SLOT_SEGMENT) else { return Source::Missing { name } };
             // The segment at `here` within this slot.
@@ -709,6 +729,27 @@ impl<'r, 'a> Walk<'r, 'a> {
         }
         self.skip("Source chains longer than 24 mobs");
         Source::Missing { name }
+    }
+
+    /// The file a file source mob's media was imported from (Media Composer keeps an import
+    /// source mob with the original file's location behind its own MXF media): (media, channel,
+    /// seconds in).
+    fn original(&mut self, slot: &Object, rate: (i32, i32), here: f64) -> Option<(usize, u16, f64)> {
+        let seg = self.r.store.strong(slot, pid::SLOT_SEGMENT).filter(|s| self.r.is(s, "SourceClip"))?;
+        let id = mob_id(&seg, pid::SOURCEREF_ID).filter(|id| id.iter().any(|b| *b != 0))?;
+        let m = self.r.mob(&id).cloned().filter(|m| self.r.is(m, "SourceMob"))?;
+        let desc = self.r.store.strong(&m, pid::SOURCE_MOB_DESCRIPTOR).filter(|d| self.r.is(d, "ImportDescriptor") || self.is_file_descriptor(d))?;
+        if self.r.store.strong_list(&desc, pid::DESCRIPTOR_LOCATORS).is_empty() {
+            return None;
+        }
+        let want = seg.u32(pid::SOURCEREF_SLOT).unwrap_or(0);
+        let slots = self.slots(&m);
+        let s = slots.iter().find(|s| s.u32(pid::SLOT_ID) == Some(want))?;
+        let phys = s.u32(pid::SLOT_PHYSICAL_TRACK).unwrap_or(1).max(1);
+        let seconds = here + seg.i64(pid::SOURCECLIP_START).unwrap_or(0) as f64 * f64::from(rate.1) / f64::from(rate.0);
+        let name = m.string(pid::MOB_NAME).unwrap_or_default();
+        let media = self.media_of(&m, &desc, &name)?;
+        Some((media, u16::try_from(phys - 1).unwrap_or(0), seconds))
     }
 
     fn is_file_descriptor(&self, d: &Object) -> bool {
@@ -853,7 +894,7 @@ impl<'r, 'a> Walk<'r, 'a> {
                 c.len += by;
                 c.offset -= by;
                 for ch in c.channels.iter_mut().flatten() {
-                    ch.offset -= by;
+                    ch.shift(-by);
                 }
                 c.gain_env = c.gain_env.iter().map(|(t, v)| (t + by, *v)).collect();
             };
@@ -904,7 +945,7 @@ impl<'r, 'a> Walk<'r, 'a> {
                 c.len += by;
                 c.offset -= by;
                 for ch in c.channels.iter_mut().flatten() {
-                    ch.offset -= by;
+                    ch.shift(-by);
                 }
                 gone[i] = true;
             }

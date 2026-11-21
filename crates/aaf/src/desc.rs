@@ -86,6 +86,19 @@ pub struct ChannelRef {
     pub media: usize,
     pub channel: u16,
     pub offset: i64,
+    /// The file `media` was made from, when the AAF names it: (media, channel, offset). Media
+    /// Composer's own media is MXF; the file it imported is often still at hand.
+    pub original: Option<(usize, u16, i64)>,
+}
+
+impl ChannelRef {
+    /// Moves where the channel starts reading by `by` samples (in the original too).
+    pub fn shift(&mut self, by: i64) {
+        self.offset += by;
+        if let Some(o) = &mut self.original {
+            o.2 += by;
+        }
+    }
 }
 
 /// A fade's shape.
@@ -167,20 +180,20 @@ pub fn to_samples(n: i64, rate: (i32, i32), sr: u32) -> i64 {
 }
 
 /// The file paths an external media location may be at: the location itself when it is a path or
-/// a `file:` URL, then for a file beside the interchange file in `dir`, its name and each longer
-/// tail of its path joined to `dir` (most specific first).
+/// a `file:` URL; then each longer tail of its path (most specific first, down to the bare
+/// name) joined to `dir`, the interchange file's folder, and then to the folder above it (media
+/// in a folder beside the one holding the file).
 pub fn candidate_paths(location: &str, dir: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
     let path = url_to_path(location);
     let mut out = Vec::new();
     if !path.is_empty() {
         out.push(std::path::PathBuf::from(&path));
     }
-    if let Some(dir) = dir {
-        let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect();
-        // Longest tails first (a sub folder beside the file), down to the bare name.
-        let n = parts.len();
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect();
+    let n = parts.len();
+    for base in [dir, dir.and_then(std::path::Path::parent)].into_iter().flatten() {
         for k in (1..=n.min(4)).rev() {
-            let mut p = dir.to_path_buf();
+            let mut p = base.to_path_buf();
             for part in &parts[n - k..] {
                 if part.ends_with(':') {
                     continue;
@@ -266,6 +279,7 @@ mod tests {
         let c = candidate_paths("file:///c%3a/media/sub/x.wav", Some(dir));
         assert_eq!(c[0], std::path::PathBuf::from("c:/media/sub/x.wav"));
         assert!(c.contains(&std::path::PathBuf::from("/aaf/sub/x.wav")));
-        assert_eq!(c.last(), Some(&std::path::PathBuf::from("/aaf/x.wav")));
+        assert!(c.contains(&std::path::PathBuf::from("/aaf/x.wav")));
+        assert_eq!(c.last(), Some(&std::path::PathBuf::from("/x.wav")), "then the folder above");
     }
 }

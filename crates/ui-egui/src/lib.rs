@@ -1631,6 +1631,13 @@ impl SoundApp {
                 if id == "file.import_dawproject" {
                     dawproject_report::offer(self, &v);
                 }
+                if id == "file.import_aaf"
+                    && let Some(summary) = v.get("summary").and_then(serde_json::Value::as_str)
+                {
+                    // Tracks, clips, markers, offline files, anything not carried (the full
+                    // report is in the Notes tab).
+                    self.ui.status = summary.to_string();
+                }
                 if id == "app.quit" {
                     self.quit_requested = true;
                 }
