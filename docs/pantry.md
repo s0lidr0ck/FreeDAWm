@@ -59,9 +59,17 @@ sounds.
 at a time through the track's modules (pre-fader, offline, the way Freeze renders) and makes a new instrument track whose
 Pantry plays the result. The source track is not changed.
 
+Each note is played to the instrument exactly as asked, and its sample is filed under that note
+and velocity. How the source track plays its clips is left out: the global transpose track (the
+Key ruler's transpose changes) and the track's MIDI Real-Time Properties (transpose, velocity,
+length, delay, quantize). The new Pantry track follows the global transpose itself, as the source
+does, so the two play every key alike. A capture made with 0.10.0 under a global transpose has
+that transpose recorded into its samples, so its Pantry plays that many semitones too high (or
+low): turn its Transpose knob down by the same amount, or capture again.
+
 | Setting | Default | |
 |---|---|---|
-| `low`, `high` | 21, 108 | the range, as MIDI notes (A0 to C8 on a piano) |
+| `low`, `high` | 21, 108 | the range, as MIDI notes: a piano's 88 keys, shown as A-1 to C7 (FreeDAWm names middle C, 60, C3; they are A0 to C8 where middle C is C4) |
 | `step` | 3 | semitones between captured notes (1 captures every key) |
 | `layers` | 12 | evenly spaced velocities up to 127, 16 at most |
 | `velocities` | | the velocities to play instead, as a list |

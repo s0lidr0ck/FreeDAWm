@@ -250,7 +250,7 @@ impl CaptureJob {
         Ok(CaptureJob {
             id,
             params: p.clone(),
-            scratch: (*s).clone(),
+            scratch: capture_scratch(&s, t),
             track: t,
             track_name: tr.name.clone(),
             name,
@@ -499,6 +499,22 @@ impl CaptureJob {
         }
         Ok(self.out)
     }
+}
+
+/// The session a capture of `track` renders: `s`, with the track playing each note to its
+/// instrument exactly as written. The global transpose track and the track's MIDI Real-Time
+/// Properties (transpose, velocity, length, delay, quantize) are how the track plays its clips,
+/// not part of the instrument: the Pantry made follows the global transpose itself, so a note
+/// captured through it would be transposed twice, and a sample is labelled with the note and
+/// velocity it was asked for, so it must be played at them.
+fn capture_scratch(s: &soundcraft_model::Session, track: TrackId) -> soundcraft_model::Session {
+    let mut scratch = s.clone();
+    if let Some(tr) = scratch.track_mut(track) {
+        tr.transpose_independent = true;
+    }
+    let rtp = format!("rtp.{}.", track.0);
+    scratch.edit.values.retain(|k, _| !k.starts_with(&rtp));
+    scratch
 }
 
 fn capture(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -2237,3 +2253,7 @@ mod tests {
         assert_eq!((v["samples"].as_u64(), v["layers"].as_u64(), v["skipped"].as_u64()), (Some(24), Some(18), Some(0)));
     }
 }
+
+#[cfg(test)]
+#[path = "multisample_pitch_tests.rs"]
+mod pitch_tests;
