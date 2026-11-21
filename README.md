@@ -113,8 +113,11 @@ that.
 
 - **Tune Vocal.** Note-based pitch and level correction on audio clips; no ML model needed. Vocal
   tracks are analysed in the background. You get Centre, Drift, Vibrato and loudness sliders, Snap
-  to key, macro presets, and you can drag any note (in cents, snapping at semitones). It's
-  non-destructive: switch Tuned/Original, and Commit when you're happy.
+  to key, macro presets, and you can drag any note (in cents, snapping at semitones). A moved note
+  keeps the singer's sound: every sung period keeps its waveform shape, the formants, vibrato and
+  drift stay as sung, a stereo vocal keeps its image, and the move blends into an unmoved
+  neighbour instead of jumping. It's non-destructive: switch Tuned/Original, and Commit when
+  you're happy.
 - **The Vocal Editor.** A piano roll of the singer's notes, coloured by how far off they are and
   drawn thick by loudness. It shows the original and tuned pitch curves, breaths, and scoops (Keep,
   Smooth or Shorten), with the chords and key above. Split and join notes, preview a note soloed,

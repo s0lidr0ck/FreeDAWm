@@ -35,8 +35,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const MERGE_GAP_FRAMES: usize = 2;
 /// The cancel flag is checked every this many STFT frames.
 const CANCEL_EVERY: usize = 32;
-/// A frame whose ratio is this close to 1 keeps the original phase.
+/// A frame whose ratio is this close to 1 keeps the original phase (delayed by its phrase's time
+/// offset, if it has one).
 const IDENTITY_EPS: f64 = 1e-4;
+/// Unvoiced gaps of up to this many analysis frames (20 ms) inside a sung phrase are bridged: the
+/// phrase keeps one time offset across them (see [`Renderer::vocode`]) and a render span never
+/// ends inside one.
+const BRIDGE_FRAMES: usize = 4;
+/// A pitch-shift curve gap of up to this many unvoiced frames between two shifted frames (a
+/// tracker dropout inside a note) is filled, so the note does not dip back to its sung pitch.
+const FILL_FRAMES: usize = 3;
+/// Where the pitch is no longer shifted, the time offset eases back to zero at this rate: at most
+/// 3 cents of pitch, below what the ear notices.
+const STEER_RATE: f64 = 0.001_734;
 /// Shifts are clamped to ± this many cents (two octaves).
 const MAX_SHIFT_CENTS: f64 = 2400.0;
 const MIN_RATE: u32 = 8_000;
@@ -177,7 +188,8 @@ pub fn render_spans_formant(
     // A shifted frame j changes the output up to j·hop + hop + N/2 + the level follow's half-window.
     let level_half = level_kernel_len(sr) / 2;
     let reach = (dil + hop + n / 2 + level_half).div_ceil(hop) + 1;
-    let sample_spans = span_samples(frames, &shift, &gain, &formant, nf, hop, dil, reach, input.len());
+    let phrase = phrases(track);
+    let sample_spans = span_samples(frames, &shift, &gain, &formant, &phrase, nf, hop, dil, reach, input.len());
     if sample_spans.is_empty() {
         return Ok(Vec::new());
     }
@@ -186,7 +198,7 @@ pub fn render_spans_formant(
         let secs = (b - a) as f64 / f64::from(sr);
         return Err(VocalError::Unsupported(format!("a {secs:.1} s render span: no breath for over {MAX_SPAN_SECS} s")));
     }
-    let mut r = Renderer::new(input, track, shift, gain, formant, cancel);
+    let mut r = Renderer::new(input, track, fill_dropouts(&shift, track), gain, formant, phrase, cancel);
     let mut out = Vec::with_capacity(sample_spans.len());
     for (a, b) in sample_spans {
         let samples = r.render(a, b)?;
@@ -195,20 +207,72 @@ pub fn render_spans_formant(
     Ok(out)
 }
 
+/// `shift` with each run of at most [`FILL_FRAMES`] zero frames that the tracker calls unvoiced,
+/// between two shifted frames, filled linearly: a dropout inside a note keeps the note's move.
+fn fill_dropouts(shift: &[f64], track: &PitchTrack) -> Vec<f64> {
+    let mut out = shift.to_vec();
+    let unvoiced = |i: usize| track.frames.get(i).is_none_or(|f| !f.cents.is_some_and(f32::is_finite));
+    let mut i = 1;
+    while i < shift.len() {
+        let prev = shift.get(i - 1).copied().unwrap_or(0.0);
+        if prev == 0.0 || shift.get(i).copied().unwrap_or(0.0) != 0.0 {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < shift.len() && j - i < FILL_FRAMES && shift.get(j).copied().unwrap_or(0.0) == 0.0 && unvoiced(j) {
+            j += 1;
+        }
+        let next = shift.get(j).copied().unwrap_or(0.0);
+        if j > i && next != 0.0 {
+            let len = (j - i + 1) as f64;
+            for (k, o) in out.iter_mut().enumerate().take(j).skip(i) {
+                *o = prev + (next - prev) * (k - i + 1) as f64 / len;
+            }
+        }
+        i = j.max(i + 1);
+    }
+    out
+}
+
 /// Finite values (others become 0.0), as f64.
 fn sanitize(c: &[f32]) -> Vec<f64> {
     c.iter().map(|&v| if v.is_finite() { f64::from(v) } else { 0.0 }).collect()
 }
 
+/// Per track frame: inside a sung phrase, i.e. voiced, or in an unvoiced gap of at most
+/// [`BRIDGE_FRAMES`] between voiced frames.
+fn phrases(track: &PitchTrack) -> Vec<bool> {
+    let v: Vec<bool> = track.frames.iter().map(|f| f.cents.is_some_and(f32::is_finite)).collect();
+    let mut out = v.clone();
+    let mut last: Option<usize> = None;
+    for (i, &on) in v.iter().enumerate() {
+        if !on {
+            continue;
+        }
+        if let Some(l) = last
+            && i - l - 1 <= BRIDGE_FRAMES
+        {
+            for o in out.iter_mut().take(i).skip(l + 1) {
+                *o = true;
+            }
+        }
+        last = Some(i);
+    }
+    out
+}
+
 /// The sample spans `[a, b)` for `frames`: grown over shifted or gain-changed frames within
-/// `reach` frames of their ends (repeatedly), dilated by `dil` samples, clamped to `len`, sorted
-/// and merged.
+/// `reach` frames of their ends and to the ends of the sung phrases they touch (repeatedly: a
+/// pitch move offsets the rest of its phrase in time, see [`Renderer::vocode`], so a span always
+/// ends in a breath), dilated by `dil` samples, clamped to `len`, sorted and merged.
 #[allow(clippy::too_many_arguments)]
 fn span_samples(
     frames: &[Range<u32>],
     shift: &[f64],
     gain: &[f64],
     formant: &[f64],
+    phrase: &[bool],
     nf: usize,
     hop: usize,
     dil: usize,
@@ -224,17 +288,25 @@ fn span_samples(
         if s >= e {
             continue;
         }
+        let in_phrase = |i: usize| phrase.get(i).copied().unwrap_or(false);
         loop {
+            let (s0, e0) = (s, e);
+            while s > 0 && in_phrase(s - 1) {
+                s -= 1;
+            }
+            while e < nf && in_phrase(e) {
+                e += 1;
+            }
             let left = (s.saturating_sub(reach)..s).find(|&j| edited(j));
             let right = (e..e.saturating_add(reach).min(nf)).rev().find(|&j| edited(j));
-            if left.is_none() && right.is_none() {
-                break;
-            }
             if let Some(j) = left {
                 s = j;
             }
             if let Some(j) = right {
                 e = j + 1;
+            }
+            if (s, e) == (s0, e0) {
+                break;
             }
         }
         let a = s.saturating_mul(hop).saturating_sub(dil).min(len);
@@ -293,6 +365,10 @@ struct Renderer<'a> {
     formant: Vec<f64>,
     /// Per track frame: voiced (dilated by one frame) as 0.0 / 1.0.
     voiced: Vec<f64>,
+    /// Per track frame: inside a sung phrase (see [`phrases`]).
+    phrase: Vec<bool>,
+    /// Per track frame: the pitch period (samples), 0.0 where unvoiced.
+    period: Vec<f64>,
     cancel: &'a AtomicBool,
     planner: FftPlanner<f64>,
     fwd: Arc<dyn Fft<f64>>,
@@ -307,7 +383,6 @@ struct Renderer<'a> {
     mag: Vec<f64>,
     ph: Vec<f64>,
     prev_ph: Vec<f64>,
-    out_ph: Vec<f64>,
     w_inst: Vec<f64>,
     env: Vec<f64>,
     env_w: Vec<f64>,
@@ -319,7 +394,15 @@ struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
-    fn new(input: &'a [f32], track: &PitchTrack, shift: Vec<f64>, gain: Vec<f64>, formant: Vec<f64>, cancel: &'a AtomicBool) -> Self {
+    fn new(
+        input: &'a [f32],
+        track: &PitchTrack,
+        shift: Vec<f64>,
+        gain: Vec<f64>,
+        formant: Vec<f64>,
+        phrase: Vec<bool>,
+        cancel: &'a AtomicBool,
+    ) -> Self {
         let sr = track.sample_rate;
         let (n, h, lifter) = stft_sizes(sr);
         let mut planner = FftPlanner::new();
@@ -338,6 +421,14 @@ impl<'a> Renderer<'a> {
             .collect();
         let lif = (0..n).map(|q| if q < lifter || q + lifter > n { 1.0 } else { 0.0 }).collect();
         let ms10 = sr as usize / 100;
+        let period = track
+            .frames
+            .iter()
+            .map(|f| match f.cents.filter(|c| c.is_finite()) {
+                Some(c) => f64::from(sr) / (440.0 * 2f64.powf((f64::from(c) - 6900.0) / 1200.0)),
+                None => 0.0,
+            })
+            .collect();
         Renderer {
             input,
             hop: track.hop_samples as usize,
@@ -348,6 +439,8 @@ impl<'a> Renderer<'a> {
             gain,
             formant,
             voiced,
+            phrase,
+            period,
             cancel,
             planner,
             fwd,
@@ -361,7 +454,6 @@ impl<'a> Renderer<'a> {
             mag: vec![0.0; k],
             ph: vec![0.0; k],
             prev_ph: vec![0.0; k],
-            out_ph: vec![0.0; k],
             w_inst: vec![0.0; k],
             env: vec![0.0; k],
             env_w: vec![0.0; k],
@@ -427,6 +519,18 @@ impl<'a> Renderer<'a> {
 
     /// The phase vocoder over the work region `[wa, wb)` (the spike's `m_pv`, with real input as
     /// its padding). `None` when every frame's ratio is the identity.
+    ///
+    /// Phases are measured and written about each frame's centre (zero-phase windowing), and a
+    /// shifted frame's phases are the input's own, advanced by a running time offset `τ`: the
+    /// component at source frequency `ω` gets `φ_in(ω) + ω·τ` at frequency `r·ω`. `τ` grows by
+    /// `(r − 1)·hop` a frame, which is exactly what moves every component to `r` times its
+    /// frequency, and because the same `τ` applies to every component (and every channel), the
+    /// harmonics keep their phase relationships: each pitch period keeps the waveform shape it was
+    /// sung with, and a stereo pair keeps its image. (Propagating each peak's phase from the
+    /// previous output frame instead lets the harmonics drift apart independently, which is what
+    /// made the old render sound phasey, thin and robotic.) Within a phrase `τ` is kept within half
+    /// a pitch period (a whole period is the same waveform), eases back to 0 where the pitch is no
+    /// longer shifted (at most 3 cents) and restarts at 0 in each breath between phrases.
     fn vocode(&mut self, wa: i64, wb: i64) -> Result<Option<Vec<f64>>, VocalError> {
         let (n, h) = (self.n, self.h);
         let k_len = n / 2 + 1;
@@ -460,16 +564,22 @@ impl<'a> Renderer<'a> {
         let mut out = vec![0.0f64; out_len];
         let mut wsum = vec![0.0f64; out_len];
         self.prev_ph.iter_mut().for_each(|v| *v = 0.0);
-        self.out_ph.iter_mut().for_each(|v| *v = 0.0);
         let inv_n = 1.0 / n as f64;
+        let half = n / 2;
+        // The running time offset (samples) and the last pitch period seen in this phrase.
+        let mut tau = 0.0f64;
+        let mut period = 0.0f64;
         for (f, (&r, &fr)) in ratios.iter().zip(&fratios).enumerate() {
             if f % CANCEL_EVERY == 0 && self.cancel.load(Ordering::Relaxed) {
                 return Err(VocalError::Cancelled);
             }
             let p = origin + (f * h) as i64;
-            // X = rfft(seg * win)
+            let identity = (r - 1.0).abs() < IDENTITY_EPS;
+            tau = self.advance_tau(tau, &mut period, p + half as i64, r, identity);
+            // X = rfft(seg * win), rotated so that phases are about the frame's centre.
             for i in 0..n {
-                let s = self.x_at(p + i as i64) * self.win[i];
+                let j = (i + half) % n;
+                let s = self.x_at(p + j as i64) * self.win[j];
                 self.buf[i] = Complex::new(s, 0.0);
             }
             self.fwd.process_with_scratch(&mut self.buf, &mut self.scratch);
@@ -533,8 +643,14 @@ impl<'a> Renderer<'a> {
                 self.mag_n[k] = exc_n * self.env_w[k];
                 self.ks[k] = (src.round_ties_even().max(0.0) as usize).min(last);
             }
-            if (r - 1.0).abs() < IDENTITY_EPS {
+            if identity && tau == 0.0 {
                 self.new_ph.copy_from_slice(&self.ph);
+            } else if identity {
+                // Not shifted, but still offset in time: a plain delay by τ (every bin's phase
+                // advanced at its own frequency), which holds for noise as well as for partials.
+                for k in 0..k_len {
+                    self.new_ph[k] = self.ph[k] + TAU * k as f64 / n as f64 * tau;
+                }
             } else {
                 self.peaks.clear();
                 for k in 1..last {
@@ -544,12 +660,14 @@ impl<'a> Renderer<'a> {
                 }
                 if self.peaks.is_empty() {
                     for k in 0..k_len {
-                        self.new_ph[k] = self.ph[self.ks[k]];
+                        let j = self.ks[k];
+                        self.new_ph[k] = self.ph[j] + self.w_inst[j] * tau;
                     }
                 } else {
                     self.pk_ph.clear();
                     for &pk in &self.peaks {
-                        self.pk_ph.push(self.out_ph[pk] + h as f64 * r * self.w_inst[self.ks[pk]]);
+                        let j = self.ks[pk];
+                        self.pk_ph.push(self.ph[j] + self.w_inst[j] * tau);
                     }
                     // Each bin belongs to its nearest peak (midpoint bounds, numpy searchsorted).
                     let mut owner = 0usize;
@@ -562,8 +680,7 @@ impl<'a> Renderer<'a> {
                     }
                 }
             }
-            self.out_ph.copy_from_slice(&self.new_ph);
-            // y = irfft(mag_n * e^{i new_ph}) * win, overlap-added.
+            // y = irfft(mag_n * e^{i new_ph}) rotated back, * win, overlap-added.
             for k in 0..k_len {
                 self.buf[k] = Complex::from_polar(self.mag_n[k], self.new_ph[k]);
             }
@@ -574,13 +691,42 @@ impl<'a> Renderer<'a> {
             let at = f * h;
             for i in 0..n {
                 let w = self.win[i];
-                out[at + i] += self.buf[i].re * inv_n * w;
+                out[at + i] += self.buf[(i + half) % n].re * inv_n * w;
                 wsum[at + i] += w * w;
             }
         }
         // The work region is out[n .. n + (wb - wa)].
         let len = (wb - wa) as usize;
         Ok(Some(out.iter().zip(&wsum).skip(n).take(len).map(|(o, w)| o / w.max(1e-3)).collect()))
+    }
+
+    /// The time offset `τ` (samples) for the STFT frame centred on sample `centre`, from the
+    /// previous frame's: restarted at 0 outside a sung phrase, grown by `(r − 1)·hop`, brought
+    /// back within half the pitch period `period` (updated from the track where voiced) and,
+    /// where the frame is not shifted, eased towards 0 by at most [`STEER_RATE`]·hop.
+    fn advance_tau(&self, tau: f64, period: &mut f64, centre: i64, r: f64, identity: bool) -> f64 {
+        let pos = self.frame_pos(centre).round();
+        let frame = if pos >= 0.0 { Some(pos as usize) } else { None };
+        if !frame.and_then(|i| self.phrase.get(i)).copied().unwrap_or(false) {
+            *period = 0.0;
+            return 0.0;
+        }
+        if let Some(&t) = frame.and_then(|i| self.period.get(i))
+            && t.is_finite()
+            && t > 0.0
+        {
+            *period = t;
+        }
+        let h = self.h as f64;
+        let mut tau = tau + (r - 1.0) * h;
+        if *period > 0.0 && tau.abs() > *period / 2.0 {
+            tau -= (tau / *period).round() * *period;
+        }
+        if identity {
+            let step = STEER_RATE * h;
+            tau = if tau.abs() <= step { 0.0 } else { tau - step * tau.signum() };
+        }
+        if tau.is_finite() { tau } else { 0.0 }
     }
 
     /// The spike's `level_follow`: y *= clamp(env30ms(x) / env30ms(y), 0.5, 2).
