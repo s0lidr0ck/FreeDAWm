@@ -193,13 +193,15 @@ fn with_keys() -> Rig {
 }
 
 #[test]
-fn the_empty_ruler_says_no_key_set_or_shows_the_band_key_dimmed() {
+fn the_empty_ruler_says_no_key_set_and_the_band_key_is_written_at_bar_one() {
     let mut r = Rig::new();
     assert!(r.has_text("No key set"), "{:?}", r.texts());
     assert!(!r.has_text("C major"));
+    // One key for the song: setting the band's key writes it at the start of the Key ruler.
     r.app.run("band.settings", json!({"key": "E", "scale": "minor"})).unwrap();
     r.frames(2);
-    assert!(r.has_text("E minor (band key)"), "{:?}", r.texts());
+    assert!(r.has_text("E minor"), "{:?}", r.texts());
+    assert_eq!(r.keys(), [(0, "E minor".to_string())]);
     // The same rule as the Vocal Editor's "No key set".
     let s = soundcraft_model::Session::default();
     assert_eq!(soundcraft_ui_egui::session_key::empty_ruler_text(&s), "No key set");
@@ -209,7 +211,9 @@ fn the_empty_ruler_says_no_key_set_or_shows_the_band_key_dimmed() {
 #[test]
 fn double_click_opens_the_key_picker_and_ok_adds_the_key() {
     let mut r = Rig::new();
+    // The band's key is the key at bar 1 (one key for the song).
     r.app.run("band.settings", json!({"key": "D", "scale": "major"})).unwrap();
+    assert_eq!(r.keys(), [(0, "D major".to_string())]);
     let p = r.at(2 * BAR + 300);
     r.double_click(p);
     assert_eq!(r.app.dialogs.open_name(), Some("key_picker"));
@@ -218,23 +222,23 @@ fn double_click_opens_the_key_picker_and_ok_adds_the_key() {
     // Cancel adds nothing.
     r.click_text("Cancel");
     assert!(r.app.dialogs.open.is_none());
-    assert!(r.keys().is_empty());
-    // It starts on the band key; pick E minor.
+    assert_eq!(r.keys().len(), 1);
+    // It starts on the key in force (the band's); OK adds it at the click.
     r.double_click(p);
     r.frames(2);
     r.click_text("OK");
-    let at = r.keys()[0].0;
-    assert_eq!(r.keys(), [(at, "D major".to_string())], "the band key by default");
+    assert_eq!(r.keys().len(), 2);
+    assert_eq!(r.keys()[1].1, "D major", "the key in force by default");
     r.undo();
     r.double_click(p);
     r.frames(2);
     r.click_text("Minor");
     r.click_text("Eb");
     r.click_text("OK");
-    assert_eq!(r.keys().len(), 1);
-    assert_eq!(r.keys()[0].1, "Eb minor", "minor keys spell their roots");
+    assert_eq!(r.keys().len(), 2);
+    assert_eq!(r.keys()[1].1, "Eb minor", "minor keys spell their roots");
     r.undo();
-    assert!(r.keys().is_empty(), "one undo step");
+    assert_eq!(r.keys().len(), 1, "one undo step");
 }
 
 #[test]
