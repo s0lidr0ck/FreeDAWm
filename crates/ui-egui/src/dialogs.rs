@@ -2005,9 +2005,10 @@ fn capture_fields(ui: &mut egui::Ui, c: &mut CapturePantry) {
         ui.end_row();
         ui.label("Notes");
         ui.horizontal(|ui| {
-            ui.add(egui::DragValue::new(&mut c.low).range(0..=127).custom_formatter(note));
+            let range = "Notes as FreeDAWm names them: middle C is C3, so a piano's 88 keys run from A-1 to C7 (A0 to C8 where middle C is C4)";
+            ui.add(egui::DragValue::new(&mut c.low).range(0..=127).custom_formatter(note)).on_hover_text(range);
             ui.label("to");
-            ui.add(egui::DragValue::new(&mut c.high).range(0..=127).custom_formatter(note));
+            ui.add(egui::DragValue::new(&mut c.high).range(0..=127).custom_formatter(note)).on_hover_text(range);
             ui.label("every");
             ui.add(egui::DragValue::new(&mut c.step).range(1..=12));
             ui.label(if c.step == 1 { "semitone" } else { "semitones" });
