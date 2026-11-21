@@ -1680,7 +1680,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         if let Some(pl) = &app.player {
             pl.reset_underruns();
         }
-        return Some(Ok(json!({"underruns": 0})));
+        // Blocks played from disk that came late are counted with them.
+        soundcraft_model::disk::reset_underruns();
+        return Some(Ok(json!({"underruns": 0, "disk_underruns": 0})));
     }
     if id == "presets.import_firestation" {
         return Some(crate::fs_presets::command(app, p));

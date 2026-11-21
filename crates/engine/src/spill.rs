@@ -28,9 +28,6 @@ pub const PROCESSED: &str = "Processed";
 pub const SPLIT: &str = "Split";
 pub const SUBFOLDERS: [&str; 6] = [STEMS, CLEAN_VOCAL, TUNING, FREEZE, PROCESSED, SPLIT];
 
-/// Sources smaller than this many samples (all channels) stay in memory: not worth a file.
-pub const MIN_SAMPLES: usize = 1 << 16;
-
 /// The subfolder for audio made by the step labelled `label` (an undo label or command label);
 /// `None`: `Audio Files/` itself (imports, recordings, sampler loads).
 pub fn subfolder_for(label: &str) -> Option<&'static str> {
@@ -166,21 +163,16 @@ pub(crate) fn spill_sources(e: &mut Engine, label: &str, only: Option<&[SourceId
         s.sources
             .iter()
             .filter(|src| only.map_or(src.unsaved, |ids| ids.contains(&src.id)) && !keep.contains(&src.id))
-            .filter(|src| s.pool.get(src.id).is_some_and(|a| a.in_memory().is_some() && a.frames().saturating_mul(a.num_channels()) >= MIN_SAMPLES))
+            .filter(|src| {
+                s.pool.get(src.id).is_some_and(|a| a.in_memory().is_some() && !soundcraft_model::disk::keeps_in_memory(a.frames(), a.num_channels()))
+            })
             .map(|src| src.id)
             .collect()
     };
     if todo.is_empty() {
         return Vec::new();
     }
-    // A saved session writes into its project; one never saved under its autosave folder.
-    let (base, in_project) = match (e.path.as_ref(), e.session().folder.as_ref()) {
-        (Some(_), Some(folder)) => (folder.clone(), true),
-        _ => match &e.unsaved_audio_root {
-            Some(root) => (root.join(crate::io::sanitize_name(&e.session().name)), false),
-            None => return Vec::new(),
-        },
-    };
+    let Some((base, in_project)) = home(e) else { return Vec::new() };
     let sub = subfolder_for(label);
     let dir = sub.map_or_else(|| base.join("Audio Files"), |sub| base.join("Audio Files").join(sub));
     let rate = e.session().sample_rate.hz();
@@ -232,6 +224,58 @@ pub(crate) fn spill_sources(e: &mut Engine, label: &str, only: Option<&[SourceId
         }
     }
     files
+}
+
+/// Where the session's generated audio goes: a saved session's project folder (true), else the
+/// session's folder under the autosave root (false); `None` without either.
+fn home(e: &Engine) -> Option<(PathBuf, bool)> {
+    match (e.path.as_ref(), e.session().folder.as_ref()) {
+        (Some(_), Some(folder)) => Some((folder.clone(), true)),
+        _ => e.unsaved_audio_root.as_ref().map(|root| (root.join(crate::io::sanitize_name(&e.session().name)), false)),
+    }
+}
+
+/// Generated audio written straight to its file (see the module docs) as `read` makes it, a
+/// block at a time ([`crate::io::write_wav_new_from`]), then added as a new source `name` that
+/// plays from that file: an edit of a long file never holds it whole in memory. `None` (nothing
+/// added) when it is short enough to stay in memory, when streaming is off, or when there is no
+/// folder for it or it could not be written: the caller then makes it in memory as before.
+pub(crate) fn write_generated(
+    e: &mut Engine,
+    label: &str,
+    name: &str,
+    (channels, frames): (usize, usize),
+    read: &mut dyn FnMut(usize, &mut [Vec<f32>], usize),
+) -> Option<SourceId> {
+    if channels == 0 || frames == 0 || soundcraft_model::disk::keeps_in_memory(frames, channels) {
+        return None;
+    }
+    let (base, in_project) = home(e)?;
+    let sub = subfolder_for(label);
+    let dir = sub.map_or_else(|| base.join("Audio Files"), |sub| base.join("Audio Files").join(sub));
+    let rate = e.session().sample_rate.hz();
+    let stem = std::path::Path::new(name).file_stem().and_then(|x| x.to_str()).unwrap_or(name).to_string();
+    let (file, fname, peaks) = crate::io::write_wav_new_from(&dir, &crate::io::sanitize_name(&stem), (channels, rate, frames), read)?;
+    let audio = crate::io::streamable(&file, rate).and_then(|f| SourceAudio::from_disk(f, peaks).ok());
+    let Some(audio) = audio else {
+        let _ = crate::io::remove_path(&file);
+        return None;
+    };
+    if in_project {
+        crate::peak_cache::store(&base, &file, rate, &audio.peaks);
+    }
+    let stored = if in_project {
+        sub.map_or_else(|| format!("Audio Files/{fname}"), |sub| format!("Audio Files/{sub}/{fname}"))
+    } else {
+        file.to_string_lossy().into_owned()
+    };
+    let s = e.session_mut();
+    let src = crate::io::add_source_audio(s, name, Arc::new(audio), soundcraft_audio_io::FileFormat::Wav);
+    if let Some(x) = s.sources.iter_mut().find(|x| x.id == src) {
+        x.path = stored;
+        x.unsaved = !in_project;
+    }
+    Some(src)
 }
 
 /// Deletes the generated files in `project`'s generated subfolders that nothing names: not a

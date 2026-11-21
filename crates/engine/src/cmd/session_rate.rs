@@ -31,19 +31,20 @@ fn set_rate(e: &mut Engine, p: &Value) -> Result<Value> {
     if e.session().sample_rate == to {
         return Ok(json!({"rate": hz, "sources": 0}));
     }
-    // The audio at the old rate, read before the session changes.
     let s = e.session();
-    let audio: Vec<(SourceId, String, soundcraft_audio_io::AudioBuffer)> =
-        s.sources.iter().filter_map(|src| s.pool.get(src.id).map(|a| (src.id, src.name.clone(), a.buffer().into_owned()))).collect();
-    let s = e.session_mut();
-    soundcraft_model::rate_change::scale_positions(s, to);
+    let todo: Vec<(SourceId, String)> = s.sources.iter().filter(|src| s.pool.contains(src.id)).map(|src| (src.id, src.name.clone())).collect();
+    soundcraft_model::rate_change::scale_positions(e.session_mut(), to);
     // Each source again at the new rate (`add_source` converts it), as new audio: the old
-    // files are left alone for Undo.
+    // files are left alone for Undo. One at a time: each is written to disk as it is made
+    // (where the session has a folder for it), so only one source is ever decoded in memory.
     let mut map: HashMap<SourceId, SourceId> = HashMap::new();
-    for (id, name, buf) in audio {
-        let new = crate::io::add_source(s, &name, buf, None, FileFormat::Wav);
+    for (id, name) in todo {
+        let Some(buf) = e.session().pool.get(id).map(|a| a.buffer().into_owned()) else { continue };
+        let new = crate::io::add_source(e.session_mut(), &name, buf, None, FileFormat::Wav);
+        crate::spill::spill_sources(e, "Change Session Rate", Some(&[new]));
         map.insert(id, new);
     }
+    let s = e.session_mut();
     let swap = |id: &mut SourceId| {
         if let Some(n) = map.get(id) {
             *id = *n;

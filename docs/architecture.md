@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-16 · **Change:** minor (the monitor stage; previously trivial: delay compensation includes the master faders' inserts (#351)) · **Target:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-21 · **Change:** minor (sources play from disk; previously minor: the monitor stage) · **Target:** Avid Pro Tools Ultimate 2026.4.1
 
 FreeDAWm is a Cargo workspace of small crates with enforced layering (`cargo xtask layers`).
 Nothing below the UI knows about egui, so the interface can be replaced.
@@ -28,9 +28,24 @@ L6  ui-egui                                     (the user interface)
 
 `soundcraft_model::Session` is plain data (serde): tracks with playlists of clips, mixer state
 (inserts, sends, routing, automation lanes), tempo and meter maps, memory locations, groups,
-busses, and `EditState` (selection, tools, modes, view flags). Decoded audio lives in a
+busses, and `EditState` (selection, tools, modes, view flags). Each source's audio lives in a
 `SourcePool` of `Arc`s that is not serialised; cloning a session is cheap. Sessions save as
 `.fdawm` JSON plus an `Audio Files/` folder.
+
+Sources play from disk ([`model::disk`](../crates/model/src/disk.rs)): a WAV at the session rate
+is opened by its header and read through one process-wide block cache (pages of 32768 frames of
+one channel; a quarter of RAM, 512 MiB to 6 GiB, `FREEDAWM_DISK_CACHE_MB`). The audio thread only
+looks pages up (atomics, no lock, allocation or I/O): a page not there yet plays as silence for
+that block, counts a disk underrun (the status bar's "Disk too slow") and is asked for. One disk
+thread loads what was asked for, then 4 s ahead of the playhead and the loop start, then fills free
+room nearest the playhead; a locate or play start loads its first second before rolling. Offline
+work (bounce, freeze, Process, analysis, exports) reads through the same cache but blocks, so it
+never has gaps. Sources smaller than `disk::memory_threshold()` (65536 samples by default) stay
+decoded in memory; so do the samples of instruments that read them whole (Lift, Juke). Other
+formats and rates are decoded once into the project's `Decoded/` folder and stream from there;
+generated audio (Process, consolidate, freeze, stems, takes) is written to WAV when it is made.
+Waveform overviews are built in one streaming pass and cached in `Waveforms/`. Saves, autosaves
+and exports write sources a block at a time.
 
 ## Commands and undo
 
@@ -68,8 +83,8 @@ against the ISO 226 contour, played as previews, which bypass the stage.
 Device I/O today is the system's *default* output and *default* input device, opened as two
 separate cpal streams; the mix renders 512-sample blocks and resamples to the device rate when
 they differ. There is no device or buffer-size selection, no ASIO, and no MIDI device layer yet
-(see [`hardware-parity.md`](hardware-parity.md)). Sources are decoded whole into the `SourcePool`
-and recordings are captured in memory until stop.
+(see [`hardware-parity.md`](hardware-parity.md)). Sources play from disk (above) and each take
+records straight to its own file.
 
 `soundcraft-video` holds our own H.264, ProRes and Motion JPEG decoders and the ISO-BMFF demuxer
 for the video track. Hosted plugins (`clap-host`, `vst3-host`, `au-host`) are scanned, created and
@@ -93,6 +108,7 @@ app as an MCP server. See `control-protocol.md` and `mcp.md`.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | Sources play from disk through the block cache; the in-memory threshold; recordings go to their files |
 | 2026-11-16 | minor | The monitor stage (EAR and SIM): heard on the device only, never rendered |
 | 2026-10-13 | trivial | delay compensation includes the master faders' inserts (#351) |
 | 2026-10-10 | minor | Added video, vst3-host and au-host to the layer diagram; documented device I/O limits and in-memory media |

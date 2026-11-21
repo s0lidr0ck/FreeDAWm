@@ -6,7 +6,7 @@
 
 use crate::{Engine, EngineError, Result};
 use serde::{Deserialize, Serialize};
-use soundcraft_audio_io::{EncodeOptions, FileFormat};
+use soundcraft_audio_io::FileFormat;
 use soundcraft_model::{Clip, ClipContent, ClipId, SourceId, TrackId};
 use soundcraft_time::Samples;
 use std::collections::BTreeMap;
@@ -68,15 +68,7 @@ pub fn export(e: &Engine, ids: &[ClipId], path: &str) -> Result<usize> {
             {
                 let rel = format!("{audio_dir_name}/{}_{}.wav", crate::io::sanitize_name(&src.name), source.0);
                 crate::io::make_dir(dir.join(&audio_dir_name))?;
-                let opts = EncodeOptions {
-                    format: FileFormat::Wav,
-                    bit_depth: soundcraft_audio_io::BitDepth::Float32,
-                    dither: false,
-                    bwf: None,
-                    bitrate_kbps: 0,
-                };
-                let bytes = soundcraft_audio_io::encode(&buf.buffer(), &opts).map_err(|err| EngineError::Io(err.to_string()))?;
-                crate::io::write_path(dir.join(&rel), bytes)?;
+                crate::io::write_source_file(&dir.join(&rel), buf)?;
                 slot.insert(rel);
             }
             lane.push(c);
