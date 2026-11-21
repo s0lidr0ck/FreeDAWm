@@ -199,3 +199,212 @@ fn sources_are_written_out_block_by_block_byte_for_byte_as_a_whole_encode() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Decoded audio bytes a session's pool holds in memory.
+fn pool_bytes(s: &Session) -> usize {
+    s.pool.ids().filter_map(|id| s.pool.get(id)).filter_map(|a| a.in_memory()).map(|b| b.frames() * b.num_channels() * 4).sum()
+}
+
+/// Overview bytes a session's pool holds (12 bytes per 32 samples, and a third more for the
+/// coarser levels: reported, not capped).
+fn overview_bytes(s: &Session) -> usize {
+    s.pool.ids().filter_map(|id| s.pool.get(id)).map(|a| a.peaks.iter().map(|p| p.len_samples() / 32 * 12 * 4 / 3).sum::<usize>()).sum()
+}
+
+/// A saved session of `tracks` mono 16-bit files of `secs` seconds each in `d`, every clip whole
+/// from 0 at its own gain.
+fn long_session(d: &Path, tracks: usize, secs: usize) -> (PathBuf, i64) {
+    let frames = secs * SR;
+    let mut s = Session::default();
+    for k in 0..tracks {
+        let t = s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(&format!("T{k}")));
+        let src = add_file(&mut s, d, &format!("t{k}.wav"), &noise(1, frames, 100 + k as u32), BitDepth::Int16);
+        let mut c = clip(&mut s, src, 0, 0, frames as i64);
+        c.gain_db = -12.0 - k as f32 * 0.5;
+        s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(c);
+    }
+    let path = d.join("Long.fdawm");
+    std::fs::write(&path, s.to_json().unwrap()).unwrap();
+    (path, frames as i64)
+}
+
+/// The decoded audio held (the cache's and the pool's) is within `cap`; `peak` keeps the most.
+fn check(s: &Session, cap: usize, peak: &mut usize, when: &str) {
+    let (held, limit) = disk::usage();
+    assert!(limit <= cap && held + pool_bytes(s) <= cap, "{when}: {held} bytes of audio held, cap {cap}");
+    *peak = (*peak).max(held);
+}
+
+/// Opens a session whose audio is many times the cache's cap, plays `play_secs` of it through the
+/// disk thread as the audio thread would (at twice real time) and bounces all of it, checking the
+/// decoded audio held never goes over the cap; with `compare`, also opens it all in memory (the
+/// "before") and checks the bounce is the same bit for bit.
+fn within_budget(tag: &str, tracks: usize, secs: usize, cap: usize, play_secs: usize, compare: bool) {
+    let _t = turn();
+    let d = dir(tag);
+    let (path, len) = long_session(&d, tracks, secs);
+    let whole = tracks * secs * SR * 4;
+    assert!(whole >= cap * 8, "the session is many times the cap");
+    let bits = |p: &Path| -> Vec<Vec<u32>> {
+        let (_, b) = soundcraft_audio_io::decode(&std::fs::read(p).unwrap(), Some("wav")).unwrap();
+        b.channels.iter().map(|c| c.iter().map(|v| v.to_bits()).collect()).collect()
+    };
+    // Before: every source decoded into memory.
+    let reference = compare.then(|| {
+        disk::set_memory_threshold(usize::MAX);
+        let mut e = Engine::default();
+        e.execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap();
+        disk::set_memory_threshold(disk::DEFAULT_MEMORY_THRESHOLD);
+        let held = pool_bytes(e.session());
+        assert_eq!(held, whole);
+        let out = d.join("mem.wav");
+        e.execute("file.bounce_mix", &json!({"path": out.to_string_lossy(), "start": 0, "end": len, "bit_depth": 32})).unwrap();
+        println!("{tag}: in memory, the pool holds {} MB of decoded audio", held / 1_000_000);
+        let b = bits(&out);
+        let _ = std::fs::remove_file(&out);
+        b
+    });
+    // After: streamed through a cache capped far below that.
+    disk::set_limit_bytes(cap);
+    let mut e = Engine::default();
+    e.execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap();
+    let s = e.session_arc();
+    assert!(s.pool.ids().all(|id| s.pool.get(id).is_some_and(|a| a.disk_file().is_some())), "every source streams");
+    assert_eq!(pool_bytes(&s), 0);
+    let mut peak = 0usize;
+    // Play: the audio thread's reads, 4800 frames at a time, at twice real time.
+    disk::focus(Some(std::sync::Arc::clone(&s)));
+    assert!(disk::prepare(&s, 0, 1.0, std::time::Duration::from_secs(20)));
+    let before = disk::underruns();
+    let mut silent = 0usize;
+    let step = 4_800usize;
+    let audio: Vec<_> = s.pool.ids().filter_map(|id| s.pool.get(id).cloned()).collect();
+    let mut out = vec![0.0f32; step];
+    for pos in (0..play_secs * SR).step_by(step) {
+        disk::set_playhead(pos as i64, true);
+        for a in &audio {
+            a.cursor(0, true).fill(pos as i64, &mut out);
+            silent += out.iter().filter(|v| **v == 0.0).count();
+        }
+        check(e.session(), cap, &mut peak, "playing");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let late = disk::underruns() - before;
+    disk::set_playhead(0, false);
+    disk::focus(None);
+    assert_eq!(late, 0, "no block came late");
+    assert!(silent < tracks * play_secs * 4, "the audio played, not silence ({silent} zero samples)");
+    // Bounce all of it, offline.
+    let out = d.join("disk.wav");
+    e.execute("file.bounce_mix", &json!({"path": out.to_string_lossy(), "start": 0, "end": len, "bit_depth": 32})).unwrap();
+    check(e.session(), cap, &mut peak, "bounced");
+    println!(
+        "{tag}: {} MB of audio played and bounced from disk; cache cap {} MB, peak held {} MB; overviews {} MB; process peak {}",
+        whole / 1_000_000,
+        cap / 1_000_000,
+        peak / 1_000_000,
+        overview_bytes(&s) / 1_000_000,
+        // The process's peak resident memory, where the system says (Linux).
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|t| t.lines().find(|l| l.starts_with("VmHWM")).map(|l| l.trim_start_matches("VmHWM:").trim().to_string()))
+            .unwrap_or_else(|| "unknown".into())
+    );
+    if let Some(reference) = reference {
+        assert!(bits(&out) == reference, "the streamed bounce differs from the in-memory one");
+    }
+    drop(e);
+    disk::set_limit_bytes(disk::budget_bytes());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_session_eight_times_the_cache_plays_and_bounces_within_it() {
+    // 6 tracks of 4 minutes: 276 MB decoded, against a 32 MiB cache.
+    within_budget("budget", 6, 240, 32 << 20, 8, true);
+}
+
+/// The same at session size: 16 tracks of 30 minutes (5.5 GB decoded, 2.8 GB of files written to
+/// the temp folder) against a 64 MiB cache. Slow: `cargo test -p soundcraft-engine --test
+/// disk_budget -- --ignored`.
+#[test]
+#[ignore]
+fn a_long_multitrack_session_plays_and_bounces_within_a_small_cache() {
+    within_budget("budget-big", 16, 1_800, 64 << 20, 8, false);
+}
+
+/// The clip's file as it is now (every channel, whole).
+fn clip_audio(e: &Engine) -> (Vec<Vec<u32>>, bool) {
+    let s = e.session();
+    let c = &s.tracks[0].clips()[0];
+    let a = s.pool.get(c.source().unwrap()).unwrap();
+    let w = a.window(0, a.frames());
+    (w.iter().map(|c| c.iter().map(|v| v.to_bits()).collect()).collect(), a.disk_file().is_some())
+}
+
+#[test]
+fn sample_edits_of_a_long_file_are_written_to_disk_and_match_the_in_memory_edit() {
+    let _t = turn();
+    let d = dir("edits");
+    let frames = 5 * SR;
+    let file = d.join("Long.wav");
+    let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int24, dither: false, bwf: None, bitrate_kbps: 0 };
+    std::fs::write(&file, encode(&noise(2, frames, 31), &opts).unwrap()).unwrap();
+    let edits = [
+        json!({"cmd": "clip.draw_samples", "at": 100_000, "values": (0..2_000).map(|i| (i as f64 * 0.01).sin() * 0.9).collect::<Vec<_>>(), "channel": 1}),
+        json!({"cmd": "clip.sample_edit", "op": "reverse", "file_start": 30_000, "file_end": 70_001}),
+        json!({"cmd": "clip.sample_edit", "op": "gain", "file_start": 1_000, "file_end": 9_000, "db": -6.0, "channel": 0}),
+        json!({"cmd": "clip.sample_edit", "op": "cut", "file_start": 150_000, "file_end": 160_000}),
+        json!({"cmd": "clip.sample_edit", "op": "paste", "file_start": 10, "file_end": 10}),
+        json!({"cmd": "clip.sample_edit", "op": "silence", "file_start": 200_000, "file_end": 200_500}),
+        json!({"cmd": "clip.sample_edit", "op": "invert", "file_start": 0, "file_end": frames}),
+    ];
+    let run = |saved: bool| {
+        let mut e = Engine::default();
+        e.execute("file.import_audio", &json!({"path": file.to_string_lossy()})).unwrap();
+        if saved {
+            let song = d.join("Song").join("Song.fdawm");
+            e.execute("session.save_as", &json!({"path": song.to_string_lossy()})).unwrap();
+        }
+        let mut after = Vec::new();
+        for edit in &edits {
+            let clip = e.session().tracks[0].clips()[0].id.0;
+            let mut p = edit.clone();
+            p["clip"] = json!(clip);
+            let cmd = p["cmd"].as_str().unwrap().to_string();
+            e.execute(&cmd, &p).unwrap();
+            after.push(clip_audio(&e));
+        }
+        after
+    };
+    let on_disk = run(true);
+    let in_memory = run(false);
+    for (i, ((disk_bits, streamed), (mem_bits, _))) in on_disk.iter().zip(&in_memory).enumerate() {
+        assert!(*streamed, "edit {i}: the new file plays from disk");
+        assert!(disk_bits == mem_bits, "edit {i}: the file written block by block differs from the in-memory edit");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_rate_change_writes_each_converted_source_to_disk_as_it_goes() {
+    let _t = turn();
+    let d = dir("rate");
+    let mut e = Engine::default();
+    for k in 0..3 {
+        let file = d.join(format!("s{k}.wav"));
+        let opts = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None, bitrate_kbps: 0 };
+        std::fs::write(&file, encode(&noise(1, 3 * SR, 40 + k), &opts).unwrap()).unwrap();
+        e.execute("file.import_audio", &json!({"path": file.to_string_lossy()})).unwrap();
+    }
+    e.execute("session.save_as", &json!({"path": d.join("Song").join("Song.fdawm").to_string_lossy()})).unwrap();
+    let r = e.execute("session.set_sample_rate", &json!({"rate": 96_000})).unwrap();
+    assert_eq!(r["sources"], 3);
+    let s = e.session();
+    for t in &s.tracks {
+        let a = s.pool.get(t.clips()[0].source().unwrap()).unwrap();
+        assert!(a.disk_file().is_some() && a.in_memory().is_none(), "converted and played from disk");
+        assert_eq!((a.sample_rate(), a.frames()), (96_000, 6 * SR));
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
