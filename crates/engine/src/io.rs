@@ -2627,24 +2627,29 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// Frames of every channel read from a source per pass when it is written out.
 const WRITE_FRAMES: usize = 1 << 16;
 
-/// Writes `audio` to `out` as a 32-bit float WAV: byte for byte what `encode` makes of its whole
-/// buffer (no BWF, the default speaker mask, samples clamped to ±1), read a block at a time, so a
-/// source played from disk is never held whole in memory (save, autosave, exports). Returns the
-/// bytes written.
-pub fn write_source_wav(audio: &SourceAudio, out: &mut impl std::io::Write) -> std::io::Result<u64> {
-    let (channels, frames) = (audio.num_channels(), audio.frames());
-    let head = soundcraft_audio_io::wav_float_header(channels, audio.sample_rate(), frames as u64).map_err(std::io::Error::other)?;
+/// Writes a 32-bit float WAV of `frames` frames of `channels` channels to `out`, its samples
+/// given a block at a time by `read(start, planar, n)` (each channel's first `n` to fill), and
+/// handed to `each` as written: the bytes `encode` makes of the whole buffer (no BWF, the default
+/// speaker mask, samples clamped to ±1), never more than a block in memory. Returns the bytes
+/// written.
+pub(crate) fn write_wav_blocks(
+    out: &mut impl std::io::Write,
+    channels: usize,
+    rate: u32,
+    frames: usize,
+    read: &mut dyn FnMut(usize, &mut [Vec<f32>], usize),
+    each: &mut dyn FnMut(&[Vec<f32>], usize),
+) -> std::io::Result<u64> {
+    let head = soundcraft_audio_io::wav_float_header(channels, rate, frames as u64).map_err(std::io::Error::other)?;
     out.write_all(&head)?;
     let mut planar = vec![vec![0.0f32; WRITE_FRAMES]; channels];
     let mut bytes: Vec<u8> = Vec::with_capacity(WRITE_FRAMES.saturating_mul(channels).saturating_mul(4));
     let mut at = 0usize;
     while at < frames {
         let n = (frames - at).min(WRITE_FRAMES);
-        for (ch, buf) in planar.iter_mut().enumerate() {
-            if let Some(dst) = buf.get_mut(..n) {
-                audio.read(ch, at, dst);
-            }
-        }
+        planar.iter_mut().for_each(|b| b.fill(0.0));
+        read(at, &mut planar, n);
+        each(&planar, n);
         bytes.clear();
         for i in 0..n {
             for buf in &planar {
@@ -2657,6 +2662,55 @@ pub fn write_source_wav(audio: &SourceAudio, out: &mut impl std::io::Write) -> s
         at += n;
     }
     Ok((head.len() as u64).saturating_add((frames as u64).saturating_mul(channels as u64).saturating_mul(4)))
+}
+
+/// Writes `audio` to `out` as a 32-bit float WAV: byte for byte what `encode` makes of its whole
+/// buffer, read a block at a time ([`write_wav_blocks`]), so a source played from disk is never
+/// held whole in memory (save, autosave, exports). Returns the bytes written.
+pub fn write_source_wav(audio: &SourceAudio, out: &mut impl std::io::Write) -> std::io::Result<u64> {
+    let mut read = |at: usize, planar: &mut [Vec<f32>], n: usize| {
+        for (ch, buf) in planar.iter_mut().enumerate() {
+            if let Some(dst) = buf.get_mut(..n) {
+                audio.read(ch, at, dst);
+            }
+        }
+    };
+    write_wav_blocks(out, audio.num_channels(), audio.sample_rate(), audio.frames(), &mut read, &mut |_, _| {})
+}
+
+/// Writes a new float WAV `<stem>.wav` (or `<stem>_NN.wav`) in `dir` from `read` a block at a
+/// time ([`write_wav_blocks`]), synced to disk, and builds its overviews as it goes: generated
+/// audio that is never whole in memory. The file, its name and its overviews; `None` (nothing left
+/// behind) when it cannot be written.
+pub(crate) fn write_wav_new_from(
+    dir: &Path,
+    stem: &str,
+    (channels, rate, frames): (usize, u32, usize),
+    read: &mut dyn FnMut(usize, &mut [Vec<f32>], usize),
+) -> Option<(PathBuf, String, Vec<soundcraft_audio_io::peaks::Peaks>)> {
+    use std::io::Write;
+    crate::file_access::check_write(dir).ok()?;
+    std::fs::create_dir_all(dir).ok()?;
+    for k in 0..10_000u32 {
+        let name = if k == 0 { format!("{stem}.wav") } else { format!("{stem}_{k:02}.wav") };
+        let path = dir.join(&name);
+        let Ok(f) = std::fs::OpenOptions::new().write(true).create_new(true).open(&path) else { continue };
+        let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+        let mut peaks: Vec<soundcraft_audio_io::peaks::PeaksBuilder> = (0..channels).map(|_| Default::default()).collect();
+        let mut each = |planar: &[Vec<f32>], n: usize| {
+            for (b, ch) in peaks.iter_mut().zip(planar) {
+                b.push(ch.get(..n).unwrap_or_default());
+            }
+        };
+        let ok = write_wav_blocks(&mut w, channels, rate, frames, read, &mut each).is_ok() && w.flush().is_ok() && w.get_ref().sync_all().is_ok();
+        if ok {
+            return Some((path, name, peaks.into_iter().map(|b| b.finish()).collect()));
+        }
+        drop(w);
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    None
 }
 
 /// Writes `audio` as a float WAV ([`write_source_wav`]) to the new file `path`, synced to disk;

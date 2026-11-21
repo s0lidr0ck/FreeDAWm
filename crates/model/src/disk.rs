@@ -799,11 +799,16 @@ pub struct Cursor<'a> {
     /// The block a miss was last reported for (reported once per cursor and block).
     missed: usize,
     scratch: Option<Box<Scratch>>,
+    /// A blocking cursor's own copy of the block at `own_base` when the cache had no page to
+    /// spare for it (offline work over a cache full of what is playing): read from the file once
+    /// per cursor and block instead of a sample at a time.
+    own: Vec<f32>,
+    own_base: usize,
 }
 
 impl<'a> Cursor<'a> {
     pub(crate) fn new(file: &'a DiskFile, ch: usize, blocking: bool) -> Self {
-        Cursor { file, ch, blocking, page: None, held: None, base: 0, missed: usize::MAX, scratch: None }
+        Cursor { file, ch, blocking, page: None, held: None, base: 0, missed: usize::MAX, scratch: None, own: Vec::new(), own_base: 0 }
     }
 
     /// Sample `x`, `None` past the end of the file.
@@ -813,6 +818,9 @@ impl<'a> Cursor<'a> {
             && let Some(s) = x.checked_sub(self.base).and_then(|i| p.get(i))
         {
             return Some(f32::from_bits(s.load(Ordering::Relaxed)));
+        }
+        if let Some(v) = x.checked_sub(self.own_base).and_then(|i| self.own.get(i)) {
+            return Some(*v);
         }
         self.seek(x)
     }
@@ -829,21 +837,24 @@ impl<'a> Cursor<'a> {
                 return;
             }
             let current = self.page.is_some_and(|p| x >= self.base && x - self.base < p.len());
-            if !current {
-                let v = self.seek(x);
-                if self.page.is_none() {
-                    // Not loaded: realtime reads the rest of the block as silence; a blocking
-                    // read without a page to spare read this one sample from the file.
-                    let n = if self.blocking { 1 } else { (BLOCK - (x & (BLOCK - 1))).min(rest.len()) };
-                    if let Some(d) = rest.get_mut(..n) {
-                        d.fill(0.0);
+            if !current && !self.find(x) {
+                // Not loaded: realtime reads the rest of the block as silence; a blocking
+                // read without a page to spare reads the run straight from the file.
+                let n = (BLOCK - (x & (BLOCK - 1))).min(rest.len()).min(self.file.frames - x);
+                let Some(d) = rest.get_mut(..n) else { return };
+                d.fill(0.0);
+                if self.blocking {
+                    let scratch = self.scratch.get_or_insert_with(Box::default);
+                    if self.file.decode(x, n, scratch)
+                        && let Some(src) = scratch.planar.get(self.ch)
+                    {
+                        for (d, v) in d.iter_mut().zip(src) {
+                            *d = *v;
+                        }
                     }
-                    if let (true, Some(d)) = (self.blocking, rest.first_mut()) {
-                        *d = v.unwrap_or(0.0);
-                    }
-                    i += n;
-                    continue;
                 }
+                i += n.max(1);
+                continue;
             }
             let Some(p) = self.page else { return };
             let off = x - self.base;
@@ -864,10 +875,14 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Looks up (a blocking cursor: loads) the page holding `x`; false when there is none: not
+    /// loaded yet (realtime, asked for) or no page to spare (blocking).
     #[cold]
-    fn seek(&mut self, x: usize) -> Option<f32> {
+    fn find(&mut self, x: usize) -> bool {
         if x >= self.file.frames || self.ch >= self.file.channels {
-            return None;
+            self.page = None;
+            self.held = None;
+            return false;
         }
         let block = x >> BLOCK_SHIFT;
         self.base = block << BLOCK_SHIFT;
@@ -881,19 +896,35 @@ impl<'a> Cursor<'a> {
                 self.file.load(block, scratch, Need::Urgent);
                 self.held = self.file.page(self.ch, block);
                 self.page = self.held.and_then(|h| h.data.get(..valid));
-                if self.page.is_none() {
-                    // No page to spare: one sample straight from the file.
-                    let mut one = [0.0f32];
-                    self.file.read_with(self.ch, x, &mut one, scratch);
-                    return Some(one[0]);
-                }
-            } else {
-                if self.missed != block {
-                    self.missed = block;
-                    ask(self.file, block);
-                }
+            } else if self.missed != block {
+                self.missed = block;
+                ask(self.file, block);
+            }
+        }
+        self.page.is_some()
+    }
+
+    #[cold]
+    fn seek(&mut self, x: usize) -> Option<f32> {
+        if x >= self.file.frames || self.ch >= self.file.channels {
+            return None;
+        }
+        if !self.find(x) {
+            if !self.blocking {
                 return Some(0.0);
             }
+            // No page to spare: this block read into the cursor's own copy, once.
+            let (base, valid) = (self.base, (self.file.frames - self.base).min(BLOCK));
+            let scratch = self.scratch.get_or_insert_with(Box::default);
+            self.own.clear();
+            if self.file.decode(base, valid, scratch)
+                && let Some(src) = scratch.planar.get(self.ch)
+            {
+                self.own.extend_from_slice(src.get(..valid).unwrap_or_default());
+            }
+            self.own.resize(valid, 0.0);
+            self.own_base = base;
+            return self.own.get(x - base).copied();
         }
         let i = x - self.base;
         self.page.and_then(|p| p.get(i)).map(|s| f32::from_bits(s.load(Ordering::Relaxed)))
