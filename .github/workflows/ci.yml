@@ -29,6 +29,11 @@ env:
   # arithmetic), so CI skips them; they pass on the desktop machines they were written on. See
   # docs/releasing.md › Checks.
   TIMING_SKIPS: "--skip silence_tail_is_cheap --skip a_minute_of_silence_stays_cheap"
+  # No debug info in the test builds: with it, the 200-odd UI test binaries no longer fit on the
+  # macOS runner's disk (the linker stopped with "write() failed, errno=28"). Panics still print
+  # their message and location; only symbolised backtraces are lost.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   ci:
