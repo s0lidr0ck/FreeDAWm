@@ -47,6 +47,7 @@ pub mod note_index;
 pub mod open_job;
 pub mod pattern;
 pub mod peak_cache;
+pub mod peak_pages;
 pub mod render_job;
 pub mod score;
 pub mod scout_profiles;

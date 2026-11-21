@@ -4,8 +4,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use serde_json::json;
+use soundcraft_audio_io::peaks::Peaks;
 use soundcraft_audio_io::{AudioBuffer, BitDepth, EncodeOptions, FileFormat, encode};
-use soundcraft_engine::Engine;
+use soundcraft_engine::{Engine, peak_pages};
 use soundcraft_model::{ChannelFormat, Clip, ClipId, Fade, FadeShape, Session, Source, SourceId, TrackKind, disk};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -205,10 +206,45 @@ fn pool_bytes(s: &Session) -> usize {
     s.pool.ids().filter_map(|id| s.pool.get(id)).filter_map(|a| a.in_memory()).map(|b| b.frames() * b.num_channels() * 4).sum()
 }
 
-/// Overview bytes a session's pool holds (12 bytes per 32 samples, and a third more for the
-/// coarser levels: reported, not capped).
+/// Overview bytes a session's pool holds itself (for a source played from disk in a project, the
+/// coarse levels only; the fine ones are in the page cache, [`peak_pages::usage`]).
 fn overview_bytes(s: &Session) -> usize {
+    s.pool.ids().filter_map(|id| s.pool.get(id)).map(|a| a.peaks.iter().map(Peaks::memory_bytes).sum::<usize>()).sum()
+}
+
+/// What overviews held whole would take: 12 bytes per 32 samples, and a third more for the
+/// coarser levels.
+fn whole_overview_bytes(s: &Session) -> usize {
     s.pool.ids().filter_map(|id| s.pool.get(id)).map(|a| a.peaks.iter().map(|p| p.len_samples() / 32 * 12 * 4 / 3).sum::<usize>()).sum()
+}
+
+/// Draws every source's waveform as the Edit window would, `screens` screenfuls of 1800 columns
+/// at each of a few zooms spread across the session (each asked again until its pages are in),
+/// checking the overviews' memory stays within `cap` throughout; the most it held.
+fn draw_through(s: &Session, frames: usize, screens: usize, cap: usize) -> usize {
+    let mut most = 0;
+    for step in [40.0, 700.0, 3_000.0, 30_000.0, 300_000.0] {
+        let cols = 1_800usize;
+        let span = step * cols as f64;
+        for k in 0..screens {
+            let start = (frames as f64 - span).max(0.0) * k as f64 / (screens - 1).max(1) as f64;
+            for id in s.pool.ids() {
+                let Some(a) = s.pool.get(id) else { continue };
+                for p in &a.peaks {
+                    let mut tries = 0;
+                    while !p.spans_in_checked(&[], 0, start, step, step, cols).1 {
+                        tries += 1;
+                        assert!(tries < 50, "pages never came");
+                        peak_pages::wait_idle(std::time::Duration::from_secs(10));
+                    }
+                }
+            }
+            let held = overview_bytes(s) + peak_pages::usage().0;
+            assert!(held <= cap, "drawing at step {step}: overviews hold {held} bytes, cap {cap}");
+            most = most.max(held);
+        }
+    }
+    most
 }
 
 /// A saved session of `tracks` mono 16-bit files of `secs` seconds each in `d`, every clip whole
@@ -228,6 +264,14 @@ fn long_session(d: &Path, tracks: usize, secs: usize) -> (PathBuf, i64) {
     (path, frames as i64)
 }
 
+/// The process's peak resident memory, where the system says (Linux).
+fn peak_rss() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|t| t.lines().find(|l| l.starts_with("VmHWM")).map(|l| l.trim_start_matches("VmHWM:").trim().to_string()))
+        .unwrap_or_else(|| "unknown".into())
+}
+
 /// The decoded audio held (the cache's and the pool's) is within `cap`; `peak` keeps the most.
 fn check(s: &Session, cap: usize, peak: &mut usize, when: &str) {
     let (held, limit) = disk::usage();
@@ -239,10 +283,18 @@ fn check(s: &Session, cap: usize, peak: &mut usize, when: &str) {
 /// disk thread as the audio thread would (at twice real time) and bounces all of it, checking the
 /// decoded audio held never goes over the cap; with `compare`, also opens it all in memory (the
 /// "before") and checks the bounce is the same bit for bit.
-fn within_budget(tag: &str, tracks: usize, secs: usize, cap: usize, play_secs: usize, compare: bool) {
+/// The overviews are checked too: only their coarse levels are held, and drawing the session
+/// through at several zooms keeps them and the page cache (its budget `pages`) within
+/// `overview_cap`.
+fn within_budget(tag: &str, tracks: usize, secs: usize, cap: usize, play_secs: usize, compare: bool, (pages, overview_cap): (usize, usize)) {
     let _t = turn();
+    peak_pages::set_budget_bytes(pages);
     let d = dir(tag);
     let (path, len) = long_session(&d, tracks, secs);
+    // The peak so far is the test's own (each file made whole, then encoded); from here on it is
+    // the engine's (Linux lets the high-water mark be reset).
+    let setup_peak = peak_rss();
+    let _ = std::fs::write("/proc/self/clear_refs", "5");
     let whole = tracks * secs * SR * 4;
     assert!(whole >= cap * 8, "the session is many times the cap");
     let bits = |p: &Path| -> Vec<Vec<u32>> {
@@ -270,7 +322,10 @@ fn within_budget(tag: &str, tracks: usize, secs: usize, cap: usize, play_secs: u
     e.execute("session.open", &json!({"path": path.to_string_lossy()})).unwrap();
     let s = e.session_arc();
     assert!(s.pool.ids().all(|id| s.pool.get(id).is_some_and(|a| a.disk_file().is_some())), "every source streams");
+    assert!(s.pool.ids().all(|id| s.pool.get(id).is_some_and(|a| a.peaks.iter().all(Peaks::is_paged))), "every overview is paged");
     assert_eq!(pool_bytes(&s), 0);
+    let whole_overviews = whole_overview_bytes(&s);
+    assert!(overview_bytes(&s) + peak_pages::usage().0 <= overview_cap && overview_cap * 4 <= whole_overviews, "overviews held at open");
     let mut peak = 0usize;
     // Play: the audio thread's reads, 4800 frames at a time, at twice real time.
     disk::focus(Some(std::sync::Arc::clone(&s)));
@@ -298,39 +353,42 @@ fn within_budget(tag: &str, tracks: usize, secs: usize, cap: usize, play_secs: u
     let out = d.join("disk.wav");
     e.execute("file.bounce_mix", &json!({"path": out.to_string_lossy(), "start": 0, "end": len, "bit_depth": 32})).unwrap();
     check(e.session(), cap, &mut peak, "bounced");
+    // Draw it through: scrolling and zooming over all of it reads only what is shown.
+    let drawn = draw_through(&s, len as usize, 4, overview_cap);
     println!(
-        "{tag}: {} MB of audio played and bounced from disk; cache cap {} MB, peak held {} MB; overviews {} MB; process peak {}",
+        "{tag}: {} MB of audio played and bounced from disk; cache cap {} MB, peak held {} MB; overviews {} kB held ({} MB whole), at most {} kB with pages while drawn; process peak {} (writing the test's files: {})",
         whole / 1_000_000,
         cap / 1_000_000,
         peak / 1_000_000,
-        overview_bytes(&s) / 1_000_000,
-        // The process's peak resident memory, where the system says (Linux).
-        std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|t| t.lines().find(|l| l.starts_with("VmHWM")).map(|l| l.trim_start_matches("VmHWM:").trim().to_string()))
-            .unwrap_or_else(|| "unknown".into())
+        overview_bytes(&s) / 1_000,
+        whole_overviews / 1_000_000,
+        drawn / 1_000,
+        peak_rss(),
+        setup_peak,
     );
     if let Some(reference) = reference {
         assert!(bits(&out) == reference, "the streamed bounce differs from the in-memory one");
     }
     drop(e);
     disk::set_limit_bytes(disk::budget_bytes());
+    peak_pages::set_budget_bytes(peak_pages::DEFAULT_BUDGET);
     let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
 fn a_session_eight_times_the_cache_plays_and_bounces_within_it() {
-    // 6 tracks of 4 minutes: 276 MB decoded, against a 32 MiB cache.
-    within_budget("budget", 6, 240, 32 << 20, 8, true);
+    // 6 tracks of 4 minutes: 276 MB decoded, against a 32 MiB cache; overviews (35 MB whole)
+    // within 6 MiB with a 4 MiB page cache.
+    within_budget("budget", 6, 240, 32 << 20, 8, true, (4 << 20, 6 << 20));
 }
 
 /// The same at session size: 16 tracks of 30 minutes (5.5 GB decoded, 2.8 GB of files written to
-/// the temp folder) against a 64 MiB cache. Slow: `cargo test -p soundcraft-engine --test
-/// disk_budget -- --ignored`.
+/// the temp folder) against a 64 MiB cache; overviews (691 MB whole) within 24 MiB with a 16 MiB
+/// page cache. Slow: `cargo test -p soundcraft-engine --test disk_budget -- --ignored`.
 #[test]
 #[ignore]
 fn a_long_multitrack_session_plays_and_bounces_within_a_small_cache() {
-    within_budget("budget-big", 16, 1_800, 64 << 20, 8, false);
+    within_budget("budget-big", 16, 1_800, 64 << 20, 8, false, (16 << 20, 24 << 20));
 }
 
 /// The clip's file as it is now (every channel, whole).

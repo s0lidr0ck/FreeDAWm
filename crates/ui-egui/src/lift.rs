@@ -419,10 +419,13 @@ fn waveform(app: &mut SoundApp, ui: &mut Ui, p: &Painter, r: Rect, tid: TrackId,
         let mid = r.min.y + lane_h * (c as f32 + 0.5);
         let half = lane_h * 0.42;
         let samples = audio.channel(c).unwrap_or_default();
-        for i in 0..cols {
-            let a = frames.saturating_mul(i) / cols;
-            let b = (frames.saturating_mul(i + 1) / cols).max(a + 1);
-            let (lo, hi) = peaks.minmax(samples, a, b);
+        // Never waits for an overview read from disk: coarser where a page isn't in yet, then again.
+        let (spans, complete) = peaks.spans_in_checked(samples, 0, 0.0, frames as f64 / cols as f64, 0.0, cols);
+        if !complete {
+            ui.ctx().request_repaint_after(crate::waveform::REDRAW_WHILE_LOADING);
+        }
+        for (i, span) in spans.into_iter().enumerate() {
+            let (lo, hi) = span.unwrap_or((0.0, 0.0));
             let x = r.min.x + i as f32 + 0.5;
             let col = if played(x) { AMBER } else { DIM.gamma_multiply(0.35) };
             p.line_segment([pos2(x, mid - hi.clamp(-1.0, 1.0) * half), pos2(x, mid - lo.clamp(-1.0, 1.0) * half)], Stroke::new(1.0, col));

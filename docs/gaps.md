@@ -24,7 +24,7 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 | G-03 | **Alpha blocker.** Cannot exchange sessions with Pro Tools (no AAF/OMF, no `.ptx`) | File formats | [file-format-parity.md](file-format-parity.md) | 50–90 |
 | G-04 | Open correctness bugs in features counted as done (~25 issues) | Stability | this file | 25–40 |
 | G-05 | (Entitlement part: alpha blocker for the mix row) Third-party VST3s blocked in the signed macOS build; AU editors missing | Ecosystem | [plugin-parity.md](plugin-parity.md) | 15–25 |
-| G-06 | Waveform overviews held in RAM (sources stream from disk; takes record to disk) | Performance | [hardware-parity.md](hardware-parity.md) | 4–8 |
+| G-06 | Compressed files decoded whole once; one file handle per streamed file (sources and overviews stream from disk; takes record to disk) | Performance | [hardware-parity.md](hardware-parity.md) | 3–6 |
 | G-07 | Nothing is compared against Pro Tools' output (no fidelity harness) | Features | this file | 20–30 |
 | G-08 | Built-in plugin catalogue thin and unverified | Features | [plugin-parity.md](plugin-parity.md) | 80–120 |
 | G-09 | English only, no string catalog, no CJK/RTL rendering | Localization | [localization-parity.md](localization-parity.md) | 70–110 |
@@ -135,18 +135,21 @@ launch #142; Linux #45, #107.
   setting) and the samples of Lift and Juke stay in memory. Importing a WAV at the session rate
   reads only its header; other formats and rates are decoded once into `Decoded/` and stream from
   there; generated audio, sample edits and rate conversion are written to disk as made; saves and
-  exports write a block at a time. A 5.5 GB session (16 tracks of 30 minutes) plays and bounces in
-  a 64 MiB cache with a process peak of about 0.8 GB (`engine/tests/disk_budget.rs`).
-- **Missing:** waveform overviews stay in memory, about one byte for every two samples (an eighth of
-  the decoded audio: 0.7 GB for that 5.5 GB session, 11 GB for 2 hours of 32 tracks at 96 kHz);
-  their finest levels should be read from the `Waveforms/` cache on demand. A compressed or
-  other-rate file is decoded whole once (up to 2^30 samples) before it streams. Each streamed file
-  keeps a file handle open (macOS allows 256 by default). Instruments that read samples whole
-  (Lift, Juke) keep them in memory.
-- **Impact:** sessions far larger than RAM play, record, bounce and edit; very long sessions are
-  bounded by their overviews' memory.
+  exports write a block at a time. Waveform overviews of sources played from disk in a saved
+  project keep only their coarse levels in memory (about 1/256 of the whole: 2.7 MB instead of
+  691 MB for a 5.5 GB session, about 43 MB for 2 hours of 32 tracks at 96 kHz); the fine levels
+  are read from the `Waveforms/` cache for what is on screen into a 96 MiB page cache, the coarser
+  level drawn until they arrive (`engine::peak_pages`). That 5.5 GB session (16 tracks of 30
+  minutes) plays, bounces and is drawn through at five zooms in a 64 MiB audio cache and a 16 MiB
+  page cache with an engine process peak of 142 MB, was 815 MB (`engine/tests/disk_budget.rs`).
+- **Missing:** a compressed or other-rate file is decoded whole once (up to 2^30 samples) before
+  it streams. Each streamed file keeps a file handle open (macOS allows 256 by default).
+  Instruments that read samples whole (Lift, Juke) keep them in memory. Overviews stay whole in a
+  session never saved, and for a referenced (not copied) import until the session is reopened.
+- **Impact:** sessions far larger than RAM play, record, bounce, edit and draw; memory follows
+  what is on screen.
 - **Known cost:** FireStation LevelUp keeps its reference audio in RAM as `f32` (about twice the C++ plugin's memory, at most 8 min per slot); kept as is.
-- **Estimate:** ≈ 4–8 h (overview levels on disk).
+- **Estimate:** ≈ 3–6 h (a streaming decode for compressed files, a pool of file handles).
 
 ### G-07. Fidelity harness against Pro Tools
 
@@ -305,6 +308,7 @@ the rest, spec `2026-10-29-roformer-separation`). Left, from the 2026-10-30 meas
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | G-06 shrunk: waveform overviews read their fine levels from the `Waveforms/` cache on demand (coarse levels only in memory); left: compressed files decoded whole once, file handles; re-estimated at 3–6 h |
 | 2026-11-21 | minor | G-06 shrunk: sources stream from disk everywhere (import, open, edits, rate conversion, saves and exports) with a memory-budget test; what's left is the overviews' memory, re-estimated at 4–8 h |
 | 2026-10-30 | minor | G-02 shrunk: hardware MIDI input, monitoring, recording and Musical Typing built; MIDI output, clock, input filter, merge recording and MIDI learn left (≈ 10–20 h) |
 | 2026-10-30 | trivial | G-24 (new): stem separation quality, what the RoFormer measurement left: one-song proxies, best mode's -19 dB residual, two models' GPU time and memory, solo-piano isolation |

@@ -2259,21 +2259,34 @@ fn stream_saved(e: &mut Engine, file: &Path) {
     let rate = s.sample_rate.hz();
     let sampled = crate::spill::sampled(s);
     let mut swaps: Vec<(Arc<SourceAudio>, Arc<SourceAudio>)> = Vec::new();
+    let project = file.parent().map(Path::to_path_buf).unwrap_or_default();
     for src in s.sources.iter().filter(|src| !src.unsaved && !sampled.contains(&src.id)) {
         let Some(audio) = s.pool.get(src.id) else { continue };
-        if audio.in_memory().is_none()
-            || soundcraft_model::disk::keeps_in_memory(audio.frames(), audio.num_channels())
-            || swaps.iter().any(|(old, _)| Arc::ptr_eq(old, audio))
-        {
+        if swaps.iter().any(|(old, _)| Arc::ptr_eq(old, audio)) {
             continue;
         }
         let Ok(p) = stored_path(&src.path, file) else { continue };
+        // Played from disk already with its overview whole (imported or made before the save):
+        // from now on its fine levels are read from the cache the save wrote for its file (an
+        // import copied into the project: the copy's, the same audio).
+        if let Some(f) = audio.disk_file() {
+            if !audio.peaks.iter().all(soundcraft_audio_io::peaks::Peaks::is_paged)
+                && let Some(peaks) = crate::peak_pages::open(&project, &p, rate, f)
+                && let Ok(a) = SourceAudio::from_disk(Arc::clone(f), peaks)
+            {
+                swaps.push((Arc::clone(audio), Arc::new(a)));
+            }
+            continue;
+        }
+        if soundcraft_model::disk::keeps_in_memory(audio.frames(), audio.num_channels()) {
+            continue;
+        }
         let Some(f) = streamable(&p, rate) else { continue };
         if f.channels() != audio.num_channels() || f.frames() != audio.frames() {
             continue;
         }
         if let Ok(streamed) = SourceAudio::from_disk(f, audio.peaks.clone()) {
-            swaps.push((Arc::clone(audio), Arc::new(streamed)));
+            swaps.push((Arc::clone(audio), Arc::new(crate::peak_pages::paged_audio(&project, &p, rate, streamed))));
         }
     }
     e.swap_audio(&swaps);
@@ -3020,19 +3033,30 @@ pub(crate) fn streamable(p: &Path, rate: u32) -> Option<Arc<soundcraft_model::di
 
 /// `f` as a source's audio, its waveform from the project's cache in `project` when it has one
 /// for the file as it is, else made by reading the file through once (and kept in the cache).
+/// With a project, only the overview's coarse levels stay in memory; its fine levels are read
+/// from the cache as they are drawn ([`crate::peak_pages`]).
 pub(crate) fn streamed_audio(f: Arc<soundcraft_model::disk::DiskFile>, project: Option<&Path>, file: &Path, rate: u32) -> Arc<SourceAudio> {
-    let cached = project.and_then(|d| crate::peak_cache::load_sized(d, file, rate, f.channels(), f.frames()));
-    let made = match cached {
-        Some(peaks) => SourceAudio::from_disk(f, peaks),
-        None => Err(f),
+    let paged = |d: &Path, f: &Arc<soundcraft_model::disk::DiskFile>| {
+        crate::peak_pages::open(d, file, rate, f).and_then(|peaks| SourceAudio::from_disk(Arc::clone(f), peaks).ok())
     };
-    Arc::new(made.unwrap_or_else(|f| {
-        let a = SourceAudio::from_disk_scanned(f);
-        if let Some(d) = project {
-            crate::peak_cache::store(d, file, rate, &a.peaks);
+    if let Some(d) = project {
+        if let Some(a) = paged(d, &f) {
+            return Arc::new(a);
         }
-        a
-    }))
+        // Too short to page (or a cache that can't be completed): held whole, as before.
+        let cached = crate::peak_cache::load_sized(d, file, rate, f.channels(), f.frames());
+        if let Some(a) = cached.and_then(|peaks| SourceAudio::from_disk(Arc::clone(&f), peaks).ok()) {
+            return Arc::new(a);
+        }
+    }
+    let a = SourceAudio::from_disk_scanned(Arc::clone(&f));
+    if let Some(d) = project {
+        crate::peak_cache::store(d, file, rate, &a.peaks);
+        if let Some(p) = paged(d, &f) {
+            return Arc::new(p);
+        }
+    }
+    Arc::new(a)
 }
 
 /// The file name a progress line shows for a path.
@@ -3945,10 +3969,12 @@ fn place_takes(
         if e.session().track(tid).is_none_or(|t| t.frozen_audio().is_some()) {
             continue;
         }
-        // A take at the session rate plays from its file (its waveform read from it once).
+        // A take at the session rate plays from its file (its waveform read from it once; in a
+        // saved project's `Audio Files` kept in its cache, the fine levels read from there).
         let rate = e.session().sample_rate.hz();
         if let Some(f) = streamable(&path, rate) {
-            let audio = streamed_audio(f, None, &path, rate);
+            let project = e.path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| path.parent().and_then(Path::parent) == Some(*d));
+            let audio = streamed_audio(f, project, &path, rate);
             let s = e.session_mut();
             let src = insert_source(s, name, audio, Some(&path.to_string_lossy()), FileFormat::Wav);
             if let Some(x) = s.sources.last_mut() {
