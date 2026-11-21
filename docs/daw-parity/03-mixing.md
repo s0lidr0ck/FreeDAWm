@@ -196,7 +196,7 @@ K-system scales, and the master a loudness meter.
 | Several formats in one pass | ● | ◐ | ● | ● | **Works**: Also write in the Bounce dialog (`also`): more formats from the same render, each beside the main file with its own extension (MP3 and Opus at their default bitrate; a surround mix needs a fold-down or a split for them) |
 | Stems in one pass, with a choice of tracks or busses | ● | ● | ● | ● | **Works**: Export › Stems takes every unmuted track or the selected ones, and a stem of each bus as summed (`tracks`, `busses`), behind a progress window with Cancel; a track's stem is it soloed through the master |
 | Commit, freeze, bounce in place | ● | ● | ● | ● | **Works**: commit keeps the format, the pan and the fader automation |
-| AAF or OMF | ● | ● | ● | ● | **Not planned here**: needs sample AAF and OMF files from other applications to build and test against, which the owner is sourcing; DAWproject covers session exchange with Studio Pro and Cubase meanwhile |
+| AAF or OMF | ● | ● | ● | ● | **Partial**: AAF import works (File › Import › AAF..., audio only: tracks, clips, fades, crossfades, clip gain, track volume/pan/mute/solo, markers, timecode, embedded and external media; see G-03 in `docs/gaps.md`). Left: AAF export, OMF import and export, speed changes, clip pan, MXF media |
 | DAWproject | ○ | ● | ○ | ● | **Works**, both ways |
 
 ## I. Surround and immersive
@@ -502,6 +502,7 @@ their manuals as known, not from a side-by-side run; treat a ◐ as "check befor
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | AAF or OMF row Partial: AAF import (File › Import › AAF...) built |
 | 2026-11-18 | minor | FLAC, AIFF and Opus bounces carry the Bounce dialog's tags |
 | 2026-11-18 | minor | sends' levels read sample by sample and pans glide between the 64-sample grid's points, so a bending lane no longer steps |
 | 2026-11-18 | minor | several Mix windows, each with its own find, spill and sections |

@@ -82,8 +82,23 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 
 ### G-03. Session interchange with Pro Tools
 
-- **Missing:** opening or saving `.ptx`/`.ptf`, AAF and OMF import and export (#40), Media
-  Composer–compatible sessions. Our session format is `.fdawm` JSON.
+- **Done (2026-11-21): AAF import** (File › Import › AAF..., `file.import_aaf`; reader crate
+  `crates/aaf`, written from the MS-CFB, AAF Object, Low-Level Container and Edit Protocol
+  specifications, no dependencies). The audio of a Pro Tools, Media Composer, Premiere or Resolve
+  AAF comes in as new tracks in one undo step: clips at their timecode positions (an empty session
+  takes the composition's start timecode and frame rate), fades and crossfades (curve shapes
+  linear, equal power, logarithmic), Pro Tools' rendered fade clips rebuilt as real fades,
+  static clip gain and clip-gain envelopes, track volume and pan (and their automation where the
+  file has it), mute, solo, muted clips, markers, mono/stereo/5.1/7.1 tracks (multi-mono media
+  combined), embedded WAV/AIFF/PCM audio copied into the session, external audio found where the
+  file says or beside it, missing audio offline under its name (relink later). A report goes in
+  the Notes tab and a summary in the status line. Checked against 65 real files from the four
+  applications: 62 match their known answer fully (`crates/aaf/tests/samples.rs`, run with
+  `FREEDAWM_AAF_SAMPLES`).
+- **Missing:** opening or saving `.ptx`/`.ptf`, AAF export, OMF import and export (#40),
+  Media Composer–compatible sessions; in AAF import: speed changes (Motion Control / time warp),
+  clip-level pan, MXF-wrapped media (Avid's own media files come in offline), plugin effects,
+  video. Our session format is `.fdawm` JSON.
 - **Impact:** the standard's main-format bar for beta. A Pro Tools user cannot bring a project in
   or hand one back; post-production (picture editors deliver AAF) is blocked.
 - **Estimate:** AAF/OMF import + export ≈ 50–90 h (FilmCraft already writes AAF/OMF; we can learn

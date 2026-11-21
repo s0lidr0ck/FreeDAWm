@@ -6098,6 +6098,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "soundcraft-aaf"
+version = "0.10.0"
+
+[[package]]
 name = "soundcraft-ara-host"
 version = "0.10.0"
 
@@ -6203,6 +6207,7 @@ dependencies = [
  "quick-xml 0.41.0",
  "serde",
  "serde_json",
+ "soundcraft-aaf",
  "soundcraft-ara-host",
  "soundcraft-au-host",
  "soundcraft-audio-io",
