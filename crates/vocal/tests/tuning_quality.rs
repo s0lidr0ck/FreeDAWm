@@ -45,6 +45,12 @@ fn sung(secs: f64, base: f64, vib: f64) -> Vec<f32> {
 /// [`sung`] with breath: high-passed noise pulsing with the glottal cycle, at `breath` times the
 /// voice's RMS.
 fn sung_breathy(secs: f64, base: f64, vib: f64, breath: f64) -> Vec<f32> {
+    sung_line(secs, |t| f0_at(t, base, vib), breath)
+}
+
+/// A sung vowel whose fundamental follows `f0_of(t)` (Hz at `t` seconds), with breath as in
+/// [`sung_breathy`].
+fn sung_line(secs: f64, f0_of: impl Fn(f64) -> f64, breath: f64) -> Vec<f32> {
     let n = (secs * f64::from(SR)) as usize;
     // The response on a 1 Hz grid (linearly interpolated).
     let table: Vec<Complex<f64>> = (0..=8_100).map(|f| response(f as f64)).collect();
@@ -58,7 +64,7 @@ fn sung_breathy(secs: f64, base: f64, vib: f64, breath: f64) -> Vec<f32> {
     let mut voice = Vec::with_capacity(n);
     let mut pulse = Vec::with_capacity(n);
     for i in 0..n {
-        let f0 = f0_at(i as f64 / f64::from(SR), base, vib);
+        let f0 = f0_of(i as f64 / f64::from(SR));
         let mut v = 0.0;
         let mut k = 1;
         while f0 * k as f64 <= 8_000.0 {
@@ -400,4 +406,83 @@ fn a_dropout_inside_a_moved_note_keeps_the_move() {
     let low = (116..127).filter_map(|i| Some(ty.frames[i].cents? - tx.frames[i].cents?)).fold(f32::INFINITY, f32::min);
     // Old render: the pitch fell back to 11 c above the sung note.
     assert!(low >= 27.0, "the move dipped to {low:.1} c at the dropout");
+}
+
+/// A phrase as the Vocal Editor's Select All and drag gives it: two notes, a slide between them,
+/// vibrato on both, all moved +30 c in Musical mode (`build_curves_with`, the engine's path).
+/// The moved phrase must sit +30 c above the sung one all the way through, the slide included,
+/// with no 5 ms step larger than the singer's own: a long move must not warble.
+#[test]
+fn a_phrase_moved_30_cents_stays_30_cents_up_throughout() {
+    use soundcraft_vocal::{NoteEdit, NoteId, NoteMode, PitchClassSet, VocalAnalysis, build_curves_with, segment_with};
+    use std::collections::BTreeMap;
+    // 196 Hz for 0.9 s, an 80 ms slide, 233 Hz for 0.9 s; 5.5 Hz vibrato of 25 c throughout.
+    let f0 = |t: f64| {
+        let base = if t < 0.9 {
+            196.0
+        } else if t < 0.98 {
+            let u = (t - 0.9) / 0.08;
+            196.0 * (233.0f64 / 196.0).powf(u * u * (3.0 - 2.0 * u))
+        } else {
+            233.0
+        };
+        base * 2f64.powf(25.0 * (TAU * VIB_HZ * t).sin() / 1200.0)
+    };
+    let x = sung_line(2.0, f0, 0.05);
+    let t = track_pitch(&x, SR, &no_cancel()).unwrap();
+    let (notes, unvoiced) = segment_with(&t, NoteMode::Musical);
+    let a = VocalAnalysis { track: t.clone(), notes, unvoiced };
+    assert!(a.notes.len() >= 2, "{} notes", a.notes.len());
+    let edits: BTreeMap<NoteId, NoteEdit> = a.notes.iter().map(|n| (n.id, NoteEdit { offset_cents: 30.0, ..NoteEdit::default() })).collect();
+    let scale: Option<PitchClassSet> = None;
+    let c = build_curves_with(&a, &edits, &scale, NoteMode::Musical);
+    // The applied correction: +30 c on every voiced frame, slide included.
+    for (i, (s, fr)) in c.shift_cents.iter().zip(&t.frames).enumerate() {
+        if fr.cents.is_some() {
+            assert!((s - 30.0).abs() < 0.5, "frame {i}: correction {s:.1} c");
+        }
+    }
+    let y = render(&x, &t, &c);
+    let ty = track_pitch(&y, SR, &no_cancel()).unwrap();
+    // The exact answer: the same phrase sung 30 c higher (same breath), tracked the same way, so
+    // the tracker's own lag on the slide cancels out.
+    let ideal = sung_line(2.0, |s| f0(s) * shifted(30.0), 0.05);
+    let ti = track_pitch(&ideal, SR, &no_cancel()).unwrap();
+    // Away from the fades at the ends (60 ms).
+    let (mut worst, mut step_out, mut step_in) = (0.0f32, 0.0f32, 0.0f32);
+    for i in 12..t.frames.len() - 12 {
+        let (Some(pi), Some(po)) = (ti.frames[i].cents, ty.frames[i].cents) else { continue };
+        worst = worst.max((po - pi).abs());
+        if let (Some(pi0), Some(po0)) = (ti.frames[i - 1].cents, ty.frames[i - 1].cents) {
+            step_out = step_out.max((po - po0).abs());
+            step_in = step_in.max((pi - pi0).abs());
+        }
+    }
+    // 0.10.0: 8.7 c off on the slide; the first fix (a time offset re-centred by a whole period
+    // now and then): 9.4 c; now 5.2 c.
+    assert!(worst <= 6.5, "the moved phrase strays {worst:.1} c from the exact +30");
+    assert!(step_out <= step_in + 3.0, "largest 5 ms step {step_out:.1} c (exact {step_in:.1} c)");
+}
+
+/// A moved note's tail (the frames the tracker has let go of, which the render still lets
+/// through) moves with it instead of falling back to the sung pitch. (Onsets are treated alike.)
+#[test]
+fn a_moved_notes_tail_moves_with_it() {
+    let x = sung(1.0, 200.0, 0.0);
+    let mut t = track_pitch(&x, SR, &no_cancel()).unwrap();
+    // The tracker lets go at 0.9 s while the voice sounds on (as on a breathy release): those
+    // frames are unvoiced, so the correction curve is 0 there.
+    let cut = (0.9 / 0.005) as usize;
+    for f in &mut t.frames[cut..] {
+        f.cents = None;
+    }
+    let c = shift_between(&t, 0.0, 2.0, 30.0);
+    let y = render(&x, &t, &c);
+    // Tracked again (the audio is still voiced there): the first frames after the tracker let
+    // go keep the move.
+    let (tx, ty) = (track_pitch(&x, SR, &no_cancel()).unwrap(), track_pitch(&y, SR, &no_cancel()).unwrap());
+    let moved: Vec<f32> = (cut..cut + 2).filter_map(|i| Some(ty.frames[i].cents? - tx.frames[i].cents?)).collect();
+    // 0.10.0: 7 and 2 c; the first fix: 19 and 14 c; now 28 and 25 c (the voiced mask still fades
+    // to the input over the next 10 ms).
+    assert!(moved.len() == 2 && moved.iter().all(|m| *m >= 22.0), "after the tracker let go the move fell to {moved:?} c");
 }
