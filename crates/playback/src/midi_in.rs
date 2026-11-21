@@ -13,7 +13,10 @@
 //!   [`MidiBackend`] (the system's, `midir` on WinMM/CoreMIDI/ALSA, native only; or a fake for
 //!   tests). Ports are rescanned when asked ([`MidiInputs::rescan`]) and every 2 s
 //!   ([`MidiInputs::tick`]); a port that disappears closes, a port that comes back reopens if
-//!   enabled. Enabled ports are kept by name (app settings); a port never seen is enabled.
+//!   enabled. Enabled ports are kept by name (app settings); a port never seen is enabled. The
+//!   window's Rescan ([`MidiInputs::reopen`]), a wake from sleep and a device whose Active
+//!   Sensing keep-alive stops open the ports afresh. Every message is counted where the driver
+//!   hands it over ([`MidiHub::diag`]), before any filter, for the window.
 
 use soundcraft_mix::{LiveEvent, LiveMidi, MAX_MIDI_PORTS, port_id};
 use std::collections::BTreeMap;
@@ -36,6 +39,10 @@ pub const TYPING_NAME: &str = "Musical Typing";
 
 /// How often [`MidiInputs::tick`] rescans the ports.
 pub const RESCAN_EVERY: Duration = Duration::from_secs(2);
+
+/// A gap this long between two ticks means the computer slept (or the app was stalled): the
+/// open ports are opened afresh, as a driver may not deliver on a connection made before.
+pub const SLEPT_AFTER: Duration = Duration::from_secs(15);
 
 /// Single-producer single-consumer FIFO of `(stamp, packed message)` pairs. The slots are
 /// atomics, so it needs no lock and no `unsafe`; full, a push is dropped and counted.
@@ -201,6 +208,25 @@ pub struct MidiHub {
     ids: [AtomicU64; MAX_MIDI_PORTS],
     /// When each slot last received a message (µs since `epoch`, 0: never).
     activity: [AtomicU64; MAX_MIDI_PORTS],
+    /// Diagnostics, fed by the port's callback before anything else looks at a message (sync,
+    /// SysEx, the input filter, MIDI learn): how many messages came, the last one's first bytes
+    /// and length ([`MidiHub::diag`]), and when it came on the hub's clock (not the driver's).
+    received: [AtomicU64; MAX_MIDI_PORTS],
+    last_raw: [AtomicU64; MAX_MIDI_PORTS],
+    arrived: [AtomicU64; MAX_MIDI_PORTS],
+    /// How far before its arrival the last message was stamped (µs: the driver's clock, turned
+    /// into the hub's, says it was played that long ago).
+    lag: [AtomicU64; MAX_MIDI_PORTS],
+    /// Messages the audio thread took from each slot's ring (played, or dropped unheard while
+    /// nothing renders).
+    taken: [AtomicU64; MAX_MIDI_PORTS],
+    /// When the audio thread last emptied the rings (µs on the hub's clock, 0: never).
+    last_drain: AtomicU64,
+    /// Slots whose device sends Active Sensing (a keep-alive at least every 300 ms), bit per slot:
+    /// its silence then means the connection or the device stopped.
+    sensing: AtomicU64,
+    /// When each slot last got anything at all, keep-alives included (µs, 0: never).
+    alive: [AtomicU64; MAX_MIDI_PORTS],
     thru: AtomicBool,
     /// Setup › MIDI Input Filter ([`FILTER_KINDS`] bits).
     filter: AtomicU32,
@@ -262,6 +288,72 @@ impl SyncMsg {
     }
 }
 
+/// What one input port has sent ([`MidiHub::diag`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PortDiag {
+    /// Messages its driver handed over since the port was given its slot.
+    pub received: u64,
+    /// The last one, in plain words ("Note on C3 vel 80, ch 1").
+    pub last: Option<String>,
+    /// How long ago the last one came.
+    pub since: Option<Duration>,
+    /// How long before its arrival the last one was stamped (the driver's clock against the
+    /// computer's): more than a few ms means the driver's timestamps are off.
+    pub lag: Option<Duration>,
+    /// Messages the audio thread took on to the tracks (the ones the input filter, MIDI learn,
+    /// sync and SysEx left; dropped unheard while nothing renders).
+    pub taken: u64,
+    /// The device sends Active Sensing (a keep-alive): silence from it means it stopped.
+    pub keepalive: bool,
+    /// How long ago anything at all came, keep-alives included.
+    pub heard: Option<Duration>,
+}
+
+/// A MIDI message in plain words, from its first bytes and its whole length (`len`): "Note on C3
+/// vel 80, ch 1", "Controller 64 = 127, ch 1", "SysEx (12 bytes)", "Clock".
+pub fn describe(bytes: &[u8], len: usize) -> String {
+    let Some(&status) = bytes.first() else { return "Empty message".into() };
+    let d1 = bytes.get(1).copied().unwrap_or(0);
+    let d2 = bytes.get(2).copied().unwrap_or(0);
+    let ch = (status & 0x0F) + 1;
+    let note = soundcraft_midi::note_name;
+    match status & 0xF0 {
+        0x90 if d2 > 0 => format!("Note on {} vel {d2}, ch {ch}", note(d1 & 0x7F)),
+        0x90 | 0x80 => format!("Note off {}, ch {ch}", note(d1 & 0x7F)),
+        0xA0 => format!("Poly aftertouch {} {d2}, ch {ch}", note(d1 & 0x7F)),
+        0xB0 => format!("Controller {d1} = {d2}, ch {ch}"),
+        0xC0 => format!("Program {}, ch {ch}", u16::from(d1) + 1),
+        0xD0 => format!("Aftertouch {d1}, ch {ch}"),
+        0xE0 => format!("Pitch bend {}, ch {ch}", ((i32::from(d2 & 0x7F) << 7) | i32::from(d1 & 0x7F)) - 8192),
+        _ => match status {
+            0xF0 => format!("SysEx ({len} bytes)"),
+            0xF1 => "Timecode quarter frame".into(),
+            0xF2 => "Song position".into(),
+            0xF8 => "Clock".into(),
+            0xFA => "Start".into(),
+            0xFB => "Continue".into(),
+            0xFC => "Stop".into(),
+            0xFE => "Active sensing".into(),
+            0xFF => "Reset".into(),
+            s if s < 0x80 => format!("Data bytes without a status ({len} bytes)"),
+            s => format!("System message {s:02X}"),
+        },
+    }
+}
+
+/// An open error in plain words, from the system's text: a port another program holds (WinMM's
+/// `MMSYSERR_ALLOCATED`), one that is gone, or else the system's own words.
+pub fn plain_open_error(err: &str) -> String {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("allocated") || lower.contains("in use") || lower.contains("busy") {
+        "In use by another program: close it (or its MIDI settings), then press Rescan".into()
+    } else if lower.contains("not found") || lower.contains("invalid port") {
+        "Not found: unplugged or renamed; press Rescan".into()
+    } else {
+        err.to_string()
+    }
+}
+
 /// One message handed to the UI thread by [`MidiHub::take_control`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlMsg {
@@ -297,6 +389,14 @@ impl MidiHub {
             rings: std::array::from_fn(|_| MidiRing::new(PORT_RING)),
             ids: std::array::from_fn(|_| AtomicU64::new(0)),
             activity: std::array::from_fn(|_| AtomicU64::new(0)),
+            received: std::array::from_fn(|_| AtomicU64::new(0)),
+            last_raw: std::array::from_fn(|_| AtomicU64::new(0)),
+            arrived: std::array::from_fn(|_| AtomicU64::new(0)),
+            lag: std::array::from_fn(|_| AtomicU64::new(0)),
+            taken: std::array::from_fn(|_| AtomicU64::new(0)),
+            last_drain: AtomicU64::new(0),
+            sensing: AtomicU64::new(0),
+            alive: std::array::from_fn(|_| AtomicU64::new(0)),
             thru: AtomicBool::new(true),
             filter: AtomicU32::new(0),
             reset: AtomicU64::new(0),
@@ -438,6 +538,77 @@ impl MidiHub {
         self.activity.get(slot).map_or(0, |a| a.load(Ordering::Relaxed))
     }
 
+    /// Driver thread: one raw message came on slot `slot`, whatever it is (counted and kept for
+    /// [`MidiHub::diag`] before any filtering).
+    fn heard_raw(&self, slot: usize, stamp: u64, bytes: &[u8]) {
+        let (Some(n), Some(last), Some(at), Some(lag)) =
+            (self.received.get(slot), self.last_raw.get(slot), self.arrived.get(slot), self.lag.get(slot))
+        else {
+            return;
+        };
+        let now = self.now_us();
+        if let Some(a) = self.alive.get(slot) {
+            a.store(now, Ordering::Relaxed);
+        }
+        // Active Sensing only says the device is there: not counted, shown or lit.
+        if bytes.first() == Some(&0xFE) {
+            if slot < 64 {
+                self.sensing.fetch_or(1 << slot, Ordering::Relaxed);
+            }
+            return;
+        }
+        n.fetch_add(1, Ordering::Relaxed);
+        let b = |i: usize| u64::from(bytes.get(i).copied().unwrap_or(0));
+        let len = bytes.len().min(0xFF_FFFF) as u64;
+        last.store(b(0) | (b(1) << 8) | (b(2) << 16) | (len << 24), Ordering::Relaxed);
+        at.store(now, Ordering::Relaxed);
+        lag.store(now.saturating_sub(stamp), Ordering::Relaxed);
+    }
+
+    /// Slot `slot`'s diagnostics start again (another port now uses it).
+    fn clear_diag(&self, slot: usize) {
+        if slot < 64 {
+            self.sensing.fetch_and(!(1 << slot), Ordering::Relaxed);
+        }
+        let cells = [
+            self.received.get(slot),
+            self.last_raw.get(slot),
+            self.arrived.get(slot),
+            self.lag.get(slot),
+            self.taken.get(slot),
+            self.alive.get(slot),
+        ];
+        for a in cells.into_iter().flatten() {
+            a.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// What slot `slot`'s port has sent, counted where its driver hands it over (before the
+    /// input filter, sync, SysEx and MIDI learn take anything): for the MIDI Input Devices window.
+    pub fn diag(&self, slot: usize) -> PortDiag {
+        let load = |a: Option<&AtomicU64>| a.map_or(0, |a| a.load(Ordering::Relaxed));
+        let (received, raw, at) = (load(self.received.get(slot)), load(self.last_raw.get(slot)), load(self.arrived.get(slot)));
+        let last = (received > 0).then(|| {
+            let len = (raw >> 24) as usize;
+            let bytes = [(raw & 0xFF) as u8, ((raw >> 8) & 0xFF) as u8, ((raw >> 16) & 0xFF) as u8];
+            describe(bytes.get(..len.min(3)).unwrap_or(&[]), len)
+        });
+        let since = (at != 0).then(|| Duration::from_micros(self.now_us().saturating_sub(at)));
+        let lag = (received > 0).then(|| Duration::from_micros(load(self.lag.get(slot))));
+        let keepalive = slot < 64 && self.sensing.load(Ordering::Relaxed) & (1 << slot) != 0;
+        let alive = load(self.alive.get(slot));
+        let heard = (alive != 0).then(|| Duration::from_micros(self.now_us().saturating_sub(alive)));
+        PortDiag { received, last, since, lag, taken: load(self.taken.get(slot)), keepalive, heard }
+    }
+
+    /// How long since the audio thread last took the ports' messages (`None`: it never did, no
+    /// audio engine has the hub). Long while a device plays means nothing takes its messages to
+    /// the tracks: the audio engine is not running.
+    pub fn since_drain(&self) -> Option<Duration> {
+        let at = self.last_drain.load(Ordering::Relaxed);
+        (at != 0).then(|| Duration::from_micros(self.now_us().saturating_sub(at)))
+    }
+
     /// The pitches held down now on any open port (Musical Typing included), lowest first.
     pub fn held_notes(&self) -> Vec<u8> {
         let words = [self.held[0].load(Ordering::Relaxed), self.held[1].load(Ordering::Relaxed)];
@@ -534,6 +705,9 @@ impl MidiHub {
                 *p = id;
             }
             while let Some((stamp, packed)) = ring.pop() {
+                if let Some(t) = self.taken.get(slot) {
+                    t.fetch_add(1, Ordering::Relaxed);
+                }
                 if id == 0 {
                     continue;
                 }
@@ -542,6 +716,7 @@ impl MidiHub {
             }
         }
         live.sort();
+        self.last_drain.store(now.max(1), Ordering::Relaxed);
         // SysEx is not played live: it is only recorded and captured.
         let mut n = 0;
         while let Some((stamp, packed)) = self.sysex_in.pop() {
@@ -575,9 +750,12 @@ impl MidiHub {
 
     /// Audio thread: empties the rings unheard (nothing renders this block).
     pub fn discard(&self) {
-        for ring in &self.rings {
-            while ring.pop().is_some() {}
+        for (ring, taken) in self.rings.iter().zip(&self.taken) {
+            while ring.pop().is_some() {
+                taken.fetch_add(1, Ordering::Relaxed);
+            }
         }
+        self.last_drain.store(self.now_us(), Ordering::Relaxed);
         while self.sysex_in.pop().is_some() {}
         self.block_sysex_len.store(0, Ordering::Relaxed);
     }
@@ -764,6 +942,8 @@ impl PortSink {
     /// [`PortSink::send`] stamped `stamp` (µs since the hub was made), less the port's timing
     /// offset ([`MidiHub::set_offset`]).
     pub fn send_at(&self, stamp: u64, bytes: &[u8]) {
+        // First of all: it came (the window's count, last message and light).
+        self.hub.heard_raw(self.slot, stamp, bytes);
         let late = self.hub.offsets.get(self.slot).map_or(0, |o| o.load(Ordering::Relaxed));
         let stamp = stamp.saturating_sub(u64::from(late)).max(1);
         // MIDI clock and timecode in, for the UI thread (`sync_in`).
@@ -867,6 +1047,9 @@ pub struct PortInfo {
     pub error: Option<String>,
     /// Its ring slot in the hub.
     pub slot: usize,
+    /// Times in a row it fell silent although it sends a keep-alive, and was reopened (0: never,
+    /// or it came back).
+    pub revived: u32,
 }
 
 struct Port {
@@ -874,6 +1057,8 @@ struct Port {
     conn: Option<Box<dyn MidiConnection>>,
     /// The system's identity of the port when it was opened (see [`MidiBackend::ids`]).
     id: Option<String>,
+    /// When it was last reopened for falling silent ([`MidiInputs::tick`]).
+    revived_at: Option<Instant>,
 }
 
 /// The UI thread's MIDI input ports (see the module docs).
@@ -888,11 +1073,34 @@ pub struct MidiInputs {
     /// Ports control surfaces use: closed here (a surface's messages are not notes).
     reserved: Vec<String>,
     last_scan: Option<Instant>,
+    /// Ports closed here a moment ago to be opened again: a driver may still be letting go of
+    /// them, so their open is tried a few times.
+    just_closed: Vec<String>,
 }
+
+/// A device that sends Active Sensing is silent this long: its connection stopped.
+pub const SILENT_AFTER: Duration = Duration::from_millis(1200);
+
+/// How often, and how many times in a row, a silent port is reopened.
+pub const REVIVE_EVERY: Duration = Duration::from_secs(5);
+pub const REVIVE_TRIES: u32 = 3;
+
+/// Tries at opening a port just closed ([`MidiInputs::reopen`]), and the wait between two.
+const REOPEN_TRIES: usize = 3;
+const REOPEN_WAIT: Duration = Duration::from_millis(30);
 
 impl MidiInputs {
     pub fn new(backend: Box<dyn MidiBackend>, hub: Arc<MidiHub>, choices: BTreeMap<String, bool>) -> MidiInputs {
-        MidiInputs { backend, hub, ports: Vec::new(), choices, reserved: Vec::new(), offsets: BTreeMap::new(), last_scan: None }
+        MidiInputs {
+            backend,
+            hub,
+            ports: Vec::new(),
+            choices,
+            reserved: Vec::new(),
+            offsets: BTreeMap::new(),
+            last_scan: None,
+            just_closed: Vec::new(),
+        }
     }
 
     /// The system's ports (`None` where there is no MIDI backend).
@@ -954,23 +1162,91 @@ impl MidiInputs {
         }
     }
 
-    /// When the port named `name` last received a message, if it is open.
+    /// When the port named `name` last received a message (any message, as it arrived, before
+    /// any filtering), if it is open.
     pub fn since_activity(&self, name: &str) -> Option<Duration> {
         let p = self.ports.iter().find(|p| p.info.name == name && p.info.open)?;
-        let at = self.hub.last_activity(p.info.slot);
-        (at != 0).then(|| Duration::from_micros(self.hub.now_us().saturating_sub(at)))
+        self.hub.diag(p.info.slot).since
     }
 
-    /// Rescans when the last scan is [`RESCAN_EVERY`] old (or there was none).
+    /// What the port named `name` has sent ([`MidiHub::diag`]), if it was ever listed.
+    pub fn diag(&self, name: &str) -> Option<PortDiag> {
+        self.ports.iter().find(|p| p.info.name == name).map(|p| self.hub.diag(p.info.slot))
+    }
+
+    /// Rescans when the last scan is [`RESCAN_EVERY`] old (or there was none). After a gap of
+    /// [`SLEPT_AFTER`] (the computer slept) the open ports are opened afresh.
     pub fn tick(&mut self, now: Instant) {
-        if self.last_scan.is_none_or(|t| now.saturating_duration_since(t) >= RESCAN_EVERY) {
-            self.rescan_at(now);
+        match self.last_scan.map(|t| now.saturating_duration_since(t)) {
+            Some(gap) if gap >= SLEPT_AFTER => {
+                log::info!("MIDI input: {} s since the last scan, opening the ports afresh", gap.as_secs());
+                self.reopen_at(now);
+            }
+            Some(gap) if gap < RESCAN_EVERY => {}
+            _ => self.rescan_at(now),
+        }
+        self.revive_silent(now);
+    }
+
+    /// A device that sends Active Sensing and has been silent longer than [`SILENT_AFTER`] stopped
+    /// delivering although its port is open: it is closed and opened again (at most every
+    /// [`REVIVE_EVERY`], and [`REVIVE_TRIES`] times in a row; the window says so).
+    fn revive_silent(&mut self, now: Instant) {
+        let mut any = false;
+        for p in &mut self.ports {
+            if p.conn.is_none() {
+                continue;
+            }
+            let d = self.hub.diag(p.info.slot);
+            let silent = d.keepalive && d.heard.is_some_and(|s| s > SILENT_AFTER);
+            if !silent {
+                if d.heard.is_some_and(|s| s <= SILENT_AFTER) {
+                    p.info.revived = 0;
+                }
+                continue;
+            }
+            if p.info.revived >= REVIVE_TRIES || p.revived_at.is_some_and(|t| now.saturating_duration_since(t) < REVIVE_EVERY) {
+                continue;
+            }
+            log::warn!("MIDI input {}: its keep-alive stopped; opening it again", p.info.name);
+            p.conn = None;
+            p.id = None;
+            p.info.revived += 1;
+            p.revived_at = Some(now);
+            self.hub.set_slot(p.info.slot, None);
+            self.hub.reset_slot(p.info.slot);
+            self.just_closed.push(p.info.name.clone());
+            any = true;
+        }
+        if any {
+            self.apply();
         }
     }
 
     /// Rescans the ports now: new ones are listed, gone ones close, enabled ones open.
     pub fn rescan(&mut self) {
         self.rescan_at(Instant::now());
+    }
+
+    /// The window's Rescan: every open port is closed and opened again (a connection the system
+    /// stopped delivering on, after sleep or a quick unplug, comes back), then the ports are
+    /// rescanned.
+    pub fn reopen(&mut self) {
+        self.reopen_at(Instant::now());
+    }
+
+    fn reopen_at(&mut self, now: Instant) {
+        for p in &mut self.ports {
+            // Closed fully (the driver stops calling back) before it is opened again.
+            if p.conn.take().is_some() {
+                self.hub.set_slot(p.info.slot, None);
+                self.hub.reset_slot(p.info.slot);
+                self.just_closed.push(p.info.name.clone());
+            }
+            p.id = None;
+            p.info.open = false;
+        }
+        self.rescan_at(now);
     }
 
     fn rescan_at(&mut self, now: Instant) {
@@ -983,9 +1259,11 @@ impl MidiInputs {
             // let go, and it is opened afresh.
             let id = ids.iter().find(|(n, _)| *n == p.info.name).map(|(_, i)| i.clone());
             if p.conn.is_some() && p.info.present && id.is_some() && p.id.is_some() && id != p.id {
+                log::info!("MIDI input {}: plugged in again, opening it afresh", p.info.name);
                 p.conn = None;
                 self.hub.set_slot(p.info.slot, None);
                 self.hub.reset_slot(p.info.slot);
+                self.just_closed.push(p.info.name.clone());
             }
         }
         for n in names {
@@ -1001,7 +1279,14 @@ impl MidiInputs {
                     None => continue,
                 },
             };
-            self.ports.push(Port { info: PortInfo { name: n, enabled: true, present: true, open: false, error: None, slot }, conn: None, id: None });
+            // Another port's count and last message are not this one's.
+            self.hub.clear_diag(slot);
+            self.ports.push(Port {
+                info: PortInfo { name: n, enabled: true, present: true, open: false, error: None, slot, revived: 0 },
+                conn: None,
+                id: None,
+                revived_at: None,
+            });
         }
         self.apply();
         for p in self.ports.iter_mut().filter(|p| p.conn.is_some()) {
@@ -1023,7 +1308,18 @@ impl MidiInputs {
                 // The slot starts empty: whatever an old port left in it is not this port's.
                 self.hub.set_slot(slot, Some(&name));
                 self.hub.set_offset(slot, offset_us(&self.offsets, &name));
-                result = Some(self.backend.open(&name, self.hub.sink(slot)));
+                let tries = if self.just_closed.contains(&name) { REOPEN_TRIES } else { 1 };
+                for k in 0..tries {
+                    if k > 0 {
+                        std::thread::sleep(REOPEN_WAIT);
+                    }
+                    let r = self.backend.open(&name, self.hub.sink(slot));
+                    let done = r.is_ok();
+                    result = Some(r);
+                    if done {
+                        break;
+                    }
+                }
             }
             let Some(p) = self.ports.get_mut(i) else { continue };
             p.info.enabled = enabled;
@@ -1035,7 +1331,7 @@ impl MidiInputs {
                 }
                 Some(Err(err)) => {
                     log::warn!("MIDI input {name}: {err}");
-                    p.info.error = Some(err);
+                    p.info.error = Some(plain_open_error(&err));
                     self.hub.set_slot(slot, None);
                 }
                 None if !want => {
@@ -1044,12 +1340,15 @@ impl MidiInputs {
                         self.hub.reset_slot(slot);
                     }
                     p.id = None;
+                    // Disabled or gone: an old open error no longer applies.
+                    p.info.error = None;
                     self.hub.set_slot(slot, None);
                 }
                 None => {}
             }
             p.info.open = p.conn.is_some();
         }
+        self.just_closed.clear();
     }
 }
 
@@ -1061,7 +1360,9 @@ fn offset_us(offsets: &BTreeMap<String, f32>, name: &str) -> u32 {
 /// Turns a driver's timestamps (µs on its own clock) into the hub's: the smallest gap seen
 /// between the hub's clock and the driver's is the delivery delay, so a message keeps the time
 /// the driver gave it however late its callback ran. The gap may grow by 100 ppm of the time
-/// since (the two clocks drift), and a stamp is never after now.
+/// since (the two clocks drift), and a stamp is never after now. A stamp more than
+/// [`DriverClock::MAX_LAG`] behind now is not believed (the driver's clock jumped, or drifts
+/// faster than allowed): the clock starts over from that message, which is stamped now.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DriverClock {
     /// (hub − driver, at hub time).
@@ -1069,6 +1370,11 @@ pub struct DriverClock {
 }
 
 impl DriverClock {
+    /// The most a driver's stamp may say a message is older than its arrival (µs). A callback
+    /// this late is a stall; a driver clock running slow would otherwise drag every message
+    /// further into the past, a take placing notes early and live input played late.
+    pub const MAX_LAG: u64 = 250_000;
+
     pub fn to_hub(&mut self, driver: u64, now: u64) -> u64 {
         // No stamp from the driver: now.
         if driver == 0 {
@@ -1080,8 +1386,8 @@ impl DriverClock {
             None => seen,
         };
         let at = (driver as i64).saturating_add(gap).clamp(1, now.max(1) as i64) as u64;
-        // More than a second behind: the driver's clock jumped; start over from this message.
-        if now.saturating_sub(at) > 1_000_000 {
+        // Too far behind: the driver's clock jumped or drifts; start over from this message.
+        if now.saturating_sub(at) > Self::MAX_LAG {
             self.gap = Some((seen, now));
             return now;
         }
@@ -1101,8 +1407,10 @@ mod system {
 
     fn client() -> Result<midir::MidiInput, String> {
         let mut m = midir::MidiInput::new("FreeDAWm").map_err(|e| e.to_string())?;
-        // SysEx comes through (MIDI Machine Control); the clock and active sensing do not.
-        m.ignore(midir::Ignore::ActiveSense);
+        // Everything comes through: SysEx (MIDI Machine Control), the clock (sync in) and Active
+        // Sensing, the keep-alive that tells a silent device from a dead connection (counted,
+        // never played).
+        m.ignore(midir::Ignore::None);
         Ok(m)
     }
 
@@ -1136,18 +1444,48 @@ mod system {
         names.into_iter().zip(ports).filter(|(n, _)| !n.is_empty()).collect()
     }
 
+    /// A call into the system's MIDI library that must not take the app down if the library
+    /// panics on a driver's odd answer.
+    fn guarded<T>(fallback: T, f: impl FnOnce() -> T) -> T {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
+            log::warn!("MIDI input: the system's MIDI library failed");
+            fallback
+        })
+    }
+
     impl MidiBackend for Midir {
         fn ports(&mut self) -> Vec<String> {
-            let Ok(m) = client() else { return Vec::new() };
-            listed(&m).into_iter().map(|(n, _)| n).collect()
+            guarded(Vec::new(), || {
+                let Ok(m) = client() else { return Vec::new() };
+                listed(&m).into_iter().map(|(n, _)| n).collect()
+            })
         }
 
         fn ids(&mut self) -> Vec<(String, String)> {
-            let Ok(m) = client() else { return Vec::new() };
-            listed(&m).into_iter().map(|(n, p)| (n, p.id())).collect()
+            guarded(Vec::new(), || {
+                let Ok(m) = client() else { return Vec::new() };
+                // WinMM keeps a device's identity when it is plugged in again (or the computer
+                // wakes), but the connection made before may no longer deliver; its place in the
+                // system's list is part of the identity there, so a change of the list opens it
+                // afresh.
+                listed(&m)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (n, p))| {
+                        let id = if cfg!(windows) { format!("{}@{i}", p.id()) } else { p.id() };
+                        (n, id)
+                    })
+                    .collect()
+            })
         }
 
         fn open(&mut self, name: &str, sink: PortSink) -> Result<Box<dyn MidiConnection>, String> {
+            guarded(Err("the system's MIDI library failed".into()), move || open_input(name, sink))
+        }
+    }
+
+    fn open_input(name: &str, sink: PortSink) -> Result<Box<dyn MidiConnection>, String> {
+        {
             let m = client()?;
             let port = listed(&m).into_iter().find(|(n, _)| n == name).map(|(_, p)| p).ok_or_else(|| "not found".to_string())?;
             // The driver's own timestamp, where it gives one, on the hub's clock.
@@ -1191,6 +1529,10 @@ struct FakeState {
     plugged: Vec<(String, u32)>,
     sinks: Vec<(String, Arc<PortSink>)>,
     refuse: Vec<String>,
+    /// Opens that succeeded, by port.
+    opens: Vec<(String, u32)>,
+    /// Opens of a port refused this many more times ("still held" after a close).
+    busy_for: Vec<(String, u32)>,
 }
 
 struct FakeConn {
@@ -1251,6 +1593,19 @@ impl FakeBackend {
         }
     }
 
+    /// The next `times` opens of `name` fail as a port still held does.
+    pub fn busy_for(&self, name: &str, times: u32) {
+        if let Ok(mut s) = self.state.lock() {
+            s.busy_for.retain(|(n, _)| n != name);
+            s.busy_for.push((name.to_string(), times));
+        }
+    }
+
+    /// How many times `name` was opened.
+    pub fn opens(&self, name: &str) -> u32 {
+        self.state.lock().map_or(0, |s| s.opens.iter().find(|(n, _)| n == name).map_or(0, |(_, k)| *k))
+    }
+
     /// Whether `name` is open.
     pub fn is_open(&self, name: &str) -> bool {
         self.state.lock().is_ok_and(|s| s.sinks.iter().any(|(n, _)| n == name))
@@ -1287,10 +1642,22 @@ impl MidiBackend for FakeBackend {
     fn open(&mut self, name: &str, sink: PortSink) -> Result<Box<dyn MidiConnection>, String> {
         let mut s = self.state.lock().map_err(|_| "poisoned".to_string())?;
         if s.refuse.iter().any(|r| r == name) {
-            return Err("in use by another program".into());
+            return Err("could not create Windows MM MIDI input port (MMSYSERR_ALLOCATED)".into());
+        }
+        if let Some((_, k)) = s.busy_for.iter_mut().find(|(n, k)| n == name && *k > 0) {
+            *k -= 1;
+            return Err("could not create Windows MM MIDI input port (MMSYSERR_ALLOCATED)".into());
         }
         if !unique_names(s.ports.clone()).iter().any(|p| p == name) {
             return Err("not found".into());
+        }
+        if s.sinks.iter().any(|(n, _)| n == name) {
+            // Opened twice without a close in between: the system refuses, as WinMM does.
+            return Err("could not create Windows MM MIDI input port (MMSYSERR_ALLOCATED)".into());
+        }
+        match s.opens.iter_mut().find(|(n, _)| n == name) {
+            Some((_, k)) => *k += 1,
+            None => s.opens.push((name.to_string(), 1)),
         }
         s.sinks.push((name.to_string(), Arc::new(sink)));
         Ok(Box::new(FakeConn { state: Arc::clone(&self.state), name: name.to_string() }))
@@ -1724,5 +2091,157 @@ mod tests {
         hub.drain_into(&mut live, hub.now_us(), 128, 48_000.0);
         assert_eq!(live.ports[TYPING_SLOT], port_id(TYPING_NAME));
         assert_eq!(live.events().first().map(|e| e.port as usize), Some(TYPING_SLOT));
+    }
+
+    #[test]
+    fn an_open_failure_shows_in_plain_words_and_never_says_open() {
+        let fake = FakeBackend::with_ports(&["XPIANOGT"]);
+        fake.refuse("XPIANOGT");
+        let hub = MidiHub::new();
+        let mut m = MidiInputs::new(fake.boxed(), Arc::clone(&hub), BTreeMap::new());
+        m.rescan();
+        let p = m.ports().into_iter().next().unwrap();
+        assert!(!p.open, "not Open when the system refused");
+        assert_eq!(p.error.as_deref(), Some("In use by another program: close it (or its MIDI settings), then press Rescan"));
+        assert!(!hub.any_open());
+        // Disabled, the old reason goes.
+        m.set_enabled("XPIANOGT", false);
+        assert_eq!(m.ports()[0].error, None);
+        assert_eq!(plain_open_error("not found"), "Not found: unplugged or renamed; press Rescan");
+        assert_eq!(plain_open_error("something else"), "something else");
+    }
+
+    #[test]
+    fn ports_are_matched_by_name_when_the_system_reorders_them() {
+        let fake = FakeBackend::with_ports(&["XPIANOGT", "StudioRack", "SG Device I/O"]);
+        let hub = MidiHub::new();
+        let mut m = MidiInputs::new(fake.boxed(), Arc::clone(&hub), BTreeMap::new());
+        m.rescan();
+        let slot = |m: &MidiInputs, n: &str| m.ports().into_iter().find(|p| p.name == n).map(|p| p.slot);
+        let before = slot(&m, "XPIANOGT");
+        // The piano goes and comes back last in the system's list; a new port comes first.
+        fake.unplug("XPIANOGT");
+        m.rescan();
+        fake.plug("loopMIDI Port");
+        fake.plug("XPIANOGT");
+        m.rescan();
+        assert_eq!(slot(&m, "XPIANOGT"), before, "same slot, by name");
+        assert!(fake.send("XPIANOGT", &[0x90, 60, 80]));
+        let mut live = LiveMidi::new();
+        hub.drain_into(&mut live, hub.now_us(), 64, 48_000.0);
+        let e = live.events().first().copied().unwrap();
+        assert_eq!(live.ports[usize::from(e.port)], port_id("XPIANOGT"), "the event is the piano's, not the port now at its index");
+    }
+
+    #[test]
+    fn every_message_is_counted_and_shown_before_any_filter() {
+        let fake = FakeBackend::with_ports(&["XPIANOGT"]);
+        let hub = MidiHub::new();
+        let mut m = MidiInputs::new(fake.boxed(), Arc::clone(&hub), BTreeMap::new());
+        m.rescan();
+        assert_eq!(m.diag("XPIANOGT").map(|d| d.received), Some(0));
+        assert!(m.since_activity("XPIANOGT").is_none(), "dark until something comes");
+        // Every kind left out: the count, last message and light still show what came.
+        hub.set_filter(FILTER_KINDS.iter().map(|(_, b)| b).sum());
+        assert!(fake.send("XPIANOGT", &[0x90, 48, 80]));
+        let d = m.diag("XPIANOGT").unwrap();
+        assert_eq!((d.received, d.last.as_deref()), (1, Some("Note on C2 vel 80, ch 1")));
+        assert!(m.since_activity("XPIANOGT").is_some());
+        let mut live = LiveMidi::new();
+        hub.drain_into(&mut live, hub.now_us(), 64, 48_000.0);
+        assert!(live.events().is_empty(), "the filter still leaves it out of the tracks");
+        // Clock, SysEx and pedal count too.
+        fake.send("XPIANOGT", &[0xF8]);
+        fake.send("XPIANOGT", &[0xF0, 0x41, 0x10, 0xF7]);
+        fake.send("XPIANOGT", &[0xB1, 64, 127]);
+        let d = m.diag("XPIANOGT").unwrap();
+        assert_eq!((d.received, d.last.as_deref()), (4, Some("Controller 64 = 127, ch 2")));
+        assert_eq!(describe(&[0xF0, 0x41, 0x10], 4), "SysEx (4 bytes)");
+        assert_eq!(describe(&[0x80, 60, 0], 3), "Note off C3, ch 1");
+        assert_eq!(describe(&[0xE0, 0, 64], 3), "Pitch bend 0, ch 1");
+        assert_eq!(describe(&[0xF8], 1), "Clock");
+    }
+
+    #[test]
+    fn rescan_and_waking_reopen_the_ports_and_a_held_port_is_tried_again() {
+        let fake = FakeBackend::with_ports(&["XPIANOGT"]);
+        let hub = MidiHub::new();
+        let mut m = MidiInputs::new(fake.boxed(), Arc::clone(&hub), BTreeMap::new());
+        let t0 = Instant::now();
+        m.tick(t0);
+        assert_eq!(fake.opens("XPIANOGT"), 1);
+        // Ordinary scans leave a working connection alone.
+        m.tick(t0 + RESCAN_EVERY);
+        m.tick(t0 + RESCAN_EVERY * 2);
+        assert_eq!(fake.opens("XPIANOGT"), 1);
+        // Rescan closes it fully and opens it again, even when the driver is slow to let go.
+        fake.busy_for("XPIANOGT", 2);
+        m.reopen();
+        assert_eq!(fake.opens("XPIANOGT"), 2);
+        assert!(fake.is_open("XPIANOGT") && m.ports()[0].open && m.ports()[0].error.is_none());
+        assert!(fake.send("XPIANOGT", &[0x90, 60, 80]));
+        // The computer slept: the next tick opens it afresh.
+        m.tick(t0 + RESCAN_EVERY * 2 + SLEPT_AFTER);
+        assert_eq!(fake.opens("XPIANOGT"), 3);
+        // Held for good: it says why and is not Open.
+        fake.busy_for("XPIANOGT", 99);
+        m.reopen();
+        let p = m.ports().into_iter().next().unwrap();
+        assert!(!p.open && p.error.as_deref().is_some_and(|e| e.starts_with("In use by another program")));
+        // Let go: the next scan opens it.
+        fake.busy_for("XPIANOGT", 0);
+        m.rescan();
+        assert!(m.ports()[0].open && m.ports()[0].error.is_none());
+    }
+
+    #[test]
+    fn a_driver_clock_that_lags_is_not_believed_for_long() {
+        let mut c = DriverClock::default();
+        assert_eq!(c.to_hub(1_000_000, 2_000_000), 2_000_000);
+        // A driver clock running 1% slow: its stamps fall behind, but never more than MAX_LAG.
+        let mut worst = 0;
+        for k in 1..=2000u64 {
+            let now = 2_000_000 + k * 10_000;
+            let driver = 1_000_000 + k * 9_900;
+            let at = c.to_hub(driver, now);
+            worst = worst.max(now - at);
+        }
+        assert!(worst <= DriverClock::MAX_LAG, "{worst}");
+        // The window shows how late the last message was stamped.
+        let hub = MidiHub::new();
+        let sink = hub.sink(0);
+        std::thread::sleep(Duration::from_millis(5));
+        let now = hub.now_us();
+        sink.send_at(1, &[0x90, 60, 1]);
+        assert!(hub.diag(0).lag.is_some_and(|l| l.as_micros() as u64 + 1 >= now), "stamped at the hub's start: as late as the hub is old");
+    }
+
+    #[test]
+    fn a_device_whose_keep_alive_stops_is_opened_again_and_the_window_is_told() {
+        let fake = FakeBackend::with_ports(&["XPIANOGT", "Quiet Keys"]);
+        let hub = MidiHub::new();
+        let mut m = MidiInputs::new(fake.boxed(), Arc::clone(&hub), BTreeMap::new());
+        let t0 = Instant::now();
+        m.tick(t0);
+        // The piano sends Active Sensing: not counted, not lit, but it shows the device is there.
+        assert!(fake.send("XPIANOGT", &[0xFE]));
+        let d = m.diag("XPIANOGT").unwrap();
+        assert!(d.keepalive && d.received == 0 && d.last.is_none());
+        assert!(m.since_activity("XPIANOGT").is_none(), "a keep-alive does not light the light");
+        m.tick(t0 + Duration::from_millis(100));
+        assert_eq!(fake.opens("XPIANOGT"), 1);
+        // Then nothing at all: its connection stopped. Reopened once, not again at once.
+        std::thread::sleep(SILENT_AFTER + Duration::from_millis(100));
+        m.tick(t0 + Duration::from_millis(200));
+        assert_eq!(fake.opens("XPIANOGT"), 2);
+        assert_eq!(m.ports().iter().find(|p| p.name == "XPIANOGT").map(|p| p.revived), Some(1));
+        m.tick(t0 + Duration::from_millis(300));
+        assert_eq!(fake.opens("XPIANOGT"), 2, "not again within REVIVE_EVERY");
+        // A device without a keep-alive is never reopened for being quiet.
+        assert_eq!(fake.opens("Quiet Keys"), 1);
+        // It speaks again: back to normal.
+        assert!(fake.send("XPIANOGT", &[0xFE]));
+        m.tick(t0 + Duration::from_millis(400));
+        assert_eq!(m.ports().iter().find(|p| p.name == "XPIANOGT").map(|p| p.revived), Some(0));
     }
 }

@@ -7431,4 +7431,67 @@ mod lend_tests {
         p.play(0, None, None);
         assert!(p.is_playing());
     }
+
+    /// The owner's report: an armed instrument on a named port plays while stopped, then a
+    /// Record. What is played must keep sounding and be recorded through the take, and keep
+    /// sounding after Stop.
+    #[test]
+    fn a_named_port_keeps_playing_through_record_and_stop() {
+        use soundcraft_model::{ChannelFormat, Insert, MidiIn, Route, TrackKind};
+        let mut s = Session::default();
+        s.edit.click = false;
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        let tr = s.track_mut(t).unwrap();
+        tr.instrument = Some(Insert::new("subtractive_synth"));
+        tr.mixer.input = Route::Midi(MidiIn { device: Some("XPIANOGT".into()), channel: 0, ..MidiIn::default() });
+        tr.mixer.record_arm = true;
+        let (tx, rx) = channel();
+        let mut st = AudioState::new(rx, Arc::new(Shared::new()), Arc::new(s), 48_000.0, max_block_for(None), channel().0);
+        st.mix.set_external_instances(false);
+        let hub = midi_in::MidiHub::new();
+        hub.set_thru(true);
+        let fake = midi_in::FakeBackend::with_ports(&["XPIANOGT", "StudioRack", "SG Device I/O"]);
+        let mut inputs = midi_in::MidiInputs::new(fake.boxed(), Arc::clone(&hub), std::collections::BTreeMap::new());
+        inputs.rescan();
+        tx.send(Cmd::Midi(Arc::clone(&hub))).unwrap();
+        let mut out = vec![0.0f32; 2 * 256];
+        let peak = |out: &[f32]| out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        // A key played and let go, then a few blocks: the loudest of them.
+        let play = |st: &mut AudioState, out: &mut [f32], pitch: u8| {
+            assert!(fake.send("XPIANOGT", &[0x90, pitch, 100]), "the port is open");
+            let mut loud = 0.0f32;
+            for k in 0..12 {
+                if k == 8 {
+                    fake.send("XPIANOGT", &[0x80, pitch, 0]);
+                }
+                st.fill(out, 2);
+                loud = loud.max(peak(out));
+            }
+            loud
+        };
+        st.fill(&mut out, 2);
+        assert!(play(&mut st, &mut out, 60) > 1e-3, "stopped, armed: heard");
+        // Record.
+        tx.send(Cmd::Recording(true)).unwrap();
+        tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
+        for (k, pitch) in (62..70u8).enumerate() {
+            assert!(play(&mut st, &mut out, pitch) > 1e-3, "recording, key {k}: heard");
+        }
+        let mut got = Vec::new();
+        hub.take_recorded(&mut got);
+        let ons = got.iter().filter(|e| e.msg[0] & 0xF0 == 0x90 && e.msg[2] > 0).count();
+        assert_eq!(ons, 8, "every key recorded: {got:?}");
+        // Stop.
+        tx.send(Cmd::Stop).unwrap();
+        tx.send(Cmd::Recording(false)).unwrap();
+        for _ in 0..40 {
+            st.fill(&mut out, 2);
+        }
+        for pitch in [72u8, 74, 76] {
+            assert!(play(&mut st, &mut out, pitch) > 1e-3, "after Stop: heard");
+        }
+        assert!(fake.is_open("XPIANOGT") && fake.opens("XPIANOGT") == 1);
+        let d = hub.diag(inputs.ports()[0].slot);
+        assert_eq!(d.received, 2 * 12);
+    }
 }
