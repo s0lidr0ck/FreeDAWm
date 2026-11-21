@@ -45,6 +45,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("plugin-scan", 0),
     ("ara-host", 0),
     ("sysmem", 0),
+    ("aaf", 0),
     ("dsp", 1),
     ("ml", 1),
     ("band", 1),
@@ -63,7 +64,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("ui-egui", 6),
 ];
 /// Standalone format crates: no workspace dependencies at all (publishable on their own).
-const STANDALONE: &[&str] = &["time", "audio-io", "midi", "video", "dsp"];
+const STANDALONE: &[&str] = &["time", "audio-io", "midi", "video", "dsp", "aaf"];
 const UI_CRATES: &[&str] = &["craft-ui", "egui", "eframe", "winit", "egui_kittest", "rfd", "egui-wgpu", "egui_glow"];
 const EXEMPT: &[&str] = &["soundcraft", "soundcraft-cli", "soundcraft-scan", "xtask"];
 

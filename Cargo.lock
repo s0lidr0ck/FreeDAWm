@@ -6098,6 +6098,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "soundcraft-aaf"
+version = "0.10.0"
+
+[[package]]
 name = "soundcraft-ara-host"
 version = "0.10.0"
 
