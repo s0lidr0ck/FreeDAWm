@@ -267,6 +267,10 @@ download.
   when routers block it; you can run your own relay. The performer hears your live mix (Opus),
   and their take lands where they played against it. They also get a level window with a big
   meter, a clip light, plain advice and a 10-second level check.
+- **FreeDAWm Recorder (Windows).** A small window beside the DAW: Record and Stop for quick
+  ideas (a 24-bit WAV and a MIDI file named by date and time), recording into a booth on another
+  PC as a remote recorder does, and listening to the booth's mix. It never listens on the
+  network. See [docs/recorder.md](docs/recorder.md).
 
 <p align="center">
   <img alt="Setup › Network: paired devices (Phone, Stage PC, Piano PC as a remote recorder), Follow a booth, Hear the booth's mix, and Connect over the internet with invites and a relay" src="docs/images/network.png" width="60%">

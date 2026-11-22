@@ -893,6 +893,11 @@ impl FollowerGlue {
         self.current.is_some()
     }
 
+    /// The booth's session name, as it last said (empty until it does).
+    pub fn booth_session(&self) -> &str {
+        &self.booth_session
+    }
+
     /// The badge for this PC's screen.
     pub fn badge(&self, f: &Follower) -> FollowBadge {
         let booth = booth_name(f);

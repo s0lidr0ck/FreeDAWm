@@ -565,7 +565,40 @@ pub(crate) fn build_input_stream(
     Err("recording is not supported on this platform yet".into())
 }
 
+/// An input fed by hand, for tests of recording in other crates ([`Recorder::synthetic`]): each
+/// [`SyntheticInput::push`] is one input callback. Not for use outside tests.
+#[doc(hidden)]
+pub struct SyntheticInput {
+    feed: Arc<InputFeed>,
+    capture: Arc<Capture>,
+}
+
+impl SyntheticInput {
+    /// One input callback holding `interleaved` frames.
+    pub fn push(&self, interleaved: &[f32]) {
+        self.capture.guarded(|| self.feed.push(interleaved));
+    }
+
+    /// The device goes away (as an unplugged interface's stream reports it).
+    pub fn unplug(&self) {
+        self.capture.fault.store(GONE, Ordering::Relaxed);
+    }
+}
+
 impl Recorder {
+    /// Tests in other crates: a recorder on an input of `channels` fed by hand
+    /// ([`SyntheticInput`]), attached to `player` as an input on the output's clock is. Not for
+    /// use outside tests.
+    #[doc(hidden)]
+    pub fn synthetic(player: &crate::Player, channels: usize) -> (Recorder, SyntheticInput) {
+        let (rate, channels) = (player.session_rate(), channels.max(1));
+        let feed = InputFeed::fixed(channels, player.max_block());
+        let capture = Capture::for_rate(rate, channels);
+        player.attach_input(Arc::clone(&feed), Arc::clone(&capture));
+        let r = Recorder::attached(Arc::clone(&capture), "Synthetic input".into(), rate, rate, channels);
+        (r, SyntheticInput { feed, capture })
+    }
+
     /// A recorder over `capture`, whose input is `device_name` at `device_rate` with `channels`.
     pub(crate) fn attached(capture: Arc<Capture>, device_name: String, device_rate: u32, session_rate: u32, channels: usize) -> Recorder {
         Recorder {

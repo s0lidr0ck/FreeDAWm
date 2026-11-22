@@ -92,6 +92,16 @@
         <File Id="SoundcraftCliExe" Source="$(var.BinDir)\freedawm-cli.exe" KeyPath="yes" />
       </Component>
 
+      <!-- FreeDAWm Recorder (docs/recorder.md): quick ideas, recording into a booth, its own
+           Start Menu shortcut with the app's icon. -->
+      <Component Id="SoundcraftRecorder" Guid="4CE1FB2B-1ACE-40F0-9F4C-A7C89F9CE550">
+        <File Id="SoundcraftRecorderExe" Source="$(var.BinDir)\freedawm-recorder.exe" KeyPath="yes">
+          <Shortcut Id="RecorderStartMenuShortcut" Directory="ProgramMenuFolder" Name="FreeDAWm Recorder"
+              Description="Record quick ideas, or into a FreeDAWm booth" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="SoundcraftIcon.ico" IconIndex="0" />
+        </File>
+      </Component>
+
       <!-- The plugin scanner helper: the app scans plugins only through it, next to itself. -->
       <Component Id="SoundcraftScan" Guid="7D3A0E52-9B4C-4F1E-A8C6-2E5B91D04F73">
         <File Id="SoundcraftScanExe" Source="$(var.BinDir)\freedawm-scan.exe" KeyPath="yes" />
