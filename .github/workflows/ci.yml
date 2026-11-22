@@ -90,7 +90,9 @@ jobs:
             # soundcraft-playback's and soundcraft-ui-egui's test binaries crash (access violation)
             # on the hosted Windows runners (not yet diagnosed; the runners have no audio devices);
             # they pass on a desktop Windows machine and on macOS/Linux CI. Here they are only built.
-            exclude: "--exclude soundcraft-playback --exclude soundcraft-ui-egui"
+            # soundcraft-recorder's tests run the same player (with no device), so they are only
+            # built here too until that is diagnosed.
+            exclude: "--exclude soundcraft-playback --exclude soundcraft-ui-egui --exclude soundcraft-recorder"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
@@ -109,4 +111,4 @@ jobs:
 
       - name: Build the tests that don't run here
         if: matrix.exclude != ''
-        run: cargo test --locked --no-run -p soundcraft-playback -p soundcraft-ui-egui
+        run: cargo test --locked --no-run -p soundcraft-playback -p soundcraft-ui-egui -p soundcraft-recorder

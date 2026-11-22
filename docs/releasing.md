@@ -149,6 +149,11 @@ builds x64 only, without the `asio` feature.
   `FREEDAWM_REQUIRE_WINRES=1` so a missing resource compiler fails the build.
 - The script checks both PE headers: the machine type matches `-Arch`, `freedawm.exe` is a GUI
   app (no console window) and `freedawm-cli.exe` a console app.
+- **FreeDAWm Recorder** (`freedawm-recorder.exe`, package `soundcraft-recorder`,
+  [`docs/recorder.md`](recorder.md)) is built in the same `cargo build` (so with `-Asio` it gets
+  ASIO too), checked as a GUI app, signed, and shipped in the portable zip and the MSI with its
+  own Start Menu shortcut, "FreeDAWm Recorder" (the app's icon). `apps/recorder/build.rs` embeds
+  the same icon and VERSIONINFO. Windows only: the macOS and Linux packages leave it out.
 - `freedawm.wxs` (WiX v5) is a per-machine install into Program Files with an advertised Start
   Menu shortcut. FreeDAWm becomes the default app for `.fdawm` (and the older `.scraft`) and is listed under *Open with*
   for `.wav`, `.aif`, `.aiff`, `.flac`, `.mp3`, `.mid` and `.midi`. It also registers App Paths
