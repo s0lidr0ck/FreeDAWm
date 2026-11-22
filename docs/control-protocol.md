@@ -1128,7 +1128,22 @@ makes a one-time secret valid 30 minutes (`Hub::new_invite_secret`) and shows th
 name}>` with Copy; the performer pastes it in *Join with an invite*, his PC connects and sends
 `pair.invite {secret, name}` → `{token, name, pc}` (the same per-device token as the LAN, kept in
 both settings; a used or expired invite is refused), then follows that host (`follow.internet`:
-the host's address, JSON) and hears its mix. Both sides show the link: "Direct, 38 ms round trip"
+the host's address, JSON) and hears its mix. **Reusable invites**: *Invite…* offers *One person*
+(the above) or *Reusable*, for 1 hour, 1 day (default) or 7 days and 1 to 50 joins (default 10)
+(`Hub::new_reusable_invite`): the same code and secret strength (128 random bits), so the joining
+side needs nothing new. The booth keeps a reusable invite in `network.json` (`invites`: id, the
+SHA-256 of the secret, never the secret, its end as seconds since 1970, joins allowed and made),
+so it outlives a restart; one-time invites live only while the app runs. Setup › Network lists
+every open invite (kind, time left, joins used) with *Revoke*, which ends it at once; devices that
+joined stay paired. Each join shows a notice on the booth ("<PC> joined with the reusable invite")
+and lists the PC in Paired devices. A PC that joined this booth before sends its token with the
+invite and is recognised (no join used). **Coming back**: an invite is only for the first join.
+The token it gave is kept on both sides, *Let a performer join this PC over the internet* is kept
+and started when the app starts, and the performer's *Follow this booth* and *Start following when
+FreeDAWm starts* are on after joining; his PC dials the booth by its key (made once, kept), which
+n0's address lookup resolves however the booth's address or network changed. So after either app
+restarts, the booth moves, or another session is open, the performer reconnects with no new
+invite and no click on either side. Both sides show the link: "Direct, 38 ms round trip"
 or "Through a relay, …", loss, and a warning when it is too weak for the stream (over 400 ms,
 over 5 % lost, or under 400 kb/s estimated). Tested on one machine (relay-less, the whole rig and
 the stream take over it: 0 samples off) and, `#[ignore]`d, through n0's public relays from Windows
@@ -1136,7 +1151,7 @@ the stream take over it: 0 samples off) and, `#[ignore]`d, through n0's public r
 
 | Method | Params | Result |
 |---|---|---|
-| `pair.invite` | `{secret, name}` | `{token, name, pc}`; refused once used or after 30 minutes. |
+| `pair.invite` | `{secret, name, token?}` | `{token, name, pc}`; a one-time invite is refused once used or after 30 minutes, a reusable one once its time or joins run out, or when revoked. `token`: the PC's own from an earlier join of this booth (sent only to the booth whose key it joined): while the invite is still good it is recognised, answered with the same token and `again: true`, and no join is used. Wrong secrets: after 20 in 10 minutes on the booth, every invite is refused for the rest of that window. |
 | `stream.subscribe` | `{on}` | `{on}`: this follower's link hears the mix (or stops). |
 
 **Clipping guard rails** (`soundcraft_net::guard`, `net_ui::performer_panel`): on a PC following a

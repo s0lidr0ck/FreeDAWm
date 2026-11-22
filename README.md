@@ -260,7 +260,9 @@ download.
   MIDI or the audio level. At Stop, takes arrive note for note, or as FLAC in the project's
   format, with clock drift corrected. In tests MIDI lands within 0.15 ms and audio within a few
   samples. Takes wait on disk and are sent again if the link drops.
-- **Remote performers over the internet.** Send a one-time invite, valid for 30 minutes. The
+- **Remote performers over the internet.** Send a one-time invite, valid for 30 minutes, or one
+  reusable invite for several people (1 hour to 7 days, up to 50 joins, revocable). Once joined,
+  a performer reconnects on later days without a new invite. The
   connection is direct and encrypted ([iroh](https://iroh.computer)) and falls back to a relay
   when routers block it; you can run your own relay. The performer hears your live mix (Opus),
   and their take lands where they played against it. They also get a level window with a big

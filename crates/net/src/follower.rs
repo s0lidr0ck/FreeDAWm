@@ -969,7 +969,18 @@ pub fn pair_request_info(addr: &str, my_name: &str) -> Result<PairRequest, Strin
 /// Pairs with an invite's one-time secret (over the internet bridge at `addr`): the token and the
 /// booth's own name.
 pub fn pair_invite(addr: &str, secret: &str, my_name: &str) -> Result<(String, String), String> {
-    let r = one_call(addr, &json!({"id": 1, "method": "pair.invite", "params": {"secret": secret, "name": my_name}}))?;
+    pair_invite_as(addr, secret, my_name, None)
+}
+
+/// [`pair_invite`], showing this PC's token from an earlier join of the same booth (`token`;
+/// only ever sent to that booth): it is recognised and kept, and a reusable invite's join is not
+/// used again.
+pub fn pair_invite_as(addr: &str, secret: &str, my_name: &str, token: Option<&str>) -> Result<(String, String), String> {
+    let mut params = json!({"secret": secret, "name": my_name});
+    if let Some(t) = token.filter(|t| !t.is_empty()) {
+        params["token"] = json!(t);
+    }
+    let r = one_call(addr, &json!({"id": 1, "method": "pair.invite", "params": params}))?;
     let token = r["token"].as_str().ok_or("no token")?.to_string();
     Ok((token, r["pc"].as_str().unwrap_or("").to_string()))
 }

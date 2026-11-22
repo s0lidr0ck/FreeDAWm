@@ -152,6 +152,24 @@ pub struct NetConfig {
     pub pin_wrong: u32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_last_from: String,
+    /// Reusable internet invites still open (one-time ones live only while the app runs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invites: Vec<SavedInvite>,
+}
+
+/// A reusable internet invite as the booth keeps it: the SHA-256 of its secret (hex), never the
+/// secret itself, so reading this file does not hand out a live invite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedInvite {
+    /// Names it in Setup › Network (Revoke).
+    pub id: String,
+    pub hash: String,
+    /// Good until (seconds since 1970).
+    pub until: u64,
+    /// Joins allowed, and made so far.
+    pub max_joins: u32,
+    #[serde(default)]
+    pub joins: u32,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -183,6 +201,7 @@ impl Default for NetConfig {
             pin_ask: false,
             pin_wrong: 0,
             pin_last_from: String::new(),
+            invites: Vec::new(),
         }
     }
 }

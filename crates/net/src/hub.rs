@@ -21,7 +21,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::config::{NetConfig, PairedDevice};
+use crate::config::{NetConfig, PairedDevice, SavedInvite};
 use crate::pairing::exchange::{self, Confirmed, Exchange, LinkKeys, Side};
 use crate::pairing::{Confirm, PAIRING_VERSION, PIN_OFF_AFTER, PIN_STREAK, Pairing, PendingPair, PinEvent, PinGuard};
 use crate::proto::{BoothTransport, FollowerReport, RemoteAction, RemoteStatus, RigStatus, SketchNote, TransportState};
@@ -235,8 +235,10 @@ struct Inner {
     internet: Mutex<Option<Listening>>,
     /// The loopback listener the encrypted local link's bridge connects to.
     secure: Mutex<Option<Listening>>,
-    /// Invites made (their one-time secret and when they expire, hub seconds).
-    invites: Mutex<Vec<(String, f64)>>,
+    /// One-time invites made (an id, their secret and when they expire, hub seconds).
+    invites: Mutex<Vec<(String, String, f64)>>,
+    /// When wrong invite secrets came lately (the limit on guessing).
+    bad_invites: Mutex<Vec<f64>>,
     open: AtomicUsize,
     next_id: AtomicU64,
     warning: Mutex<Option<String>>,
@@ -305,6 +307,7 @@ impl Hub {
                 internet: Mutex::new(None),
                 secure: Mutex::new(None),
                 invites: Mutex::new(Vec::new()),
+                bad_invites: Mutex::new(Vec::new()),
                 open: AtomicUsize::new(0),
                 next_id: AtomicU64::new(1),
                 warning: Mutex::new(None),
@@ -1032,48 +1035,151 @@ impl Hub {
     }
 
     /// A one-time invite secret, valid for [`INVITE_MINUTES`]; see [`crate::internet::Invite`].
+    /// The secret is a pairing token's 128 random bits from the OS.
     pub fn new_invite_secret(&self) -> String {
         let secret = new_token();
         let until = self.now_s() + INVITE_MINUTES * 60.0;
         let mut inv = lock(&self.inner.invites);
         let now = self.now_s();
-        inv.retain(|(_, t)| *t > now);
-        inv.push((secret.clone(), until));
+        inv.retain(|(_, _, t)| *t > now);
+        inv.push((format!("{:08x}", random_u64() & 0xffff_ffff), secret.clone(), until));
+        secret
+    }
+
+    /// A reusable invite secret (as strong as a one-time one): good for `secs` and
+    /// `max_joins` devices (1 to [`MAX_INVITE_JOINS`]), kept in the settings as its SHA-256 only
+    /// so it outlives a restart. Devices it paired stay paired once it is revoked or ends.
+    pub fn new_reusable_invite(&self, secs: u64, max_joins: u32) -> String {
+        let secret = new_token();
+        let saved = SavedInvite {
+            id: format!("{:08x}", random_u64() & 0xffff_ffff),
+            hash: secret_hash(&secret),
+            until: unix_now().saturating_add(secs),
+            max_joins: max_joins.clamp(1, MAX_INVITE_JOINS),
+            joins: 0,
+        };
+        self.update_config(|c| {
+            let now = unix_now();
+            c.invites.retain(|i| i.until > now && i.joins < i.max_joins);
+            c.invites.push(saved);
+        });
         secret
     }
 
     /// Invites waiting (not used, not expired): seconds each has left.
     pub fn open_invites(&self) -> Vec<f64> {
+        self.invites().iter().map(|i| i.secs_left).collect()
+    }
+
+    /// Every invite still open, one-time ones first, for Setup › Network's list.
+    pub fn invites(&self) -> Vec<OpenInvite> {
         let now = self.now_s();
-        lock(&self.inner.invites).iter().filter(|(_, t)| *t > now).map(|(_, t)| t - now).collect()
+        let mut v: Vec<OpenInvite> = lock(&self.inner.invites)
+            .iter()
+            .filter(|(_, _, t)| *t > now)
+            .map(|(id, _, t)| OpenInvite { id: id.clone(), reusable: false, secs_left: t - now, joins: 0, max_joins: 1 })
+            .collect();
+        let unix = unix_now();
+        v.extend(lock(&self.inner.cfg).invites.iter().filter(|i| i.until > unix && i.joins < i.max_joins).map(|i| OpenInvite {
+            id: i.id.clone(),
+            reusable: true,
+            secs_left: (i.until - unix) as f64,
+            joins: i.joins,
+            max_joins: i.max_joins,
+        }));
+        v
+    }
+
+    /// Ends the invite `id` now (devices it paired stay paired).
+    pub fn revoke_invite(&self, id: &str) {
+        lock(&self.inner.invites).retain(|(i, _, _)| i != id);
+        if lock(&self.inner.cfg).invites.iter().any(|i| i.id == id) {
+            self.update_config(|c| c.invites.retain(|i| i.id != id));
+        }
     }
 
     /// For tests: invites expire `secs` from now.
     pub fn age_invites(&self, secs: f64) {
-        for (_, t) in lock(&self.inner.invites).iter_mut() {
+        for (_, _, t) in lock(&self.inner.invites).iter_mut() {
             *t -= secs;
         }
+        let s = secs.max(0.0) as u64;
+        self.update_config(|c| {
+            for i in &mut c.invites {
+                i.until = i.until.saturating_sub(s);
+            }
+        });
     }
 
-    /// `pair.invite {secret, name}`: an invite's secret, once, before it expires, pairs `name`.
-    fn pair_invite(&self, secret: &str, name: &str) -> Result<Value, String> {
+    /// For tests: wrong invite secrets are forgotten.
+    pub fn forget_bad_invites(&self) {
+        lock(&self.inner.bad_invites).clear();
+    }
+
+    /// `pair.invite {secret, name, token?}`: a one-time invite's secret, once, before it expires,
+    /// pairs `name`; a reusable one's, until it ends or its joins are used. `token`: the device's
+    /// own from an earlier join of this booth, recognised (its pairing kept, no join used) while
+    /// the invite is still good. Wrong secrets are limited across the listener.
+    fn pair_invite(&self, secret: &str, name: &str, token: Option<&str>) -> Result<Value, String> {
+        const REFUSED: &str = "that invite has expired or was already used: ask for a new one";
         let now = self.now_s();
-        let ok = {
-            let mut inv = lock(&self.inner.invites);
-            let found = inv.iter().position(|(s, t)| !secret.is_empty() && s == secret && *t > now);
-            if let Some(i) = found {
-                inv.remove(i);
+        {
+            let mut bad = lock(&self.inner.bad_invites);
+            bad.retain(|t| now - t < BAD_INVITE_WINDOW_S);
+            if bad.len() >= MAX_BAD_INVITES {
+                return Err("too many wrong invites lately: try again in a few minutes".into());
             }
-            found.is_some()
+        }
+        let hash = secret_hash(secret);
+        let unix = unix_now();
+        // Which invite: a one-time one (index) or a reusable one (id).
+        let one_time = lock(&self.inner.invites).iter().position(|(_, s, t)| !secret.is_empty() && same_secret(s, secret) && *t > now);
+        let reusable = if one_time.is_some() || secret.is_empty() {
+            None
+        } else {
+            lock(&self.inner.cfg)
+                .invites
+                .iter()
+                .find(|i| same_secret(&i.hash, &hash) && i.until > unix && i.joins < i.max_joins)
+                .map(|i| i.id.clone())
         };
-        if !ok {
-            return Err("that invite has expired or was already used: ask for a new one".into());
+        if one_time.is_none() && reusable.is_none() {
+            lock(&self.inner.bad_invites).push(now);
+            return Err(REFUSED.into());
+        }
+        // A device that joined before (its token, from an invite): recognised, nothing used.
+        if let Some(dev) = token.and_then(|t| self.device(t)).filter(|d| d.kind == "pc" && d.key.is_empty()) {
+            log::info!("network: {} rejoined with an invite it had used", dev.name);
+            return Ok(json!({"token": dev.token, "name": dev.name, "pc": self.pc_name(), "again": true}));
+        }
+        if let Some(i) = one_time {
+            let mut inv = lock(&self.inner.invites);
+            if inv.get(i).is_some_and(|(_, s, _)| same_secret(s, secret)) {
+                inv.remove(i);
+            } else {
+                return Err(REFUSED.into());
+            }
         }
         let name = crate::pairing::clean_name(name);
         let token = new_token();
         let dev = PairedDevice { name: name.clone(), kind: "pc".into(), token: token.clone(), follows: false, key: String::new() };
-        self.update_config(|c| c.paired.push(dev));
-        log::info!("network: {name} paired over the internet with an invite");
+        let mut used = true;
+        self.update_config(|c| {
+            if let Some(id) = &reusable {
+                match c.invites.iter_mut().find(|i| &i.id == id && i.joins < i.max_joins) {
+                    Some(i) => i.joins = i.joins.saturating_add(1),
+                    None => {
+                        used = false;
+                        return;
+                    }
+                }
+            }
+            c.paired.push(dev);
+        });
+        if !used {
+            return Err(REFUSED.into());
+        }
+        self.notice(if reusable.is_some() { format!("{name} joined with the reusable invite") } else { format!("{name} joined with an invite") });
         Ok(json!({"token": token, "name": name, "pc": self.pc_name()}))
     }
 
@@ -1336,6 +1442,7 @@ impl Hub {
                 "pair.invite" => Some(answer(self.pair_invite(
                     params.get("secret").and_then(Value::as_str).unwrap_or(""),
                     params.get("name").and_then(Value::as_str).unwrap_or("PC"),
+                    params.get("token").and_then(Value::as_str),
                 ))),
                 // A PC with an older FreeDAWm says no version (it would send the code itself):
                 // told to update before any code is shown.
@@ -1920,6 +2027,40 @@ fn from_addr(addr: SocketAddr) -> String {
 
 /// How long an invite is good for (minutes).
 pub const INVITE_MINUTES: f64 = 30.0;
+
+/// The most joins a reusable invite allows.
+pub const MAX_INVITE_JOINS: u32 = 50;
+/// Wrong invite secrets allowed per [`BAD_INVITE_WINDOW_S`] before every invite is refused for a
+/// while (a secret is 128 random bits: this only keeps the listener from being hammered).
+pub const MAX_BAD_INVITES: usize = 20;
+pub const BAD_INVITE_WINDOW_S: f64 = 600.0;
+
+/// An invite still open, as Setup › Network lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenInvite {
+    pub id: String,
+    /// Several devices may join with it (else one, within 30 minutes).
+    pub reusable: bool,
+    pub secs_left: f64,
+    pub joins: u32,
+    pub max_joins: u32,
+}
+
+/// An invite secret's SHA-256 (hex), as the settings keep a reusable one.
+fn secret_hash(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(secret.trim().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Whether two secrets (or hashes) are the same, compared in full.
+fn same_secret(a: &str, b: &str) -> bool {
+    crate::pairing::same_pin(a, b)
+}
+
+/// Seconds since 1970.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
 
 /// The largest audio take accepted (24 h of 8 channels at 96 kHz, 24-bit).
 const MAX_TAKE_BYTES: u64 = 200 << 30;

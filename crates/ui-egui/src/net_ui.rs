@@ -103,6 +103,26 @@ pub struct NetState {
     pin_msg: String,
     /// "Forget all…" pressed once: the second press forgets.
     forget_all_armed: bool,
+    /// The next invite: reusable (else for one person), for how long (seconds) and how many
+    /// joins.
+    invite_reusable: bool,
+    invite_secs: u64,
+    invite_joins: u32,
+}
+
+/// How long a reusable invite can last: the label and seconds.
+const INVITE_SPANS: [(&str, u64); 3] = [("1 hour", 3600), ("1 day", 86_400), ("7 days", 7 * 86_400)];
+
+/// "23 min", "5 h", "3 days".
+fn time_left(secs: f64) -> String {
+    let m = (secs / 60.0).ceil();
+    if m < 120.0 {
+        format!("{m} min")
+    } else if m < 48.0 * 60.0 {
+        format!("{} h", (m / 60.0).round())
+    } else {
+        format!("{} days", (m / 1440.0).round())
+    }
 }
 
 impl NetState {
@@ -147,6 +167,9 @@ impl NetState {
             pin_show: false,
             pin_msg: String::new(),
             forget_all_armed: false,
+            invite_reusable: false,
+            invite_secs: 86_400,
+            invite_joins: 10,
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -368,10 +391,12 @@ impl NetState {
         Ok(self.internet()?.bridge_to_json(addr)?.to_string())
     }
 
-    /// Makes an invite (valid 30 minutes, once): the code to send the performer.
+    /// Makes an invite (for one person: valid 30 minutes, once; reusable: for the time and the
+    /// joins chosen): the code to send the performer. Both kinds are the same code.
     fn make_invite(&mut self) -> Result<String, String> {
         let addr = self.internet()?.addr(Duration::from_secs(5));
-        let secret = self.hub.new_invite_secret();
+        let secret =
+            if self.invite_reusable { self.hub.new_reusable_invite(self.invite_secs, self.invite_joins) } else { self.hub.new_invite_secret() };
         Ok(soundcraft_net::internet::Invite { addr, secret, name: self.hub.pc_name() }.code())
     }
 
@@ -1245,17 +1270,58 @@ fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) 
     }
     if host {
         ui.horizontal(|ui| {
-            if ui.button("Invite…").on_hover_text("A code for the performer: valid for 30 minutes, once").clicked() {
+            ui.radio_value(&mut net.invite_reusable, false, "One person").on_hover_text("Valid for 30 minutes, once");
+            ui.radio_value(&mut net.invite_reusable, true, "Reusable").on_hover_text("Several people can join with the same code");
+            if net.invite_reusable {
+                let shown = INVITE_SPANS.iter().find(|(_, s)| *s == net.invite_secs).map_or("1 day", |(l, _)| l);
+                egui::ComboBox::from_id_salt("net-invite-span").selected_text(format!("for {shown}")).show_ui(ui, |ui| {
+                    for (label, secs) in INVITE_SPANS {
+                        ui.selectable_value(&mut net.invite_secs, secs, label);
+                    }
+                });
+                ui.add(egui::DragValue::new(&mut net.invite_joins).range(1..=soundcraft_net::hub::MAX_INVITE_JOINS).suffix(" joins"));
+            }
+            let hover = if net.invite_reusable {
+                "One code for several performers, until it runs out or you revoke it"
+            } else {
+                "A code for the performer: valid for 30 minutes, once"
+            };
+            if ui.button("Invite…").on_hover_text(hover).clicked() {
                 match net.make_invite() {
                     Ok(code) => net.invite = Some((code, std::time::Instant::now())),
                     Err(e) => net.error = Some(e),
                 }
             }
-            let open = net.hub.open_invites();
-            if let Some(left) = open.iter().copied().fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.max(b)))) {
-                ui.label(egui::RichText::new(format!("Invite waiting: {} min left", (left / 60.0).ceil())).color(t.text_dim));
-            }
         });
+        if net.invite_reusable {
+            let span = INVITE_SPANS.iter().find(|(_, s)| *s == net.invite_secs).map_or("1 day", |(l, _)| l);
+            ui.label(
+                egui::RichText::new(format!(
+                    "Reusable: up to {} people can join with the same code within {span}. Revoke ends it at once; those who joined stay paired.",
+                    net.invite_joins
+                ))
+                .small()
+                .color(t.text_dim),
+            );
+        }
+        let open = net.hub.invites();
+        let mut revoke = None;
+        for i in &open {
+            ui.horizontal(|ui| {
+                let text = if i.reusable {
+                    format!("Reusable invite: {} left, {} of {} joins used", time_left(i.secs_left), i.joins, i.max_joins)
+                } else {
+                    format!("Invite for one person: {} left", time_left(i.secs_left))
+                };
+                ui.label(egui::RichText::new(text).color(t.text_dim));
+                if ui.small_button("Revoke").on_hover_text("Ends it now; devices that joined with it stay paired").clicked() {
+                    revoke = Some(i.id.clone());
+                }
+            });
+        }
+        if let Some(id) = revoke {
+            net.hub.revoke_invite(&id);
+        }
         if let Some((code, _)) = net.invite.clone() {
             let mut shown = code.clone();
             ui.add(egui::TextEdit::multiline(&mut shown).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
@@ -1297,6 +1363,9 @@ fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) 
                 Err(e) => net.join_status = e,
                 Ok(inv) => {
                     let addr_json = serde_json::to_string(&inv.addr).unwrap_or_default();
+                    // Joined this booth before: its token goes along (to that booth only), so a
+                    // reusable invite recognises this PC instead of using a join.
+                    let again = same_booth(&cfg.follow.internet, &addr_json).then(|| cfg.follow.token.clone());
                     match net.bridge(&addr_json) {
                         Err(e) => net.join_status = e,
                         Ok(bridge) => {
@@ -1306,7 +1375,7 @@ fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) 
                             let c = ctx.clone();
                             let booth = inv.name.clone();
                             std::thread::spawn(move || {
-                                let r = soundcraft_net::follower::pair_invite(&bridge, &inv.secret, &me)
+                                let r = soundcraft_net::follower::pair_invite_as(&bridge, &inv.secret, &me, again.as_deref())
                                     .map(|(token, pc)| json!({"token": token, "pc": if pc.is_empty() { booth } else { pc }, "addr": addr_json}));
                                 *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
                                 c.request_repaint();
@@ -1380,6 +1449,12 @@ fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) 
         .small()
         .color(t.text_dim),
     );
+}
+
+/// Two booth addresses (JSON, from invites) name the same booth: the same key.
+fn same_booth(a: &str, b: &str) -> bool {
+    let id = |s: &str| serde_json::from_str::<Value>(s).ok().map(|v| v["id"].clone()).filter(|v| !v.is_null());
+    id(a).is_some_and(|a| Some(a) == id(b))
 }
 
 /// What this PC's screen says about the booth it follows (the toolbar badge), while following.
