@@ -113,11 +113,16 @@ pub fn delete(take: &TakeFiles) -> Result<(), String> {
 
 /// Shows `path` in the system's file manager (selected, where the system can).
 pub fn reveal(path: &Path) -> Result<(), String> {
-    let mut cmd = if cfg!(windows) {
+    #[cfg(windows)]
+    let mut cmd = {
+        // Explorer reads `/select,"<path>"` itself, so the argument goes as written.
+        use std::os::windows::process::CommandExt;
         let mut c = std::process::Command::new("explorer");
-        c.arg(format!("/select,{}", path.display()));
+        c.raw_arg(format!("/select,\"{}\"", path.display()));
         c
-    } else if cfg!(target_os = "macos") {
+    };
+    #[cfg(not(windows))]
+    let mut cmd = if cfg!(target_os = "macos") {
         let mut c = std::process::Command::new("open");
         c.arg("-R").arg(path);
         c
