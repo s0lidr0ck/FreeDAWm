@@ -256,6 +256,8 @@ fn the_ai_menu_holds_every_ml_tool() {
             "vocal.note_mode",
             "vocal.fit_to_lead",
             "ui.vocal_harmony",
+            "vocal.to_midi_track",
+            "vocal.export_midi",
             "vocal.commit",
             "vocal.remove"
         ]

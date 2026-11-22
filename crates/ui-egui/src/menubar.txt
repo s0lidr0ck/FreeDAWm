@@ -554,6 +554,8 @@ AI > Tune Vocal > Tuned / Original = @vocal.toggle
 AI > Tune Vocal > Notes Classic / Musical = @vocal.note_mode
 AI > Tune Vocal > Fit to Lead = @vocal.fit_to_lead
 AI > Tune Vocal > Make Harmony… = @ui.vocal_harmony
+AI > Tune Vocal > Notes to MIDI Track = @vocal.to_midi_track
+AI > Tune Vocal > Export Notes as MIDI File... = @vocal.export_midi
 AI > Tune Vocal > Commit = @vocal.commit
 AI > Tune Vocal > Remove Tuning = @vocal.remove
 AI > ---

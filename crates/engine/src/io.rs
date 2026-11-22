@@ -818,7 +818,7 @@ fn shift_smf(smf: &mut soundcraft_midi::Smf, origin: i64) {
     }
 }
 
-fn export_midi_of(s: &Session, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
+pub(crate) fn export_midi_of(s: &Session, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
     let smf = smf_of(s, only)?;
     soundcraft_midi::write_smf(&smf).map_err(|err| EngineError::Io(err.to_string()))
 }

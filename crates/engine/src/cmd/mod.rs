@@ -124,6 +124,7 @@ mod video;
 mod view;
 mod view_more;
 mod vocal;
+pub mod vocal_midi;
 mod vocal_studio;
 mod vst3;
 pub mod warp;
@@ -342,6 +343,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lyric_place::specs());
         v.extend(lyric_chord_cmds::specs());
         v.extend(vocal::specs());
+        v.extend(vocal_midi::specs());
         v.extend(vocal_studio::specs());
         v.extend(comp::specs());
         v.extend(ml::specs());

@@ -792,9 +792,9 @@ fn wheel(app: &mut SoundApp, ui: &Ui, area: Rect, roll: Rect) {
     }
 }
 
-/// The header's right-hand bar width (px): Select all / Split / Join / Preview / row height /
-/// zoom / Tuning / Window (Dock).
-const HEADER_BAR_W: f32 = 800.0;
+/// The header's right-hand bar width (px): MIDI / Studio / Select all / Split / Join / Preview /
+/// row height / zoom / Tuning / Window (Dock).
+const HEADER_BAR_W: f32 = 860.0;
 
 /// The header: "VOCAL EDITOR", the counts and hints, and Select all / Split / Join / Preview /
 /// Tuning.
@@ -881,6 +881,89 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     if studio_b.on_hover_text("Vocal Studio: every vocal track in one pitch view").clicked() {
         let _ = app.run("ui.vocal_studio", json!({"value": !st_on}));
     }
+    midi_menu(app, &mut tb, track);
+}
+
+/// Why the header's MIDI menu is greyed out.
+pub const NO_NOTES_FOR_MIDI: &str = "No detected notes on this track yet: wait for the analysis, or Analyse Now";
+
+/// The header's MIDI drop-down: the track's notes (the selected ones, if any) as a MIDI track
+/// under it, or as a .mid file. Greyed out while the track has no detected notes.
+fn midi_menu(app: &mut SoundApp, tb: &mut Ui, track: TrackId) {
+    use soundcraft_engine::cmd::vocal_midi::{EXPORT, TO_TRACK, track_has_notes};
+    let has = track_has_notes(app.engine.session(), track);
+    hook(tb.ctx(), "midi-enabled", has);
+    let k = notes_on(app, track).len();
+    let what = if k > 0 { format!("the {k} selected note{}", if k == 1 { "" } else { "s" }) } else { "every note".to_string() };
+    let mut chosen = None;
+    let r = tb.add_enabled_ui(has, |ui| {
+        ui.menu_button("MIDI", |ui| {
+            let a = ui.button("Notes to MIDI Track").on_hover_text(format!("Copy {what} to a new instrument track under this one"));
+            store(ui.ctx(), "midi-to-track", a.rect);
+            if a.clicked() {
+                chosen = Some(TO_TRACK);
+            }
+            let b = ui.button("Export Notes as MIDI File...").on_hover_text(format!("Write {what} to a .mid file"));
+            store(ui.ctx(), "midi-export", b.rect);
+            if b.clicked() {
+                chosen = Some(EXPORT);
+            }
+            if chosen.is_some() {
+                ui.close();
+            }
+        })
+        .response
+    });
+    store(tb.ctx(), "midi", r.inner.rect);
+    r.inner.on_hover_text("The notes as MIDI: double the melody on an instrument, or write harmonies").on_disabled_hover_text(NO_NOTES_FOR_MIDI);
+    match chosen {
+        Some(TO_TRACK) => notes_to_midi_track(app, track),
+        Some(_) => export_notes(app, track),
+        None => {}
+    }
+}
+
+/// The selected notes on `track`'s clips.
+fn notes_on(app: &SoundApp, track: TrackId) -> Vec<NoteRef> {
+    let s = app.engine.session();
+    app.vocal.selected.iter().copied().filter(|r| s.find_clip(r.clip).is_some_and(|(t, _)| t == track)).collect()
+}
+
+/// The MIDI commands' parameters for `track`: it, and its selected notes when there are any.
+pub fn midi_params(app: &SoundApp, track: TrackId) -> Value {
+    let notes: Vec<Value> = notes_on(app, track).iter().map(|r| json!({"clip": r.clip.0, "note": r.note.0})).collect();
+    if notes.is_empty() { json!({"track": track.0}) } else { json!({"track": track.0, "notes": notes}) }
+}
+
+/// Notes to MIDI Track for `track` (its selected notes, else all), the outcome in the status line.
+pub fn notes_to_midi_track(app: &mut SoundApp, track: TrackId) {
+    let p = midi_params(app, track);
+    app.ui.status = match app.run(soundcraft_engine::cmd::vocal_midi::TO_TRACK, p) {
+        Ok(r) => {
+            let s = app.engine.session();
+            let name = r["tracks"][0]["track"].as_u64().and_then(|t| s.track(TrackId(t))).map(|t| t.name.clone()).unwrap_or_default();
+            let skipped = r["skipped"].as_array().map_or(0, Vec::len);
+            let more = if skipped > 0 { format!(" ({skipped} clip{} skipped)", if skipped == 1 { "" } else { "s" }) } else { String::new() };
+            format!("{} notes copied to {name}{more}", r["notes"])
+        }
+        Err(e) => e,
+    };
+}
+
+/// Export Notes as MIDI File... for `track`: the path prompt, named after the track, with the
+/// track and its selected notes going to the command.
+pub fn export_notes(app: &mut SoundApp, track: TrackId) {
+    let id = soundcraft_engine::cmd::vocal_midi::EXPORT;
+    if !app.dialogs.open_for_command(&app.engine, id) {
+        return;
+    }
+    let name = app.engine.session().track(track).map(|t| crate::user_files::file_name(&format!("{} notes", t.name))).unwrap_or_default();
+    if let Some(crate::dialogs::Dialog::PathPrompt { path, .. }) = app.dialogs.open.as_mut()
+        && let Some(dir) = std::path::Path::new(path.as_str()).parent().map(|d| d.display().to_string())
+    {
+        *path = format!("{dir}/{name}.mid");
+    }
+    app.dialogs.path_extra = Some((id.to_string(), midi_params(app, track)));
 }
 
 /// The zoom factor's segmented control, right of Preview: ¼× ½× 1× 2× 4× relative to the Edit
