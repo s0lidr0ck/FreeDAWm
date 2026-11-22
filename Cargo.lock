@@ -6370,6 +6370,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "soundcraft-recorder"
+version = "0.10.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui_kittest",
+ "log",
+ "rfd",
+ "serde",
+ "serde_json",
+ "soundcraft-audio-io",
+ "soundcraft-engine",
+ "soundcraft-midi",
+ "soundcraft-model",
+ "soundcraft-net",
+ "soundcraft-playback",
+ "soundcraft-time",
+ "winresource",
+]
+
+[[package]]
 name = "soundcraft-scan"
 version = "0.10.0"
 dependencies = [
