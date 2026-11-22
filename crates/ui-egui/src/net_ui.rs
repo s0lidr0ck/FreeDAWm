@@ -19,7 +19,7 @@ use soundcraft_engine::Engine;
 use soundcraft_model::{Route, Session, Track, TrackId};
 use soundcraft_net::config::NetConfig;
 use soundcraft_net::discovery::Discovery;
-use soundcraft_net::follower::{FollowTarget, Follower, pair_confirm, pair_request};
+use soundcraft_net::follower::{FollowTarget, Follower, pair_confirm, pair_request_info};
 use soundcraft_net::glue::{BoothGlue, FinishedAudio, FinishedTake, FollowBadge, FollowerGlue, HostView, LiveAudio, RigHost};
 use soundcraft_net::hub::{Hub, HubRequest, TakeClock};
 use soundcraft_net::pairing::exchange::LinkKeys;
@@ -96,6 +96,13 @@ pub struct NetState {
     lan_note: String,
     lan_client: Option<soundcraft_net::internet::Internet>,
     pair_lan: Option<(String, String)>,
+    /// The booth PIN as typed in Setup › Network (not yet set), shown in the clear, and what
+    /// the window says about it.
+    pin_edit: String,
+    pin_show: bool,
+    pin_msg: String,
+    /// "Forget all…" pressed once: the second press forgets.
+    forget_all_armed: bool,
 }
 
 impl NetState {
@@ -136,6 +143,10 @@ impl NetState {
             lan_note: String::new(),
             lan_client: None,
             pair_lan: None,
+            pin_edit: String::new(),
+            pin_show: false,
+            pin_msg: String::new(),
+            forget_all_armed: false,
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -608,34 +619,191 @@ pub(crate) const PAIRING_NOTE: &str = "Pair only a device you trust: once paired
 
 pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(net) = &app.net else { return };
+    notices_window(net, ctx);
     let pending = net.hub.pending_pairings();
     if pending.is_empty() {
         return;
     }
     let t = Tokens::current();
     let mut deny = None;
+    let mut allow = None;
     egui::Window::new("Pairing request").anchor(egui::Align2::RIGHT_TOP, vec2(-16.0, 60.0)).collapsible(false).resizable(false).show(ctx, |ui| {
         for p in &pending {
-            ui.label(format!("{} wants to {}.", p.name, if p.kind == "pc" { "connect as a remote recorder" } else { "control this PC" }));
-            ui.horizontal(|ui| {
-                ui.label("Type this code on it:");
-                ui.label(egui::RichText::new(&p.code).size(28.0).strong().monospace().color(t.text));
-            });
-            if p.kind == "pc" {
-                ui.label(egui::RichText::new(PC_CODE_NOTE).small().color(t.text_dim));
-            }
-            if ui.button("Deny").clicked() {
-                deny = Some(p.id.clone());
+            let wants = if p.kind == "pc" { "connect as a remote recorder" } else { "control this PC" };
+            if p.pin && !p.allowed {
+                // Ask me before each device joins: Allow instead of a code.
+                ui.label(format!("{} wants to {} with the booth PIN.", p.from, wants));
+                ui.horizontal(|ui| {
+                    if ui.button("Allow").clicked() {
+                        allow = Some(p.id.clone());
+                    }
+                    if ui.button("Deny").clicked() {
+                        deny = Some(p.id.clone());
+                    }
+                });
+            } else if p.pin {
+                ui.label(format!("{} is pairing with the booth PIN, to {}.", p.from, wants));
+                if ui.button("Deny").clicked() {
+                    deny = Some(p.id.clone());
+                }
+            } else {
+                ui.label(format!("{} wants to {}.", p.name, wants));
+                ui.horizontal(|ui| {
+                    ui.label("Type this code on it:");
+                    ui.label(egui::RichText::new(&p.code).size(28.0).strong().monospace().color(t.text));
+                });
+                if p.kind == "pc" {
+                    ui.label(egui::RichText::new(PC_CODE_NOTE).small().color(t.text_dim));
+                }
+                if ui.button("Deny").clicked() {
+                    deny = Some(p.id.clone());
+                }
             }
             ui.separator();
         }
-        ui.label(egui::RichText::new("Nothing pairs without this code.").small().color(t.text_dim));
+        if pending.iter().any(|p| !p.pin) {
+            ui.label(egui::RichText::new("Nothing pairs without this code.").small().color(t.text_dim));
+        } else {
+            ui.label(egui::RichText::new("Nothing pairs without the booth PIN.").small().color(t.text_dim));
+        }
         ui.label(egui::RichText::new(PAIRING_NOTE).small().color(t.text_dim));
     });
     if let Some(id) = deny {
         net.hub.deny_pairing(&id);
     }
+    if let Some(id) = allow {
+        net.hub.allow_pairing(&id);
+    }
     ctx.request_repaint_after(Duration::from_millis(500));
+}
+
+/// What the network tells the booth's owner (a device paired with the booth PIN, PIN pairing
+/// paused or turned off), wherever the user is, until dismissed.
+fn notices_window(net: &NetState, ctx: &egui::Context) {
+    let notices = net.hub.notices();
+    if notices.is_empty() {
+        return;
+    }
+    let mut dismiss = Vec::new();
+    egui::Window::new("Network")
+        .id(egui::Id::new("net-notices"))
+        .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-16.0, -60.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            for (id, text) in &notices {
+                ui.horizontal(|ui| {
+                    ui.label(text);
+                    if ui.small_button("OK").clicked() {
+                        dismiss.push(*id);
+                    }
+                });
+            }
+            if notices.len() > 1 && ui.small_button("Dismiss all").clicked() {
+                dismiss.extend(notices.iter().map(|(id, _)| *id));
+            }
+        });
+    for id in dismiss {
+        net.hub.dismiss_notice(id);
+    }
+}
+
+/// What the booth PIN is for, under its field.
+pub(crate) const PIN_NOTE: &str = "With a booth PIN, devices pair by typing it instead of a code shown here, so nobody needs to be at the booth. \
+PCs never send it (it proves both PCs' keys, as the code does); the phone's page sends it over the plain link, as it does the code. \
+It never works over the internet: performers there still need an invite.";
+
+/// Under the booth PIN: what changing it does to devices already paired.
+pub(crate) const PIN_KEEPS_NOTE: &str = "Changing or clearing the PIN does not unpair devices already paired: they keep their own keys. \
+Use Forget (or Forget all) for that.";
+
+/// Setup › Network › Booth PIN: set, show, suggest or clear it; ask before each device joins;
+/// where it stands (paused or turned off after wrong tries, with the way back on).
+fn pin_section(ui: &mut egui::Ui, net: &mut NetState) {
+    use soundcraft_net::hub::PinState;
+    let t = Tokens::current();
+    let cfg = net.hub.config();
+    let set = !cfg.booth_pin.is_empty();
+    ui.horizontal(|ui| {
+        ui.label(if set { "Booth PIN:" } else { "Booth PIN (none):" });
+        // The PIN set is shown (masked unless Show) until a new one is typed.
+        if net.pin_edit.is_empty() && set && !ui.memory(|m| m.has_focus(egui::Id::new("net-pin"))) {
+            net.pin_edit = cfg.booth_pin.clone();
+        }
+        ui.add(
+            egui::TextEdit::singleline(&mut net.pin_edit)
+                .id(egui::Id::new("net-pin"))
+                .password(!net.pin_show)
+                .hint_text("at least 6 characters")
+                .desired_width(140.0),
+        );
+        ui.checkbox(&mut net.pin_show, "Show");
+        if ui.button("Suggest one").on_hover_text("A random 6-digit PIN").clicked() {
+            net.pin_edit = soundcraft_net::pairing::suggest_pin(soundcraft_net::hub::random_u64);
+            net.pin_show = true;
+            net.pin_msg = "Suggested: press Set PIN to use it.".into();
+        }
+        let changed = net.pin_edit.trim() != cfg.booth_pin;
+        if ui.add_enabled(changed && !net.pin_edit.trim().is_empty(), egui::Button::new("Set PIN")).clicked() {
+            net.pin_msg = match net.hub.set_booth_pin(&net.pin_edit) {
+                Ok(()) => {
+                    net.pin_edit = net.hub.config().booth_pin;
+                    "Booth PIN set: devices can pair by typing it.".into()
+                }
+                Err(e) => e,
+            };
+        }
+        if set && ui.button("Clear").on_hover_text("No booth PIN: a random code per request, shown here").clicked() {
+            net.hub.clear_booth_pin();
+            net.pin_edit.clear();
+            net.pin_msg = "Booth PIN cleared: each request shows a code here again.".into();
+        }
+    });
+    if !net.pin_msg.is_empty() {
+        let bad = net.pin_msg.starts_with("The booth PIN");
+        ui.colored_label(if bad { t.rec } else { t.text_dim }, &net.pin_msg);
+    }
+    if set {
+        let mut ask = cfg.pin_ask;
+        if ui.checkbox(&mut ask, "Ask me before each device joins").on_hover_text("A device typing the PIN waits for Allow on this screen").changed()
+        {
+            net.hub.set_pin_ask(ask);
+        }
+        match net.hub.pin_state() {
+            PinState::Unset | PinState::On => {
+                ui.label(
+                    egui::RichText::new("PIN pairing on: each device that joins with it is shown here and in Paired devices.").color(t.text_dim),
+                );
+            }
+            PinState::Paused { secs_left, from } => {
+                ui.colored_label(
+                    t.rec,
+                    format!(
+                        "PIN pairing paused: {} wrong tries from {from}. Back on in {} min (a code shows here meanwhile).",
+                        soundcraft_net::pairing::PIN_STREAK,
+                        (secs_left / 60.0).ceil()
+                    ),
+                );
+                if ui.button("Resume PIN pairing now").clicked() {
+                    net.hub.reset_pin_guard();
+                }
+            }
+            PinState::Off { from } => {
+                ui.colored_label(
+                    t.rec,
+                    format!(
+                        "PIN pairing turned off after {} wrong tries (the last from {from}). Consider a new PIN.",
+                        soundcraft_net::pairing::PIN_OFF_AFTER
+                    ),
+                );
+                if ui.button("Turn PIN pairing back on").clicked() {
+                    net.hub.reset_pin_guard();
+                }
+            }
+        }
+    }
+    ui.label(egui::RichText::new(PIN_NOTE).small().color(t.text_dim));
+    ui.label(egui::RichText::new(PIN_KEEPS_NOTE).small().color(t.text_dim));
 }
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
@@ -708,7 +876,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.label("Service remote (any browser on this network):");
                         ui.hyperlink_to(egui::RichText::new(&url).size(16.0).strong(), &url);
                         ui.label(
-                            egui::RichText::new("Scan with the phone's camera. The first visit asks for the code shown here.")
+                            egui::RichText::new("Scan with the phone's camera. The first visit asks for the code shown here, or the booth PIN.")
                                 .small()
                                 .color(t.text_dim),
                         );
@@ -755,6 +923,23 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             if let Some(tok) = forget {
                 net.hub.forget(&tok);
             }
+            if !cfg.paired.is_empty() {
+                ui.horizontal(|ui| {
+                    let label = if net.forget_all_armed { format!("Really forget all {}?", cfg.paired.len()) } else { "Forget all…".to_string() };
+                    if ui.button(label).on_hover_text("Every device must pair again").clicked() {
+                        if net.forget_all_armed {
+                            net.hub.forget_all();
+                        }
+                        net.forget_all_armed = !net.forget_all_armed;
+                    }
+                    if net.forget_all_armed && ui.button("Cancel").clicked() {
+                        net.forget_all_armed = false;
+                    }
+                });
+            }
+            ui.add_space(6.0);
+            ui.heading("Booth PIN");
+            pin_section(ui, &mut net);
             ui.add_space(6.0);
             ui.separator();
             ui.heading("Follow a booth");
@@ -827,7 +1012,7 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
         let addr = cfg.follow.booth_addr.clone();
         if ui
             .add_enabled(!addr.is_empty(), egui::Button::new(if paired { "Pair again…" } else { "Pair…" }))
-            .on_hover_text("The booth shows a 4-digit code")
+            .on_hover_text("The booth shows a 4-digit code, or has a booth PIN")
             .clicked()
         {
             let job = Arc::clone(&net.pair.result);
@@ -855,7 +1040,7 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
             let me = me.clone();
             let c = ctx.clone();
             std::thread::spawn(move || {
-                let r = pair_request(&addr, &me).map(|id| json!({"request": id}));
+                let r = pair_request_info(&addr, &me).map(|r| json!({"request": r.request, "pin": r.pin, "ask": r.ask}));
                 *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
                 c.request_repaint();
             });
@@ -866,7 +1051,13 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
         match r {
             Ok(v) if v.get("request").is_some() => {
                 net.pair.request = v["request"].as_str().map(str::to_string);
-                net.pair_status = "Type the code the booth shows:".into();
+                net.pair_status = if v["ask"] == true {
+                    "Type the booth PIN (someone at the booth must also press Allow):".into()
+                } else if v["pin"] == true {
+                    "Type the booth PIN:".into()
+                } else {
+                    "Type the code the booth shows:".into()
+                };
             }
             Ok(v) => {
                 let token = v["token"].as_str().unwrap_or("").to_string();
@@ -897,7 +1088,8 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
     }
     if let Some(req) = net.pair.request.clone() {
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut net.code_edit).desired_width(70.0).hint_text("0000"));
+            ui.label("Code or booth PIN:");
+            ui.add(egui::TextEdit::singleline(&mut net.code_edit).id(egui::Id::new("net-code")).desired_width(140.0).hint_text("code or PIN"));
             if ui.button("Pair").clicked() {
                 let job = Arc::clone(&net.pair.result);
                 // The code is the exchange's password, over the booth's key this PC dialled and its

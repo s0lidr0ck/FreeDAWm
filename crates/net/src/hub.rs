@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{NetConfig, PairedDevice};
 use crate::pairing::exchange::{self, Confirmed, Exchange, LinkKeys, Side};
-use crate::pairing::{Confirm, PAIRING_VERSION, Pairing, PendingPair};
+use crate::pairing::{Confirm, PAIRING_VERSION, PIN_OFF_AFTER, PIN_STREAK, Pairing, PendingPair, PinEvent, PinGuard};
 use crate::proto::{BoothTransport, FollowerReport, RemoteAction, RemoteStatus, RigStatus, SketchNote, TransportState};
 use crate::take::{BoothAnchor, TakeEnvelope, remote_port_name};
 
@@ -244,7 +244,26 @@ struct Inner {
     position: Mutex<f64>,
     /// Wakes the UI thread when a request comes in.
     waker: Mutex<Option<Waker>>,
+    /// What the booth's screen tells its owner until dismissed (a device paired with the booth
+    /// PIN, PIN pairing paused or turned off): an id and the text.
+    notices: Mutex<Vec<(u64, String)>>,
 }
+
+/// Where booth PIN pairing stands (Setup › Network says it).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PinState {
+    /// No booth PIN: a random code per request.
+    Unset,
+    /// Devices pair with the booth PIN.
+    On,
+    /// Paused after wrong PINs: seconds left, and where the last wrong one came from.
+    Paused { secs_left: f64, from: String },
+    /// Turned off after [`PIN_OFF_AFTER`] wrong PINs, until the owner turns it back on.
+    Off { from: String },
+}
+
+/// The most notices kept.
+const MAX_NOTICES: usize = 20;
 
 /// Wakes the app's UI thread (egui's `request_repaint`).
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
@@ -291,8 +310,20 @@ impl Hub {
                 warning: Mutex::new(None),
                 position: Mutex::new(0.0),
                 waker: Mutex::new(None),
+                notices: Mutex::new(Vec::new()),
             }),
         }
+        .seeded()
+    }
+
+    /// The wrong-PIN count carried over from the saved settings.
+    fn seeded(self) -> Hub {
+        let (wrong, from) = {
+            let c = lock(&self.inner.cfg);
+            (c.pin_wrong, c.pin_last_from.clone())
+        };
+        lock(&self.inner.pairing).set_pin_guard(PinGuard { wrong, last_from: from, ..PinGuard::default() });
+        self
     }
 
     fn now_s(&self) -> f64 {
@@ -362,25 +393,195 @@ impl Hub {
         lock(&self.inner.pairing).deny(id);
     }
 
+    /// Lets a device waiting with the booth PIN pair (Allow, when the booth asks before each
+    /// device joins).
+    pub fn allow_pairing(&self, id: &str) {
+        lock(&self.inner.pairing).allow(id);
+    }
+
     pub fn forget(&self, token: &str) {
         self.update_config(|c| c.paired.retain(|d| d.token != token));
     }
 
-    fn pair_request(&self, name: &str, kind: &str) -> Result<Value, String> {
+    /// Forgets every paired device (each must pair again).
+    pub fn forget_all(&self) {
+        self.update_config(|c| c.paired.clear());
+    }
+
+    /// Sets the booth PIN (spaces around it dropped; at least
+    /// [`crate::pairing::PIN_MIN_LEN`] characters, else why not in plain words). A new PIN starts
+    /// the wrong-PIN count again and turns PIN pairing back on. Devices already paired stay
+    /// paired: they hold their own tokens.
+    pub fn set_booth_pin(&self, pin: &str) -> Result<(), String> {
+        let pin = crate::pairing::check_pin(pin)?;
+        self.update_config(|c| {
+            c.booth_pin = pin;
+            c.pin_wrong = 0;
+            c.pin_last_from.clear();
+        });
+        self.reset_pin_guard();
+        Ok(())
+    }
+
+    /// No booth PIN: a random code per request, as before. Devices already paired stay paired.
+    pub fn clear_booth_pin(&self) {
+        self.update_config(|c| c.booth_pin.clear());
+        self.reset_pin_guard();
+    }
+
+    /// Ask before each device joins with the booth PIN.
+    pub fn set_pin_ask(&self, ask: bool) {
+        self.update_config(|c| c.pin_ask = ask);
+    }
+
+    /// The owner resumes a paused PIN pairing, or turns one turned off back on: the wrong-PIN
+    /// count starts again.
+    pub fn reset_pin_guard(&self) {
+        lock(&self.inner.pairing).set_pin_guard(PinGuard::default());
+        let saved = {
+            let c = lock(&self.inner.cfg);
+            c.pin_wrong != 0 || !c.pin_last_from.is_empty()
+        };
+        if saved {
+            self.update_config(|c| {
+                c.pin_wrong = 0;
+                c.pin_last_from.clear();
+            });
+        }
+    }
+
+    /// Where booth PIN pairing stands.
+    pub fn pin_state(&self) -> PinState {
+        if lock(&self.inner.cfg).booth_pin.is_empty() {
+            return PinState::Unset;
+        }
         let now = self.now_s();
-        let r = lock(&self.inner.pairing).request(name, kind, now, random_u64).ok_or("too many pairing requests; try again in a few minutes")?;
+        let p = lock(&self.inner.pairing);
+        let g = p.pin_guard();
+        if g.is_off() {
+            PinState::Off { from: g.last_from.clone() }
+        } else if let Some(secs_left) = g.paused(now) {
+            PinState::Paused { secs_left, from: g.last_from.clone() }
+        } else {
+            PinState::On
+        }
+    }
+
+    /// For tests: a pause of PIN pairing ends `secs` sooner.
+    pub fn age_pin_pause(&self, secs: f64) {
+        let mut p = lock(&self.inner.pairing);
+        let mut g = p.pin_guard().clone();
+        g.paused_until -= secs;
+        p.set_pin_guard(g);
+    }
+
+    /// What the booth's screen tells its owner until dismissed, oldest first.
+    pub fn notices(&self) -> Vec<(u64, String)> {
+        lock(&self.inner.notices).clone()
+    }
+
+    pub fn dismiss_notice(&self, id: u64) {
+        lock(&self.inner.notices).retain(|(i, _)| *i != id);
+    }
+
+    /// Tells the booth's owner `text` (on screen until dismissed).
+    pub fn notice(&self, text: String) {
+        log::info!("network: {text}");
+        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut n = lock(&self.inner.notices);
+            n.push((id, text));
+            if n.len() > MAX_NOTICES {
+                n.remove(0);
+            }
+        }
+        if let Some(w) = lock(&self.inner.waker).as_ref() {
+            w();
+        }
+    }
+
+    /// Hands the booth PIN as set now to the pairing state (none while unset).
+    fn sync_pin(&self) {
+        let (pin, ask) = {
+            let c = lock(&self.inner.cfg);
+            (zeroize::Zeroizing::new(c.booth_pin.clone()), c.pin_ask)
+        };
+        lock(&self.inner.pairing).set_pin(if pin.is_empty() { None } else { Some(pin.as_str()) }, ask);
+    }
+
+    /// After a pairing call: the booth PIN's notices, and its wrong count kept in the settings.
+    fn after_pin(&self) {
+        let (events, guard) = {
+            let mut p = lock(&self.inner.pairing);
+            (p.take_pin_events(), p.pin_guard().clone())
+        };
+        for e in events {
+            match e {
+                PinEvent::Paired { name, .. } => self.notice(format!("{name} paired with the booth PIN")),
+                PinEvent::Paused { from, secs } => {
+                    self.notice(format!("PIN pairing paused for {} minutes: {PIN_STREAK} wrong tries from {from}", (secs / 60.0).round()))
+                }
+                PinEvent::TurnedOff { from } => self.notice(format!(
+                    "PIN pairing turned off after {PIN_OFF_AFTER} wrong tries (the last from {from}): turn it back on in Setup › Network"
+                )),
+            }
+        }
+        let saved = {
+            let c = lock(&self.inner.cfg);
+            (c.pin_wrong, c.pin_last_from.clone())
+        };
+        if saved != (guard.wrong, guard.last_from.clone()) {
+            self.update_config(|c| {
+                c.pin_wrong = guard.wrong;
+                c.pin_last_from = guard.last_from;
+            });
+        }
+    }
+
+    /// Why a try on PIN request `id` is not made: it waits for Allow on the booth's screen.
+    fn pin_refusal(&self, id: &str) -> Option<String> {
+        let p = lock(&self.inner.pairing);
+        (p.is_pin_request(id) && p.waiting_for_allow(id))
+            .then(|| "the booth asks before each device joins: someone there must press Allow, then type the PIN again".to_string())
+    }
+
+    /// What a request that is gone is told: PIN pairing paused or off says so.
+    fn gone(&self) -> String {
+        match self.pin_state() {
+            PinState::Paused { .. } | PinState::Off { .. } => {
+                "PIN pairing is paused on the booth after wrong tries: ask again (the booth then shows a code on its screen), or try later".into()
+            }
+            _ => "that pairing request has expired; ask again".into(),
+        }
+    }
+
+    fn pair_request(&self, name: &str, kind: &str, from: &str) -> Result<Value, String> {
+        let now = self.now_s();
+        self.sync_pin();
+        let r = lock(&self.inner.pairing)
+            .request_from(name, kind, from, now, random_u64)
+            .ok_or("too many pairing requests; try again in a few minutes")?;
+        if r.pin {
+            log::info!("pairing requested by {} ({}): waiting for the booth PIN", r.name, r.kind);
+            return Ok(json!({"request": r.id, "pc": self.pc_name(), "pairing": PAIRING_VERSION, "pin": true, "ask": !r.allowed}));
+        }
         log::info!("pairing requested by {} ({}): code shown on screen", r.name, r.kind);
         Ok(json!({"request": r.id, "pc": self.pc_name(), "pairing": PAIRING_VERSION}))
     }
 
-    /// A browser typed the code (the phone's page; a PC's code is never sent).
+    /// A browser typed the code or the booth PIN (the phone's page; a PC's is never sent).
     fn pair_confirm(&self, id: &str, code: &str) -> Result<Value, (String, u8)> {
         let now = self.now_s();
+        self.sync_pin();
+        if let Some(e) = self.pin_refusal(id) {
+            return Err((e, crate::pairing::MAX_WRONG));
+        }
         let got = lock(&self.inner.pairing).confirm(id, code, now);
+        self.after_pin();
         match got {
             Confirm::Paired { name, kind } => Ok(self.paired(name, kind, None)),
-            Confirm::Wrong { left } => Err((format!("wrong code ({left} tries left)"), left)),
-            Confirm::Unknown => Err(("that pairing request has expired; ask again".into(), 0)),
+            Confirm::Wrong { left } => Err((format!("wrong code or PIN ({left} tries left)"), left)),
+            Confirm::Unknown => Err((self.gone(), 0)),
         }
     }
 
@@ -402,8 +603,16 @@ impl Hub {
     fn pair_exchange(&self, params: &Value, keys: Option<LinkKeys>) -> Result<(String, Confirmed, Value), String> {
         let keys = keys.ok_or("the encrypted link did not say which keys it proved")?;
         let id = params.get("request").and_then(Value::as_str).filter(|s| s.len() <= 64).ok_or("no pairing request named")?;
-        let code =
-            lock(&self.inner.pairing).begin_exchange(id, self.now_s()).ok_or("that pairing request has expired or has no tries left; ask again")?;
+        self.sync_pin();
+        if let Some(e) = self.pin_refusal(id) {
+            return Err(e);
+        }
+        let code = lock(&self.inner.pairing).begin_exchange(id, self.now_s());
+        self.after_pin();
+        let code = code.ok_or_else(|| match self.pin_state() {
+            PinState::Paused { .. } | PinState::Off { .. } => self.gone(),
+            _ => "that pairing request has expired or has no tries left; ask again".to_string(),
+        })?;
         let theirs = params
             .get("msg")
             .and_then(Value::as_str)
@@ -433,6 +642,7 @@ impl Hub {
         let tag = params.get("confirm").and_then(Value::as_str).filter(|s| s.len() <= 4 * exchange::TAG_LEN).and_then(crate::audio::b64_decode);
         let ok = tag.is_some_and(|t| c.check(&t));
         let got = lock(&self.inner.pairing).finish_exchange(id, ok, self.now_s());
+        self.after_pin();
         match got {
             Confirm::Paired { name, kind } => {
                 log::info!("network: {name} paired; its code proved both PCs' keys");
@@ -440,9 +650,9 @@ impl Hub {
             }
             Confirm::Wrong { left } => {
                 log::info!("network: a PC's pairing exchange failed (a wrong code, or another computer in between)");
-                Err(format!("wrong code, or another computer is in between ({left} tries left)"))
+                Err(format!("wrong code or PIN, or another computer is in between ({left} tries left)"))
             }
-            Confirm::Unknown => Err("that pairing request has expired; ask again".into()),
+            Confirm::Unknown => Err(self.gone()),
         }
     }
 
@@ -450,6 +660,7 @@ impl Hub {
     fn pair_exchange_failed(&self, id: &str) {
         let now = self.now_s();
         let _ = lock(&self.inner.pairing).finish_exchange(id, false, now);
+        self.after_pin();
     }
 
     fn device(&self, token: &str) -> Option<PairedDevice> {
@@ -922,13 +1133,13 @@ impl Hub {
         } else if kind != LinkKind::Plain {
             // The service remote page is on the plain listener only.
         } else {
-            self.serve_http(reader, stream, stop);
+            self.serve_http(reader, stream, addr, stop);
         }
     }
 
     // ---- HTTP: the service remote page ----
 
-    fn serve_http(&self, mut reader: BufReader<TcpStream>, mut out: TcpStream, stop: &Arc<AtomicBool>) {
+    fn serve_http(&self, mut reader: BufReader<TcpStream>, mut out: TcpStream, addr: SocketAddr, stop: &Arc<AtomicBool>) {
         let Some(req) = read_http(&mut reader) else {
             let _ = respond(&mut out, 400, "text/plain", b"bad request");
             return;
@@ -941,7 +1152,7 @@ impl Hub {
             ("GET", "/remote.css") => respond(&mut out, 200, "text/css; charset=utf-8", STYLE.as_bytes()),
             ("POST", "/api/pair/request") => {
                 let name = body.get("name").and_then(Value::as_str).unwrap_or("Browser");
-                match self.pair_request(name, "browser") {
+                match self.pair_request(name, "browser", &from_addr(addr)) {
                     Ok(v) => respond_json(&mut out, 200, &v),
                     Err(e) => respond_json(&mut out, 429, &json!({"error": e})),
                 }
@@ -1131,7 +1342,7 @@ impl Hub {
                 "pair.request" if params.get("pairing").and_then(Value::as_u64).is_none_or(|v| v < PAIRING_VERSION) => {
                     Some(json!({"ok": false, "error": UPDATE_PC, "pair": true, "update": true}))
                 }
-                "pair.request" => Some(answer(self.pair_request(params.get("name").and_then(Value::as_str).unwrap_or("PC"), "pc"))),
+                "pair.request" => Some(answer(self.pair_request(params.get("name").and_then(Value::as_str).unwrap_or("PC"), "pc", &from_addr(addr)))),
                 // The code in the clear (an older FreeDAWm): never compared, never accepted.
                 "pair.confirm" => Some(json!({"ok": false, "error": UPDATE_PC, "pair": true, "update": true})),
                 "pair.exchange" => {
@@ -1699,6 +1910,12 @@ fn stream_loop(weak: &std::sync::Weak<Inner>) {
         drop(inner);
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// A caller's address for the booth's notices: empty when it is this PC's own (a bridge from
+/// the encrypted link).
+fn from_addr(addr: SocketAddr) -> String {
+    if addr.ip().is_loopback() { String::new() } else { addr.ip().to_string() }
 }
 
 /// How long an invite is good for (minutes).

@@ -986,13 +986,36 @@ A browser sends the code (`POST /api/pair/confirm`); a PC never does: the code i
 a key exchange that proves both PCs' keys (`pair.exchange`, `pair.finish` below), each exchange
 spending one of the 3 tries.
 
+**Booth PIN** (Setup › Network › Booth PIN; off by default). When the booth has one
+(`network.json`: `booth_pin`, at least 6 characters of any kind, kept as the tokens are), a request
+waits for that PIN instead of a code on the screen: nobody at the booth reads anything out. The
+device types it where it would type the code; nothing else changes on the wire: a PC's PIN is the
+password of the same `pair.exchange` (never sent), the page sends it in `POST /api/pair/confirm`
+`code` as it sends a code (compared through SHA-256 hashes, in full). The request's answer says
+which it waits for with two optional fields, `pin: true` and `ask: true` (absent for a code, so an
+older device just shows its code prompt; either is typed in the same field). The per-request limits
+stay, and wrong PINs are also counted across requests: 5 in a row pause PIN pairing for 5 minutes,
+each next pause twice as long up to an hour; 20 since the last PIN pairing turn it off until the
+owner turns it back on (`pin_wrong` and `pin_last_from` in `network.json`, so a restart keeps it
+off). A PC's exchange counts when it begins (the booth's answer tells it whether its guess was
+right); a correct PIN pairing, a new PIN or the owner's *Resume* / *Turn back on* starts the count
+again. While paused or off, a request gets a random code shown on the screen as without a PIN
+(no `pin` in the answer), and a waiting PIN request is told "PIN pairing is paused on the booth…".
+*Ask me before each device joins* (`pin_ask`) shows the request with Allow / Deny: until Allow the
+PIN is not tried (and no try is spent), the device is told "…someone there must press Allow, then
+type the PIN again". Every PIN pairing, pause and turning off shows a notice on the booth until
+dismissed, and the device is listed in Paired devices with Forget (and *Forget all…*). Changing or
+clearing the PIN leaves paired devices paired (their tokens). Over the internet the PIN does
+nothing: that listener refuses `pair.request` and the exchange, so only an invite pairs there.
+Neither the mDNS TXT record nor the status feed carries the PIN or anything made from it.
+
 HTTP (one request per connection; JSON bodies; the token in `X-Token` or `?token=`):
 
 | Request | Body | Result |
 |---|---|---|
 | `GET /`, `/remote.js`, `/remote.css` | | The page (embedded in the app). |
-| `POST /api/pair/request` | `{name}` | `{request, pc}`; this PC shows the code. 429 when rate-limited. |
-| `POST /api/pair/confirm` | `{request, code}` | `{token, name, pc}`, or 403 `{error, left}`. |
+| `POST /api/pair/request` | `{name}` | `{request, pc}`; this PC shows the code. With a booth PIN: `{request, pc, pin: true, ask?: true}`, the PIN is typed instead. 429 when rate-limited. |
+| `POST /api/pair/confirm` | `{request, code}` | `{token, name, pc}`, or 403 `{error, left}`. `code`: the code, or the booth PIN for a PIN request. |
 | `GET /api/events?token=` | | The status feed as server-sent events: `data: <status JSON>` on every change (at most ~15 a second) and every 10 s. 401 `{pair: true}` when unpaired. |
 | `GET /api/status` | | The status once. |
 | `POST /api/action` | `{action: "record"}`, `{action: "play"}`, `{action: "stop", held?}`, `{action: "arm_all", value}`, `{action: "arm", track, value}`, `{action: "marker", name?}`, `{action: "rename_marker", id, name}` | `{ok, result}`; 409 `{ok: false, error}` when refused. While recording, `stop` needs `held: true` (the page sends it after a 1 s press-and-hold): a tap is refused. Nothing deletes; any other action is refused. A marker is named `Marker h:mm:ss` unless named. |
@@ -1010,7 +1033,7 @@ lines without an `id` get no reply):
 
 | Method | Params | Result |
 |---|---|---|
-| `pair.request` | `{name, pairing: 2}` | `{request, pc, pairing: 2}` (kind `pc`). Without `pairing` (or below 2: a FreeDAWm that would send the code itself) refused with "update FreeDAWm on this computer…" and `update: true`, before any code is shown. A PC refuses a booth whose answer has no `pairing` 2 ("update FreeDAWm on the booth…"), before any code is typed. |
+| `pair.request` | `{name, pairing: 2}` | `{request, pc, pairing: 2}` (kind `pc`), plus `pin: true` (and `ask: true`) when the booth waits for its booth PIN, the exchange's password then. Without `pairing` (or below 2: a FreeDAWm that would send the code itself) refused with "update FreeDAWm on this computer…" and `update: true`, before any code is shown. A PC refuses a booth whose answer has no `pairing` 2 ("update FreeDAWm on the booth…"), before any code is typed. |
 | `pair.exchange` | `{request, msg}` | `{msg, confirm}`. The first pairing's key exchange: `msg` the PC's SPAKE2 message (33 bytes, base64; side A, identities `freedawm-pc` and `freedawm-booth`, password the code on the booth's screen), answered by the booth's message and its confirmation, `HMAC-SHA256(HKDF-SHA256(k, info "freedawm pairing confirm"), role ‖ booth key ‖ PC key)` (role the sender's identity; each field after a byte giving its length; the keys are the encrypted link's two public keys as the TLS session proved them, none on the plain link). Spends one of the request's 3 tries whatever follows; a damaged message or a request without tries ends the connection. The code itself is never sent. |
 | `pair.finish` | `{confirm}` | `{token, name, pc}`: the PC's own confirmation, sent only after its check of the booth's, compared in constant time; it must be the next line on the same connection. A mismatch (a wrong code, or a machine in the middle holding another key towards each side) answers "wrong code, or another computer is in between (N tries left)" and ends the connection. Over the encrypted link the PC is then bound to its key, as before. |
 | `pair.confirm` | `{request, code}` | Refused ("update FreeDAWm on this computer…"): the code in the clear is never compared on this channel. The phone's page keeps `POST /api/pair/confirm`, for browser requests only. |

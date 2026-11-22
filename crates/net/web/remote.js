@@ -1,5 +1,5 @@
 // FreeDAWm service remote: served by the booth, plain JS, no install.
-// Pairing (4-digit code from the booth's screen) → a token kept in this browser; the status
+// Pairing (4-digit code from the booth's screen, or the booth PIN when the booth has one) → a token kept in this browser; the status
 // arrives as server-sent events (/api/events); the buttons POST /api/action.
 "use strict";
 (function () {
@@ -47,8 +47,12 @@
       request = r.request;
       $("pair-code-row").hidden = false;
       $("pair-code").value = "";
+      // A code is digits (the number pad); a booth PIN may be anything.
+      $("pair-code").inputMode = r.pin ? "text" : "numeric";
       $("pair-code").focus();
-      $("pair-msg").textContent = "Type the 4 digits " + (r.pc || "the booth") + " shows.";
+      $("pair-msg").textContent = r.pin
+        ? "Type the booth PIN." + (r.ask ? " Someone at the booth must also press Allow." : "")
+        : "Type the 4 digits " + (r.pc || "the booth") + " shows.";
     }).catch(function () { $("pair-msg").textContent = "Cannot reach the booth."; });
   };
   $("pair-ok").onclick = function () {

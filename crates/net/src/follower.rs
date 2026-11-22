@@ -934,19 +934,36 @@ fn one_call(addr: &str, msg: &Value) -> Result<Value, String> {
 pub const UPDATE_BOOTH: &str = "update FreeDAWm on the booth to pair with it: this PC pairs by a newer exchange in which the code is never sent";
 
 /// What this PC says when the booth's confirmation does not match.
-pub const WRONG_OR_BETWEEN: &str =
-    "wrong code, or another computer is answering for the booth: check the code on the booth's screen and type it again";
+pub const WRONG_OR_BETWEEN: &str = "wrong code or booth PIN, or another computer is answering for the booth: check it and type it again";
 
 /// Asks the booth at `addr` to pair: it shows a code on its screen. Returns the request's id.
 /// A booth that does not speak this PC's pairing ([`crate::pairing::PAIRING_VERSION`]) is
 /// refused before any code is typed (the code would otherwise be sent to it).
 pub fn pair_request(addr: &str, my_name: &str) -> Result<String, String> {
+    pair_request_info(addr, my_name).map(|r| r.request)
+}
+
+/// The booth's answer to a pairing request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairRequest {
+    /// The request's id (for [`pair_confirm`]).
+    pub request: String,
+    /// The booth waits for its booth PIN (else for the code it shows on its screen). Either is
+    /// typed in the same place; this only words the prompt.
+    pub pin: bool,
+    /// The booth also asks someone there to press Allow.
+    pub ask: bool,
+}
+
+/// [`pair_request`], with what the booth waits for.
+pub fn pair_request_info(addr: &str, my_name: &str) -> Result<PairRequest, String> {
     let version = crate::pairing::PAIRING_VERSION;
     let r = one_call(addr, &json!({"id": 1, "method": "pair.request", "params": {"name": my_name, "pairing": version}}))?;
     if r["pairing"].as_u64().is_none_or(|v| v < version) {
         return Err(UPDATE_BOOTH.into());
     }
-    r["request"].as_str().map(str::to_string).ok_or_else(|| "no request id".to_string())
+    let request = r["request"].as_str().map(str::to_string).ok_or_else(|| "no request id".to_string())?;
+    Ok(PairRequest { request, pin: r["pin"] == true, ask: r["ask"] == true })
 }
 
 /// Pairs with an invite's one-time secret (over the internet bridge at `addr`): the token and the

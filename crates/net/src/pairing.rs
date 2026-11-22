@@ -9,6 +9,15 @@
 //! derived the same key over the two PCs' link keys as it sees them, so a machine sitting
 //! between the two (holding another key towards each) fails the check unless it guessed the
 //! code, one guess per try. Each exchange a PC starts spends one of the request's tries.
+//!
+//! A booth PIN (Setup › Network, off by default) stands in for the random code: a request made
+//! while one is set waits for that PIN instead of a code on the screen, so nobody at the booth
+//! has to read anything out. It is the same password of the same exchange for PCs (never sent)
+//! and what the phone's page types. Because it does not change from one request to the next,
+//! wrong PINs are also counted across requests ([`PinGuard`]): 5 in a row pause PIN pairing (5
+//! minutes, doubling each time up to an hour) and 20 since the last success turn it off until
+//! the booth's owner turns it back on. While it is paused or off a request gets a random code
+//! shown on the booth's screen, as without a PIN.
 
 use zeroize::Zeroizing;
 
@@ -25,11 +34,19 @@ pub struct PendingPair {
     pub name: String,
     /// `browser` or `pc`.
     pub kind: String,
-    /// The 4 digits shown on this PC's screen.
+    /// The 4 digits shown on this PC's screen (empty for a request waiting for the booth PIN).
     pub code: String,
     /// Seconds (the caller's clock) it was made at.
     pub made: f64,
     pub wrong: u8,
+    /// Waits for the booth PIN instead of a code shown on the screen.
+    pub pin: bool,
+    /// May pair: a PIN request when the booth asks before each device joins, once Allow is
+    /// pressed; every other request at once.
+    pub allowed: bool,
+    /// Where it came from, for the booth's notices: the name it gave, and its address when that
+    /// is not this PC's own (a bridge).
+    pub from: String,
 }
 
 /// The code is left out (so it never reaches a log by way of `{:?}`).
@@ -41,6 +58,9 @@ impl std::fmt::Debug for PendingPair {
             .field("kind", &self.kind)
             .field("made", &self.made)
             .field("wrong", &self.wrong)
+            .field("pin", &self.pin)
+            .field("allowed", &self.allowed)
+            .field("from", &self.from)
             .finish_non_exhaustive()
     }
 }
@@ -52,11 +72,142 @@ pub const MAX_PENDING: usize = 4;
 pub const MAX_RECENT: usize = 20;
 pub const WINDOW_S: f64 = 600.0;
 
+/// The shortest booth PIN taken (characters).
+pub const PIN_MIN_LEN: usize = 6;
+/// The longest.
+pub const PIN_MAX_LEN: usize = 64;
+/// Wrong PINs in a row that pause PIN pairing.
+pub const PIN_STREAK: u32 = 5;
+/// The first pause (seconds); each next one is twice as long, up to [`PIN_PAUSE_MAX_S`].
+pub const PIN_PAUSE_S: f64 = 300.0;
+pub const PIN_PAUSE_MAX_S: f64 = 3600.0;
+/// Wrong PINs since the last PIN pairing that turn PIN pairing off.
+pub const PIN_OFF_AFTER: u32 = 20;
+
+/// Whether `pin` can be the booth PIN (spaces around it are dropped): the PIN to keep, or why
+/// not in plain words.
+pub fn check_pin(pin: &str) -> Result<String, String> {
+    let pin = pin.trim();
+    let n = pin.chars().count();
+    if n < PIN_MIN_LEN {
+        return Err(format!("The booth PIN needs at least {PIN_MIN_LEN} characters (digits, letters or anything else)."));
+    }
+    if n > PIN_MAX_LEN {
+        return Err(format!("The booth PIN can be at most {PIN_MAX_LEN} characters."));
+    }
+    if pin.chars().any(char::is_control) {
+        return Err("The booth PIN cannot hold control characters.".into());
+    }
+    Ok(pin.to_string())
+}
+
+/// A random 6-digit PIN ("Suggest one"); `random` gives fresh random numbers.
+pub fn suggest_pin(mut random: impl FnMut() -> u64) -> String {
+    format!("{:06}", random() % 1_000_000)
+}
+
+/// Whether `typed` is `pin` (both trimmed), without the time taken saying how much matched:
+/// both are hashed and the hashes compared in full.
+pub fn same_pin(typed: &str, pin: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let (a, b) = (Sha256::digest(typed.trim().as_bytes()), Sha256::digest(pin.trim().as_bytes()));
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// The booth PIN as [`Pairing`] holds it: wiped when dropped, never printed.
+#[derive(Default)]
+struct Secret(Option<Zeroizing<String>>);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "Secret(set)" } else { "Secret(none)" })
+    }
+}
+
+/// Wrong booth PINs counted across requests (a request's own 3 tries are not enough for a
+/// secret that stays the same).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PinGuard {
+    /// Wrong in a row (since the last pause or success).
+    pub streak: u32,
+    /// Wrong since the last PIN pairing (or the owner's reset).
+    pub wrong: u32,
+    /// Pauses so far (each next one is twice as long).
+    pub pauses: u32,
+    /// Paused until (seconds, the caller's clock).
+    pub paused_until: f64,
+    /// Where the last wrong PIN came from.
+    pub last_from: String,
+}
+
+/// What a booth PIN try changed, for the booth's notices.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PinEvent {
+    /// A device paired with the booth PIN.
+    Paired { name: String, kind: String },
+    /// [`PIN_STREAK`] wrong in a row: paused for `secs`.
+    Paused { from: String, secs: f64 },
+    /// [`PIN_OFF_AFTER`] wrong since the last success: off until the owner turns it back on.
+    TurnedOff { from: String },
+}
+
+impl PinGuard {
+    /// Seconds of pause left, while paused.
+    pub fn paused(&self, now: f64) -> Option<f64> {
+        (now < self.paused_until).then_some(self.paused_until - now)
+    }
+
+    /// Turned off by wrong PINs.
+    pub fn is_off(&self) -> bool {
+        self.wrong >= PIN_OFF_AFTER
+    }
+
+    /// PIN pairing may be tried now.
+    pub fn open(&self, now: f64) -> bool {
+        !self.is_off() && self.paused(now).is_none()
+    }
+
+    /// How long the next pause lasts.
+    pub fn next_pause(&self) -> f64 {
+        let doubled = 2f64.powi(i32::try_from(self.pauses.min(16)).unwrap_or(16));
+        (PIN_PAUSE_S * doubled).min(PIN_PAUSE_MAX_S)
+    }
+
+    /// A wrong PIN from `from`.
+    pub fn wrong(&mut self, now: f64, from: &str) -> Option<PinEvent> {
+        self.streak = self.streak.saturating_add(1);
+        self.wrong = self.wrong.saturating_add(1);
+        self.last_from = from.to_string();
+        if self.is_off() {
+            return Some(PinEvent::TurnedOff { from: from.to_string() });
+        }
+        if self.streak >= PIN_STREAK {
+            let secs = self.next_pause();
+            self.paused_until = now + secs;
+            self.pauses = self.pauses.saturating_add(1);
+            self.streak = 0;
+            return Some(PinEvent::Paused { from: from.to_string(), secs });
+        }
+        None
+    }
+
+    /// A correct PIN pairing, or the owner's reset: everything starts again.
+    pub fn reset(&mut self) {
+        *self = PinGuard::default();
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Pairing {
     pending: Vec<PendingPair>,
     /// When recent requests were made (for the rate limit).
     recent: Vec<f64>,
+    /// The booth PIN, when one is set and PIN pairing is on.
+    pin: Secret,
+    /// Ask before each device joins with the PIN.
+    ask: bool,
+    guard: PinGuard,
+    events: Vec<PinEvent>,
 }
 
 /// What a confirmation found.
@@ -83,7 +234,14 @@ impl Pairing {
 
     /// A new request from `name`; `random` gives fresh random numbers (the code and the id).
     /// `None` when too many were made lately.
-    pub fn request(&mut self, name: &str, kind: &str, now: f64, mut random: impl FnMut() -> u64) -> Option<PendingPair> {
+    pub fn request(&mut self, name: &str, kind: &str, now: f64, random: impl FnMut() -> u64) -> Option<PendingPair> {
+        self.request_from(name, kind, "", now, random)
+    }
+
+    /// [`Pairing::request`], noting where it came from (`from`: an address, or empty). It waits
+    /// for the booth PIN when one is set and PIN pairing is open (not paused or turned off);
+    /// otherwise for a random code shown on the screen.
+    pub fn request_from(&mut self, name: &str, kind: &str, from: &str, now: f64, mut random: impl FnMut() -> u64) -> Option<PendingPair> {
         self.expire(now);
         self.recent.retain(|t| now - t < WINDOW_S);
         if self.recent.len() >= MAX_RECENT {
@@ -95,10 +253,94 @@ impl Pairing {
         }
         let name = clean_name(name);
         let kind = if kind == "pc" { "pc" } else { "browser" };
-        let p =
-            PendingPair { id: format!("{:016x}", random()), name, kind: kind.into(), code: format!("{:04}", random() % 10_000), made: now, wrong: 0 };
+        let pin = self.pin_open(now);
+        let id = format!("{:016x}", random());
+        let code = if pin { String::new() } else { format!("{:04}", random() % 10_000) };
+        let from = clean_text(&if from.is_empty() { name.clone() } else { format!("{name} ({from})") }, 80);
+        let allowed = !(pin && self.ask);
+        let p = PendingPair { id, name, kind: kind.into(), code, made: now, wrong: 0, pin, allowed, from };
         self.pending.push(p.clone());
         Some(p)
+    }
+
+    /// Sets the booth PIN (`None`: no PIN, or PIN pairing turned off) and whether to ask before
+    /// each device joins with it. Requests already made keep what they wait for.
+    pub fn set_pin(&mut self, pin: Option<&str>, ask: bool) {
+        let same = match (&self.pin.0, pin) {
+            (Some(a), Some(b)) => a.as_str() == b,
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.pin = Secret(pin.map(|p| Zeroizing::new(p.to_string())));
+        }
+        self.ask = ask;
+    }
+
+    /// PIN pairing is set and open now.
+    pub fn pin_open(&self, now: f64) -> bool {
+        self.pin.0.is_some() && self.guard.open(now)
+    }
+
+    /// The wrong-PIN counters.
+    pub fn pin_guard(&self) -> &PinGuard {
+        &self.guard
+    }
+
+    /// The owner's reset, or the count carried over from the saved settings.
+    pub fn set_pin_guard(&mut self, guard: PinGuard) {
+        self.guard = guard;
+    }
+
+    /// What booth PIN tries changed since last asked (oldest first).
+    pub fn take_pin_events(&mut self) -> Vec<PinEvent> {
+        std::mem::take(&mut self.events)
+    }
+
+    /// Lets a PIN request pair (Allow on this PC's screen, when it asks before each device
+    /// joins).
+    pub fn allow(&mut self, id: &str) {
+        for p in self.pending.iter_mut().filter(|p| p.id == id) {
+            p.allowed = true;
+        }
+    }
+
+    /// The request `id` waits for Allow on this PC's screen (its PIN is not tried until then).
+    pub fn waiting_for_allow(&self, id: &str) -> bool {
+        self.pending.iter().any(|p| p.id == id && !p.allowed)
+    }
+
+    /// The request `id` waits for the booth PIN.
+    pub fn is_pin_request(&self, id: &str) -> bool {
+        self.pending.iter().any(|p| p.id == id && p.pin)
+    }
+
+    /// A wrong PIN from `from`: counted across requests too; a pause or the PIN turning itself
+    /// off ends every PIN request waiting.
+    fn pin_wrong(&mut self, from: &str, now: f64) {
+        if let Some(e) = self.guard.wrong(now, from) {
+            self.pending.retain(|p| !p.pin);
+            self.events.push(e);
+        }
+    }
+
+    /// A PIN request paired.
+    fn pin_paired(&mut self, name: &str, kind: &str) {
+        self.guard.reset();
+        self.events.push(PinEvent::Paired { name: name.to_string(), kind: kind.to_string() });
+    }
+
+    /// What the request at `i` must be given: its code, or the booth PIN while PIN pairing is
+    /// open. `None`: a PIN request while PIN pairing is not open, or before Allow.
+    fn secret_for(&self, i: usize, now: f64) -> Option<Zeroizing<String>> {
+        let p = self.pending.get(i)?;
+        if !p.pin {
+            return Some(Zeroizing::new(p.code.clone()));
+        }
+        if !p.allowed || !self.pin_open(now) {
+            return None;
+        }
+        self.pin.0.as_ref().map(|s| Zeroizing::new(s.as_str().to_string()))
     }
 
     /// The browser typed `code` for its request `id` (a browser's only: a PC's code is never
@@ -106,17 +348,35 @@ impl Pairing {
     pub fn confirm(&mut self, id: &str, code: &str, now: f64) -> Confirm {
         self.expire(now);
         let Some(i) = self.pending.iter().position(|p| p.id == id && p.kind == "browser") else { return Confirm::Unknown };
-        let Some(p) = self.pending.get_mut(i) else { return Confirm::Unknown };
-        if p.code == code.trim() {
+        // A PIN request before Allow, or while PIN pairing is paused or off: nothing is tried.
+        let Some(secret) = self.secret_for(i, now) else { return Confirm::Unknown };
+        let pin = self.pending.get(i).is_some_and(|p| p.pin);
+        let right = if pin { same_pin(code, &secret) } else { secret.as_str() == code.trim() };
+        drop(secret);
+        if right {
             let p = self.pending.remove(i);
+            if pin {
+                self.pin_paired(&p.name, &p.kind);
+            }
             return Confirm::Paired { name: p.name, kind: p.kind };
         }
+        self.spend(i, id, pin, now)
+    }
+
+    /// A wrong try on the request at `i` (`id`): its own count, and the PIN's across requests.
+    fn spend(&mut self, i: usize, id: &str, pin: bool, now: f64) -> Confirm {
+        let Some(p) = self.pending.get_mut(i) else { return Confirm::Unknown };
         p.wrong = p.wrong.saturating_add(1);
         let left = MAX_WRONG.saturating_sub(p.wrong);
+        let from = p.from.clone();
         if left == 0 {
             self.pending.remove(i);
         }
-        Confirm::Wrong { left }
+        if pin {
+            self.pin_wrong(&from, now);
+        }
+        // A pause ends the PIN requests waiting: none left to try.
+        Confirm::Wrong { left: if self.pending.iter().any(|p| p.id == id) { left } else { 0 } }
     }
 
     /// A PC starts the key exchange for its request `id`: one of the request's tries is spent
@@ -124,12 +384,25 @@ impl Pairing {
     /// back to run it with. `None`: no such PC request, or its tries are spent.
     pub fn begin_exchange(&mut self, id: &str, now: f64) -> Option<Zeroizing<String>> {
         self.expire(now);
-        let p = self.pending.iter_mut().find(|p| p.id == id && p.kind == "pc")?;
-        if p.wrong >= MAX_WRONG {
+        let i = self.pending.iter().position(|p| p.id == id && p.kind == "pc")?;
+        if self.pending.get(i).is_none_or(|p| p.wrong >= MAX_WRONG) {
             return None;
         }
+        // A PIN request before Allow, or while PIN pairing is paused or off: nothing is tried.
+        let secret = self.secret_for(i, now)?;
+        let p = self.pending.get_mut(i)?;
         p.wrong = p.wrong.saturating_add(1);
-        Some(Zeroizing::new(p.code.clone()))
+        if p.pin {
+            // The PIN's count across requests is spent now too (the PC learns from the booth's
+            // answer whether its guess was right, and may never finish); a success resets it.
+            // The exchange under way stays, so a right PIN still pairs.
+            let from = p.from.clone();
+            if let Some(e) = self.guard.wrong(now, &from) {
+                self.pending.retain(|p| !p.pin || p.id == id);
+                self.events.push(e);
+            }
+        }
+        Some(secret)
     }
 
     /// How the exchange begun for `id` ended: `ok` (both sides' confirmations matched) pairs;
@@ -139,9 +412,15 @@ impl Pairing {
         let Some(i) = self.pending.iter().position(|p| p.id == id && p.kind == "pc") else { return Confirm::Unknown };
         if ok {
             let p = self.pending.remove(i);
+            if p.pin {
+                self.pin_paired(&p.name, &p.kind);
+            }
             return Confirm::Paired { name: p.name, kind: p.kind };
         }
         let left = self.pending.get(i).map_or(0, |p| MAX_WRONG.saturating_sub(p.wrong));
+        // A PIN request whose PIN pairing was paused meanwhile: no more tries.
+        let paused = self.pending.get(i).is_some_and(|p| p.pin) && !self.pin_open(now);
+        let left = if paused { 0 } else { left };
         if left == 0 {
             self.pending.remove(i);
         }
@@ -531,6 +810,126 @@ mod tests {
         assert_eq!(p.finish_exchange(&phone.id, true, 1.0), Confirm::Unknown);
         assert_eq!(p.pending(1.0).len(), 2, "neither spent a try");
         assert!(p.pending(1.0).iter().all(|r| r.wrong == 0));
+    }
+
+    fn pin_pairing() -> Pairing {
+        let mut p = Pairing::default();
+        p.set_pin(Some("482113"), false);
+        p
+    }
+
+    #[test]
+    fn with_a_booth_pin_a_request_waits_for_it_and_shows_no_code() {
+        let mut p = pin_pairing();
+        let r = p.request_from("Phone", "browser", "192.168.1.9", 0.0, counter()).unwrap();
+        assert!(r.pin && r.allowed && r.code.is_empty());
+        assert_eq!(r.from, "Phone (192.168.1.9)");
+        assert_eq!(p.confirm(&r.id, " 482113 ", 1.0), Confirm::Paired { name: "Phone".into(), kind: "browser".into() });
+        assert_eq!(p.take_pin_events(), vec![PinEvent::Paired { name: "Phone".into(), kind: "browser".into() }]);
+        // Without a PIN: a code, as before.
+        p.set_pin(None, false);
+        let r = p.request("Phone", "browser", 2.0, counter()).unwrap();
+        assert!(!r.pin && r.code.len() == 4);
+    }
+
+    #[test]
+    fn wrong_pins_count_across_requests_pause_double_and_turn_off() {
+        let mut p = pin_pairing();
+        let mut rng = counter();
+        let mut now = 0.0;
+        let mut wrong = |p: &mut Pairing, now: f64| {
+            let r = p.request("Guest", "browser", now, &mut rng).unwrap();
+            assert!(r.pin, "PIN pairing open at {now}");
+            assert!(matches!(p.confirm(&r.id, "000000", now), Confirm::Wrong { .. }));
+        };
+        for _ in 0..4 {
+            wrong(&mut p, now);
+        }
+        assert!(p.pin_open(now) && p.take_pin_events().is_empty());
+        wrong(&mut p, now);
+        assert_eq!(p.take_pin_events(), vec![PinEvent::Paused { from: "Guest".into(), secs: 300.0 }]);
+        assert!(!p.pin_open(now + 299.0));
+        // While paused a request gets a code shown on the screen, as without a PIN.
+        let r = p.request("Friend", "browser", now + 10.0, counter()).unwrap();
+        assert!(!r.pin && r.code.len() == 4);
+        p.deny(&r.id);
+        now += 301.0;
+        assert!(p.pin_open(now));
+        for _ in 0..5 {
+            wrong(&mut p, now);
+        }
+        assert_eq!(p.take_pin_events(), vec![PinEvent::Paused { from: "Guest".into(), secs: 600.0 }], "doubled");
+        now += 601.0;
+        for _ in 0..5 {
+            wrong(&mut p, now);
+        }
+        assert!(matches!(p.take_pin_events().as_slice(), [PinEvent::Paused { secs, .. }] if *secs == 1200.0));
+        now += 1201.0;
+        for _ in 0..5 {
+            wrong(&mut p, now);
+        }
+        assert_eq!(p.take_pin_events(), vec![PinEvent::TurnedOff { from: "Guest".into() }], "20 since the last success");
+        assert!(!p.pin_open(now + 1e6), "off until the owner turns it back on");
+        p.set_pin_guard(PinGuard::default());
+        assert!(p.pin_open(now));
+    }
+
+    #[test]
+    fn the_pause_caps_at_an_hour_and_a_right_pin_resets_the_count() {
+        let g = PinGuard { pauses: 9, ..PinGuard::default() };
+        assert_eq!(g.next_pause(), PIN_PAUSE_MAX_S);
+        let mut p = pin_pairing();
+        let mut rng = counter();
+        for _ in 0..4 {
+            let r = p.request("Guest", "browser", 0.0, &mut rng).unwrap();
+            let _ = p.confirm(&r.id, "nope-nope", 0.0);
+        }
+        assert_eq!(p.pin_guard().streak, 4);
+        let r = p.request("Phone", "browser", 0.0, &mut rng).unwrap();
+        assert!(matches!(p.confirm(&r.id, "482113", 0.0), Confirm::Paired { .. }));
+        assert_eq!(*p.pin_guard(), PinGuard::default());
+    }
+
+    #[test]
+    fn a_pc_pin_exchange_counts_when_it_begins_and_a_right_one_still_pairs() {
+        let mut p = pin_pairing();
+        let mut rng = counter();
+        for _ in 0..4 {
+            let r = p.request("Guest PC", "pc", 0.0, &mut rng).unwrap();
+            assert_eq!(p.begin_exchange(&r.id, 0.0).as_deref().map(String::as_str), Some("482113"));
+            // Abandoned without finishing: still counted.
+        }
+        let r = p.request("Piano PC", "pc", 0.0, &mut rng).unwrap();
+        assert!(p.begin_exchange(&r.id, 0.0).is_some());
+        assert!(matches!(p.take_pin_events().as_slice(), [PinEvent::Paused { .. }]), "the fifth begun");
+        // Its own exchange stays: the right PIN pairs and ends the pause.
+        assert!(matches!(p.finish_exchange(&r.id, true, 1.0), Confirm::Paired { .. }));
+        assert!(p.pin_open(1.0));
+    }
+
+    #[test]
+    fn asking_first_tries_nothing_before_allow() {
+        let mut p = Pairing::default();
+        p.set_pin(Some("482113"), true);
+        let r = p.request("Phone", "browser", 0.0, counter()).unwrap();
+        assert!(r.pin && !r.allowed && p.waiting_for_allow(&r.id));
+        assert_eq!(p.confirm(&r.id, "482113", 1.0), Confirm::Unknown, "not tried before Allow");
+        assert_eq!(p.pending(1.0)[0].wrong, 0);
+        p.allow(&r.id);
+        assert!(matches!(p.confirm(&r.id, "482113", 2.0), Confirm::Paired { .. }));
+    }
+
+    #[test]
+    fn pins_shorter_than_six_are_refused_and_suggestions_are_six_digits() {
+        assert!(check_pin("12345").unwrap_err().contains("at least 6"));
+        assert!(check_pin("  12345 ").is_err());
+        assert_eq!(check_pin(" sunday ").unwrap(), "sunday");
+        assert!(check_pin("a\u{7}bcdef").is_err());
+        assert!(check_pin(&"x".repeat(65)).is_err());
+        assert_eq!(suggest_pin(|| 42), "000042");
+        assert_eq!(suggest_pin(|| 123_456_789), "456789");
+        assert!(same_pin(" 482113", "482113") && !same_pin("482112", "482113") && !same_pin("", "482113"));
+        assert!(!format!("{:?}", pin_pairing()).contains("482113"));
     }
 
     #[test]

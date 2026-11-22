@@ -43,7 +43,8 @@
 //! Play / Source / Notes / Both row as after Analyse. `{"net_demo": true}` sets up Setup ›
 //! Network as at a service (`net_ui::demo`): listening, paired devices, a piano PC connected
 //! in-process and a booth track on its port with a live sketch (`{"net_demo": "audio"}`: a guitar
-//! PC recording audio, its live level and clips on the booth's track; `"internet"`: Setup › Network
+//! PC recording audio, its live level and clips on the booth's track; `"pin"`: with a booth PIN set
+//! and its notice; `"internet"`: Setup › Network
 //! with an invite made and a friend joined over a real local internet connection). `{"follower_demo": "recording"}`
 //! (or `waiting`, `sent`) shows this PC as a piano PC following a booth (`net_ui::follower_demo`).
 //! `{"models_demo": "progress"}` (or `"confirm"`) shows Setup › ML Models over a fake model folder
@@ -454,6 +455,14 @@ fn main() {
                     soundcraft_ui_egui::net_ui::demo_audio(harness.state_mut())
                 } else if v["net_demo"] == "internet" {
                     soundcraft_ui_egui::net_ui::demo_internet(harness.state_mut())
+                } else if v["net_demo"] == "pin" {
+                    // The same, with a booth PIN set (shown masked) and a device joined with it.
+                    soundcraft_ui_egui::net_ui::demo(harness.state_mut()).and_then(|()| {
+                        let hub = harness.state().net.as_ref().map(|n| n.hub.clone()).ok_or("no network")?;
+                        hub.set_booth_pin("482113")?;
+                        hub.notice("Alto's phone paired with the booth PIN".into());
+                        Ok(())
+                    })
                 } else {
                     soundcraft_ui_egui::net_ui::demo(harness.state_mut())
                 };

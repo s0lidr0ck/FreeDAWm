@@ -28,6 +28,17 @@ pub struct Discovery {
     browsing: bool,
 }
 
+/// The TXT record a PC announces: its role, the record's version, and its encrypted local
+/// link's UDP port and key (hex) when it offers one.
+pub fn txt(role: &str, lan: Option<(u16, &str)>) -> Vec<(&'static str, String)> {
+    let mut props = vec![("role", role.to_string()), ("v", "1".to_string())];
+    if let Some((q, k)) = lan {
+        props.push(("q", q.to_string()));
+        props.push(("k", k.to_string()));
+    }
+    props
+}
+
 impl Discovery {
     pub fn new() -> Result<Discovery, String> {
         let daemon = ServiceDaemon::new().map_err(|e| format!("mDNS: {e}"))?;
@@ -35,6 +46,7 @@ impl Discovery {
     }
 
     /// Announces this PC as `name` on `port` (role `booth` or `recorder`), replacing an earlier one.
+    /// What it announces is [`txt`] and nothing else (never the booth PIN or anything made from it).
     pub fn announce(&mut self, name: &str, port: u16, role: &str) -> Result<(), String> {
         self.announce_with(name, port, role, None)
     }
@@ -44,12 +56,8 @@ impl Discovery {
     pub fn announce_with(&mut self, name: &str, port: u16, role: &str, lan: Option<(u16, &str)>) -> Result<(), String> {
         self.withdraw();
         let host = format!("{}.local.", crate::hub::computer_name().replace([' ', '.'], "-"));
-        let q = lan.map(|(p, _)| p.to_string()).unwrap_or_default();
-        let mut props = vec![("role", role), ("v", "1")];
-        if let Some((_, k)) = lan {
-            props.push(("q", q.as_str()));
-            props.push(("k", k));
-        }
+        let props = txt(role, lan);
+        let props: Vec<(&str, &str)> = props.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let info = ServiceInfo::new(SERVICE_TYPE, name, &host, "", port, &props[..]).map_err(|e| format!("mDNS: {e}"))?.enable_addr_auto();
         let full = info.get_fullname().to_string();
         self.daemon.register(info).map_err(|e| format!("mDNS: {e}"))?;

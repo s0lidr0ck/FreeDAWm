@@ -139,6 +139,27 @@ pub struct NetConfig {
     /// remote page and nothing else. On by default; a value already saved is kept.
     #[serde(default = "yes")]
     pub encrypted_only: bool,
+    /// The booth PIN (Setup › Network; empty: none, a random code per request as before). Kept
+    /// here as the pairing tokens are, never in a session, never announced or sent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub booth_pin: String,
+    /// Ask before each device joins with the booth PIN (Allow / Deny on the booth's screen).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pin_ask: bool,
+    /// Wrong booth PINs since the last PIN pairing (at [`crate::pairing::PIN_OFF_AFTER`] PIN
+    /// pairing is off until the owner turns it back on), and where the last came from.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pin_wrong: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pin_last_from: String,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Default for NetConfig {
@@ -158,6 +179,10 @@ impl Default for NetConfig {
             relay_url: String::new(),
             encrypted_link: true,
             encrypted_only: true,
+            booth_pin: String::new(),
+            pin_ask: false,
+            pin_wrong: 0,
+            pin_last_from: String::new(),
         }
     }
 }

@@ -251,7 +251,9 @@ download.
 - **A phone as the remote.** Setup › Network › *Allow control from this network* (off by default)
   serves a web page on port 48100. On a phone or a stage PC you get Record, Play, Stop
   (press-and-hold while recording), Arm All, Add Marker, track meters, and the disk space left on
-  every PC. Devices pair with a 4-digit code shown on the main PC's screen.
+  every PC. Devices pair with a 4-digit code shown on the main PC's screen, or with a booth PIN
+  set once in Setup › Network so nobody has to be at the booth (at least 6 characters; wrong
+  guesses pause it and, after 20, turn it off; each device that joins is shown on the booth).
 - **Several PCs, one recording.** Another PC running FreeDAWm can *follow the booth*. It records,
   plays and stops with the main PC at the same timeline position, so a keyboard player's MIDI rig
   or a guitar PC records along. While it records, the main PC's track shows a live sketch of the
