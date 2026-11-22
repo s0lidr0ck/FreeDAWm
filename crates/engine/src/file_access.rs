@@ -470,7 +470,7 @@ mod tests {
             // path); `peak_cache` checks the roots itself for the waveform cache it keeps beside a
             // session's audio (and `peak_pages`, which reads that cache's pages), and
             // `decode_cache` for the decodes it keeps there; `movie_export` checks the roots itself for the movies it reads and
-            // the movie it writes; `tests*.rs` are test-only modules.
+            // the movie it writes; `tests*.rs` and `*_tests.rs` are test-only modules.
             if path.parent() == Some(src.as_path())
                 && matches!(
                     name,
@@ -484,6 +484,7 @@ mod tests {
                         | "movie_export.rs"
                 )
                 || name.starts_with("tests")
+                || name.ends_with("_tests.rs")
             {
                 continue;
             }
