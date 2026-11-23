@@ -273,8 +273,13 @@ download.
   paired PC can also subscribe to a pushed mixer feed (every strip's fader, pan, mute, solo,
   sends and inserts, then only what changes, plus meters about 20 times a second: about
   7.5 to 9 KB/s for 32 strips). While remotes are connected or live inputs are monitored, the studio PC
-  is kept awake. The remote mixer screen itself is still to come; see
-  [docs/control-protocol.md](docs/control-protocol.md).
+  is kept awake.
+- **Connect to a Studio: mix a live stream from home.** File › Connect to a Studio… opens a
+  studio's mixer on another PC (same network, booth PIN, or an internet invite): faders, pan,
+  mute, solo, sends, insert bypass, built-in effect editors, undo and mix snapshots, with the
+  studio's master in your speakers. A drag is one undo step on the studio; a dropped connection
+  changes nothing there. The studio can lock remote mixing at any time. See
+  [docs/remote-mixing.md](docs/remote-mixing.md).
 - **FreeDAWm Recorder (Windows).** A small window beside the DAW: Record and Stop for quick
   ideas (a 24-bit WAV and a MIDI file named by date and time), recording into a booth on another
   PC as a remote recorder does, and listening to the booth's mix. It never listens on the

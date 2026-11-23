@@ -1236,13 +1236,51 @@ remotes are connected…". It lets go as soon as neither holds. Windows: `SetThr
 <pid>`; Linux: `systemd-inhibit --what=idle:sleep` (where systemd runs); elsewhere nothing, and
 the window says it could not.
 
-**Next (design notes, not built).** *Conflicts and locking*: two hands on one control: the first
-touch holds it until release plus about half a second; the other side sees it move and cannot
-grab it meanwhile (the feed would carry a `held_by` per strip); the booth operator can always
-take over with a "Lock remote mixing" switch, which refuses remote mixing commands until turned
-off; a remote that drops releases what it held and nothing else changes (no "safe" scene is
-recalled). Undo stays one history on the booth: a remote's gesture is one step in it, labelled as
-the command is. *Low-latency stream mode*: today's stream is tuned for the internet (20 ms Opus
+**Connect to a Studio** (File › Connect to a Studio…, `window.connect_studio`; `soundcraft_net::studio`,
+`crates/ui-egui/src/studio_ui.rs`, user page `docs/remote-mixing.md`). The mixing PC only dials:
+it pairs as above (code, booth PIN, or `pair.invite` over the internet bridge) and keeps each
+studio in `network.json` `studios` (`name, addr, token, key, lan, internet, last_used`), apart
+from `follow` (a studio mixed and a booth followed can be the same PC, each with its own pairing;
+the dialog also offers the followed booth's pairing). Its link: `hello {role: "listener"}`, then
+`mixer.subscribe` and, while it listens, `stream.subscribe {on, live: true}`; a gap in `seq`
+subscribes again for a snapshot; `net.ping` every second (answered by the hub itself, never the
+app: the banner's round trip; no answer for 4 s ends the link and it reconnects every 2 s). A
+change queued when the link goes, or made while it is down, is dropped and counted, never sent
+later. Moves are `engine.execute` with these gesture keys: `fader:<track>`, `pan:<track>:<i>`,
+`send:<track>:<slot>`, `editor:<track>:<module>` (a built-in editor's drag), closed by
+`engine.end_gesture {gesture}`.
+
+| Method | Params | Result |
+|---|---|---|
+| `net.ping` | `{}` | `{}` at once, from the hub (any paired PC). |
+| `engine.end_gesture` | `{gesture?}` | `{}`: with `gesture`, only that gesture's undo step ends (a drag of something else on the studio goes on as one step); without, as before. |
+
+The mixer feed's state also carries `undo` and `redo` (the studio's next Undo and Redo labels, or
+null) and `snapshots` (`[{index, name}]`, the session's mix snapshots: recall with
+`mix.snapshot_recall {snapshot: index}`, store with `mix.snapshot_store {name}`).
+
+**First touch holds.** On the studio's hub, the first connection to move a gesture key holds that
+control until its `engine.end_gesture` plus 0.5 s (`HOLD_GRACE`), or 1.5 s without a move
+(`HOLD_LEASE`, as the engine's gesture lease). Another connection's `engine.execute` with the same
+key meanwhile is refused `{ok: false, error: "<PC> is moving that control", held_by: "<PC>"}`.
+The studio's own screen is not held: between it and a remote the last move wins, and the remote
+shows the feed once its hand is off. A connection that goes mid-drag has its holds released and
+each open gesture ended at once (`engine.end_gesture` sent to the app for it): its undo step
+closes, the mix stays as last set.
+
+**Lock remote mixing** (Setup › Network › Remote mixing; `network.json` `lock_remote_mixing`).
+While on, every forwarded method from a paired PC is refused `{ok: false, error, locked: true}`,
+except those that only read: `session.inspect`, `engine.commands`, `engine.parity`,
+`ui.inspect`, `ui.menu.list`, `ui.screenshot`, `engine.end_gesture`, and `engine.execute` of a
+query command without a gesture. The feeds and the stream go on. `hello`'s answer carries
+`locked`, and each connected PC gets `{"event": "remote_lock", "params": {on}}` when it changes.
+The same section lists the PCs connected (`Hub::remote_pcs`), "mixing · last change …" once one
+changed something (`remotes()` then says `state: "mixing"`; a notice "<PC> started mixing
+remotely" the first time), with **Disconnect** (`Hub::disconnect`: its connections end and its
+`hello` is refused `{away: true}` until *Let back in* or a restart) and **Forget** (which now also
+ends its connections).
+
+**Next (design notes, not built).** *Low-latency stream mode*: today's stream is tuned for the internet (20 ms Opus
 frames, a 150 ms jitter buffer growing to 500 ms: about 0.2–0.6 s behind). On a wired LAN a mode
 with 10 ms (or 5 ms) frames, Opus's restricted low-delay application, a 20–40 ms starting
 buffer that grows only on dropouts, and the same epoch/idle rules would bring it to about
@@ -1277,6 +1315,7 @@ and mix delay. The network runs on its own threads; nothing touches the audio th
 | Command | Params | Result |
 |---|---|---|
 | `window.network` | `{value?: bool}` | Setup › Network…: shows or hides the window. |
+| `window.connect_studio` | `{value?: bool}` | File › Connect to a Studio…: shows or hides the dialog. |
 
 Preview the page without a booth: `cargo run -p soundcraft-net --example remote_demo [port]`.
 
