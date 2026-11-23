@@ -432,3 +432,76 @@ fn a_track_feeding_a_live_group_through_an_off_path_aux_stays_aligned() {
     let out = run(&mut eng, &s, 0..6, first_impulse(0.0));
     assert_eq!(hits(&out), vec![400, 1100], "T waits for the returns as Q does");
 }
+
+/// Auto Pitch on `track` in `mode` (0 Studio, 1 Live; Live at the Middle voice range).
+fn auto_pitch(s: &mut Session, track: TrackId, mode: f32) -> soundcraft_model::ModuleId {
+    let mut ins = soundcraft_model::Insert::new("autopitch");
+    ins.params.insert("mode".into(), mode);
+    s.track_mut(track).unwrap().mixer.add_module(ins, None).unwrap()
+}
+
+#[test]
+fn llm_keeps_auto_pitch_in_live_mode_and_the_singer_hears_its_few_ms() {
+    // Live mode reports 288 samples (6 ms at 48 kHz) and says it is made to be heard live: it
+    // stays on the live path, which waits only for it. Studio mode (2048 samples) is bypassed
+    // there like any delaying insert.
+    let live_lat = soundcraft_dsp::create("autopitch").map(|mut p| {
+        p.set_param("mode", 1.0);
+        p.latency()
+    });
+    assert_eq!(live_lat, Some(288));
+    for (mode, want, bypassed) in [(1.0, 288usize, 0u64), (0.0, 0, 1)] {
+        let mut s = session(true);
+        let vox = armed(&mut s);
+        auto_pitch(&mut s, vox, mode);
+        let mut eng = MixEngine::new(48_000.0, BLOCK);
+        // A click on the input (no pitch: let through unchanged, only delayed).
+        let out = run(&mut eng, &s, 0..12, first_impulse(0.8));
+        assert_eq!(hits(&out).first().copied(), Some(want), "mode {mode}");
+        assert_eq!(eng.meters[&vox].llm_bypassed, bypassed, "mode {mode}");
+    }
+    // Without low-latency monitoring Live mode is an ordinary latent insert.
+    let mut s = session(false);
+    let vox = armed(&mut s);
+    auto_pitch(&mut s, vox, 1.0);
+    let mut eng = MixEngine::new(48_000.0, BLOCK);
+    let out = run(&mut eng, &s, 0..12, first_impulse(0.8));
+    assert_eq!(hits(&out).first().copied(), Some(288));
+    assert_eq!(eng.meters[&vox].llm_bypassed, 0);
+}
+
+#[test]
+fn switching_auto_pitch_to_live_realigns_the_mix() {
+    // Two playback tracks with the same click, one through Auto Pitch, panned apart: they line up
+    // in Studio mode (2048 samples compensated) and again after a switch to Live mid-play (288).
+    let click = |at: usize| {
+        let mut v = vec![0.0f32; 48_000];
+        v[at] = 0.5;
+        v[at + 12_000] = 0.5;
+        v
+    };
+    let mut s = session(false);
+    let a = playback(&mut s, "A", click(6_000));
+    let b = playback(&mut s, "B", click(6_000));
+    s.track_mut(a).unwrap().mixer.pan = vec![-1.0];
+    s.track_mut(b).unwrap().mixer.pan = vec![1.0];
+    let m = auto_pitch(&mut s, a, 0.0);
+    let mut eng = MixEngine::new(48_000.0, BLOCK);
+    let mut out = vec![vec![0.0f32; BLOCK]; 2];
+    let (mut l, mut r) = (Vec::new(), Vec::new());
+    for blk in 0..(40_000 / BLOCK) {
+        if blk == 60 {
+            s.track_mut(a).unwrap().module_mut(m).unwrap().params.insert("mode".into(), 1.0);
+        }
+        eng.render(&s, (blk * BLOCK) as i64, BLOCK, &mut out);
+        l.extend_from_slice(&out[0]);
+        r.extend_from_slice(&out[1]);
+        if blk == 59 {
+            assert_eq!(eng.latency, 2048);
+        }
+    }
+    assert_eq!(eng.latency, 288);
+    let (hl, hr) = (hits(&l), hits(&r));
+    assert_eq!(hl.len(), 2, "{hl:?}");
+    assert_eq!(hl, hr, "both clicks line up before and after the switch");
+}

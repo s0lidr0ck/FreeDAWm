@@ -1,5 +1,6 @@
 //! The built-in plugins and their registry.
 
+pub mod autopitch;
 pub mod drums;
 pub mod dynamics;
 pub mod eq;
@@ -39,7 +40,7 @@ pub mod wavetable;
 use crate::{Plugin, PluginInfo};
 
 /// The built-in plugins other than the FireStation engines, in menu order.
-const BUILTINS: [&PluginInfo; 44] = [
+const BUILTINS: [&PluginInfo; 45] = [
     &eq::EQ1_INFO,
     &eq::EQ7_INFO,
     &dynamics::COMP_INFO,
@@ -64,6 +65,7 @@ const BUILTINS: [&PluginInfo; 44] = [
     &sprawl::SPRAWL_INFO,
     &keel::KEEL_INFO,
     &heft::HEFT_INFO,
+    &autopitch::AUTOPITCH_INFO,
     &utility::SHIFT_INFO,
     &imprint::IMPRINT_INFO,
     &utility::GAIN_INFO,
@@ -165,6 +167,7 @@ fn instantiate_one(id: &str) -> Option<Box<dyn Plugin>> {
         "sprawl" => Box::new(sprawl::Sprawl::new()),
         "keel" => Box::new(keel::Keel::new()),
         "heft" => Box::new(heft::Heft::new()),
+        "autopitch" => Box::new(autopitch::AutoPitch::new()),
         "time_shift" => Box::new(utility::TimeShift::new()),
         "imprint" => Box::new(imprint::Imprint::new()),
         "gain" => Box::new(utility::Gain::new()),
@@ -222,6 +225,7 @@ mod tests {
         "sprawl",
         "keel",
         "heft",
+        "autopitch",
         "time_shift",
         "imprint",
         "gain",

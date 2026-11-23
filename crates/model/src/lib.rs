@@ -41,7 +41,9 @@ pub use automation::{
     AutoParam, AutomationLane, AutomationMode, AutomationPoint, BYPASS_PARAM, CURVE_EPSILON, MIX_PARAM, PencilShape, SURROUND_AXES, curve_shape,
     letter_slot,
 };
-pub use band::{BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials};
+pub use band::{
+    BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials, parse_key,
+};
 pub use clip::{
     CleanAlt, CleanupPreview, Clip, ClipAra, ClipContent, ClipModule, Fade, FadeShape, FxRender, MAX_CLIP_MODULES, MAX_TRANSPOSE_CENTS, MidiCleanup,
     MidiFxRender, PatternClip, ProcessStep,

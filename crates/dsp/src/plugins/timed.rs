@@ -182,6 +182,18 @@ impl Plugin for Timed {
         self.inner.set_transport(transport);
     }
 
+    fn follows_song_key(&self) -> bool {
+        self.inner.follows_song_key()
+    }
+
+    fn live_monitoring(&self) -> bool {
+        self.inner.live_monitoring()
+    }
+
+    fn set_song_keys(&mut self, keys: &[crate::SongKey]) {
+        self.inner.set_song_keys(keys);
+    }
+
     fn set_offline(&mut self, offline: bool) {
         self.inner.set_offline(offline);
     }

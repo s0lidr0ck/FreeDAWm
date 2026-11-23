@@ -12,6 +12,7 @@ rustfft.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+soundcraft-dsp.workspace = true
 soundcraft-audio-io.workspace = true
 serde_json.workspace = true
 

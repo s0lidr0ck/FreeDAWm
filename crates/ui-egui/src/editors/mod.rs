@@ -5,6 +5,7 @@
 //! fills only its own module.
 
 pub mod amp;
+pub mod autopitch;
 pub mod chamber;
 pub mod cleanq;
 pub mod comp;
@@ -72,6 +73,7 @@ pub(crate) fn not_in_presets(plugin: &str) -> &'static [&'static str] {
         "fs_filter" => filter::FAMILY.not_in_presets,
         "fs_levelup" => &levelup::NOT_IN_PRESETS,
         "heft" => heft::FAMILY.not_in_presets,
+        "autopitch" => autopitch::FAMILY.not_in_presets,
         "keel" => keel::FAMILY.not_in_presets,
         "lull" => lull::FAMILY.not_in_presets,
         "fs_manners" => manners::FAMILY.not_in_presets,
