@@ -116,6 +116,10 @@ pub struct NetState {
     awake_checked: Option<std::time::Instant>,
     /// File › Connect to a Studio…: the studio this PC mixes remotely (`studio_ui`).
     pub studio: crate::studio_ui::StudioState,
+    /// For renders: a remote mixing this PC (in-process), and the Remote mixing section scrolled
+    /// into view once.
+    pub(crate) studio_side_demo: Option<soundcraft_net::studio::Studio>,
+    pub(crate) reveal_mixing: bool,
 }
 
 /// How long a reusable invite can last: the label and seconds.
@@ -183,6 +187,8 @@ impl NetState {
             awake_error: None,
             awake_checked: None,
             studio: crate::studio_ui::StudioState::default(),
+            studio_side_demo: None,
+            reveal_mixing: false,
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -1322,6 +1328,9 @@ pub(crate) const LOCK_NOTE: &str = "Paired PCs can still see this mixer and hear
 /// connected now, mixing or listening, with Disconnect and Forget.
 fn mixing_section(ui: &mut egui::Ui, net: &mut NetState) {
     let t = Tokens::current();
+    if std::mem::take(&mut net.reveal_mixing) {
+        ui.scroll_to_cursor(Some(egui::Align::Min));
+    }
     let mut locked = net.hub.remote_lock();
     if ui
         .checkbox(&mut locked, "Lock remote mixing")

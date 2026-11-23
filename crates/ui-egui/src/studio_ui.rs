@@ -172,6 +172,7 @@ impl StudioState {
         self.demo = None;
         self.window = false;
         self.meters.clear();
+        self.notes.clear();
         self.drag = None;
         self.confirm = None;
         self.undo_ok = false;
@@ -743,6 +744,8 @@ fn contents(app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
         return;
     };
     let area = ui.available_rect_before_wrap();
+    // An opaque ground: greyed strips (drawn faded) never show what is behind the window.
+    ui.painter().rect_filled(area, 0.0, t.window_bg);
     let mut c = ui.new_child(egui::UiBuilder::new().max_rect(area));
     if !s.connected || s.locked {
         c.disable();
@@ -932,17 +935,20 @@ fn strips(net: &mut NetState, ui: &mut Ui, view: &MixerView) {
             }
         });
     }
+    let shown = view.strips.iter().filter(|s| !s.hidden);
+    let rows = shown.fold((0, 0), |(i, k), s| (i.max(s.inserts.len()), k.max(s.sends.len())));
     egui::ScrollArea::horizontal().id_salt("remote-mix-strips").auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
             for s in view.strips.iter().filter(|s| !s.hidden) {
-                strip(net, ui, view, s);
+                strip(net, ui, view, s, rows);
             }
         });
     });
 }
 
-fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
+/// Every strip's sections are as tall as the fullest strip's (inserts, sends), so faders line up.
+fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip, rows: (usize, usize)) {
     let t = Tokens::current();
     let h = ui.available_height().max(480.0);
     let (r, _) = ui.allocate_exact_size(vec2(STRIP_W, h), Sense::hover());
@@ -954,7 +960,7 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
     let w = STRIP_W - 8.0;
     let mut y = r.min.y + 8.0;
     // Inserts: name and bypass.
-    let sec_h = 14.0 + 16.0 * s.inserts.len().max(1) as f32;
+    let sec_h = 14.0 + 16.0 * rows.0.max(1) as f32;
     let sec = Rect::from_min_size(pos2(x0, y), vec2(w, sec_h));
     crate::widgets::inset(ui.painter(), sec, t.strip_section);
     ui.painter().text(pos2(sec.min.x + 3.0, sec.min.y + 1.0), Align2::LEFT_TOP, "INSERTS", regular(8.0), t.text_dim);
@@ -975,7 +981,7 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
     }
     y = sec.max.y + 4.0;
     // Sends: where to and how loud.
-    let sec_h = 14.0 + 16.0 * s.sends.len().max(1) as f32;
+    let sec_h = 14.0 + 16.0 * rows.1.max(1) as f32;
     let sec = Rect::from_min_size(pos2(x0, y), vec2(w, sec_h));
     crate::widgets::inset(ui.painter(), sec, t.strip_section);
     ui.painter().text(pos2(sec.min.x + 3.0, sec.min.y + 1.0), Align2::LEFT_TOP, "SENDS", regular(8.0), t.text_dim);
@@ -1008,7 +1014,11 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
     if let Some(v) = s.vca.and_then(|v| view.strip(v)) {
         tags.push(format!("VCA {}", v.name));
     }
-    let tag = if tags.is_empty() { "no group".to_string() } else { tags.join(" ") };
+    let mut tag = if tags.is_empty() { "no group".to_string() } else { tags.join(" ") };
+    if !matches!(s.automation_mode.as_str(), "off" | "read" | "") {
+        // A writing automation mode on the studio: say so (Read, the default, says nothing).
+        tag = format!("{tag} · auto {}", s.automation_mode);
+    }
     ui.painter().text(pos2(r.center().x, y + 6.0), Align2::CENTER_CENTER, tag, regular(9.0), t.text_dim);
     y += 16.0;
     // Pan.
@@ -1027,8 +1037,9 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
             }
             ui.painter().text(pos2(cx, y + 38.0), Align2::CENTER_CENTER, crate::widgets::pan_text(v), regular(8.5), t.text_dim);
         }
-        y += 48.0;
     }
+    y += 48.0;
+
     // Input monitoring (read-only here), then Solo / Mute.
     let bw = (w - 6.0) / 2.0;
     let mut row = ui.new_child(
@@ -1036,9 +1047,9 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
     );
     row.spacing_mut().item_spacing.x = 6.0;
     if matches!(s.kind.as_str(), "audio" | "instrument" | "midi") {
-        let state = match s.input_monitor.as_str() {
-            "On" => soundcraft_model::InputMonitor::On,
-            "Off" => soundcraft_model::InputMonitor::Off,
+        let state = match s.input_monitor.to_ascii_lowercase().as_str() {
+            "on" => soundcraft_model::InputMonitor::On,
+            "off" => soundcraft_model::InputMonitor::Off,
             _ => soundcraft_model::InputMonitor::Auto,
         };
         row.add_enabled_ui(false, |ui| crate::widgets::input_monitor_key(ui, vec2(bw, 18.0), state, crate::mix_window::input_monitor_tip(state)))
@@ -1075,16 +1086,6 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
     if let Some(db) = crate::widgets::fader(ui, fr, s.volume_db, egui::Id::new(("remote-fader", s.id))) {
         let held = ui.input(|i| i.pointer.any_down());
         act(net, Control::Volume(s.id), db, held, "mix.volume", json!({"tracks": [s.id], "db": db}));
-    }
-    if s.automation_mode != "off" && !s.automation_mode.is_empty() {
-        // The studio's automation moves this fader while it reads: say so.
-        ui.painter().text(
-            pos2(fr.center().x, fr.min.y - 2.0),
-            Align2::CENTER_BOTTOM,
-            format!("auto {}", s.automation_mode),
-            regular(8.0),
-            t.auto_read,
-        );
     }
     let md = net.studio.meters.get(&s.id).copied().unwrap_or_default();
     let slot = crate::widgets::fader_slot(fr);
@@ -1267,8 +1268,46 @@ pub fn demo(app: &mut SoundApp, state: &str) -> Result<(), String> {
             });
             app.ui.show_connect_studio = true;
         }
+        "editor" => {
+            let vocal = view.strips.iter().find(|s| s.name == "Vocal").cloned().ok_or("no vocal")?;
+            net.studio.current = Some(KnownStudio { name: "Studio PC".into(), ..KnownStudio::default() });
+            net.studio.demo = Some(DemoLink { connected: true, locked: false, view, levels, rtt_ms: 38.0, buffer_ms: 150.0 });
+            net.studio.window = true;
+            let comp = vocal.inserts.iter().find(|i| i.plugin == "fs_comp").ok_or("no comp")?;
+            crate::studio_editors::open(net, &vocal, comp);
+        }
+        "studio" => return demo_studio_side(app),
         other => return Err(format!("unknown remote mix demo `{other}`")),
     }
+    Ok(())
+}
+
+/// The studio's side for a render: this PC listening, a PC paired and connected in-process,
+/// mixing (a mute changed), and Setup › Network open at its Remote mixing section.
+fn demo_studio_side(app: &mut SoundApp) -> Result<(), String> {
+    let net = app.net.as_mut().ok_or("no network state")?;
+    let hub = net.hub.clone();
+    hub.update_config(|c| c.encrypted_only = false);
+    let port = match hub.listening_port() {
+        Some(p) => p,
+        None => hub.listen(0)?,
+    };
+    let addr = format!("127.0.0.1:{port}");
+    let a = addr.clone();
+    let asked = std::thread::spawn(move || soundcraft_net::follower::pair_request(&a, "Home PC"));
+    let id = asked.join().map_err(|_| "pairing thread")??;
+    let code = hub.pending_pairings().into_iter().find(|p| p.id == id).ok_or("no request")?.code;
+    let (token, _) = soundcraft_net::follower::pair_confirm(&addr, &id, code, soundcraft_net::pairing::exchange::LinkKeys::PLAIN)?;
+    let link = Studio::start(StudioTarget { name: String::new(), addr, token, my_name: "Home PC".into() });
+    let t0 = Instant::now();
+    while !link.connected() && t0.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let v = app.engine.session().tracks.iter().find(|t| t.kind == soundcraft_model::TrackKind::Audio).map(|t| t.id.0).ok_or("no audio track")?;
+    link.execute("mix.mute", json!({"tracks": [v], "value": true}), None);
+    net.studio_side_demo = Some(link);
+    net.reveal_mixing = true;
+    app.ui.show_network = true;
     Ok(())
 }
 

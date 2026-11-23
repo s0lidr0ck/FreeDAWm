@@ -519,3 +519,32 @@ fn a_snapshot_is_recalled_on_the_studio_after_asking() {
     run_until(&mut h, "stored there", |_| studio.engine.lock().unwrap().session().mix_snapshots.iter().any(|s| s.name == "Sermon B"));
     h.state_mut().net.as_mut().unwrap().studio.disconnect();
 }
+
+#[test]
+fn the_remote_window_draws_32_strips_quickly() {
+    let Some(mut h) = app_with_net() else { return };
+    let mut e = soundcraft_engine::Engine::default();
+    for k in 0..31 {
+        e.execute("track.new", &json!({"name": format!("Ch {k}"), "kind": "audio"})).unwrap();
+    }
+    e.execute("track.new", &json!({"name": "Master", "kind": "master"})).unwrap();
+    let t = e.session().tracks[0].id.0;
+    e.execute("mix.insert", &json!({"track": t, "plugin": "fs_comp"})).unwrap();
+    let mut mirror = soundcraft_net::studio::MixMirror::default();
+    mirror.on_event("mixer.snapshot", &json!({"seq": 1, "state": soundcraft_engine::surface::feed::mixer_state(&e)}));
+    studio_ui::demo(h.state_mut(), "connected").unwrap();
+    h.state_mut().net.as_mut().unwrap().studio.demo.as_mut().unwrap().view = mirror.view().unwrap();
+    h.run_steps(5);
+    // The whole app's frame with the Remote Mix window open, against the same frame without it.
+    let frame = |h: &mut Harness<'static, SoundApp>| {
+        let t0 = Instant::now();
+        h.run_steps(40);
+        t0.elapsed().as_secs_f64() * 1000.0 / 40.0
+    };
+    let with = frame(&mut h);
+    h.state_mut().net.as_mut().unwrap().studio.window = false;
+    h.run_steps(3);
+    let without = frame(&mut h);
+    eprintln!("frame with the Remote Mix window (32 strips): {with:.2} ms; without: {without:.2} ms; the window: {:.2} ms a frame", with - without);
+    assert!(with - without < 50.0, "{with} vs {without}");
+}
