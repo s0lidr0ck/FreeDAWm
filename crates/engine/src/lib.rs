@@ -271,6 +271,10 @@ pub struct Engine {
     merge_key: Option<String>,
     /// The key every merged gesture takes while held (see `hold_merge`).
     merge_hold: Option<String>,
+    /// A remote's gesture (`engine.execute {gesture}` over the control channel) keeps its undo
+    /// step open until this instant, though no pointer is down here (see
+    /// [`Engine::execute_gesture`]).
+    gesture_lease: Option<std::time::Instant>,
     /// The redo stack a gesture's first step cleared, kept while that step is still the newest
     /// and brought back when the step is discarded (see `undo_discard`): a drag that ends where
     /// it began costs no Redo.
@@ -378,6 +382,7 @@ impl Engine {
             merge_key: None,
             merge_redo: None,
             merge_hold: None,
+            gesture_lease: None,
             step_label: None,
             tempo_pinned: Vec::new(),
             messages: Vec::new(),
@@ -1164,6 +1169,30 @@ impl Engine {
     /// End a gesture started with `execute_merged`.
     pub fn end_merge(&mut self) {
         self.merge_key = None;
+        self.gesture_lease = None;
+    }
+
+    /// How long a remote gesture stays one undo step after its last move without an explicit end
+    /// (a dropped link releases it this way).
+    pub const GESTURE_LEASE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+    /// A remote controller's continuous gesture (a fader dragged on another PC): as
+    /// [`Engine::execute_merged`] under `remote:<key>`, and the step stays open across frames
+    /// with no pointer down here until `end_merge` (the remote's release) or
+    /// [`Engine::GESTURE_LEASE`] after its last move.
+    pub fn execute_gesture(&mut self, id: &str, params: &Value, key: &str) -> Result<Value> {
+        let r = self.execute_merged(id, params, &format!("remote:{key}"));
+        self.gesture_lease = Some(std::time::Instant::now() + Self::GESTURE_LEASE);
+        r
+    }
+
+    /// The UI's end of every frame with no pointer down: ends the gesture unless a remote's is
+    /// still within its lease.
+    pub fn end_idle_merge(&mut self) {
+        if self.gesture_lease.is_some_and(|t| std::time::Instant::now() < t) {
+            return;
+        }
+        self.end_merge();
     }
 
     /// Convenience: execute with `{}` params.
