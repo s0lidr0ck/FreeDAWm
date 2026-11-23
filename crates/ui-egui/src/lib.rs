@@ -3416,7 +3416,8 @@ impl SoundApp {
             let now = ctx.input(|i| i.time);
             let tapping = self.ops.tap_times.last().is_some_and(|t| now - t < soundcraft_engine::cmd::tap_tempo::TAP_RESET_SECONDS);
             if !ctx.egui_wants_keyboard_input() && !self.engine.automation_pass_writing() && !tapping {
-                self.engine.end_merge();
+                // A remote's fader drag stays one step until it lets go (`engine.end_gesture`).
+                self.engine.end_idle_merge();
             }
         }
         self.watch_output();

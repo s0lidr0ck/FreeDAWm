@@ -128,3 +128,15 @@ pub(crate) fn utc_offset_secs(_unix_secs: i64) -> Option<i32> {
 pub(crate) fn utc_offset_secs(_unix_secs: i64) -> Option<i32> {
     None
 }
+
+/// Keeps the computer from sleeping on its own (or lets it again): `SetThreadExecutionState` with
+/// `ES_CONTINUOUS | ES_SYSTEM_REQUIRED`, which holds for the calling thread until the next call
+/// or until that thread ends; the caller makes both calls from the same long-lived thread.
+#[cfg(windows)]
+pub(crate) fn hold_awake(on: bool) -> bool {
+    use windows_sys::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
+    let flags = if on { ES_CONTINUOUS | ES_SYSTEM_REQUIRED } else { ES_CONTINUOUS };
+    // SAFETY: plain flags in, the previous state out (0 on failure); no pointers.
+    let previous = unsafe { SetThreadExecutionState(flags) };
+    previous != 0
+}

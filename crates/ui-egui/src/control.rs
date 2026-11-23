@@ -3,7 +3,8 @@
 //! goes through exactly the same code as a click.
 //!
 //! Methods:
-//! - `engine.execute {command, params}` (alias `command`): run any command programmatically (no dialogs)
+//! - `engine.execute {command, params}` (alias `command`): run any command programmatically (no dialogs);
+//!   with `gesture: "<key>"` consecutive calls are one undo step until `engine.end_gesture`
 //! - `engine.commands {filter?}`, `engine.parity`, `session.inspect {detail?}`, `ui.inspect`
 //! - `ui.menu.list`, `ui.menu.invoke {path: "Track > New..." | id}` (menu-style: may open dialogs)
 //! - `ui.click {x,y,button?,count?,mods?}`, `ui.move {x,y}`, `ui.drag {x,y,to_x,to_y,steps?}`
@@ -95,6 +96,20 @@ pub(crate) fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlReque
     let pos = egui::pos2(f("x"), f("y"));
     let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 200);
     Some(match req.method.as_str() {
+        "engine.execute" | "command" if p.get("gesture").and_then(Value::as_str).is_some() => {
+            // One undo step from the first move to `engine.end_gesture` (a remote fader drag).
+            let id = p.get("command").or_else(|| p.get("id")).and_then(Value::as_str).unwrap_or("");
+            let params = p.get("params").cloned().unwrap_or(json!({}));
+            let key = p.get("gesture").and_then(Value::as_str).unwrap_or("");
+            match app.engine.execute_gesture(id, &params, key) {
+                Ok(v) => ok(v),
+                Err(e) => err(e),
+            }
+        }
+        "engine.end_gesture" => {
+            app.engine.end_merge();
+            ok(json!({}))
+        }
         "engine.execute" | "command" => {
             let id = p.get("command").or_else(|| p.get("id")).and_then(Value::as_str).unwrap_or("");
             let params = p.get("params").cloned().unwrap_or(json!({}));

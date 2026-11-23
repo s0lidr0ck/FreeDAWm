@@ -182,6 +182,9 @@ struct Link {
     streaming: bool,
     /// The link it came in by.
     kind: LinkKind,
+    /// A listening PC (`hello {role: "listener"}`): hears the mix and reads the status, never
+    /// records or sends takes; the booth never waits for it and forgets it when it goes.
+    listener: bool,
 }
 
 /// The live sketch of one remote port (booth timeline seconds).
@@ -228,7 +231,7 @@ struct Inner {
     /// The remote mix stream: the player's tap and the session rate, the links hearing it, and
     /// whether its thread runs.
     tap: Mutex<Option<(Arc<soundcraft_playback::stream::MixTap>, u32)>>,
-    stream_subs: Mutex<Vec<(u64, Arc<Mutex<TcpStream>>)>>,
+    stream_subs: Mutex<Vec<StreamSub>>,
     streaming: AtomicBool,
     listening: Mutex<Option<Listening>>,
     /// The loopback listener the internet bridge connects to (only pairing by invite there).
@@ -249,6 +252,41 @@ struct Inner {
     /// What the booth's screen tells its owner until dismissed (a device paired with the booth
     /// PIN, PIN pairing paused or turned off): an id and the text.
     notices: Mutex<Vec<(u64, String)>>,
+    /// The mixer feed (`mixer.subscribe`): the last picture, recent deltas, the latest meters;
+    /// `mixer_changed` wakes its pushers, `mixer_subs` counts them.
+    mixer: Mutex<MixerFeed>,
+    mixer_changed: Condvar,
+    mixer_subs: AtomicUsize,
+    /// Paired PCs connected now (after `hello`), whatever they do.
+    pcs: AtomicUsize,
+}
+
+/// The mixer feed's shared state (see [`Hub::publish_mixer`]). Bounded: a pusher that falls
+/// further behind than [`MAX_MIXER_DELTAS`] gets a fresh snapshot instead.
+#[derive(Default)]
+struct MixerFeed {
+    seq: u64,
+    state: Option<Arc<Value>>,
+    /// `(seq, line)`: the newest last.
+    deltas: VecDeque<(u64, Arc<String>)>,
+    meter_seq: u64,
+    meters: Option<Arc<String>>,
+    last_meters: Option<Value>,
+}
+
+/// Mixer deltas kept for pushers catching up.
+const MAX_MIXER_DELTAS: usize = 64;
+/// Meters go to a subscriber at most this often (~20 Hz).
+const METERS_EVERY: Duration = Duration::from_millis(50);
+
+/// A link hearing the mix stream.
+#[derive(Clone)]
+struct StreamSub {
+    link: u64,
+    out: Arc<Mutex<TcpStream>>,
+    /// It takes the stream while the booth is stopped too (`stream.subscribe {live: true}`: a
+    /// newer FreeDAWm, whose decoder knows idle packets); else talkback only then, as before.
+    live: bool,
 }
 
 /// Where booth PIN pairing stands (Setup › Network says it).
@@ -314,6 +352,10 @@ impl Hub {
                 position: Mutex::new(0.0),
                 waker: Mutex::new(None),
                 notices: Mutex::new(Vec::new()),
+                mixer: Mutex::new(MixerFeed::default()),
+                mixer_changed: Condvar::new(),
+                mixer_subs: AtomicUsize::new(0),
+                pcs: AtomicUsize::new(0),
             }),
         }
         .seeded()
@@ -731,6 +773,17 @@ impl Hub {
         let followers: Vec<String> = lock(&self.inner.cfg).paired.iter().filter(|d| d.follows).map(|d| d.name.clone()).collect();
         let mut out: Vec<RemoteStatus> = Vec::new();
         for l in &links {
+            if l.listener {
+                if l.connected {
+                    let mut parts: Vec<String> = Vec::new();
+                    if l.streaming {
+                        parts.push("hears the mix".into());
+                    }
+                    parts.push(l.kind.text().into());
+                    out.push(RemoteStatus { name: l.name.clone(), state: "listening".into(), detail: parts.join(" · "), ..RemoteStatus::default() });
+                }
+                continue;
+            }
             let state = if !l.connected {
                 "not reachable".to_string()
             } else if l.landed && l.report.state != "recording" {
@@ -864,13 +917,14 @@ impl Hub {
         lock(&self.inner.stream_subs).len()
     }
 
-    /// A link wants the mix (or not): the stream thread starts with the first.
-    fn subscribe(&self, link: u64, out: &Arc<Mutex<TcpStream>>, on: bool) {
+    /// A link wants the mix (or not; `live`: while the booth is stopped too): the stream thread
+    /// starts with the first.
+    fn subscribe(&self, link: u64, out: &Arc<Mutex<TcpStream>>, on: bool, live: bool) {
         {
             let mut subs = lock(&self.inner.stream_subs);
-            subs.retain(|(l, _)| *l != link);
+            subs.retain(|s| s.link != link);
             if on {
-                subs.push((link, Arc::clone(out)));
+                subs.push(StreamSub { link, out: Arc::clone(out), live });
             }
         }
         for l in lock(&self.inner.links).iter_mut().filter(|l| l.id == link) {
@@ -1378,6 +1432,12 @@ impl Hub {
         let mut who: Option<PairedDevice> = None;
         let mut link: Option<u64> = None;
         let mut pusher: Option<Arc<AtomicBool>> = None;
+        // This connection is a listening PC's (not a recorder's).
+        let mut listening = false;
+        // The status and mixer feeds pushed on this connection, while on.
+        let mut status_push: Option<Arc<AtomicBool>> = None;
+        let mut mixer_push: Option<Arc<AtomicBool>> = None;
+        let mut counted = false;
         loop {
             if self.stopped(stop) {
                 break;
@@ -1488,11 +1548,20 @@ impl Hub {
                             json!({"ok": false, "error": "this PC was paired over the encrypted local link: connect over it, with the same key", "pair": true}),
                         ),
                         Some(dev) => {
-                            let follower = params.get("role").and_then(Value::as_str) == Some("follower");
-                            if follower {
-                                let report: FollowerReport =
-                                    params.get("report").cloned().and_then(|r| serde_json::from_value(r).ok()).unwrap_or_default();
-                                let l = self.open_link(&dev, report, kind);
+                            let role = params.get("role").and_then(Value::as_str);
+                            let follower = role == Some("follower");
+                            listening = role == Some("listener") && link.is_none();
+                            if !counted {
+                                counted = true;
+                                self.inner.pcs.fetch_add(1, Ordering::SeqCst);
+                            }
+                            if follower || listening {
+                                let report: FollowerReport = if follower {
+                                    params.get("report").cloned().and_then(|r| serde_json::from_value(r).ok()).unwrap_or_default()
+                                } else {
+                                    FollowerReport::default()
+                                };
+                                let l = self.open_link(&dev, report, kind, listening);
                                 link = Some(l);
                                 let flag = Arc::new(AtomicBool::new(false));
                                 pusher = Some(Arc::clone(&flag));
@@ -1503,7 +1572,14 @@ impl Hub {
                                     .name("freedawm-net-push".into())
                                     .spawn(move || hub.push_transport(&out, &flag, &stop));
                             }
-                            log::info!("network: {} connected from {addr}{}", dev.name, if follower { " as a remote recorder" } else { "" });
+                            let what = if follower {
+                                " as a remote recorder"
+                            } else if listening {
+                                " to listen"
+                            } else {
+                                ""
+                            };
+                            log::info!("network: {} connected from {addr}{what}", dev.name);
                             let r = json!({"ok": true, "result": {"pc": self.pc_name(), "name": dev.name, "transport": self.transport()}});
                             who = Some(dev);
                             Some(r)
@@ -1517,6 +1593,39 @@ impl Hub {
                         (Some(b1), Some(b2)) => Some(json!({"ok": true, "result": {"b1": b1, "b2": b2}})),
                         _ => Some(json!({"ok": false, "error": "the booth is stopped"})),
                     }
+                }
+                "follower.report" | "feed" | "feed.audio" | "take.offer" | "take.chunk" | "take.transfer" if listening => {
+                    Some(json!({"ok": false, "error": "a listening PC does not record: connect as a remote recorder to send takes"}))
+                }
+                "status.subscribe" => {
+                    let on = params.get("on").and_then(Value::as_bool).unwrap_or(true);
+                    if let Some(f) = status_push.take() {
+                        f.store(true, Ordering::SeqCst);
+                        self.inner.changed.notify_all();
+                    }
+                    if on {
+                        let flag = Arc::new(AtomicBool::new(false));
+                        status_push = Some(Arc::clone(&flag));
+                        let (hub, out, stop) = (self.clone(), Arc::clone(&out), Arc::clone(stop));
+                        let _ = std::thread::Builder::new().name("freedawm-net-status".into()).spawn(move || hub.push_status(&out, &flag, &stop));
+                    }
+                    Some(json!({"ok": true, "result": {"on": on}}))
+                }
+                "mixer.subscribe" => {
+                    let on = params.get("on").and_then(Value::as_bool).unwrap_or(true);
+                    let meters = params.get("meters").and_then(Value::as_bool).unwrap_or(true);
+                    if let Some(f) = mixer_push.take() {
+                        f.store(true, Ordering::SeqCst);
+                        self.inner.mixer_changed.notify_all();
+                    }
+                    if on {
+                        let flag = Arc::new(AtomicBool::new(false));
+                        mixer_push = Some(Arc::clone(&flag));
+                        let (hub, out, stop) = (self.clone(), Arc::clone(&out), Arc::clone(stop));
+                        let _ =
+                            std::thread::Builder::new().name("freedawm-net-mixer".into()).spawn(move || hub.push_mixer(&out, &flag, &stop, meters));
+                    }
+                    Some(json!({"ok": true, "result": {"on": on, "meters": meters}}))
                 }
                 "follower.report" => {
                     if let (Some(l), Ok(r)) = (link, serde_json::from_value::<FollowerReport>(params)) {
@@ -1538,12 +1647,13 @@ impl Hub {
                 }
                 "stream.subscribe" => {
                     let on = params.get("on").and_then(Value::as_bool).unwrap_or(true);
+                    let live = params.get("live").and_then(Value::as_bool).unwrap_or(false);
                     match link {
                         Some(l) => {
-                            self.subscribe(l, &out, on);
-                            Some(json!({"ok": true, "result": {"on": on}}))
+                            self.subscribe(l, &out, on, live);
+                            Some(json!({"ok": true, "result": {"on": on, "live": live}}))
                         }
-                        None => Some(json!({"ok": false, "error": "only a remote recorder hears the mix"})),
+                        None => Some(json!({"ok": false, "error": "only a remote recorder or a listening PC hears the mix"})),
                     }
                 }
                 "take.offer" => Some(answer(who.as_ref().map_or(Err("not paired".into()), |d| self.take_offer(&d.name, &params)))),
@@ -1579,8 +1689,19 @@ impl Hub {
             p.store(true, Ordering::SeqCst);
             self.inner.transport_changed.notify_all();
         }
+        if let Some(p) = status_push {
+            p.store(true, Ordering::SeqCst);
+            self.inner.changed.notify_all();
+        }
+        if let Some(p) = mixer_push {
+            p.store(true, Ordering::SeqCst);
+            self.inner.mixer_changed.notify_all();
+        }
+        if counted {
+            self.inner.pcs.fetch_sub(1, Ordering::SeqCst);
+        }
         if let Some(l) = link {
-            self.subscribe(l, &out, false);
+            self.subscribe(l, &out, false, false);
             self.close_link(l);
         }
     }
@@ -1758,13 +1879,184 @@ impl Hub {
         }
     }
 
-    fn open_link(&self, dev: &PairedDevice, report: FollowerReport, kind: LinkKind) -> u64 {
+    /// Pushes the status to one paired PC (`status.subscribe`): on every change, at most every
+    /// 66 ms, and every 10 s when nothing changed, as `{"event": "status", "params": <status>}`.
+    fn push_status(&self, out: &Arc<Mutex<TcpStream>>, done: &AtomicBool, stop: &AtomicBool) {
+        let mut seen = u64::MAX;
+        let mut last_push = Instant::now() - STATUS_EVERY;
+        loop {
+            let seq = {
+                let s = lock(&self.inner.status);
+                let (s, _) = self
+                    .inner
+                    .changed
+                    .wait_timeout_while(s, Duration::from_secs(10), |s| s.0 == seen && !done.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst))
+                    .unwrap_or_else(PoisonError::into_inner);
+                s.0
+            };
+            if done.load(Ordering::SeqCst) || stop.load(Ordering::SeqCst) {
+                break;
+            }
+            if seq != seen {
+                let wait = STATUS_EVERY.saturating_sub(last_push.elapsed());
+                if !wait.is_zero() {
+                    std::thread::sleep(wait);
+                }
+            }
+            seen = lock(&self.inner.status).0;
+            last_push = Instant::now();
+            let latest = Arc::clone(&lock(&self.inner.status).2);
+            if !write_raw(out, &format!("{{\"event\":\"status\",\"params\":{latest}}}")) {
+                break;
+            }
+        }
+    }
+
+    /// The mixer as the UI sees it now ([`soundcraft_engine::surface::feed::mixer_state`]): the
+    /// first becomes the snapshot, each later one that differs a delta for the subscribers. Cheap
+    /// and never waits on a subscriber (the UI thread calls it).
+    pub fn publish_mixer(&self, state: Value) {
+        let mut m = lock(&self.inner.mixer);
+        let delta = match &m.state {
+            None => None,
+            Some(old) => match soundcraft_engine::surface::feed::mixer_delta(old, &state) {
+                Some(d) => Some(d),
+                None => return,
+            },
+        };
+        m.seq = m.seq.wrapping_add(1);
+        let seq = m.seq;
+        if let Some(mut d) = delta {
+            if let Some(o) = d.as_object_mut() {
+                o.insert("seq".into(), json!(seq));
+            }
+            let line = Arc::new(json!({"event": "mixer.delta", "params": d}).to_string());
+            m.deltas.push_back((seq, line));
+            while m.deltas.len() > MAX_MIXER_DELTAS {
+                m.deltas.pop_front();
+            }
+        } else {
+            m.deltas.clear();
+        }
+        m.state = Some(Arc::new(state));
+        drop(m);
+        self.inner.mixer_changed.notify_all();
+    }
+
+    /// The meters now ([`soundcraft_engine::surface::feed::meters_json`]'s `params`); only the
+    /// latest is kept.
+    pub fn publish_meters(&self, mut params: Value) {
+        let mut m = lock(&self.inner.mixer);
+        // Unchanged (stopped and quiet): nothing new to send.
+        if m.last_meters.as_ref() == Some(&params) {
+            return;
+        }
+        m.last_meters = Some(params.clone());
+        m.meter_seq = m.meter_seq.wrapping_add(1);
+        if let Some(o) = params.as_object_mut() {
+            o.insert("seq".into(), json!(m.meter_seq));
+        }
+        m.meters = Some(Arc::new(json!({"event": "mixer.meters", "params": params}).to_string()));
+        drop(m);
+        self.inner.mixer_changed.notify_all();
+    }
+
+    /// PCs subscribed to the mixer feed now (the UI builds it only while there are some).
+    pub fn mixer_subscribers(&self) -> usize {
+        self.inner.mixer_subs.load(Ordering::SeqCst)
+    }
+
+    /// Mixer deltas held for subscribers catching up (at most [`MAX_MIXER_DELTAS`]).
+    pub fn mixer_backlog(&self) -> usize {
+        lock(&self.inner.mixer).deltas.len()
+    }
+
+    /// Paired PCs connected now (recorders, listeners and controlling PCs alike).
+    pub fn connected_pcs(&self) -> usize {
+        self.inner.pcs.load(Ordering::SeqCst)
+    }
+
+    /// Pushes the mixer feed to one subscriber (`mixer.subscribe`): a snapshot, then each delta in
+    /// order (a fresh snapshot when it fell more than [`MAX_MIXER_DELTAS`] behind), and the latest
+    /// meters at most every [`METERS_EVERY`]. A subscriber that stops reading only stalls this
+    /// thread, until the link's write timeout ends it; nothing here waits on the UI.
+    fn push_mixer(&self, out: &Arc<Mutex<TcpStream>>, done: &AtomicBool, stop: &AtomicBool, meters: bool) {
+        self.inner.mixer_subs.fetch_add(1, Ordering::SeqCst);
+        // The UI builds the feed only while someone subscribes: wake it.
+        if let Some(w) = lock(&self.inner.waker).as_ref() {
+            w();
+        }
+        let mut cursor: Option<u64> = None;
+        let mut meters_seen = 0u64;
+        let mut last_meters = Instant::now() - METERS_EVERY;
+        let mut lines: Vec<Arc<String>> = Vec::new();
+        loop {
+            let quit = || done.load(Ordering::SeqCst) || stop.load(Ordering::SeqCst);
+            let snapshot = {
+                let g = lock(&self.inner.mixer);
+                let (g, _) = self
+                    .inner
+                    .mixer_changed
+                    .wait_timeout_while(g, Duration::from_secs(5), |m| {
+                        (m.state.is_none() || Some(m.seq) == cursor) && (!meters || m.meter_seq == meters_seen) && !quit()
+                    })
+                    .unwrap_or_else(PoisonError::into_inner);
+                if quit() {
+                    break;
+                }
+                lines.clear();
+                let mut snapshot = None;
+                if let Some(state) = &g.state
+                    && Some(g.seq) != cursor
+                {
+                    let caught_up = cursor.is_some_and(|c| g.deltas.front().is_some_and(|(first, _)| *first <= c.wrapping_add(1)));
+                    if caught_up {
+                        lines.extend(g.deltas.iter().filter(|(s, _)| cursor.is_some_and(|c| *s > c)).map(|(_, l)| Arc::clone(l)));
+                    } else {
+                        snapshot = Some((g.seq, Arc::clone(state)));
+                    }
+                    cursor = Some(g.seq);
+                }
+                if meters && g.meter_seq != meters_seen && last_meters.elapsed() >= METERS_EVERY {
+                    meters_seen = g.meter_seq;
+                    last_meters = Instant::now();
+                    if let Some(m) = &g.meters {
+                        lines.push(Arc::clone(m));
+                    }
+                }
+                snapshot
+            };
+            if let Some((seq, state)) = snapshot {
+                let line = json!({"event": "mixer.snapshot", "params": {"seq": seq, "state": &*state}}).to_string();
+                lines.insert(0, Arc::new(line));
+            }
+            let mut ok = true;
+            for l in &lines {
+                if !write_raw(out, l) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                // A stalled or gone subscriber: its link is ended, nothing waits for it.
+                let _ = lock(out).shutdown(std::net::Shutdown::Both);
+                break;
+            }
+            if lines.is_empty() && meters && meters_seen != lock(&self.inner.mixer).meter_seq {
+                // Meters waiting for their turn.
+                std::thread::sleep(METERS_EVERY.saturating_sub(last_meters.elapsed()).max(Duration::from_millis(1)));
+            }
+        }
+        self.inner.mixer_subs.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn open_link(&self, dev: &PairedDevice, report: FollowerReport, kind: LinkKind, listener: bool) -> u64 {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let ports: Vec<String> = report.ports.iter().map(|p| remote_port_name(&dev.name, p)).collect();
         let inputs: Vec<String> = report.inputs.iter().map(|p| remote_port_name(&dev.name, p)).collect();
         {
             let mut links = lock(&self.inner.links);
-            links.retain(|l| l.name != dev.name);
+            links.retain(|l| l.name != dev.name || l.listener != listener);
             links.push(Link {
                 id,
                 name: dev.name.clone(),
@@ -1774,7 +2066,12 @@ impl Hub {
                 landed: false,
                 streaming: false,
                 kind,
+                listener,
             });
+        }
+        if listener {
+            // Not a remote recorder: nothing to follow, no ports, nothing the booth waits for.
+            return id;
         }
         let name = dev.name.clone();
         self.update_config(|c| {
@@ -1833,10 +2130,13 @@ impl Hub {
     }
 
     fn close_link(&self, id: u64) {
-        for l in lock(&self.inner.links).iter_mut().filter(|l| l.id == id) {
+        let mut links = lock(&self.inner.links);
+        for l in links.iter_mut().filter(|l| l.id == id) {
             l.connected = false;
-            log::info!("network: remote recorder {} disconnected", l.name);
+            log::info!("network: {} {} disconnected", if l.listener { "listening PC" } else { "remote recorder" }, l.name);
         }
+        // A listener is not waited for: gone is gone.
+        links.retain(|l| !(l.id == id && l.listener));
     }
 
     /// Adds notes to the live sketch of `pc`'s `port` (as a feed batch does; for renders).
@@ -1874,6 +2174,12 @@ fn answer(r: Result<Value, String>) -> Value {
 fn write_line(out: &Arc<Mutex<TcpStream>>, v: &Value) -> bool {
     let mut s = lock(out);
     writeln!(s, "{v}").is_ok() && s.flush().is_ok()
+}
+
+/// [`write_line`] for a line already made.
+fn write_raw(out: &Arc<Mutex<TcpStream>>, line: &str) -> bool {
+    let mut s = lock(out);
+    writeln!(s, "{line}").is_ok() && s.flush().is_ok()
 }
 
 /// Reads one `\n`-terminated line of at most `max` bytes (newline stripped). `Ok(false)` at end
@@ -1973,13 +2279,16 @@ fn respond_json(out: &mut TcpStream, code: u16, v: &Value) -> std::io::Result<()
 }
 
 /// The remote mix stream's thread: reads the tap, encodes, sends to every link hearing it; the
-/// tap is on only while someone listens. Ends with the hub.
+/// tap is on only while someone listens. Two encoders: one streaming while the booth is stopped
+/// (`live` links), one sending only talkback then (older performers), each run only while a link
+/// wants it. Ends with the hub.
 fn stream_loop(weak: &std::sync::Weak<Inner>) {
-    let mut enc: Option<(u32, crate::stream::MixEncoder)> = None;
+    // [talkback-only, live]
+    let mut encs: [Option<(u32, crate::stream::MixEncoder)>; 2] = [None, None];
     let mut blocks = Vec::new();
     loop {
         let Some(inner) = weak.upgrade() else { return };
-        let subs: Vec<(u64, Arc<Mutex<TcpStream>>)> = lock(&inner.stream_subs).clone();
+        let subs: Vec<StreamSub> = lock(&inner.stream_subs).clone();
         let tap = lock(&inner.tap).clone();
         match (&tap, subs.is_empty()) {
             (Some((t, rate)), false) => {
@@ -1987,31 +2296,41 @@ fn stream_loop(weak: &std::sync::Weak<Inner>) {
                     t.clear();
                     t.set_on(true);
                 }
-                if enc.as_ref().is_none_or(|(r, _)| r != rate) {
-                    enc = Some((*rate, crate::stream::MixEncoder::new(*rate)));
-                }
                 blocks.clear();
                 t.read(&mut blocks);
-                if let Some((_, e)) = enc.as_mut() {
+                let mut dead = Vec::new();
+                for (k, enc) in encs.iter_mut().enumerate() {
+                    let live = k == 1;
+                    if !subs.iter().any(|s| s.live == live) {
+                        *enc = None;
+                        continue;
+                    }
+                    if enc.as_ref().is_none_or(|(r, _)| r != rate) {
+                        let e = if live { crate::stream::MixEncoder::live(*rate) } else { crate::stream::MixEncoder::new(*rate) };
+                        *enc = Some((*rate, e));
+                    }
+                    let Some((_, e)) = enc.as_mut() else { continue };
                     for p in e.feed(&blocks) {
                         let line = json!({"event": "stream", "params": p});
-                        let mut dead = Vec::new();
-                        for (id, out) in &subs {
-                            if !write_line(out, &line) {
-                                dead.push(*id);
+                        for s in subs.iter().filter(|s| s.live == live) {
+                            if dead.contains(&s.link) {
+                                continue;
+                            }
+                            if !write_line(&s.out, &line) {
+                                dead.push(s.link);
                             }
                         }
-                        if !dead.is_empty() {
-                            lock(&inner.stream_subs).retain(|(id, _)| !dead.contains(id));
-                        }
                     }
+                }
+                if !dead.is_empty() {
+                    lock(&inner.stream_subs).retain(|s| !dead.contains(&s.link));
                 }
             }
             _ => {
                 if let Some((t, _)) = &tap {
                     t.set_on(false);
                 }
-                enc = None;
+                encs = [None, None];
             }
         }
         drop(inner);

@@ -17,6 +17,14 @@
 //!   turns a mark into a point (his take clock, the host's take clock of the sample he heard
 //!   then): the take's `heard` map ([`crate::take::AudioTake::heard`]).
 //!
+//! While the host is stopped the stream goes on when the encoder is [`MixEncoder::live`] (a live
+//! event mixes live inputs with the transport stopped): those packets are on a clock of their own
+//! (frames since the host stopped) and marked [`StreamPacket::idle`], so a performer's heard map
+//! never takes them for the host's take clock; without it (an older performer) only talkback is
+//! sent while stopped, as before. A roll after a stop is a new epoch that drops what is queued at
+//! once; a stop after a roll is a new (idle) epoch that does not: what the performer had not heard
+//! yet of the roll plays out first, still mapped, so a take's end is heard and placed as before.
+//!
 //! Opus delays what it decodes by [`CODEC_DELAY`] samples (its lookahead): taken off. Clock
 //! drift between the PCs moves the queue: frames are dropped when it runs over the target by
 //! 100 ms (and the map starts a new segment there), silence plays when it runs dry (not counted:
@@ -52,6 +60,11 @@ pub struct StreamPacket {
     pub pos: f64,
     /// Opus, base64.
     pub data: String,
+    /// Sent while the host is stopped (monitoring, talkback): `rolled` is not the host's take
+    /// clock but frames since the stop, and the performer maps nothing from it. Absent (false)
+    /// from an older host, which sends only talkback then.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idle: bool,
 }
 
 /// A streaming rate converter for monitoring (cubic Hermite): good enough to listen to, steady
@@ -123,8 +136,11 @@ pub struct MixEncoder {
     /// 48 kHz frames out so far this epoch, and waiting to be encoded.
     out_frames: u64,
     pending: Vec<f32>,
-    /// While stopped and talking: the talkback's own clock (frames since it started).
+    /// While stopped (and talking, unless `live`): the stream's own clock (frames since it
+    /// started).
     idle: Option<i64>,
+    /// Stopped blocks are sent too, not only talkback (see the module docs).
+    live: bool,
 }
 
 impl MixEncoder {
@@ -142,7 +158,18 @@ impl MixEncoder {
             out_frames: 0,
             pending: Vec::new(),
             idle: None,
+            live: false,
         }
+    }
+
+    /// An encoder that streams while the host is stopped too (see the module docs).
+    pub fn live(rate: u32) -> MixEncoder {
+        MixEncoder { live: true, ..MixEncoder::new(rate) }
+    }
+
+    /// Whether it streams while stopped.
+    pub fn is_live(&self) -> bool {
+        self.live
     }
 
     fn encoder(&mut self) -> Option<&mut rusty_opus::OpusEncoder> {
@@ -162,14 +189,15 @@ impl MixEncoder {
     pub fn feed(&mut self, blocks: &[TapBlock]) -> Vec<StreamPacket> {
         let mut out = Vec::new();
         for b in blocks {
-            // Stopped, the stream carries only talkback, on a clock of its own (its own epoch:
-            // the performer is not recording, and the roll after it starts a new one).
+            // Stopped, the stream carries only talkback (everything when `live`), on a clock of
+            // its own (its own epoch: the performer is not recording, and the roll after it
+            // starts a new one).
             let rolled = if b.rolling {
                 if self.idle.take().is_some() {
                     self.next = None;
                 }
                 b.rolled
-            } else if b.talk {
+            } else if b.talk || self.live {
                 let at = *self.idle.get_or_insert_with(|| {
                     self.next = None;
                     0
@@ -218,6 +246,7 @@ impl MixEncoder {
                     rolled: self.start_rolled as f64 / r + at,
                     pos: self.start_pos as f64 / r + at,
                     data: crate::audio::b64_encode(buf.get(..len).unwrap_or(&[])),
+                    idle: self.idle.is_some(),
                 });
             }
         }
@@ -232,6 +261,8 @@ struct Segment {
     index: u64,
     rolled: f64,
     pos: f64,
+    /// From an idle epoch (the host stopped): no place on its take clock.
+    idle: bool,
 }
 
 /// The performer's side (see the module docs).
@@ -240,6 +271,8 @@ pub struct MixDecoder {
     dec: Option<rusty_opus::OpusDecoder>,
     rs: Resampler,
     epoch: Option<u64>,
+    /// The epoch's packets are idle ones (the host stopped).
+    idle: bool,
     /// Packets waiting, by sequence; the next one to decode.
     held: BTreeMap<u64, StreamPacket>,
     next_seq: Option<u64>,
@@ -272,6 +305,7 @@ impl MixDecoder {
             dec: None,
             rs: Resampler::new(RATE, rate),
             epoch: None,
+            idle: false,
             held: BTreeMap::new(),
             next_seq: None,
             decoded: 0,
@@ -295,7 +329,14 @@ impl MixDecoder {
     pub fn on_packet(&mut self, p: StreamPacket, queue: &StreamIn) {
         self.packets += 1;
         if self.epoch.is_none_or(|e| p.epoch > e) {
+            // The host stopped after a roll: what is held and queued of the roll still plays
+            // (the end of a take is heard, and mapped); anything else is dropped at once.
+            let play_out = p.idle && !self.idle && self.epoch.is_some();
+            if play_out {
+                self.drain_held(queue);
+            }
             self.epoch = Some(p.epoch);
+            self.idle = p.idle;
             self.held.clear();
             self.next_seq = Some(p.seq);
             self.decoded = 0;
@@ -307,7 +348,9 @@ impl MixDecoder {
             self.rs = Resampler::new(RATE, self.rate);
             // Everything queued is from before: dropped (the audio thread counts it as played, so
             // frame `pushed` is still the next one it plays).
-            queue.flush();
+            if !play_out {
+                queue.flush();
+            }
         }
         if Some(p.epoch) != self.epoch {
             return;
@@ -383,50 +426,71 @@ impl MixDecoder {
                 }
                 self.lost += 1;
             }
-            let bytes = have.as_ref().and_then(|p| crate::audio::b64_decode(&p.data));
-            let pcm = self.decode(bytes.as_deref());
-            self.decoded += (pcm.len() / 2) as u64;
             next += 1;
             self.next_seq = Some(next);
-            // Converted even when dropped, so output frame `m` of the epoch is always decoded
-            // frame `m * step` (the map stays exact).
-            let mut conv = Vec::with_capacity(pcm.len() + 8);
-            self.rs.run(&pcm, &mut conv);
-            let first_out = self.converted;
-            self.converted += (conv.len() / 2) as u64;
-            if self.skip_next {
-                // Dropped: the next frame pushed starts a new segment.
-                self.skip_next = false;
+            if !self.push_frame(have.as_ref(), queue) {
+                break;
+            }
+        }
+    }
+
+    /// Decodes one frame (`None`: lost, concealed) and queues it; `false` once the queue is full.
+    fn push_frame(&mut self, have: Option<&StreamPacket>, queue: &StreamIn) -> bool {
+        let bytes = have.and_then(|p| crate::audio::b64_decode(&p.data));
+        let pcm = self.decode(bytes.as_deref());
+        self.decoded += (pcm.len() / 2) as u64;
+        // Converted even when dropped, so output frame `m` of the epoch is always decoded
+        // frame `m * step` (the map stays exact).
+        let mut conv = Vec::with_capacity(pcm.len() + 8);
+        self.rs.run(&pcm, &mut conv);
+        let first_out = self.converted;
+        self.converted += (conv.len() / 2) as u64;
+        if self.skip_next {
+            // Dropped: the next frame pushed starts a new segment.
+            self.skip_next = false;
+            return true;
+        }
+        if conv.is_empty() {
+            return true;
+        }
+        // This frame's first sample (decoded frame `first_out * step`): Opus's delay off.
+        let at = (first_out as f64 * self.rs.step - CODEC_DELAY as f64) / f64::from(RATE);
+        let seg = Segment { index: self.pushed, rolled: self.epoch_rolled + at, pos: self.epoch_pos + at, idle: self.idle };
+        let continuous = self.segments.back().is_some_and(|s| {
+            let expect = s.rolled + (seg.index - s.index) as f64 / f64::from(self.rate);
+            s.idle == seg.idle && (expect - seg.rolled).abs() < 1.0 / f64::from(self.rate)
+        });
+        if !continuous {
+            self.segments.push_back(seg);
+            if self.segments.len() > 10_000 {
+                self.segments.pop_front();
+            }
+        }
+        let n = queue.push(&conv);
+        self.pushed = self.pushed.saturating_add(n as u64);
+        n * 2 >= conv.len()
+    }
+
+    /// Queues every packet still held of this epoch, in order (gaps skipped), whatever the
+    /// target: the host stopped and nothing more of this epoch comes.
+    fn drain_held(&mut self, queue: &StreamIn) {
+        let held = std::mem::take(&mut self.held);
+        for (seq, p) in held {
+            if self.next_seq.is_some_and(|n| seq < n) {
                 continue;
             }
-            if conv.is_empty() {
-                continue;
-            }
-            // This frame's first sample (decoded frame `first_out * step`): Opus's delay off.
-            let at = (first_out as f64 * self.rs.step - CODEC_DELAY as f64) / f64::from(RATE);
-            let seg = Segment { index: self.pushed, rolled: self.epoch_rolled + at, pos: self.epoch_pos + at };
-            let continuous = self.segments.back().is_some_and(|s| {
-                let expect = s.rolled + (seg.index - s.index) as f64 / f64::from(self.rate);
-                (expect - seg.rolled).abs() < 1.0 / f64::from(self.rate)
-            });
-            if !continuous {
-                self.segments.push_back(seg);
-                if self.segments.len() > 10_000 {
-                    self.segments.pop_front();
-                }
-            }
-            let n = queue.push(&conv);
-            self.pushed = self.pushed.saturating_add(n as u64);
-            if n * 2 < conv.len() {
+            self.next_seq = Some(seq + 1);
+            if !self.push_frame(Some(&p), queue) {
                 break;
             }
         }
     }
 
     /// The host's take clock (s) and timeline (s) of stream frame `index` (frames played).
+    /// `None` before the first frame and in audio sent while the host was stopped.
     pub fn at_index(&self, index: u64) -> Option<(f64, f64)> {
         let i = self.segments.partition_point(|s| s.index <= index);
-        let s = self.segments.get(i.checked_sub(1)?)?;
+        let s = self.segments.get(i.checked_sub(1)?).filter(|s| !s.idle)?;
         let d = (index - s.index) as f64 / f64::from(self.rate);
         Some((s.rolled + d, s.pos + d))
     }
@@ -538,7 +602,23 @@ mod tests {
     /// lossy link, his clock off by `ppm`) and plays a pluck the instant he hears each; his
     /// heard map puts each pluck at the host take-clock time of its click.
     fn performer_hears(host_rate: u32, perf_rate: u32, ppm: f64, base_ms: f64, jitter_ms: f64, loss: f64) -> Vec<f64> {
-        let mut enc = MixEncoder::new(host_rate);
+        performer_hears_live(host_rate, perf_rate, ppm, base_ms, jitter_ms, loss, None)
+    }
+
+    /// [`performer_hears`], the host streaming while stopped (`live`: blocks stopped before the
+    /// roll and after it), a quiet tone playing then (live inputs monitored).
+    fn performer_hears_live(
+        host_rate: u32,
+        perf_rate: u32,
+        ppm: f64,
+        base_ms: f64,
+        jitter_ms: f64,
+        loss: f64,
+        live: Option<(usize, usize)>,
+    ) -> Vec<f64> {
+        let mut enc = if live.is_some() { MixEncoder::live(host_rate) } else { MixEncoder::new(host_rate) };
+        let (mut lead, mut tail) = live.unwrap_or((0, 0));
+        let mut idle_packets = 0usize;
         let mut dec = MixDecoder::new(perf_rate);
         let queue = StreamIn::default();
         queue.set_on(true);
@@ -552,19 +632,36 @@ mod tests {
         let mut plucks: Vec<i64> = Vec::new();
         let step_s = block as f64 / f64::from(host_rate);
         let mut t = 0.0;
-        while host_rolled < i64::from(host_rate) * 9 {
+        while host_rolled < i64::from(host_rate) * 9 || tail > 0 {
             // The host renders a block.
             let mut s = vec![0f32; block * 2];
-            for c in &clicks {
-                let k = c - host_rolled;
-                if (0..block as i64).contains(&k) {
-                    s[k as usize * 2] = 0.9;
-                    s[k as usize * 2 + 1] = 0.9;
+            let stopped = lead > 0 || host_rolled >= i64::from(host_rate) * 9;
+            let b = if stopped {
+                // Stopped: a quiet tone (under the pluck threshold), the take clock where it stopped.
+                for (i, x) in s.iter_mut().enumerate() {
+                    *x = 0.1 * ((i / 2) as f32 * 0.05).sin();
                 }
-            }
-            let b = TapBlock { rolled: host_rolled, position: 100_000 + host_rolled, rolling: true, talk: false, samples: s };
-            host_rolled += block as i64;
+                if lead > 0 {
+                    lead -= 1;
+                } else {
+                    tail -= 1;
+                }
+                let at = if host_rolled > 0 { host_rolled } else { 0 };
+                TapBlock { rolled: at, position: 100_000 + at, rolling: false, talk: false, samples: s }
+            } else {
+                for c in &clicks {
+                    let k = c - host_rolled;
+                    if (0..block as i64).contains(&k) {
+                        s[k as usize * 2] = 0.9;
+                        s[k as usize * 2 + 1] = 0.9;
+                    }
+                }
+                let b = TapBlock { rolled: host_rolled, position: 100_000 + host_rolled, rolling: true, talk: false, samples: s };
+                host_rolled += block as i64;
+                b
+            };
             for p in enc.feed(&[b]) {
+                idle_packets += usize::from(p.idle);
                 let r = net.rand();
                 if r < loss {
                     continue;
@@ -612,7 +709,101 @@ mod tests {
             offs.push(booth - *near as f64);
         }
         assert!(offs.len() >= 8, "only {} clicks heard (lost {}, late {})", offs.len(), dec.lost, dec.late);
+        if live.is_some() {
+            assert!(idle_packets > 0, "stopped, it streamed");
+        }
         offs
+    }
+
+    #[test]
+    fn streaming_while_stopped_before_and_after_the_roll_keeps_the_take_exact() {
+        // A second stopped (live inputs monitored) before Play, half a second after Stop.
+        let offs = performer_hears_live(48_000, 48_000, 0.0, 120.0, 80.0, 0.02, Some((188, 94)));
+        eprintln!("live stream, 48k, 120 ms + 80 ms jitter, 2 % loss: {offs:?}");
+        assert!(offs.iter().all(|o| o.abs() <= 1.0), "{offs:?}");
+        let offs = performer_hears_live(44_100, 48_000, 120.0, 250.0, 150.0, 0.03, Some((172, 86)));
+        eprintln!("live stream, 44.1k host, 48k performer at +120 ppm: {offs:?}");
+        assert!(offs.iter().all(|o| o.abs() <= 1.0), "{offs:?}");
+    }
+
+    fn tone(rolled: i64, rolling: bool) -> TapBlock {
+        TapBlock { rolled, position: 9_000 + rolled, rolling, talk: false, samples: (0..1920).map(|i| 0.3 * ((i / 2) as f32 * 0.06).sin()).collect() }
+    }
+
+    #[test]
+    fn live_the_stream_runs_stopped_and_across_stop_play_stop_without_gaps_or_repeats() {
+        let mut enc = MixEncoder::live(48_000);
+        assert!(enc.is_live());
+        // Stopped: sent, idle, on its own clock (from 0), whatever the take clock says.
+        let a = enc.feed(&vec![tone(5_000, false); 10]);
+        assert_eq!(a.len(), 10, "every stopped block is sent");
+        assert!(a.iter().all(|p| p.idle));
+        assert!(a[0].rolled.abs() < 1e-9);
+        // Play: a new epoch on the take clock, not idle.
+        let b = enc.feed(&(0..10).map(|k| tone(k * 960, true)).collect::<Vec<_>>());
+        assert_eq!(b.len(), 10);
+        assert!(b.iter().all(|p| !p.idle && p.epoch == a[0].epoch + 1));
+        assert!(b[0].rolled.abs() < 1e-9 && (b[9].rolled - 0.18).abs() < 1e-9);
+        // Stop: idle again, a new epoch.
+        let c = enc.feed(&vec![tone(9_600, false); 10]);
+        assert_eq!(c.len(), 10);
+        assert!(c.iter().all(|p| p.idle && p.epoch == b[0].epoch + 1));
+        // One run of sequence numbers through it all, epochs only ever growing.
+        let all: Vec<&StreamPacket> = a.iter().chain(&b).chain(&c).collect();
+        assert!(all.windows(2).all(|w| w[1].seq == w[0].seq + 1 && w[1].epoch >= w[0].epoch), "no gap, no repeat");
+        // Not live (an older performer): nothing but talkback while stopped, as before.
+        let mut old = MixEncoder::new(48_000);
+        assert!(old.feed(&vec![tone(5_000, false); 4]).is_empty());
+        // Idle is said only when true: a rolling packet's JSON is what an older performer knows.
+        let j = serde_json::to_value(&b[0]).unwrap();
+        assert!(j.get("idle").is_none(), "{j}");
+        assert_eq!(serde_json::to_value(&c[0]).unwrap()["idle"], true);
+    }
+
+    #[test]
+    fn a_stop_after_a_roll_plays_out_the_rolls_end_still_mapped_and_maps_nothing_after() {
+        let mut enc = MixEncoder::live(48_000);
+        let roll = enc.feed(&(0..20).map(|k| tone(k * 960, true)).collect::<Vec<_>>());
+        let idle = enc.feed(&vec![tone(19_200, false); 20]);
+        let mut dec = MixDecoder::new(48_000);
+        let q = StreamIn::default();
+        q.set_on(true);
+        for p in &roll {
+            dec.on_packet(p.clone(), &q);
+        }
+        // The audio thread takes the first epoch's flush, as it would between blocks.
+        q.mix_into(&mut [], &mut [], 0, 0, true);
+        dec.target_ms = 100.0;
+        dec.pump(&q);
+        let queued = q.queued();
+        assert!(queued > 0 && queued < 20 * 960, "some of the roll waits in the jitter buffer: {queued}");
+        // The stop's first packet: nothing of the roll is dropped, what was held is queued too.
+        dec.on_packet(idle[0].clone(), &q);
+        let (mut l, mut r) = (vec![0f32; 4], vec![0f32; 4]);
+        q.mix_into(&mut l, &mut r, 4, 0, true);
+        assert_eq!(q.played(), 4, "not flushed");
+        assert_eq!(q.queued(), 20 * 960 - 4, "the whole roll is queued");
+        for p in &idle[1..] {
+            dec.on_packet(p.clone(), &q);
+        }
+        // The roll plays out; then the idle audio is queued behind it.
+        let n = q.queued();
+        let (mut l, mut r) = (vec![0f32; n], vec![0f32; n]);
+        q.mix_into(&mut l, &mut r, n, 0, true);
+        assert!(l.iter().any(|x| x.abs() > 0.1), "the roll's end is heard");
+        dec.pump(&q);
+        assert!(q.queued() > 0);
+        // The roll's last frame maps to its place; the idle audio after it maps nowhere.
+        let last = 20 * 960 - 1;
+        let (rolled, _) = dec.at_index(last).unwrap();
+        assert!((rolled - (last as f64 - CODEC_DELAY as f64) / 48_000.0).abs() < 1e-6, "{rolled}");
+        assert!(dec.at_index(last + 1).is_none(), "idle audio has no place on the take clock");
+        assert!(dec.heard(HeardMark { played: last + 960, rolled: 50_000, rolling: true, full: true }).is_none());
+        // A roll after it drops the idle audio at once.
+        let again = enc.feed(&[tone(0, true)]);
+        dec.on_packet(again[0].clone(), &q);
+        q.mix_into(&mut [], &mut [], 0, 0, true);
+        assert_eq!(q.queued(), 0);
     }
 
     #[test]

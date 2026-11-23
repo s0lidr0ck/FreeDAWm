@@ -267,6 +267,14 @@ download.
   when routers block it; you can run your own relay. The performer hears your live mix (Opus),
   and their take lands where they played against it. They also get a level window with a big
   meter, a clip light, plain advice and a 10-second level check.
+- **Groundwork for mixing from home.** The live mix now streams while the transport is stopped
+  (a live event monitors inputs without rolling). A paired PC can connect just to listen: it
+  hears the mix and reads the status, never records, and the studio lists it as "listening". A
+  paired PC can also subscribe to a pushed mixer feed (every strip's fader, pan, mute, solo,
+  sends and inserts, then only what changes, plus meters about 20 times a second: about
+  7.5 to 9 KB/s for 32 strips). While remotes are connected or live inputs are monitored, the studio PC
+  is kept awake. The remote mixer screen itself is still to come; see
+  [docs/control-protocol.md](docs/control-protocol.md).
 - **FreeDAWm Recorder (Windows).** A small window beside the DAW: Record and Stop for quick
   ideas (a 24-bit WAV and a MIDI file named by date and time), recording into a booth on another
   PC as a remote recorder does, and listening to the booth's mix. It never listens on the
