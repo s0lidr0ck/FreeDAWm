@@ -5,8 +5,10 @@
 //! synthetic phrase (generated, no recording) at each preset, `synth_<preset>.wav`, with the dry
 //! input; and the CPU share of one core for a stereo voice at 48 kHz.
 //!
-//! `... -- <out_dir> <take.wav> <from s> <to s> <key 1..12 (1 = C)> [scale index]`: that stretch of
-//! a recording at each preset, `take_<preset>.wav` with `take_dry.wav`. Nothing is read or
+//! `... -- <out_dir> <take.wav> <from s> <to s> <key 1..12 (1 = C)> [scale index] [live]`: that
+//! stretch of a recording at each preset, `take_<preset>.wav` with `take_dry.wav` (with `live`:
+//! in Live mode, Middle voice range, `take_live_<preset>.wav`). `... -- <out_dir> live`: the
+//! synthetic phrase in Live mode too. Nothing is read or
 //! written anywhere else; the files are for the person whose take it is.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -61,6 +63,8 @@ fn main() {
         let x: Vec<Vec<f32>> = buf.channels.iter().map(|c| c[a.min(c.len())..b.min(c.len())].to_vec()).collect();
         let key: f32 = args[4].parse().unwrap();
         let scale: f32 = args.get(5).map_or(0.0, |s| s.parse().unwrap());
+        let live = args.get(6).is_some_and(|a| a == "live");
+        let tag = if live { "live_" } else { "" };
         write(&format!("{out}/take_dry.wav"), sr, &x);
         let mask = soundcraft_dsp::plugins::autopitch::rotate(
             soundcraft_dsp::plugins::autopitch::SCALES[scale as usize % 12].1,
@@ -71,11 +75,14 @@ fn main() {
             let mut set = fixtures::setting(preset);
             set.push(("key", key));
             set.push(("scale", scale));
+            if live {
+                set.extend([("mode", 1.0), ("range", 1.0)]);
+            }
             let (y, _, d, secs) = fixtures::run_with(&x, &set, 256, sr as f32);
-            write(&format!("{out}/take_{}.wav", preset.to_lowercase()), sr, &y);
+            write(&format!("{out}/take_{tag}{}.wav", preset.to_lowercase()), sr, &y);
             let audio = x[0].len() as f64 / f64::from(sr);
             println!(
-                "take {preset}: latency {d} samples, {:.1} % of one core ({} channels), {:.0} % of the voiced time within 15 c of a key note",
+                "take {tag}{preset}: latency {d} samples, {:.1} % of one core ({} channels), {:.0} % of the voiced time within 15 c of a key note",
                 100.0 * secs / audio,
                 x.len(),
                 in_key(&y, sr, mask)
@@ -85,10 +92,29 @@ fn main() {
     }
     let x = vec![phrase()];
     write(&format!("{out}/synth_dry.wav"), fixtures::SR, &x);
+    let live = args.get(1).is_some_and(|a| a == "live");
     for preset in fixtures::SETTINGS {
-        let (y, _, d, _) = fixtures::run(&x, &fixtures::setting(preset));
-        write(&format!("{out}/synth_{}.wav", preset.to_lowercase()), fixtures::SR, &y);
-        println!("synth {preset}: latency {d} samples ({:.1} ms)", d as f64 / 48.0);
+        let mut set = fixtures::setting(preset);
+        // Live: the Low voice range (the phrase goes down to E2).
+        if live {
+            set.extend([("mode", 1.0), ("range", 0.0)]);
+        }
+        let tag = if live { "live_" } else { "" };
+        let (y, _, d, _) = fixtures::run(&x, &set);
+        write(&format!("{out}/synth_{tag}{}.wav", preset.to_lowercase()), fixtures::SR, &y);
+        println!("synth {tag}{preset}: latency {d} samples ({:.1} ms)", d as f64 / 48.0);
+    }
+    if live {
+        let f = fixtures::by_name("stereo_2mic").unwrap();
+        let long: Vec<Vec<f32>> = f.x.iter().map(|c| c.repeat(10)).collect();
+        let audio = long[0].len() as f64 / fixtures::SRF;
+        for preset in fixtures::SETTINGS {
+            let mut set = fixtures::setting(preset);
+            set.extend([("mode", 1.0), ("range", 1.0)]);
+            let (_, _, _, secs) = fixtures::run_with(&long, &set, 128, 48_000.0);
+            println!("CPU Live {preset}: {:.2} % of one core, stereo 48 kHz, 128-sample blocks", 100.0 * secs / audio);
+        }
+        return;
     }
     // CPU: the two-microphone voice, stereo 48 kHz, ten times over, 256-sample blocks.
     let f = fixtures::by_name("stereo_2mic").unwrap();

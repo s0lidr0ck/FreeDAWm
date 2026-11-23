@@ -248,7 +248,7 @@ fn process_keeps_its_buffers() {
     // heap blocks keep their addresses and capacities through a minute of blocks of every size,
     // with parameter changes, key changes and silence.
     let mut a = made(SR, 2, &[("key", 1.0)]);
-    let addr = |a: &AutoPitch| -> Vec<(usize, usize)> { a.studio.buffers().into_iter().chain(a.front.buffers()).collect() };
+    let addr = |a: &AutoPitch| -> Vec<(usize, usize)> { a.buffers() };
     let before = addr(&a);
     let x = tone(SR, 3.0, 5660.0, 40.0);
     let mut io = vec![vec![0.0f32; 1024]; 2];
@@ -262,6 +262,8 @@ fn process_keeps_its_buffers() {
         }
         if k % 50 == 0 {
             a.set_param("style", (k / 50 % 3) as f32);
+            a.set_param("mode", (k / 100 % 2) as f32);
+            a.set_param("range", (k / 50 % 3) as f32);
             a.set_param("formant", if k % 100 == 0 { 3.0 } else { 0.0 });
             a.set_song_keys(&[SongKey { start: 0, tonic: (k % 12) as u8, minor: k % 3 == 0 }]);
         }
@@ -287,4 +289,95 @@ fn hostile_input_and_parameters_never_break_it() {
     assert!(io[2].iter().all(|v| *v == 0.1));
     let mut none: Vec<Vec<f32>> = Vec::new();
     a.process(&mut none, 100);
+}
+
+// ------------------------------------------------------------------------------- Live mode
+
+const LIVE: f32 = MODE_LIVE as f32;
+
+#[test]
+fn live_mode_reports_a_few_milliseconds_and_switching_changes_the_latency() {
+    let mut a = made(SR, 2, &[]);
+    assert_eq!(a.latency(), 2048);
+    assert!(!a.live_monitoring());
+    a.set_param("mode", LIVE);
+    // Middle voice: 1 ms + half of a 100 Hz period = 288 samples (6 ms).
+    assert_eq!(a.latency(), 288);
+    assert!(a.live_monitoring());
+    for (range, want) in [(0.0, 391), (2.0, 208)] {
+        a.set_param("range", range);
+        assert_eq!(a.latency(), want, "range {range}");
+    }
+    a.set_param("mode", 0.0);
+    assert_eq!(a.latency(), 2048);
+}
+
+#[test]
+fn live_mode_is_the_same_whatever_the_block_size() {
+    let l = tone(SR, 1.5, 5660.0, 30.0);
+    let r: Vec<f32> = l.iter().map(|v| v * 0.7).collect();
+    let x = vec![l, r];
+    for style in [STYLE_NATURAL, STYLE_HARD] {
+        let set = [("style", style as f32), ("key", 1.0), ("mode", LIVE)];
+        let reference = run(&mut made(SR, 2, &set), &x, 32);
+        for block in [128, 512, 1024, 333] {
+            assert_eq!(run(&mut made(SR, 2, &set), &x, block), reference, "style {style}, block {block}");
+        }
+    }
+}
+
+#[test]
+fn live_mode_lets_noise_through_delayed_by_its_latency_and_mix_zero_is_the_delayed_input() {
+    for sr in [44_100.0, 48_000.0, 96_000.0] {
+        let mut a = made(sr, 2, &[("key", 1.0), ("mode", LIVE)]);
+        let x = vec![noise(sr as usize / 2, 3), noise(sr as usize / 2, 5)];
+        let y = run(&mut a, &x, 256);
+        let d = a.latency();
+        for c in 0..2 {
+            assert_eq!(&y[c][d..], &x[c][..], "{sr} Hz");
+        }
+    }
+    let x = vec![tone(SR, 1.2, 5660.0, 0.0)];
+    let mut a = made(SR, 1, &[("style", STYLE_HARD as f32), ("key", 1.0), ("mode", LIVE), ("mix", 0.0)]);
+    let y = run(&mut a, &x, 256);
+    assert_eq!(&y[0][a.latency()..], &x[0][..]);
+}
+
+#[test]
+fn live_mode_corrects_with_a_bounded_delay() {
+    // A3 40 c flat, Hard tune: on the note within 2 c; the delay never exceeds one period of the
+    // range's lowest note plus 20 ms (the bound the engine keeps), and averages a few ms.
+    for range in [0.0f32, 1.0, 2.0] {
+        let x = vec![tone(SR, 1.5, 5660.0, 0.0)];
+        let mut a = made(SR, 1, &[("style", STYLE_HARD as f32), ("key", 1.0), ("mode", LIVE), ("range", range)]);
+        let y = run(&mut a, &x, 128);
+        let d = a.latency() as f64 / f64::from(SR);
+        let p = pitch(&y[0], SR, 0.6 + d, 1.2 + d);
+        assert!((p - 5700.0).abs() < 2.0, "range {range}: {p}");
+        let (mean, max) = a.live_delay().unwrap();
+        let floor = RANGE_FLOORS[range as usize];
+        let bound = f64::from(SR) / floor * 3.0 + 0.02 * f64::from(SR);
+        println!("range {range}: mean {:.1} ms, max {:.1} ms", mean / 48.0, max / 48.0);
+        assert!(max <= bound, "range {range}: {max}");
+        assert!(mean <= f64::from(SR) / floor + 48.0, "range {range}: mean {mean}");
+    }
+}
+
+#[test]
+fn switching_mode_mid_stream_starts_the_new_engine_clean() {
+    let x = tone(SR, 2.0, 5660.0, 20.0);
+    let mut a = made(SR, 1, &[("key", 1.0)]);
+    let mut io = vec![vec![0.0f32; 256]];
+    for (k, chunk) in x.chunks(256).enumerate() {
+        if k == 150 {
+            a.set_param("mode", LIVE);
+        }
+        io[0][..chunk.len()].copy_from_slice(chunk);
+        a.process(&mut io, chunk.len());
+        assert!(io[0].iter().all(|v| v.is_finite() && v.abs() < 1.0));
+    }
+    let mut r = [f32::NAN; 8];
+    a.readouts(&mut r);
+    assert_eq!(r[7], 1.0);
+    assert!((r[6] - 6.0).abs() < 0.1, "{r:?}");
 }

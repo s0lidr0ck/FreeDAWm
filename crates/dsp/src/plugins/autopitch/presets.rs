@@ -2,8 +2,8 @@
 //!
 //! Each preset lists only what it changes from Auto Pitch's defaults (Gentle is the defaults);
 //! the JSON a preset menu recalls (`{"name", "group", "desc", "values"}`, as the other built-ins'
-//! presets) carries every parameter. The editor keeps the key, the scale and the note switches
-//! out of presets, so recalling one never changes the key.
+//! presets) carries every parameter. The editor keeps the key, the scale, the note switches, the
+//! mode and the voice range out of presets, so recalling one never changes the key or the mode.
 
 use super::{AUTOPITCH_INFO, STYLE_CUSTOM, STYLE_HARD};
 use std::sync::OnceLock;

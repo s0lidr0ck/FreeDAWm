@@ -186,6 +186,10 @@ impl Plugin for Timed {
         self.inner.follows_song_key()
     }
 
+    fn live_monitoring(&self) -> bool {
+        self.inner.live_monitoring()
+    }
+
     fn set_song_keys(&mut self, keys: &[crate::SongKey]) {
         self.inner.set_song_keys(keys);
     }

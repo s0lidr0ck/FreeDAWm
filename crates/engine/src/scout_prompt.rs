@@ -29,8 +29,8 @@ use std::fmt::Write as _;
 /// The three synths' modulation patching (their four macros, one line each, the FM Synth's Env 2,
 /// the Subtractive Synth's X-Mod and the Wavetable Synth's Warp: 340) raised it to 56 000. Auto
 /// Pitch (1 000: its key and scale lists, twelve note switches named by note, and its line) raised
-/// it to 57 000.
-pub const MAX_CHARS: usize = 57_000;
+/// it to 57 000, and its Live mode and Voice range (200) to 57 300.
+pub const MAX_CHARS: usize = 57_300;
 
 /// The reply format Scout reads guides from: the `guides` block of a package's
 /// `ai_response_instructions`, and the starting prompt's "How to reply".
@@ -60,7 +60,7 @@ pub fn purpose(id: &str) -> &'static str {
     match id {
         "fs_amp" => "Guitar/bass amp: seven tube amps solved from their schematics, built-in or impulse-response cabinet, Auto Level, output trim.",
         "autopitch" => {
-            "Real-time pitch correction for one voice: pulls it to the nearest enabled note of the song's key (Key ruler) or its own; Natural or Hard tune; 43 ms, compensated."
+            "Real-time pitch correction for one voice: pulls it to the nearest enabled note of the song's key (Key ruler) or its own; Natural or Hard tune; Studio 43 ms (compensated) or Live 4-8 ms."
         }
         "heft" => {
             "Bass enhancer: harmonics of the band below Frequency added above it (Character even/odd), Original Bass keeps or removes the lows."

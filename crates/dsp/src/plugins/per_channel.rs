@@ -340,6 +340,10 @@ impl Plugin for PerChannel {
         self.first.follows_song_key()
     }
 
+    fn live_monitoring(&self) -> bool {
+        self.first.live_monitoring()
+    }
+
     fn set_song_keys(&mut self, keys: &[crate::SongKey]) {
         self.all().for_each(|p| p.set_song_keys(keys));
     }

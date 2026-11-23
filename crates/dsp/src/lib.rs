@@ -274,6 +274,10 @@ pub struct Transport {
     pub bar: i64,
 }
 
+/// The most delay (ms) a module that says it is made to be heard live ([`Plugin::live_monitoring`])
+/// may add and still stay in under Low Latency Monitoring.
+pub const LIVE_MONITORING_MAX_MS: f64 = 15.0;
+
 /// Most key changes a plugin following the song's key is handed ([`Plugin::set_song_keys`]).
 pub const MAX_SONG_KEYS: usize = 256;
 
@@ -409,6 +413,13 @@ pub trait Plugin: Send {
     /// Processing latency in samples (for delay compensation).
     fn latency(&self) -> usize {
         0
+    }
+    /// Whether the plugin is made to be heard live at its current latency (Auto Pitch's Live
+    /// mode): Low Latency Monitoring then keeps it in on an armed or monitored track, where it
+    /// takes out every other insert that reports a delay, as long as that delay is at most
+    /// [`LIVE_MONITORING_MAX_MS`]. False by default. Must not allocate.
+    fn live_monitoring(&self) -> bool {
+        false
     }
     /// How long the output keeps ringing after the input stops, in samples.
     fn tail_samples(&self) -> usize {

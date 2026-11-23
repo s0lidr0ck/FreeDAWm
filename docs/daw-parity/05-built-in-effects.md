@@ -66,7 +66,7 @@ from the menu, and say so where a hidden effect would have filled a gap.
 | C. Saturation and amps | Tape, five saturation circuits, twelve pedals, seven guitar amps with IR cabinets, a bass amp, a bass enhancer | Small (pedalboard dropped by the owner) |
 | D. Reverb | Six algorithmic machines, a geometry-built chamber, zero-latency convolution | Medium: **no bundled impulse responses** (the owner is sourcing them); no reverb that spreads a source across surround speakers |
 | E. Delay and modulation | Six delay voicings, fourteen modelled modulation circuits | Small: rotary speaker, auto-pan, ring modulator and frequency shifter dropped by the owner |
-| F. Pitch and voice | Octaver, doubler, whammy; real-time pitch correction (Auto Pitch, Studio mode); machine-learning de-noise and de-reverb on an insert | Small: a low-delay Auto Pitch for live singing is approved, not built; a vocoder dropped by the owner |
+| F. Pitch and voice | Octaver, doubler, whammy; real-time pitch correction (Auto Pitch: Studio and a low-delay Live mode); machine-learning de-noise and de-reverb on an insert | Small: a vocoder dropped by the owner |
 | G. Creative and mastering | Rhythmic swells, step-sequenced filter, loudness matching with references | Medium: no glitch or multi-effect; no mastering assistant (beat repeat and a gater dropped by the owner) |
 | H. Utility and metering | Gain, polarity, DC, tone generator, delay, imager, channel tool, dither, spectrum, loudness, phase meter, tuner | Small: no phase alignment utility outside Shale |
 | I. Presets | 955 factory presets, a searchable browser, chain and track presets, one save path, rename, a default per effect, A/B everywhere | Small |
@@ -177,7 +177,7 @@ Loudness Meter and Phase Meter). All three are in place.
 | Real-time pitch shifter | ● | ◐ | ● | ● | **Works** (Pitch); no formant preservation, and its delay is not compensated (bug 5) |
 | Octaver, doubler, harmony at fixed intervals | ● | ◐ | ● | ● | **Works** |
 | Harmony that follows a key | ○ | ○ | ◐ | ◐ | **Not planned here**: needs pitch tracking in Pitch, close to the real-time pitch correction the owner dropped; the owner builds only Keel and Heft of the new effects in this section |
-| Real-time automatic pitch correction | ○ | ○ | ● | ● | **Partial**: Auto Pitch (Studio mode) corrects a recorded voice to the song's Key ruler (key changes included) or its own key, scale and notes; Natural / Hard tune switch, Retune speed, Humanize, Keep vibrato, Note hold, Formant, Mix; 43 ms, compensated; pitch display (`docs/auto-pitch.md`). Left: a low-delay Live mode for singing through it (approved by the owner), capturing a pass into the Vocal Editor, MIDI-played target notes |
+| Real-time automatic pitch correction | ○ | ○ | ● | ● | **Works**: Auto Pitch corrects one voice to the song's Key ruler (key changes included) or its own key, scale and notes; Natural / Hard tune switch, Retune speed, Humanize, Keep vibrato, Note hold, Formant, Mix; Studio mode (43 ms, compensated) and Live mode (4–8 ms by Voice range, kept in by Low Latency Monitoring); pitch display (`docs/auto-pitch.md`). Not built: capturing a pass into the Vocal Editor, MIDI-played target notes |
 | Vocoder | ◐ | ● | ● | ● | **Dropped by the owner** |
 | De-noise on an insert | ○ | ○ | ○ | ◐ | **Works** (Mend Live): about 50 ms delay, 44.1 and 48 kHz only |
 | De-reverb on an insert | ○ | ○ | ○ | ○ | **Works** (Mend Studio): about 2.9 s delay, so for mixing, not tracking |
@@ -427,3 +427,4 @@ What counts as "in the box" differs by edition and bundle, most of all for Pro T
 | 2026-11-18 | minor | Round four: Dist's 8x oversampling for the hard clippers, off by default |
 | 2026-11-18 | minor | The browser build removed by the owner: its mentions taken out |
 | 2026-11-23 | minor | Real-time pitch correction asked for again: Auto Pitch (Studio mode) added; the row is Partial until Live mode |
+| 2026-11-23 | minor | Auto Pitch's Live mode (the owner approved about 5 ms): the row is Works |

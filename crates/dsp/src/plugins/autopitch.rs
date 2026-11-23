@@ -14,9 +14,14 @@
 //!   voice keeps its image.
 //! - **Mix**: the corrected voice against the delayed input (0 %: the delayed input exactly).
 //!
-//! The engine behind "Move" is one of a kind of its own ([`studio::Studio`]); a low-delay engine
-//! for singing through it live can sit beside it behind a switch, sharing the detector, the
-//! corrector, the key and the controls ([`front::Front`]).
+//!   **Live** mode ([`live`]): the study's low-delay "splice" engine for singing through it, about
+//!   4 to 8 ms by Voice range (formants move a little with the correction; Formant does not
+//!   apply). Low Latency Monitoring keeps it in on an armed or monitored track
+//!   ([`Plugin::live_monitoring`]).
+//!
+//! Each mode (and each Voice range in Live) is a lane of its own: its own input history,
+//! detector, corrector and engine, all made in `prepare`; switching lanes starts the new one
+//! clean (the mixer re-aligns the changed latency with its crossfade).
 //!
 //! Style sets the character in one control: Natural (gentle, keeps the vibrato) and Hard tune
 //! (instant, flattened) use their own Retune speed, Humanize, Keep vibrato and Note hold; Custom
@@ -25,11 +30,13 @@
 //! Every buffer is made in `prepare`; `process` never allocates, locks or panics.
 //! `readouts`: `[0]` sung pitch (MIDI cents, NaN when letting the voice through), `[1]` the pitch
 //! it is moved to, `[2]` the note aimed at, `[3]` the key's tonic (pitch class), `[4]` the enabled
-//! notes (bit per pitch class), `[5]` input peak dBFS, `[6]` delay (ms).
+//! notes (bit per pitch class), `[5]` input peak dBFS, `[6]` delay (ms), `[7]` mode (0 Studio,
+//! 1 Live).
 
 mod correct;
 mod detect;
 mod front;
+mod live;
 pub mod presets;
 mod studio;
 
@@ -38,6 +45,7 @@ use crate::util::{Smoother, sane_channels, sane_sr};
 use crate::{Category, MAX_SONG_KEYS, ParamInfo, Plugin, PluginInfo, SongKey, Taper, Transport, Unit, gain_to_db};
 use correct::Settings;
 use front::Front;
+use live::Live;
 use studio::Studio;
 
 /// The scales the Scale control offers: (name, bit per semitone above the key's tonic). The same
@@ -110,11 +118,21 @@ const fn disp(mut info: ParamInfo, f: fn(f32) -> String) -> ParamInfo {
     info
 }
 
+/// The Mode control: Studio (43 ms, cleanest) or Live (low delay, for singing through it).
+const MODE_CHOICES: [&str; 2] = ["Studio", "Live"];
+pub const MODE_STUDIO: usize = 0;
+pub const MODE_LIVE: usize = 1;
+
+/// Live mode's Voice range: the lowest note it listens for, which sets its delay.
+const RANGE_CHOICES: [&str; 3] = ["Low (from 70 Hz)", "Middle (from 100 Hz)", "High (from 150 Hz)"];
+/// The floors of [`RANGE_CHOICES`] (Hz).
+pub const RANGE_FLOORS: [f64; 3] = [70.0, 100.0, 150.0];
+
 const fn note(id: &'static str, name: &'static str, on: bool) -> ParamInfo {
     toggle(id, name, on)
 }
 
-static AUTOPITCH_PARAMS: [ParamInfo; 21] = [
+static AUTOPITCH_PARAMS: [ParamInfo; 23] = [
     choice("style", "Style", &STYLE_CHOICES, STYLE_NATURAL),
     choice("key", "Key", &KEY_CHOICES, 0),
     choice("scale", "Scale", &SCALE_CHOICES, 0),
@@ -136,6 +154,8 @@ static AUTOPITCH_PARAMS: [ParamInfo; 21] = [
     disp(p("hold", "Note Hold", 0.0, 100.0, STYLE_VALUES[0].3, Unit::Cents, Taper::Linear), hold_text),
     disp(p("formant", "Formant", -12.0, 12.0, 0.0, Unit::Semitones, Taper::Linear), formant_text),
     p("mix", "Mix", 0.0, 100.0, 100.0, Unit::Percent, Taper::Linear),
+    choice("mode", "Mode", &MODE_CHOICES, MODE_STUDIO),
+    choice("range", "Voice Range", &RANGE_CHOICES, 1),
 ];
 
 const P_STYLE: usize = 0;
@@ -148,6 +168,8 @@ const P_VIBRATO: usize = 17;
 const P_HOLD: usize = 18;
 const P_FORMANT: usize = 19;
 const P_MIX: usize = 20;
+const P_MODE: usize = 21;
+const P_RANGE: usize = 22;
 
 pub static AUTOPITCH_INFO: PluginInfo = PluginInfo {
     id: "autopitch",
@@ -170,12 +192,56 @@ pub fn rotate(mask: u16, tonic: u8) -> u16 {
     (((m << t) | (m >> (12 - t))) & 0xFFF) as u16
 }
 
+/// One mode's front end and engine.
+struct Lane {
+    front: Front,
+    engine: Engine,
+}
+
+enum Engine {
+    Studio(Box<Studio>),
+    Live(Live),
+}
+
+impl Lane {
+    fn studio(sr: f64, channels: usize) -> Lane {
+        let studio = Studio::new(sr, channels);
+        let hop = (studio.frame_hop() / 2).max(1);
+        Lane { front: Front::new(sr, channels, hop, studio.history(), detect::FLOOR_HZ), engine: Engine::Studio(Box::new(studio)) }
+    }
+
+    fn live(sr: f64, channels: usize, floor: f64) -> Lane {
+        let live = Live::new(sr, floor);
+        // Detections about every 2.7 ms at any rate (128 at 48 kHz).
+        let hop = ((128.0 * sr / 48_000.0).round() as usize).max(1);
+        Lane { front: Front::new(sr, channels, hop, live.history(), floor), engine: Engine::Live(live) }
+    }
+
+    fn latency(&self) -> usize {
+        match &self.engine {
+            Engine::Studio(e) => e.latency(),
+            Engine::Live(e) => e.latency(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.front.reset();
+        match &mut self.engine {
+            Engine::Studio(e) => e.reset(),
+            Engine::Live(e) => e.reset(),
+        }
+    }
+}
+
 pub struct AutoPitch {
     p: Params,
     sr: f32,
     channels: usize,
-    front: Front,
-    studio: Studio,
+    /// Lane 0 Studio, lanes 1..=3 Live by Voice range: each its own input history, detector,
+    /// corrector and engine.
+    lanes: Vec<Lane>,
+    /// The lane running now.
+    active: usize,
     mix: Smoother,
     keys: [SongKey; MAX_SONG_KEYS],
     n_keys: usize,
@@ -204,8 +270,8 @@ impl AutoPitch {
             p: Params::new(&AUTOPITCH_PARAMS),
             sr: 48_000.0,
             channels: 2,
-            front: Front::new(48_000.0, 2, 128, 4096, detect::FLOOR_HZ),
-            studio: Studio::new(48_000.0, 2),
+            lanes: Vec::new(),
+            active: 0,
             mix: Smoother::new(1.0),
             keys: [SongKey::default(); MAX_SONG_KEYS],
             n_keys: 0,
@@ -236,6 +302,19 @@ impl AutoPitch {
         Settings::from_controls(f64::from(retune), f64::from(humanize) / 100.0, vibrato, f64::from(hold))
     }
 
+    /// The lane the controls ask for: Studio, or Live at its Voice range.
+    fn wanted(&self) -> usize {
+        if self.p.choice(P_MODE) == MODE_LIVE { 1 + self.p.choice(P_RANGE).min(RANGE_FLOORS.len() - 1) } else { 0 }
+    }
+
+    /// Delay range of Live mode since the last reset (samples: mean, largest); `None` in Studio.
+    pub fn live_delay(&self) -> Option<(f64, f64)> {
+        match self.lanes.get(self.active).map(|l| &l.engine) {
+            Some(Engine::Live(e)) => Some(e.delay_stats()),
+            _ => None,
+        }
+    }
+
     /// The key's tonic and enabled notes at timeline sample `pos`.
     fn key_at(&self, pos: i64) -> (u8, u16) {
         let key = self.p.choice(P_KEY);
@@ -253,6 +332,21 @@ impl AutoPitch {
             None => (0..12).filter(|i| self.p.on(P_NOTE0 + i)).fold(0u16, |m, i| m | (1 << i)),
         };
         (tonic, mask)
+    }
+}
+
+#[cfg(test)]
+impl AutoPitch {
+    /// Addresses and capacities of every lane's heap buffers (tests: nothing reallocates).
+    fn buffers(&self) -> Vec<(usize, usize)> {
+        let mut out = vec![(self.lanes.as_ptr() as usize, self.lanes.capacity())];
+        for l in &self.lanes {
+            out.extend(l.front.buffers());
+            if let Engine::Studio(e) = &l.engine {
+                out.extend(e.buffers());
+            }
+        }
+        out
     }
 }
 
@@ -278,9 +372,9 @@ impl Plugin for AutoPitch {
         self.sr = sane_sr(sample_rate);
         self.channels = sane_channels(channels).max(1);
         let sr = f64::from(self.sr);
-        self.studio = Studio::new(sr, self.channels);
-        let hop = (self.studio.frame_hop() / 2).max(1);
-        self.front = Front::new(sr, self.channels, hop, self.studio.history(), detect::FLOOR_HZ);
+        let ch = self.channels;
+        self.lanes = std::iter::once(Lane::studio(sr, ch)).chain(RANGE_FLOORS.iter().map(|f| Lane::live(sr, ch, *f))).collect();
+        self.active = self.wanted();
         self.mix.set_time(20.0, self.sr);
         self.update();
         self.mix.snap();
@@ -288,8 +382,10 @@ impl Plugin for AutoPitch {
     }
 
     fn reset(&mut self) {
-        self.front.reset();
-        self.studio.reset();
+        self.active = self.wanted();
+        if let Some(l) = self.lanes.get_mut(self.active) {
+            l.reset();
+        }
         self.mix.snap();
         self.block_n_in = 0;
         self.sung = f32::NAN;
@@ -299,13 +395,17 @@ impl Plugin for AutoPitch {
     }
 
     fn latency(&self) -> usize {
-        self.studio.latency()
+        self.lanes.get(self.wanted()).map_or(0, Lane::latency)
+    }
+
+    fn live_monitoring(&self) -> bool {
+        self.wanted() != 0
     }
 
     fn set_transport(&mut self, t: &Transport) {
         self.playing = t.playing;
         self.at_samples = t.samples;
-        self.block_n_in = self.front.n_in;
+        self.block_n_in = self.lanes.get(self.active).map_or(0, |l| l.front.n_in);
     }
 
     fn follows_song_key(&self) -> bool {
@@ -328,7 +428,17 @@ impl Plugin for AutoPitch {
         }
         let s = self.settings();
         let formant = f64::from(self.p.v(P_FORMANT));
-        let hop = self.front.hop as u64;
+        // A change of mode or Voice range: the new lane starts clean.
+        let want = self.wanted();
+        if want != self.active {
+            self.active = want;
+            if let Some(l) = self.lanes.get_mut(want) {
+                l.reset();
+            }
+            self.block_n_in = 0;
+        }
+        let Some(lane) = self.lanes.get(self.active) else { return };
+        let hop = lane.front.hop as u64;
         self.in_peak = 0.0;
         for buf in io.iter().take(ch) {
             for v in buf.iter().take(n) {
@@ -339,23 +449,40 @@ impl Plugin for AutoPitch {
         }
         let mut pos = 0;
         while pos < n {
-            let to_boundary = (hop - self.front.n_in % hop) as usize;
+            let Some(n_in) = self.lanes.get(self.active).map(|l| l.front.n_in) else { return };
+            let to_boundary = (hop - n_in % hop) as usize;
             let take = to_boundary.min(n - pos);
-            self.front.push(io, pos, take);
-            if self.front.detection_due() {
-                let since = self.front.n_in.saturating_sub(self.block_n_in) as f64 - self.front.next_tc_offset();
+            let due = {
+                let mix = &mut self.mix;
+                let Some(lane) = self.lanes.get_mut(self.active) else { return };
+                lane.front.push(io, pos, take);
+                // Live reads the decisions made up to the last detection before these samples
+                // (whatever the block size): it emits before this hop's detection.
+                if let Engine::Live(e) = &mut lane.engine {
+                    e.emit(&lane.front, io, pos, take, || mix.next());
+                }
+                lane.front.detection_due().then(|| lane.front.n_in.saturating_sub(self.block_n_in) as f64 - lane.front.next_tc_offset())
+            };
+            if let Some(since) = due {
                 let at = if self.playing { self.at_samples.saturating_add(since.round() as i64) } else { self.at_samples };
                 let (tonic, mask) = self.key_at(at);
-                let e = self.front.detect(&s, mask);
+                let Some(lane) = self.lanes.get_mut(self.active) else { return };
+                let e = lane.front.detect(&s, mask);
                 self.tonic = tonic;
                 self.mask = mask;
                 self.sung = e.cents as f32;
                 self.target = e.target as f32;
                 self.moved = (e.cents + e.corr) as f32;
             }
-            self.studio.run_frames(&self.front, formant);
             let mix = &mut self.mix;
-            self.studio.emit(&self.front, io, pos, take, || mix.next());
+            let Some(lane) = self.lanes.get_mut(self.active) else { return };
+            match &mut lane.engine {
+                Engine::Studio(e) => {
+                    e.run_frames(&lane.front, formant);
+                    e.emit(&lane.front, io, pos, take, || mix.next());
+                }
+                Engine::Live(_) => {}
+            }
             pos += take;
         }
     }
@@ -367,7 +494,8 @@ impl Plugin for AutoPitch {
         out[3] = f32::from(self.tonic);
         out[4] = f32::from(self.mask);
         out[5] = gain_to_db(self.in_peak);
-        out[6] = self.studio.latency() as f32 / self.sr * 1000.0;
+        out[6] = self.lanes.get(self.active).map_or(0, Lane::latency) as f32 / self.sr * 1000.0;
+        out[7] = if self.active == 0 { 0.0 } else { 1.0 };
     }
 }
 

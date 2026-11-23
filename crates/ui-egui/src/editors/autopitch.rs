@@ -10,6 +10,8 @@
 //!   Custom).
 //! - The pitch display: the sung pitch and the corrected pitch scrolling against the key's note
 //!   lanes, and the current note with how far off it was sung, from the module's readouts.
+//! - The mode switch: Studio (43 ms, compensated) or Live (a few ms, for singing through it), with
+//!   the delay it adds; in Live, the Voice range in place of Formant.
 //! - The dials: Retune speed, Humanize, Note hold, Keep vibrato; Formant and Mix.
 //!
 //! Every change goes through `mix.module_params` (one undo step per gesture).
@@ -49,11 +51,11 @@ pub const SIZE: Vec2 = vec2(760.0, HEIGHT);
 pub const ACCENT: u32 = 0xFF3E_C8B4;
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(ACCENT));
 
-/// A/B and Undo walk every parameter but the key, the scale and the notes, which presets leave
-/// alone too: recalling Hard never changes the key.
+/// A/B and Undo walk every parameter but the key, the scale, the notes, the mode and the voice
+/// range, which presets leave alone too: recalling Hard never changes the key or the mode.
 pub(crate) const FAMILY: Family = Family::new(
     "AutoPitch",
-    &["key", "scale", "note0", "note1", "note2", "note3", "note4", "note5", "note6", "note7", "note8", "note9", "note10", "note11"],
+    &["key", "scale", "note0", "note1", "note2", "note3", "note4", "note5", "note6", "note7", "note8", "note9", "note10", "note11", "mode", "range"],
 );
 
 /// The controls a Style sets.
@@ -62,7 +64,7 @@ const STYLE_PARAMS: [&str; 4] = ["retune", "humanize", "vibrato", "hold"];
 const SHOWN_SECS: f64 = 4.0;
 
 /// What each control does, for its tooltip.
-const TIPS: [(&str, &str); 9] = [
+const TIPS: [(&str, &str); 11] = [
     (
         "style",
         "Natural: gentle correction that keeps the vibrato (long notes more gently still). Hard tune: every note snaps at once and the vibrato is flattened. Moving Retune speed, Humanize, Keep vibrato or Note hold makes it Custom.",
@@ -78,9 +80,12 @@ const TIPS: [(&str, &str); 9] = [
     ),
     ("formant", "Keep: the voice's character stays as sung. Shift it up or down (semitones) to sound brighter or darker."),
     ("mix", "How much of the corrected voice you hear against the original (both delayed alike)."),
+    ("mode", MODE_TIP),
+    ("range", RANGE_TIP),
 ];
 
-const MODE_TIP: &str = "Studio mode: about 43 ms of delay, which the mixer lines up with every other track, so it suits recorded tracks. While a track is armed or monitored with Low Latency Monitoring on, the module is bypassed like any delaying effect; for live singing a low-delay mode is planned.";
+const MODE_TIP: &str = "Studio: about 43 ms of delay, lined up by the mixer with every other track; the cleanest sound, for recorded tracks (with Low Latency Monitoring on it is bypassed on an armed or monitored track, like any delaying effect). Live: about 4 to 8 ms, for singing through it; Low Latency Monitoring keeps it in, and you hear yourself that much later plus your interface's own round trip. Live keeps about half the vibrato at Hard tune and moves the vowel colour a little with the correction; Formant does not apply.";
+const RANGE_TIP: &str = "Live mode listens down to the lowest note of the voice range: a higher range means less delay. Low: from 70 Hz (bass voices); Middle: from 100 Hz (most voices); High: from 150 Hz.";
 
 fn tip_of(id: &str) -> &'static str {
     TIPS.iter().find(|(k, _)| *k == id).map_or("", |t| t.1)
@@ -287,11 +292,43 @@ fn character_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, r
     if s == STYLE_CUSTOM {
         p.text(pos2(seg.right() + 12.0, seg.center().y), Align2::LEFT_CENTER, "Custom", regular(LABEL_SIZE), pal.accent);
     }
-    let latency_ms = readouts(host).map(|r| r[6]).filter(|v| v.is_finite()).unwrap_or(2048.0 / host.sr as f32 * 1000.0);
-    let text = format!("Studio  ·  {latency_ms:.0} ms delay, lined up by the mixer");
-    let r = p.text(pos2(row.right(), seg.center().y), Align2::RIGHT_CENTER, text, regular(CAPTION_SIZE), pal.text_dim);
-    let resp = ui.interact(r, ui.id().with("ap-mode"), egui::Sense::hover());
+    // Studio / Live, and the delay it adds.
+    let live = live_mode(host);
+    let mode = Rect::from_min_size(pos2(row.right() - 190.0, seg.top()), vec2(190.0, seg.height()));
+    if let Some(i) = segmented_ex(ui, mode, "ap-mode", pal, &["Studio", "Live"], 1, Some(usize::from(live)), SelectionStyle::Filled, false) {
+        family::push_undo(&mut st.fam, host, &FAMILY);
+        end_gesture(app);
+        set_params(app, host, &[("mode", i as f32)]);
+    }
+    tip(ui, segmented_id(ui, "ap-mode"), MODE_TIP);
+    let latency_ms = readouts(host).map(|r| r[6]).filter(|v| v.is_finite() && (r_mode(host) == live)).unwrap_or_else(|| delay_ms(host));
+    let text = if live { format!("about {latency_ms:.0} ms: sing through it") } else { format!("{latency_ms:.0} ms delay, lined up by the mixer") };
+    let r = ui.painter().text(pos2(mode.left() - 12.0, seg.center().y), Align2::RIGHT_CENTER, text, regular(CAPTION_SIZE), pal.text_dim);
+    let resp = ui.interact(r, ui.id().with("ap-delay"), egui::Sense::hover());
     let _ = resp.on_hover_text(MODE_TIP);
+}
+
+/// Whether the module is set to Live mode.
+fn live_mode(host: &Host) -> bool {
+    param(host, "mode") > 0.5
+}
+
+/// The mode the readouts come from (Live when [7] says so).
+fn r_mode(host: &Host) -> bool {
+    readouts(host).is_some_and(|r| r[7] > 0.5)
+}
+
+/// The delay the settings give (ms), before any readout: Studio's frame, or Live's 1 ms plus half
+/// the voice range's longest period.
+fn delay_ms(host: &Host) -> f32 {
+    if live_mode(host) {
+        let floor = soundcraft_dsp::plugins::autopitch::RANGE_FLOORS.get(param(host, "range").round().max(0.0) as usize).copied().unwrap_or(100.0);
+        (1.0 + 500.0 / floor) as f32
+    } else {
+        // The Vocal Editor's frame: 2048 points at 48 kHz, the nearest power of two at other rates.
+        let n = 2f64.powf((2048.0 * host.sr / 48_000.0).max(1.0).log2().round().clamp(8.0, 16.0));
+        (n / host.sr * 1000.0) as f32
+    }
 }
 
 /// The key, the scale and the twelve notes.
@@ -531,7 +568,24 @@ fn controls_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, ro
         set_params(app, host, &with_custom(host, "vibrato", if on { 0.0 } else { 1.0 }));
     }
     let _ = resp.on_hover_text(tip_of("vibrato"));
-    dial_row(app, ui, host, &mut st.fam, body(&right), &[("formant", "Formant"), ("mix", "Mix")]);
+    let rb = body(&right);
+    if live_mode(host) {
+        // Live: the voice range in place of Formant (which Live does not apply).
+        let half = Rect::from_min_size(rb.min, vec2(rb.width() / 2.0, rb.height()));
+        let seg = Rect::from_center_size(half.center() - vec2(0.0, 6.0), vec2(half.width() - 16.0, 66.0));
+        let sel = param(host, "range").round().max(0.0) as usize;
+        if let Some(i) = segmented_ex(ui, seg, "ap-range", pal, &["Low", "Middle", "High"], 3, Some(sel), SelectionStyle::Filled, false) {
+            family::push_undo(&mut st.fam, host, &FAMILY);
+            end_gesture(app);
+            set_params(app, host, &[("range", i as f32)]);
+        }
+        tip(ui, segmented_id(ui, "ap-range"), RANGE_TIP);
+        ui.painter().text(pos2(half.center().x, seg.bottom() + 10.0), Align2::CENTER_CENTER, "Voice Range", regular(LABEL_SIZE), pal.text_dim);
+        let rest = Rect::from_min_max(pos2(half.right(), rb.top()), rb.max);
+        dial_row(app, ui, host, &mut st.fam, rest, &[("mix", "Mix")]);
+    } else {
+        dial_row(app, ui, host, &mut st.fam, rb, &[("formant", "Formant"), ("mix", "Mix")]);
+    }
 }
 
 fn editor_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host<'_>) {

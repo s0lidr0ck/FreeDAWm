@@ -49,7 +49,7 @@ impl Front {
         let det = Detector::new(sr, floor_hz);
         let hop = hop.max(1);
         let xlen = (history + 2 * hop).next_power_of_two();
-        let mlen = (det.frame_len() + 2 * hop).next_power_of_two();
+        let mlen = (det.frame_len().max(history) + 2 * hop).next_power_of_two();
         Front {
             sr,
             channels,
@@ -79,6 +79,17 @@ impl Front {
     #[inline]
     pub(super) fn x(&self, c: usize, i: u64) -> f32 {
         self.x.get(c).and_then(|b| b.get(i as usize & self.xmask)).copied().unwrap_or(0.0)
+    }
+
+    /// The mono sum's input sample `i` (absolute).
+    #[inline]
+    pub(super) fn mono_at(&self, i: u64) -> f32 {
+        self.mono.get(i as usize & self.mmask).copied().unwrap_or(0.0)
+    }
+
+    /// The input time of the latest decision (samples; -1 before the first).
+    pub(super) fn known_until(&self) -> f64 {
+        if self.log_n == 0 { -1.0 } else { self.entry(self.log_n - 1).tc }
     }
 
     /// Takes `take` frames of `io` from `pos` (channels past `io`'s get silence).

@@ -8,15 +8,27 @@ It works on **one voice at a time** (a lead, a single backing part). On two voic
 hears no clear pitch and lets the sound through untouched; put it on each voice's own track. A
 stereo vocal is corrected as one voice, both sides moved alike, so its stereo image holds.
 
-## Studio mode, and live singing
+## Studio and Live
 
-Auto Pitch runs in **Studio mode**: it uses the Vocal Editor's own pitch shifter, which keeps the
-voice's character and each sung period's shape, and delays the voice by about 43 ms. The mixer
-lines every other track up with that delay, so playback and bounces stay in time.
+Auto Pitch has two modes, switched at the top right of its editor:
 
-While a track is armed or monitored with **Low Latency Monitoring** on, Auto Pitch is bypassed on
-that track, like every effect that delays the sound. **For live singing a low-delay mode is
-planned.**
+- **Studio** (the default) uses the Vocal Editor's own pitch shifter, which keeps the voice's
+  character and each sung period's shape. It delays the voice by about 43 ms; the mixer lines
+  every other track up with that delay, so playback and bounces stay in time. The cleanest sound,
+  for recorded tracks.
+- **Live** is for singing through it (monitoring, live streaming). It delays the voice by only a
+  few milliseconds: it plays the voice back a touch faster or slower and, now and then, skips or
+  repeats exactly one sung cycle. Its delay depends on **Voice range** (the lowest note it listens
+  for): about 8 ms for Low (from 70 Hz), 6 ms for Middle (from 100 Hz, the default) and 4 ms for
+  High (from 150 Hz); on average it is less. What it costs: at Hard tune about half of the vibrato
+  survives (it hears the pitch a little late), the vowel colour moves slightly with the correction,
+  and Formant does not apply.
+
+With **Low Latency Monitoring** on, every effect that delays the sound is taken out of an
+armed or monitored track, but Auto Pitch in Live mode stays in: you hear yourself corrected, later
+by its few milliseconds plus your audio interface's own round trip (typically 5 to 10 ms at a
+128-sample buffer). In Studio mode it is taken out there like any other delaying effect. (The rule:
+a module made to be heard live stays in while its delay is at most 15 ms.)
 
 ## The controls
 
@@ -30,12 +42,14 @@ planned.**
 | **Humanize** | Notes held longer than half a second are corrected more gently. |
 | **Keep vibrato** | On: the note's centre is corrected and the vibrato kept. Off: the vibrato is flattened too. |
 | **Note hold** | How much closer (in cents) the voice must get to another note before the target changes. Too low and a wide vibrato flips between two neighbouring notes (a warble); the defaults do not flip on a wide vibrato. |
-| **Formant** | Keep (the voice's character as sung), or shift it up or down in semitones. |
+| **Formant** | Keep (the voice's character as sung), or shift it up or down in semitones (Studio mode). |
 | **Mix** | The corrected voice against the original (both delayed alike; 0 % is the original exactly). |
+| **Studio / Live** | The mode (above). Switching it changes the delay; the mixer re-aligns the other tracks with a short crossfade. |
+| **Voice range** | Live mode only: Low, Middle or High (see above). |
 | **Bypass** | Takes Auto Pitch out (the voice still comes out delayed alike, so nothing moves in time). |
 
 Presets: **Gentle** (the defaults: Natural), **Medium** (firmer, vibrato kept) and **Hard**
-(Hard tune). Presets never change the key, the scale or the notes.
+(Hard tune). Presets never change the key, the scale, the notes, the mode or the voice range.
 
 ## The display
 
