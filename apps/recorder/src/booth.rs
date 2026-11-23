@@ -1,14 +1,19 @@
-//! Following a FreeDAWm booth on another PC, as the DAW's remote recorder does, over the same
-//! code (`soundcraft_net::follower` and `soundcraft_net::glue::FollowerGlue`): pairing with the
-//! booth's 4-digit code, recording when it records, sending each take, hearing its mix.
+//! Following a FreeDAWm booth on another PC (a "studio" in the Recorder's window), as the DAW's
+//! remote recorder does, over the same code (`soundcraft_net::follower` and
+//! `soundcraft_net::glue::FollowerGlue`): pairing with the booth's 4-digit code or its booth PIN,
+//! or joining with an internet invite; recording when it records, sending each take, hearing its
+//! mix.
 //!
 //! The recorder only ever dials: it starts no hub, announces nothing and accepts no connection.
-//! Nothing goes on the network until the user asks: looking for booths (an mDNS query) when
-//! **Find booths** is pressed, a pairing request when **Pair** is, and the link to the booth
-//! once paired and following. Over the booth's encrypted local link the recorder dials from a UDP
+//! Nothing goes on the network until the user asks: looking for booths (an mDNS query) while the
+//! studio screen is open, a pairing request when **Join** is pressed, and the link to the booth
+//! once joined and following. Over the booth's encrypted local link the recorder dials from a UDP
 //! socket of its own that answers no one, through a bridge on this PC only (127.0.0.1), exactly as
-//! the DAW does. Joining by internet invite is not offered: the internet endpoint asks the router
-//! for a port mapping and takes incoming connections, which the recorder never does.
+//! the DAW does. An internet invite is joined from a dial-only endpoint
+//! ([`soundcraft_net::internet::Internet::start_dial_only`]): it offers no protocol (a connection
+//! to it is refused in its handshake), asks no router for a port and publishes its address
+//! nowhere; it reaches the booth directly or through the relay the invite names, through the
+//! same kind of 127.0.0.1 bridge.
 
 use serde_json::{Value, json};
 use soundcraft_engine::Engine;
@@ -16,9 +21,10 @@ use soundcraft_engine::midi_record::RecordedEvent;
 use soundcraft_model::TrackId;
 use soundcraft_net::config::NetConfig;
 use soundcraft_net::discovery::{Discovery, Found};
-use soundcraft_net::follower::{FollowTarget, Follower, StreamHealth, pair_confirm, pair_request};
+use soundcraft_net::follower::{FollowTarget, Follower, StreamHealth, pair_confirm, pair_invite_as, pair_request_info};
 use soundcraft_net::glue::{FinishedAudio, FinishedTake, FollowBadge, FollowerGlue, HostView, LiveAudio, RigHost};
 use soundcraft_net::hub::TakeClock;
+use soundcraft_net::internet::{Internet, Invite, Relays};
 use soundcraft_net::pairing::exchange::LinkKeys;
 use soundcraft_playback::TransportProbe;
 use std::path::{Path, PathBuf};
@@ -196,12 +202,26 @@ pub struct Link {
     path: Option<PathBuf>,
     outbox: Option<PathBuf>,
     discovery: Option<Discovery>,
-    lan_client: Option<soundcraft_net::internet::Internet>,
+    lan_client: Option<Internet>,
+    /// The dial-only internet endpoint (made when an invite is joined, or to follow a booth
+    /// joined by one).
+    inet: Option<Internet>,
+    /// The relays an invite is joined through (the settings' relay, n0's public ones by
+    /// default; tests: none).
+    pub invite_relays: Relays,
     pub follower: Option<Follower>,
     glue: FollowerGlue,
     clock: Arc<RigClock>,
     pair: PairJob,
     pair_lan: Option<(String, String)>,
+    /// The booth asked waits for its booth PIN (else for the code on its screen), and also for
+    /// someone there to press Allow.
+    pub pair_pin: bool,
+    pub pair_ask: bool,
+    /// A PIN typed before the booth was asked: given as soon as it answers (when it wants a PIN).
+    pub pending_pin: Option<String>,
+    /// Joining by invite: the booth's name and address (JSON), while it runs.
+    joining: Option<(String, String)>,
     pub pair_status: String,
     pub addr_edit: String,
     pub code_edit: String,
@@ -210,12 +230,20 @@ pub struct Link {
     pub said: Option<String>,
     /// Renders and tests: shown instead of the live link.
     pub demo: Option<BoothView>,
+    /// Renders and tests: the booths "found" (no network query).
+    pub demo_found: Option<Vec<Found>>,
 }
 
 impl Link {
     /// The link with the settings in `path` (`recorder-network.json`) and the outbox in `outbox`.
     /// Opens nothing; follows at once only a booth paired before with Follow on.
     pub fn new(path: Option<PathBuf>, outbox: Option<PathBuf>) -> Link {
+        Link::with_relays(path, outbox, None)
+    }
+
+    /// [`Link::new`], invites joined through `relays` (tests: none) instead of the settings'.
+    #[doc(hidden)]
+    pub fn with_relays(path: Option<PathBuf>, outbox: Option<PathBuf>, relays: Option<Relays>) -> Link {
         let mut cfg = path.as_deref().map(NetConfig::load).unwrap_or_default();
         // Never a listener: whatever the file says.
         (cfg.enabled, cfg.internet_host) = (false, false);
@@ -224,21 +252,28 @@ impl Link {
         }
         let mut l = Link {
             addr_edit: cfg.follow.booth_addr.clone(),
+            invite_relays: relays.unwrap_or_else(|| Relays::from_setting(&cfg.relay_url)),
             cfg,
             path,
             outbox,
             discovery: None,
             lan_client: None,
+            inet: None,
             follower: None,
             glue: FollowerGlue::default(),
             clock: Arc::new(RigClock::default()),
             pair: PairJob::default(),
             pair_lan: None,
+            pair_pin: false,
+            pair_ask: false,
+            pending_pin: None,
+            joining: None,
             pair_status: String::new(),
             code_edit: String::new(),
             error: None,
             said: None,
             demo: None,
+            demo_found: None,
         };
         l.save();
         if l.cfg.follow.enabled && l.paired() {
@@ -287,8 +322,25 @@ impl Link {
         }
     }
 
+    /// Looking for booths, since [`Link::find`] (the studio screen is open).
+    pub fn finding(&self) -> bool {
+        self.discovery.is_some()
+    }
+
+    /// Stops looking for booths (the studio screen closed); a booth followed over the plain link
+    /// keeps the list it was found in.
+    pub fn stop_finding(&mut self) {
+        let plain = self.follower.is_some() && self.cfg.follow.booth_key.is_empty() && self.cfg.follow.internet.is_empty();
+        if !plain {
+            self.discovery = None;
+        }
+    }
+
     /// The booths found so far (not other recorders, not this PC).
     pub fn found(&self) -> Vec<Found> {
+        if let Some(f) = &self.demo_found {
+            return f.clone();
+        }
         let me = self.my_name();
         self.discovery.as_ref().map(Discovery::found).unwrap_or_default().into_iter().filter(|f| f.name != me && f.role != "recorder").collect()
     }
@@ -343,6 +395,8 @@ impl Link {
         }
         *self.pair.result.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.pair.request = None;
+        (self.pair_pin, self.pair_ask) = (false, false);
+        self.joining = None;
         self.pair_status = "Asking the booth…".into();
         let lan = self.found().into_iter().find(|f| f.name == self.cfg.follow.booth_name).and_then(|f| f.lan);
         self.pair_lan = None;
@@ -362,9 +416,69 @@ impl Link {
         self.pair.addr = addr.clone();
         let (job, me) = (Arc::clone(&self.pair.result), self.my_name());
         std::thread::spawn(move || {
-            let r = pair_request(&addr, &me).map(|id| json!({"request": id}));
+            let r = pair_request_info(&addr, &me).map(|r| json!({"request": r.request, "pin": r.pin, "ask": r.ask}));
             *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
         });
+    }
+
+    /// Asking a booth, checking a code, or joining by invite: an answer is awaited.
+    pub fn busy(&self) -> bool {
+        self.pair_status.ends_with('…') && !self.wants_code()
+    }
+
+    /// Joins the booth an internet invite (`freedawm-invite:…`) is for, from this PC's dial-only
+    /// endpoint (made now; see the module docs). Joined before with an invite from the same
+    /// booth, this PC's token goes along (to that booth only), so a reusable invite recognises
+    /// it instead of using a join.
+    pub fn join_invite(&mut self, code: &str) {
+        let inv = match Invite::parse(code) {
+            Ok(i) => i,
+            Err(e) => {
+                self.pair_status = e;
+                return;
+            }
+        };
+        let addr_json = serde_json::to_string(&inv.addr).unwrap_or_default();
+        let again = same_booth(&self.cfg.follow.internet, &addr_json).then(|| self.cfg.follow.token.clone());
+        let bridge = match self.inet_bridge(&addr_json) {
+            Ok(b) => b,
+            Err(e) => {
+                self.pair_status = e;
+                return;
+            }
+        };
+        self.pair.request = None;
+        *self.pair.result.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        self.joining = Some((inv.name.clone(), addr_json));
+        self.pair_status = format!("Joining {}…", inv.name);
+        let (job, me) = (Arc::clone(&self.pair.result), self.my_name());
+        std::thread::spawn(move || {
+            let r = pair_invite_as(&bridge, &inv.secret, &me, again.as_deref()).map(|(token, pc)| json!({"token": token, "pc": pc}));
+            *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+        });
+    }
+
+    /// This PC's dial-only internet endpoint (its key made once and kept in the settings).
+    fn inet(&mut self) -> Result<&Internet, String> {
+        if self.inet.is_none() {
+            use soundcraft_net::internet::{key_from_hex, key_hex, new_key};
+            let key = match key_from_hex(&self.cfg.internet_key) {
+                Some(k) => k,
+                None => {
+                    let k = new_key();
+                    self.update(|c| c.internet_key = key_hex(&k));
+                    k
+                }
+            };
+            self.inet = Some(Internet::start_dial_only(key, self.invite_relays.clone())?);
+        }
+        self.inet.as_ref().ok_or_else(|| "no internet endpoint".to_string())
+    }
+
+    /// A port on this PC only, bridged over the internet to the booth at `addr` (JSON, from its
+    /// invite).
+    fn inet_bridge(&mut self, addr: &str) -> Result<String, String> {
+        Ok(self.inet()?.bridge_to_json(addr)?.to_string())
     }
 
     /// Waiting for the code the booth shows.
@@ -399,9 +513,12 @@ impl Link {
             c.follow.token.clear();
             c.follow.booth_key.clear();
             c.follow.booth_lan.clear();
+            c.follow.internet.clear();
             c.follow.enabled = false;
         });
         self.pair_status.clear();
+        self.pending_pin = None;
+        self.inet = None;
     }
 
     fn pair_progress(&mut self) {
@@ -410,18 +527,40 @@ impl Link {
         match r {
             Ok(v) if v.get("request").is_some() => {
                 self.pair.request = v["request"].as_str().map(str::to_string);
-                self.pair_status = "Type the code the booth shows:".into();
+                (self.pair_pin, self.pair_ask) = (v["pin"] == true, v["ask"] == true);
+                self.pair_status = if self.pair_pin { "Type the booth PIN:".into() } else { "Type the code the booth shows:".into() };
+                // A PIN typed before the booth answered goes at once (a booth showing a code
+                // wants that code instead: the PIN is dropped).
+                if let Some(pin) = self.pending_pin.take()
+                    && self.pair_pin
+                {
+                    self.code_edit = pin;
+                    self.confirm();
+                }
             }
             Ok(v) => {
                 let token = v["token"].as_str().unwrap_or("").to_string();
                 let booth = v["pc"].as_str().unwrap_or("").to_string();
                 let lan = self.pair_lan.take();
+                let invite = self.joining.take();
                 self.update(|c| {
                     c.follow.token = token;
-                    if !booth.is_empty() {
-                        c.follow.booth_name = booth;
+                    match invite {
+                        Some((name, addr)) => {
+                            c.follow.booth_name = if booth.is_empty() { name } else { booth };
+                            c.follow.internet = addr;
+                            c.follow.booth_addr.clear();
+                            c.follow.booth_lan.clear();
+                            c.follow.booth_key.clear();
+                        }
+                        None => {
+                            if !booth.is_empty() {
+                                c.follow.booth_name = booth;
+                            }
+                            (c.follow.booth_lan, c.follow.booth_key) = lan.unwrap_or_default();
+                            c.follow.internet.clear();
+                        }
                     }
-                    (c.follow.booth_lan, c.follow.booth_key) = lan.unwrap_or_default();
                     c.follow.enabled = true;
                 });
                 self.pair.request = None;
@@ -430,6 +569,8 @@ impl Link {
             }
             Err(e) => {
                 self.pair.request = None;
+                self.joining = None;
+                self.pending_pin = None;
                 self.pair_status = e;
             }
         }
@@ -448,7 +589,17 @@ impl Link {
         }
         let cfg = self.cfg.clone();
         let secure = !cfg.follow.booth_key.is_empty() && !cfg.follow.booth_lan.is_empty();
-        let addr = if secure {
+        let over_internet = !cfg.follow.internet.is_empty();
+        let addr = if over_internet {
+            // Joined by invite: through the dial-only endpoint, to the address the invite gave.
+            match self.inet_bridge(&cfg.follow.internet) {
+                Ok(a) => a,
+                Err(e) => {
+                    self.error = Some(e);
+                    return;
+                }
+            }
+        } else if secure {
             // The booth's encrypted link where it announces it now (it may have moved), else where
             // it was paired; always to the key pinned then.
             let lan = self
@@ -473,7 +624,10 @@ impl Link {
         };
         let target = FollowTarget { booth_name: cfg.follow.booth_name.clone(), addr, token: cfg.follow.token.clone(), my_name: self.my_name() };
         let f = Follower::start(target, self.outbox.clone(), Some(self.clock.clone() as Arc<dyn TakeClock>));
-        if !secure && let Some(d) = &self.discovery {
+        if !secure
+            && !over_internet
+            && let Some(d) = &self.discovery
+        {
             f.set_lookup(d.found_handle());
         }
         self.error = None;
@@ -524,7 +678,13 @@ impl Link {
             badge: self.glue.badge(f),
             connected: f.connected(),
             state: f.state(),
-            link: if secure { "encrypted local link" } else { "local link, not encrypted" },
+            link: if !self.cfg.follow.internet.is_empty() {
+                "over the internet, encrypted"
+            } else if secure {
+                "encrypted local link"
+            } else {
+                "local link, not encrypted"
+            },
             session: self.glue.booth_session().to_string(),
             transport,
             position: rig.player.position() as f64 / f64::from(rig.rate().max(1)),
@@ -538,4 +698,19 @@ impl Link {
     pub fn shutdown(&mut self) {
         self.stop_following();
     }
+
+    /// The name of the booth followed (or being joined), as it calls itself.
+    pub fn booth_name(&self) -> String {
+        if let Some((name, _)) = &self.joining {
+            return name.clone();
+        }
+        let c = &self.cfg.follow;
+        if c.booth_name.is_empty() { c.booth_addr.clone() } else { c.booth_name.clone() }
+    }
+}
+
+/// Two internet addresses (an invite's, as JSON) are the same booth's: the same key.
+fn same_booth(a: &str, b: &str) -> bool {
+    let id = |s: &str| serde_json::from_str::<Value>(s).ok().map(|v| v["id"].clone()).filter(|v| !v.is_null());
+    id(a).is_some_and(|a| Some(a) == id(b))
 }

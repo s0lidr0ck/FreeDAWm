@@ -27,6 +27,9 @@ soundcraft-model.workspace = true
 soundcraft-engine.workspace = true
 soundcraft-playback.workspace = true
 soundcraft-net.workspace = true
+# The computer's time zone offset, so takes are named in local time (already in the tree through
+# soundcraft-model; its one isolated unsafe module makes the OS call).
+soundcraft-sysmem.workspace = true
 egui.workspace = true
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 rfd.workspace = true

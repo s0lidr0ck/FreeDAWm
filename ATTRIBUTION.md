@@ -27,7 +27,7 @@ files are bundled, and nothing is recorded from or modelled on another product's
 ## Fonts
 
 FreeDAWm bundles one font file: Inter Regular (`assets/fonts/Inter-Regular.ttf`, listed under
-Files below), used only for the launch splash's statement. The interface uses the default fonts
+Files below), used for the launch splash's statement and as FreeDAWm Recorder's text font. The DAW's interface uses the default fonts
 shipped inside the `egui` crate (Ubuntu-Light: Ubuntu Font Licence 1.0; Hack: MIT; Noto Emoji:
 OFL-1.1; emoji-icon-font: OFL-1.1/MIT) and, at runtime, the operating system's own UI fonts when
 available (never redistributed).
@@ -53,7 +53,7 @@ available (never redistributed).
 | `docs/superpowers/specs/renders/midi-editor-editing-dark.png` | FreeDAWm contributors (Claude) | Rendered from the app by `crates/ui-egui/examples/ui_shot.rs` with `examples/scripts/midi_editor_editing.jsonl` (the demo's synthesised session) for the MIDI Editor editing spec | MIT OR Apache-2.0 |
 | `docs/superpowers/specs/renders/midi-editor-editing-light.png` | FreeDAWm contributors (Claude) | Rendered from the app by `crates/ui-egui/examples/ui_shot.rs` with `examples/scripts/midi_editor_editing.jsonl` (the demo's synthesised session) for the MIDI Editor editing spec | MIT OR Apache-2.0 |
 | `assets/splash/freedawm-splash-source.mp4` | the FreeDAWm owner | supplied by the owner (the launch animation, 1280×720, 24 fps, 6 s; its audio track is unused) | MIT (`LICENSE-MIT`; copyright the FireStation owner; owner's decision, 2026-11-02) |
-| `assets/fonts/Inter-Regular.ttf` | The Inter Project Authors (Rasmus Andersson) | Inter 4.1 release, `Inter-4.1.zip` › `extras/ttf/Inter-Regular.ttf` (https://github.com/rsms/inter/releases/tag/v4.1); embedded in the app for the splash statement | OFL-1.1 (`assets/fonts/Inter-LICENSE.txt`, the release's `LICENSE.txt`) |
+| `assets/fonts/Inter-Regular.ttf` | The Inter Project Authors (Rasmus Andersson) | Inter 4.1 release, `Inter-4.1.zip` › `extras/ttf/Inter-Regular.ttf` (https://github.com/rsms/inter/releases/tag/v4.1); embedded in the app for the splash statement, and in FreeDAWm Recorder as its text font | OFL-1.1 (`assets/fonts/Inter-LICENSE.txt`, the release's `LICENSE.txt`) |
 | `assets/splash/frames/` | the FreeDAWm owner | `packaging/splash.py` from `freedawm-splash-source.mp4` (144 JPEG frames, 960×540, 24 fps, embedded in `freedawm`) | MIT (`LICENSE-MIT`; copyright the FireStation owner; owner's decision, 2026-11-02) |
 | `assets/app-icon/freedawm-logo-source.png` | the FreeDAWm owner | supplied by the owner (the FreeDAWm bird logo, 1536 px RGBA) | MIT (`LICENSE-MIT`; copyright the FireStation owner; owner's decision, 2026-11-02) |
 | `assets/app-icon/freedawm-wordmark-source.png` | the FreeDAWm owner | supplied by the owner (the FreeDAWm wordmark, 1536 × 300 RGBA) | MIT (`LICENSE-MIT`; copyright the FireStation owner; owner's decision, 2026-11-02) |

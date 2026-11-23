@@ -75,6 +75,21 @@ pub struct Saved {
     pub seconds: f64,
     /// What went wrong, in words (the files written are still kept).
     pub problem: Option<String>,
+    /// What kind of thing went wrong (with `problem`).
+    pub cause: Option<Cause>,
+}
+
+/// Why a take stopped early or lost part of itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cause {
+    /// The audio input went away (unplugged).
+    InputGone,
+    /// The disk could not keep up, or is full.
+    Disk,
+    /// The audio output stopped (the take's clock).
+    OutputGone,
+    /// Another problem (a file not written).
+    Other,
 }
 
 /// A booth take as the glue wants it once it stopped (see `crate::booth`).
@@ -252,6 +267,37 @@ impl Rig {
         self.take.is_some()
     }
 
+    /// The take recording now was started by the studio (the booth glue).
+    pub fn recording_for_booth(&self) -> bool {
+        self.take.as_ref().is_some_and(|t| t.for_booth)
+    }
+
+    /// Notes played so far in this take, counted from MIDI event `from` on (note-ons), and the
+    /// next event to count from.
+    pub fn notes_since(&self, from: usize) -> (usize, usize) {
+        let new = self.live.get(from..).unwrap_or_default();
+        (new.iter().filter(|e| e.msg[0] & 0xF0 == 0x90 && e.msg[2] > 0).count(), self.live.len())
+    }
+
+    /// The input's loudness over the last `bars` stretches of `blocks` live blocks each (0..1
+    /// peaks, oldest first), while a take records audio: the moving bars.
+    pub fn recent_peaks(&self, bars: usize, blocks: usize) -> Vec<f32> {
+        let Some(r) = self.input.as_ref().filter(|_| self.take.is_some()) else { return Vec::new() };
+        let Some(live) = r.live_take(self.audio_track) else { return Vec::new() };
+        let have = live.first().map_or(0, Vec::len);
+        let want = bars.saturating_mul(blocks.max(1));
+        let from = have.saturating_sub(want);
+        let mut out = Vec::with_capacity(bars);
+        let mut at = from;
+        while at < have {
+            let end = at.saturating_add(blocks.max(1)).min(have);
+            let peak = live.iter().filter_map(|c| c.get(at..end)).flatten().map(|(lo, hi)| lo.abs().max(hi.abs())).fold(0f32, f32::max);
+            out.push(peak);
+            at = end;
+        }
+        out
+    }
+
     /// Seconds recorded so far.
     pub fn elapsed(&self) -> f64 {
         self.take.as_ref().map_or(0.0, |t| t.began.elapsed().as_secs_f64())
@@ -334,21 +380,25 @@ impl Rig {
         {
             self.output_problem = Some(format!("The audio output stopped ({t:?}): pick another output, or plug it back in and press Retry"));
             if self.take.is_some() {
-                return Some(self.stop());
+                let mut saved = self.stop();
+                saved.problem = saved.problem.or_else(|| Some("The audio output stopped. The take is saved up to there.".into()));
+                saved.cause = Some(Cause::OutputGone);
+                return Some(saved);
             }
         }
         let trouble = self.input.as_mut().filter(|_| self.take.is_some()).and_then(Recorder::trouble);
         if let Some(t) = trouble {
-            let (why, gone) = match t {
-                Trouble::Device(d) => (format!("The audio input stopped: {d}. The take is saved up to there."), true),
-                Trouble::Disk(d) => (format!("The disk could not keep up ({d}). The take is saved up to there."), false),
+            let (why, cause) = match t {
+                Trouble::Device(d) => (format!("The audio input stopped: {d}. The take is saved up to there."), Cause::InputGone),
+                Trouble::Disk(d) => (format!("The disk could not keep up ({d}). The take is saved up to there."), Cause::Disk),
             };
             let mut saved = self.stop();
-            if gone {
+            if cause == Cause::InputGone {
                 self.input = None;
                 self.input_error = Some("The audio input was disconnected: plug it back in and press Retry".into());
             }
             saved.problem = Some(why);
+            saved.cause = Some(cause);
             return Some(saved);
         }
         None

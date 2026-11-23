@@ -72,6 +72,74 @@ fn wav_header_seconds(b: &[u8]) -> Option<f64> {
     None
 }
 
+/// A WAV file's shape: the loudest sample (0..1) near each of `bars` evenly spaced points, read
+/// from up to 4096 frames at each (a few hundred kilobytes, whatever the take's length). PCM
+/// (16, 24 or 32 bit) and 32-bit float files; `None` for anything else or a damaged file.
+pub fn shape(path: &Path, bars: usize) -> Option<Vec<f32>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = vec![0u8; 65_536];
+    let n = f.read(&mut head).ok()?;
+    head.truncate(n);
+    let u16_at = |i: usize| head.get(i..i.checked_add(2)?).and_then(|s| s.try_into().ok()).map(u16::from_le_bytes);
+    let u32_at = |i: usize| head.get(i..i.checked_add(4)?).and_then(|s| s.try_into().ok()).map(u32::from_le_bytes);
+    if head.get(0..4) != Some(b"RIFF") || head.get(8..12) != Some(b"WAVE") {
+        return None;
+    }
+    let (mut at, mut fmt, mut data) = (12usize, None, None);
+    while let (Some(id), Some(size)) = (head.get(at..at.checked_add(4)?), u32_at(at.checked_add(4)?)) {
+        let body = at.checked_add(8)?;
+        match id {
+            b"fmt " => {
+                let tag = u16_at(body)?;
+                let tag = if tag == 0xFFFE { u16_at(body.checked_add(24)?)? } else { tag };
+                fmt = Some((tag, usize::from(u16_at(body.checked_add(2)?)?), usize::from(u16_at(body.checked_add(14)?)?)));
+            }
+            b"data" => {
+                data = Some((body, size as usize));
+                break;
+            }
+            _ => {}
+        }
+        at = body.checked_add(size as usize)?.checked_add(size as usize % 2)?;
+    }
+    let ((tag, channels, bits), (start, size)) = (fmt?, data?);
+    let width = bits / 8;
+    if channels == 0 || !matches!((tag, bits), (1, 16) | (1, 24) | (1, 32) | (3, 32)) {
+        return None;
+    }
+    let frame = channels.checked_mul(width)?;
+    // A take cut short leaves the header's size behind the file's: the file says how far it goes.
+    let in_file = (f.metadata().ok()?.len() as usize).saturating_sub(start);
+    let frames = size.min(in_file) / frame;
+    let bars = bars.max(1);
+    let each = (frames / bars).clamp(1, 4096);
+    let mut buf = vec![0u8; each * frame];
+    let mut out = Vec::with_capacity(bars);
+    for i in 0..bars {
+        let first = i.checked_mul(frames)? / bars;
+        if frames == 0 || first >= frames {
+            out.push(0.0);
+            continue;
+        }
+        f.seek(SeekFrom::Start(u64::try_from(start.checked_add(first.checked_mul(frame)?)?).ok()?)).ok()?;
+        let got = f.read(&mut buf).ok()?;
+        let peak = buf
+            .get(..got - got % width)
+            .unwrap_or_default()
+            .chunks_exact(width)
+            .map(|s| match (tag, bits) {
+                (1, 16) => f32::from(i16::from_le_bytes([s[0], s[1]])) / 32_768.0,
+                (1, 24) => (i32::from_le_bytes([0, s[0], s[1], s[2]]) >> 8) as f32 / 8_388_608.0,
+                (1, _) => i32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f32 / 2_147_483_648.0,
+                _ => f32::from_le_bytes([s[0], s[1], s[2], s[3]]),
+            })
+            .fold(0f32, |m, x| if x.is_finite() { m.max(x.abs()) } else { m });
+        out.push(peak.min(1.0));
+    }
+    Some(out)
+}
+
 /// Renames a take's files to `new` (both, or neither: a name taken by another take is refused).
 pub fn rename(take: &TakeFiles, new: &str) -> Result<TakeFiles, String> {
     let new = crate::settings::file_safe(new);

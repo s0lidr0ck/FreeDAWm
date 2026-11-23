@@ -33,6 +33,12 @@ pub struct Prefs {
     /// The booth's mix in the output, at this volume (linear).
     pub listen: bool,
     pub listen_gain: f32,
+    /// Start recording as soon as the Recorder opens (and its devices are ready).
+    pub record_on_open: bool,
+    /// Where the window was last (its top-left corner on the desktop, points).
+    pub window_pos: Option<[f32; 2]>,
+    /// The window's last size (points).
+    pub window_size: Option<[f32; 2]>,
 }
 
 impl Default for Prefs {
@@ -46,6 +52,9 @@ impl Default for Prefs {
             midi: BTreeMap::new(),
             listen: false,
             listen_gain: 1.0,
+            record_on_open: false,
+            window_pos: None,
+            window_size: None,
         }
     }
 }
@@ -127,11 +136,75 @@ pub fn recorder_name(computer: &str) -> String {
 /// A wall-clock time, `(year, month, day, hour, minute, second)`.
 pub type Stamp = (i64, u32, u32, u32, u32, u32);
 
-/// Now, in UTC. (Local time needs the system's time zone, which the standard library does not
-/// read; see `docs/recorder.md`.)
+/// Now, in seconds since 1970 (UTC).
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
+/// Now, in the computer's local time.
 pub fn now_stamp() -> Stamp {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    stamp_of(secs)
+    local_stamp(now_secs())
+}
+
+/// `secs` (since 1970, UTC) in the computer's local time: its time zone's offset at that time as
+/// the system gives it (`soundcraft_sysmem::utc_offset_secs`; on Windows the offset in force
+/// now), UTC when it gives none.
+pub fn local_stamp(secs: i64) -> Stamp {
+    let offset = soundcraft_sysmem::utc_offset_secs(secs).unwrap_or(0);
+    stamp_of(u64::try_from(secs.saturating_add(i64::from(offset))).unwrap_or(0))
+}
+
+/// The day of the week of a date, 0 for Monday … 6 for Sunday.
+pub fn weekday(s: Stamp) -> usize {
+    // Days since 1970-01-01 (a Thursday), Howard Hinnant's days-from-civil.
+    let (y, m, d) = (s.0 - i64::from(s.1 <= 2), i64::from(s.1), i64::from(s.2));
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    usize::try_from((days + 3).rem_euclid(7)).unwrap_or(0)
+}
+
+/// Days between two dates (`b` less `a`), ignoring the time of day.
+pub fn days_between(a: Stamp, b: Stamp) -> i64 {
+    let day = |s: Stamp| {
+        let (y, m, d) = (s.0 - i64::from(s.1 <= 2), i64::from(s.1), i64::from(s.2));
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+        era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy
+    };
+    day(b) - day(a)
+}
+
+/// A stem `unique_stem` made: its prefix, its time and any `(n)` after it
+/// (`Sunday Service 2026-11-22 14-03-10 (2)` → `("Sunday Service", …, " (2)")`).
+pub fn parse_stem(stem: &str) -> Option<(String, Stamp, String)> {
+    let (head, tail) = match stem.rfind(" (") {
+        Some(i) if stem.ends_with(')') && stem.get(i + 2..stem.len() - 1).is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) => {
+            (stem.get(..i)?, stem.get(i..)?)
+        }
+        _ => (stem, ""),
+    };
+    // `<prefix> YYYY-MM-DD HH-MM-SS`: the last 19 characters.
+    let cut = head.len().checked_sub(19)?;
+    let (prefix, when) = (head.get(..cut)?, head.get(cut..)?);
+    let b = when.as_bytes();
+    let digits = |r: std::ops::Range<usize>| -> Option<i64> {
+        let s = when.get(r)?;
+        if s.bytes().all(|c| c.is_ascii_digit()) { s.parse().ok() } else { None }
+    };
+    if b.get(4) != Some(&b'-') || b.get(7) != Some(&b'-') || b.get(10) != Some(&b' ') || b.get(13) != Some(&b'-') || b.get(16) != Some(&b'-') {
+        return None;
+    }
+    let small = |r| digits(r).and_then(|v| u32::try_from(v).ok());
+    let s: Stamp = (digits(0..4)?, small(5..7)?, small(8..10)?, small(11..13)?, small(14..16)?, small(17..19)?);
+    if !(1..=12).contains(&s.1) || !(1..=31).contains(&s.2) || s.3 > 23 || s.4 > 59 || s.5 > 60 {
+        return None;
+    }
+    let prefix = prefix.strip_suffix(' ')?.to_string();
+    (!prefix.trim().is_empty()).then_some((prefix, s, tail.to_string()))
 }
 
 /// Seconds since 1970 as a civil date and time (UTC).
@@ -181,6 +254,24 @@ mod tests {
         // 2026-11-22 14:03:10 UTC.
         assert_eq!(stamp_text(stamp_of(1_795_356_190)), "2026-11-22 14-03-10");
         assert_eq!(stamp_of(951_782_400), (2000, 2, 29, 0, 0, 0));
+    }
+
+    #[test]
+    fn names_are_in_local_time() {
+        let now = now_secs();
+        let offset = soundcraft_sysmem::utc_offset_secs(now).unwrap_or(0);
+        eprintln!("this computer is {offset} s ahead of UTC");
+        assert_eq!(local_stamp(now), stamp_of((now + i64::from(offset)) as u64));
+        // A take's name holds that local time, and reads back from it.
+        let at = local_stamp(1_795_356_190);
+        let stem = format!("Idea {}", stamp_text(at));
+        assert_eq!(parse_stem(&stem), Some(("Idea".to_string(), at, String::new())));
+        assert_eq!(parse_stem("Sunday Service 2026-11-22 14-03-10 (2)").map(|p| p.2), Some(" (2)".to_string()));
+        assert_eq!(parse_stem("Chorus idea"), None);
+        assert_eq!(parse_stem("Idea 2026-13-22 14-03-10"), None);
+        assert_eq!(weekday((2026, 11, 23, 0, 0, 0)), 0, "a Monday");
+        assert_eq!(weekday((2000, 2, 29, 0, 0, 0)), 1, "a Tuesday");
+        assert_eq!(days_between((2026, 2, 28, 23, 0, 0), (2026, 3, 1, 1, 0, 0)), 1);
     }
 
     #[test]
