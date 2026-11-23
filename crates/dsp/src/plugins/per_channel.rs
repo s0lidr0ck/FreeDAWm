@@ -336,6 +336,14 @@ impl Plugin for PerChannel {
         self.all().for_each(|p| p.set_transport(transport));
     }
 
+    fn follows_song_key(&self) -> bool {
+        self.first.follows_song_key()
+    }
+
+    fn set_song_keys(&mut self, keys: &[crate::SongKey]) {
+        self.all().for_each(|p| p.set_song_keys(keys));
+    }
+
     fn set_offline(&mut self, offline: bool) {
         self.offline = offline;
         self.all().for_each(|p| p.set_offline(offline));

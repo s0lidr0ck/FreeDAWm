@@ -94,6 +94,7 @@ pub use prepare::{BuiltinPrep, ClipHandle, ClipSlot, Prepared, PreparedClipFx, P
 pub mod scout;
 pub use link::{LinkProblem, LinkRoute, describe_link, link_refusal, link_regressions, link_routes, link_routes_with, short_link_problem};
 mod sidechain;
+pub mod song_keys;
 pub use sidechain::{
     INSTRUMENT_OUT, ModuleInputRoute, SidechainProblem, SidechainRoute, describe_route, module_input_refusal, module_input_routes, short_problem,
     sidechain_refusal, sidechain_regressions, sidechain_routes, sidechain_routes_with,
@@ -2172,8 +2173,15 @@ impl MixEngine {
             }
             let rate = s.sample_rate.hz();
             let lfe = lfe_mask(strip_format(t, ch));
+            // Effects that follow the song's key (Auto Pitch): the Key ruler as it is now.
+            let keys = chain.iter().flatten().any(|p| p.plugin.follows_song_key()).then(|| song_keys::song_key_table(s));
             for (slot, ins) in chain.iter_mut().zip(&t.mixer.inserts) {
                 if let Some(slot) = slot.as_mut() {
+                    if let Some(keys) = &keys
+                        && slot.plugin.follows_song_key()
+                    {
+                        slot.plugin.set_song_keys(keys);
+                    }
                     slot.plugin.set_lfe_channels(lfe);
                     sync_assets(slot, ins, s, rate, cx.retired_assets);
                     sync_link(slot, t.id, ins, &self.links, cx.retired_links);

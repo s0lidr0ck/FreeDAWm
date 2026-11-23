@@ -6467,6 +6467,7 @@ dependencies = [
  "serde",
  "serde_json",
  "soundcraft-audio-io",
+ "soundcraft-dsp",
 ]
 
 [[package]]
