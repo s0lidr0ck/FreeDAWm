@@ -168,6 +168,35 @@ impl Internet {
         Ok(Internet { rt, ep, conns: Arc::new(Mutex::new(Vec::new())), alpn: ALPN })
     }
 
+    /// An endpoint that only dials (FreeDAWm Recorder joining a booth by invite), with key `key`:
+    /// it offers no protocol, so a connection made to it is refused during its handshake, and
+    /// nothing here ever accepts one; it asks no router to map a port (no UPnP, NAT-PMP or PCP)
+    /// and publishes its address nowhere (no address publishing, only the lookups dialing a
+    /// booth may need). It keeps the home relay `relays` names, as dialing through one needs.
+    /// [`Internet::bridge_to`] and [`Internet::bridge_to_json`] work as on any endpoint; never
+    /// call [`Internet::serve_to`] on it. The DAW's endpoints ([`Internet::start`]) are unchanged.
+    pub fn start_dial_only(key: [u8; 32], relays: Relays) -> Result<Internet, String> {
+        use iroh::address_lookup::{DnsAddressLookup, PkarrResolver};
+        let rt = runtime()?;
+        let secret = SecretKey::from_bytes(&key);
+        let ep = rt.block_on(async {
+            let b = Endpoint::builder(presets::Minimal).portmapper_config(iroh::endpoint::PortmapperConfig::Disabled);
+            let b = match &relays {
+                Relays::Public => b
+                    .relay_mode(iroh::endpoint::default_relay_mode())
+                    .address_lookup(PkarrResolver::n0_dns())
+                    .address_lookup(DnsAddressLookup::n0_dns()),
+                Relays::Custom(url) => {
+                    let url: iroh::RelayUrl = url.parse().map_err(|e| format!("relay address `{url}`: {e}"))?;
+                    b.relay_mode(RelayMode::custom([url])).address_lookup(PkarrResolver::n0_dns()).address_lookup(DnsAddressLookup::n0_dns())
+                }
+                Relays::LocalOnly => b.relay_mode(RelayMode::Disabled),
+            };
+            b.secret_key(secret).alpns(Vec::new()).bind().await.map_err(|e| e.to_string())
+        })?;
+        Ok(Internet { rt, ep, conns: Arc::new(Mutex::new(Vec::new())), alpn: ALPN })
+    }
+
     /// The encrypted local link's endpoint (see the module docs) with key `key`, on UDP port
     /// `port` of every interface (0: any free port, as a remote PC dials out from).
     pub fn start_lan(key: [u8; 32], port: u16) -> Result<Internet, String> {

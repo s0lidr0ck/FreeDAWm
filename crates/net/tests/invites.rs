@@ -155,3 +155,30 @@ fn a_performer_comes_back_another_day_without_a_new_invite() {
     again.stop_internet();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+#[test]
+fn a_dial_only_endpoint_joins_by_invite_and_answers_no_one() {
+    // FreeDAWm Recorder's endpoint: it reaches the booth through the bridge, as the DAW's does,
+    // and pairs with the invite; another endpoint dialling it gets no answer.
+    use soundcraft_net::internet::{Internet, Invite, Relays, new_key};
+    let (hub, _) = booth(None);
+    let host = Internet::start(new_key(), Relays::LocalOnly).unwrap();
+    host.serve_to(hub.listen_internet().unwrap());
+    let code = Invite { addr: host.addr(Duration::from_secs(1)), secret: hub.new_invite_secret(), name: "Booth".into() }.code();
+    let me = Internet::start_dial_only(new_key(), Relays::LocalOnly).unwrap();
+    let inv = Invite::parse(&code).unwrap();
+    let bridge = me.bridge_to_json(&serde_json::to_string(&inv.addr).unwrap()).unwrap().to_string();
+    let (token, booth_name) = pair_invite(&bridge, &inv.secret, "Recorder PC").unwrap();
+    assert_eq!(booth_name, hub.pc_name());
+    assert_eq!(hello(&bridge, &token)["ok"], true, "it follows through the bridge");
+    assert_eq!(me.quality().len(), 1, "one connection, the one it dialled");
+
+    // Dialled, it refuses: its address (direct, on this machine) taken by another endpoint.
+    let stranger = Internet::start(new_key(), Relays::LocalOnly).unwrap();
+    let mine = me.addr(Duration::from_millis(200));
+    assert!(mine.ip_addrs().next().is_some(), "{mine:?}");
+    let back = stranger.bridge_to(mine).unwrap().to_string();
+    assert!(pair_invite(&back, &inv.secret, "Stranger").is_err(), "nothing answers on the dial-only endpoint");
+    assert!(stranger.quality().is_empty(), "no connection was made to it");
+    hub.stop_internet();
+}
