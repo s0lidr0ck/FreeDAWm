@@ -677,7 +677,9 @@ impl Follower {
                 if let Some((q, _)) = &*lock(&self.inner.stream_in) {
                     q.set_on(want);
                 }
-                send(out, &json!({"id": "s", "method": "stream.subscribe", "params": {"on": want}}))?;
+                // `live`: the booth's mix while it is stopped too (its decoder knows those packets
+                // have no place on the booth's take clock); an older booth ignores it.
+                send(out, &json!({"id": "s", "method": "stream.subscribe", "params": {"on": want, "live": true}}))?;
             }
             if want {
                 self.pump_stream();
