@@ -1037,7 +1037,7 @@ lines without an `id` get no reply):
 | `pair.exchange` | `{request, msg}` | `{msg, confirm}`. The first pairing's key exchange: `msg` the PC's SPAKE2 message (33 bytes, base64; side A, identities `freedawm-pc` and `freedawm-booth`, password the code on the booth's screen), answered by the booth's message and its confirmation, `HMAC-SHA256(HKDF-SHA256(k, info "freedawm pairing confirm"), role ‖ booth key ‖ PC key)` (role the sender's identity; each field after a byte giving its length; the keys are the encrypted link's two public keys as the TLS session proved them, none on the plain link). Spends one of the request's 3 tries whatever follows; a damaged message or a request without tries ends the connection. The code itself is never sent. |
 | `pair.finish` | `{confirm}` | `{token, name, pc}`: the PC's own confirmation, sent only after its check of the booth's, compared in constant time; it must be the next line on the same connection. A mismatch (a wrong code, or a machine in the middle holding another key towards each side) answers "wrong code, or another computer is in between (N tries left)" and ends the connection. Over the encrypted link the PC is then bound to its key, as before. |
 | `pair.confirm` | `{request, code}` | Refused ("update FreeDAWm on this computer…"): the code in the clear is never compared on this channel. The phone's page keeps `POST /api/pair/confirm`, for browser requests only. |
-| `hello` | `{token, name, role?: "follower", report?}` | `{pc, name, transport}`. Unpaired: `{ok: false, pair: true}`. After it, **every control-protocol method** (`engine.execute`, `session.inspect`, `ui.*`…) runs as on the `--control` channel. |
+| `hello` | `{token, name, role?: "follower" or "listener", report?}` | `{pc, name, transport}` (a listening PC: see "Listening PCs" below). Unpaired: `{ok: false, pair: true}`. After it, **every control-protocol method** (`engine.execute`, `session.inspect`, `ui.*`…) runs as on the `--control` channel. |
 | `sync.ping` | `{t0}` | `{b1, b2}`: the booth's take clock (s) when the ping arrived and when it answered. Refused while the booth is stopped. |
 | `follower.report` | `{state, notes, disk_free?, queued, ports, inputs, clips, sending?}` | (notification, about once a second; `inputs`: armed audio inputs, `clips` in the take recording, `sending` 0..1 while an audio take uploads) |
 | `feed` | `{port, notes: [{at, pitch, vel}]}` | (notification, every 250 ms while recording: the live sketch, booth timeline seconds, best effort) |
@@ -1092,7 +1092,17 @@ mute/solo/plugins/locates included) and a network thread reads it every 10 ms, c
 `{"event": "stream", "params": {seq, epoch, rolled, pos, data}}`: `rolled` and `pos` are the
 booth's take clock and timeline (s) at the frame's first input sample; `epoch` changes when the
 booth's take clock jumps (Stop, Play, a locate), and the follower drops what it queued at once.
-Nothing is sent while the booth is stopped. The follower's decoder keeps a jitter buffer (starts
+**While the booth is stopped** the stream goes on for a link that asked with
+`stream.subscribe {on, live: true}` (FreeDAWm from this version: remote recorders and listening
+PCs): a live event mixes live inputs with the transport stopped. Those packets carry `idle: true`;
+their `rolled` is not the booth's take clock but the stream's own clock since the stop (from 0),
+and a performer maps nothing from them, so a take's alignment is exactly as before. A roll after a
+stop is a new epoch the performer drops its queue for at once; a stop after a roll is a new
+(idle) epoch that does not drop anything: what he had not heard of the roll yet plays out first,
+still mapped (the end of a take is heard and placed as before). Sequence numbers run on through
+it all, epochs only grow. A link that asks without `live` (an older FreeDAWm) gets only
+talkback while stopped, as before (the booth runs a second encoder for it only while such a link
+listens). The stream is always the main mix as this PC hears it. The follower's decoder keeps a jitter buffer (starts
 at 150 ms; +30 ms each time it runs dry, up to 500; −10 ms after 20 s without; lost packets
 concealed; a queue 100 ms over target drops a frame for clock drift), converts to its session rate
 and queues it for its audio thread, which adds it to its main mix at the *Mix volume* (the
@@ -1152,7 +1162,92 @@ the stream take over it: 0 samples off) and, `#[ignore]`d, through n0's public r
 | Method | Params | Result |
 |---|---|---|
 | `pair.invite` | `{secret, name, token?}` | `{token, name, pc}`; a one-time invite is refused once used or after 30 minutes, a reusable one once its time or joins run out, or when revoked. `token`: the PC's own from an earlier join of this booth (sent only to the booth whose key it joined): while the invite is still good it is recognised, answered with the same token and `again: true`, and no join is used. Wrong secrets: after 20 in 10 minutes on the booth, every invite is refused for the rest of that window. |
-| `stream.subscribe` | `{on}` | `{on}`: this follower's link hears the mix (or stops). |
+| `stream.subscribe` | `{on, live?}` | `{on, live}`: this link (a remote recorder's or a listening PC's) hears the mix (or stops); `live: true` takes it while the booth is stopped too (`idle` packets). |
+
+**Listening PCs** (for mixing from another PC, with no recording). `hello {token, name, role:
+"listener"}` opens a listen-only link: it can `stream.subscribe` and `status.subscribe`, and it
+gets the `transport` events, but it never arms or records, is never made a follower (no
+`follows`, no remote ports), and `follower.report`, `feed`, `feed.audio`, `take.offer`,
+`take.chunk` and `take.transfer` are refused on it. The booth lists it in Setup › Network (and in
+the status's `remotes`) as `state: "listening"` (detail "hears the mix · <link>", never a
+warning), and forgets it the moment it goes: nothing waits for it, nothing in the mix changes.
+It works over the plain link, the encrypted local link and the internet invite link alike. An
+older booth answers `hello` as for a controlling PC (the role is unknown there) and refuses
+`stream.subscribe` ("only a remote recorder…"): a client then falls back to following. A paired PC
+keeps full control on this link too (the owner's choice: no roles).
+
+| Method | Params | Result |
+|---|---|---|
+| `status.subscribe` | `{on?}` (default true) | `{on}`; then `{"event": "status", "params": <the status>}` on every change (at most ~15 a second) and every 10 s: the same status the phone's page gets. Any paired PC. |
+| `mixer.subscribe` | `{on?, meters?}` (both default true) | `{on, meters}`; then the mixer feed below. Any paired PC. |
+| `engine.execute` | `{command, params, gesture?}` | With `gesture: "<key>"`: consecutive calls with the same key are one undo step (as dragging the fader here), until `engine.end_gesture` or 1.5 s without a move (a dropped link ends it so). |
+| `engine.end_gesture` | `{}` | `{}`: the gesture's undo step is closed (the remote let go). |
+
+**Mixer feed** (`soundcraft_engine::surface::feed`, published by the UI thread through
+`Hub::publish_mixer` / `Hub::publish_meters` only while a PC subscribes). Events on the link:
+
+- `{"event": "mixer.snapshot", "params": {seq, state}}` first (and again if the PC fell more than
+  64 changes behind). `state`: `session`, `pre_fader_metering` (the meters are pre-fader),
+  `solo_mode`, `order` (strip ids in mixer order), `strips`, `busses` (`id, name, format`),
+  `groups` (`id, name, letter, members, active, color`), `transport` (`state`
+  `stopped|playing|recording`, `loop`). Each strip (every track but video ones, the master, aux
+  and VCA tracks included): `id, name, kind, color ("#rrggbb"), format, volume_db, pan (per
+  channel, -1..1), mute, solo, record_arm, input_monitor (Auto|On|Off), input, output (routes as
+  in `session.inspect`), automation_mode, vca (the VCA's id or null), groups (ids), inactive,
+  hidden, sends (slot, target, level_db, pan, mute, pre_fader), inserts (slot, module, plugin,
+  name, bypass, hosted)`. A built-in module's insert carries `params` (`{id: value}` in plain
+  units, what `mix.module_param` takes); a third-party plug-in only its name and bypass. Fader and
+  pan show their automation while the track reads it (as a control surface does); values are
+  rounded to 0.01.
+- `{"event": "mixer.delta", "params": {seq, strips?, removed?, …}}` whenever anything changed,
+  from any source (this PC's screen, another remote, automation playback, a snapshot recall,
+  undo), at most every 50 ms: `strips` holds each changed strip's `id` and only its changed
+  fields (a new strip whole), `removed` the ids of strips gone, and any other top-level field that
+  changed comes whole. `seq` counts up by one; a PC that sees a gap subscribes again for a
+  snapshot. Applying deltas in order to the snapshot gives the booth's state
+  (`feed::apply_delta`).
+- `{"event": "mixer.meters", "params": {seq, pos, ids, lv}}` about 20 times a second while they
+  change: `pos` the playhead (s), `ids` the strips in order, `lv` base64 of five bytes per strip
+  in that order: peak L, peak R, RMS L, RMS R (dB = byte / 2 - 100; 0 is -100 dB or silence; what
+  the Mix window's meters show, with their ballistics) and the first dynamics insert's gain
+  reduction (quarter dB).
+
+Bounded: the booth keeps the last picture, the last 64 deltas and the latest meters; each
+subscriber has its own thread that sends what is new. A PC that stops reading stalls only that
+thread until the link's write timeout (5 s) ends its link; the UI never waits on it and memory
+does not grow. Measured on loopback (`crates/net/tests/remote_mix.rs`): 32 strips, a snapshot of
+about 10 KB; with the meters moving and no control touched about 7.5 KB/s (60 kb/s); with a fader moving at 20 Hz on top about
+9.1 KB/s. Stopped and silent, unchanged meters are not sent again (nothing but deltas).
+
+**A remote fader is one undo step.** A remote mixer sends `engine.execute {command: "mix.volume",
+params: {track, db}, gesture: "fader:<track>"}` on every move and `engine.end_gesture` on release:
+as the Mix window's fader and a control surface's touch to release, one undo step. The step
+stays open while no pointer is down on the booth (the booth's own per-frame end of gestures waits
+for it) until the release, or 1.5 s after the last move if the release never comes. A later
+"network surface" holds automation while touched as the Mackie layer does
+(`Engine::automation_hold` on touch, off on release; Trim mode through `automation_trim`).
+
+**Keeping the studio awake.** While *Allow control from this network* (or *Let a performer join
+this PC over the internet*) is on and either a paired PC is connected (a remote recorder, a
+listening PC, a controlling PC) or a track hears its live input (Input Monitoring On, or armed on
+Auto), FreeDAWm keeps the PC from sleeping, and Setup › Network says "Keeping this PC awake while
+remotes are connected…". It lets go as soon as neither holds. Windows: `SetThreadExecutionState`
+(system required; the screen may still turn off) from the UI thread; macOS: `caffeinate -i -w
+<pid>`; Linux: `systemd-inhibit --what=idle:sleep` (where systemd runs); elsewhere nothing, and
+the window says it could not.
+
+**Next (design notes, not built).** *Conflicts and locking*: two hands on one control: the first
+touch holds it until release plus about half a second; the other side sees it move and cannot
+grab it meanwhile (the feed would carry a `held_by` per strip); the booth operator can always
+take over with a "Lock remote mixing" switch, which refuses remote mixing commands until turned
+off; a remote that drops releases what it held and nothing else changes (no "safe" scene is
+recalled). Undo stays one history on the booth: a remote's gesture is one step in it, labelled as
+the command is. *Low-latency stream mode*: today's stream is tuned for the internet (20 ms Opus
+frames, a 150 ms jitter buffer growing to 500 ms: about 0.2–0.6 s behind). On a wired LAN a mode
+with 10 ms (or 5 ms) frames, Opus's restricted low-delay application, a 20–40 ms starting
+buffer that grows only on dropouts, and the same epoch/idle rules would bring it to about
+50–100 ms; it would be asked for per link (`stream.subscribe {mode: "low_latency"}`) and fall back
+to the normal mode over the internet or after repeated dropouts.
 
 **Clipping guard rails** (`soundcraft_net::guard`, `net_ui::performer_panel`): on a PC following a
 booth with an audio track armed, a "Your level" window shows one big input meter (green up to
