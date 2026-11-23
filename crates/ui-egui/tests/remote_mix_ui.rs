@@ -8,6 +8,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 use soundcraft_net::config::{KnownStudio, NetConfig};
 use soundcraft_net::hub::{Hub, HubRequest};
+use soundcraft_ui_egui::studio_editors as studio_ui_editors;
 use soundcraft_ui_egui::{Services, SoundApp, studio_ui};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -266,4 +267,145 @@ fn on_the_studio_a_remote_fader_drag_is_one_undo_step_through_the_real_control_p
     assert_eq!(vol(&h), before);
     remote.stop();
     hub.stop();
+}
+
+// ---- Stage three: the built-in effect editors on the studio's inserts ----
+
+fn pointer(h: &mut Harness<'static, SoundApp>, pos: egui::Pos2, pressed: Option<bool>) {
+    h.input_mut().events.push(egui::Event::PointerMoved(pos));
+    if let Some(pressed) = pressed {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    h.step();
+}
+
+/// Press at `from`, move to `to` in small steps, release.
+fn drag(h: &mut Harness<'static, SoundApp>, from: egui::Pos2, to: egui::Pos2) {
+    pointer(h, from, None);
+    pointer(h, from, Some(true));
+    let d = to - from;
+    let n = (d.length() / 8.0).ceil().max(1.0) as usize;
+    for k in 1..=n {
+        pointer(h, from + d * (k as f32 / n as f32), None);
+    }
+    pointer(h, to, Some(false));
+    h.run_steps(2);
+}
+
+#[test]
+fn every_full_editor_opens_over_a_mirror_and_leaves_this_session_alone() {
+    let Some(mut h) = app_with_net() else { return };
+    let rev = h.state().engine.revision;
+    let tracks = h.state().engine.session().tracks.len();
+    for plugin in studio_ui_editors::FULL_EDITORS {
+        let mut e = soundcraft_engine::Engine::default();
+        e.execute("track.new", &json!({"name": "Vocal", "kind": "audio"})).unwrap();
+        let t = e.session().tracks[0].id.0;
+        let m = e.execute("mix.insert", &json!({"track": t, "plugin": plugin})).unwrap()["module"].as_u64().unwrap() as u32;
+        let mut mirror = soundcraft_net::studio::MixMirror::default();
+        mirror.on_event("mixer.snapshot", &json!({"seq": 1, "state": soundcraft_engine::surface::feed::mixer_state(&e)}));
+        studio_ui::demo(h.state_mut(), "connected").unwrap();
+        h.state_mut().net.as_mut().unwrap().studio.demo.as_mut().unwrap().view = mirror.view().unwrap();
+        studio_ui::open_editor(h.state_mut(), t, m).unwrap_or_else(|e| panic!("{plugin}: {e}"));
+        h.run_steps(3);
+        let ed = h.state().net.as_ref().unwrap().studio.editor.as_ref().map(|e| (e.plugin.clone(), e.kind));
+        assert_eq!(ed, Some((plugin.to_string(), studio_ui_editors::EditorKind::Full)), "{plugin} stays open");
+        assert!(h.query_by_label_contains("on Vocal (on Studio PC)").is_some(), "{plugin}: its window");
+    }
+    assert_eq!(h.state().engine.revision, rev, "this PC's session never changed");
+    assert_eq!(h.state().engine.session().tracks.len(), tracks);
+}
+
+#[test]
+fn the_comp_editor_drags_the_studios_compressor_as_one_undo_step() {
+    let Some(mut h) = app_with_net() else { return };
+    let (studio, known) = Studio::start();
+    let ctx = h.ctx.clone();
+    studio_ui::connect_to(h.state_mut(), &ctx, known);
+    run_until(&mut h, "the studio's mixer", |h| h.query_by_label("Mute Vocal").is_some());
+    let (v, comp, before, depth) = {
+        let e = studio.engine.lock().unwrap();
+        let t = e.session().tracks.iter().find(|t| t.name == "Vocal").unwrap();
+        let c = t.mixer.inserts.iter().find(|i| i.plugin == "fs_comp").unwrap();
+        (t.id.0, c.id.0, c.params.get("amount").copied().unwrap_or(0.0), e.undo_depth())
+    };
+    // A click on its name opens its own editor, working on the studio's insert.
+    let name = h
+        .query_all_by_label_contains("on Vocal")
+        .map(|n| n.accesskit_node().label().unwrap_or_default().to_string())
+        .find(|l| !l.starts_with("Bypass") && l.contains("Comp"))
+        .expect("the comp's row");
+    h.get_by_label(&name).click();
+    run_until(&mut h, "its editor", |h| h.query_by_label("Threshold").is_some());
+    assert_eq!(h.state().net.as_ref().unwrap().studio.editor.as_ref().map(|e| (e.strip, e.module)), Some((v, comp)));
+    let knob = h.get_by_label("Threshold").rect().center();
+    drag(&mut h, knob, knob - egui::vec2(0.0, 50.0));
+    let amount = |s: &Studio| {
+        let e = s.engine.lock().unwrap();
+        e.session()
+            .tracks
+            .iter()
+            .find(|t| t.id.0 == v)
+            .unwrap()
+            .mixer
+            .inserts
+            .iter()
+            .find(|i| i.id.0 == comp)
+            .unwrap()
+            .params
+            .get("amount")
+            .copied()
+            .unwrap_or(0.0)
+    };
+    run_until(&mut h, "the studio's compressor moved", |_| (amount(&studio) - (before + 0.4)).abs() < 0.03);
+    run_until(&mut h, "one step", |_| studio.engine.lock().unwrap().undo_depth() == depth + 1);
+    run_until(&mut h, "the drag closed", |_| !studio.engine.lock().unwrap().gesture_open(&format!("editor:{v}:{comp}")));
+    // The studio's change comes back into the editor (here: undone there).
+    studio.engine.lock().unwrap().execute("edit.undo", &json!({})).unwrap();
+    run_until(&mut h, "the editor follows the studio", |h| {
+        let ed = h.state().net.as_ref().unwrap().studio.editor.as_ref().map(|e| e.title.clone());
+        ed.is_some() && (amount(&studio) - before).abs() < 1e-4
+    });
+    h.state_mut().net.as_mut().unwrap().studio.disconnect();
+}
+
+#[test]
+fn a_built_in_without_a_full_editor_opens_as_a_list_and_a_third_party_one_does_not_open() {
+    let Some(mut h) = app_with_net() else { return };
+    studio_ui::demo(h.state_mut(), "connected").unwrap();
+    h.run_steps(2);
+    let view = h.state().net.as_ref().unwrap().studio.demo.as_ref().unwrap().view.clone();
+    let vocal = view.strips.iter().find(|s| s.name == "Vocal").unwrap();
+    let eq = vocal.inserts.iter().find(|i| i.plugin == "eq_7band").unwrap();
+    studio_ui::open_editor(h.state_mut(), vocal.id, eq.module).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().net.as_ref().unwrap().studio.editor.as_ref().map(|e| e.kind), Some(studio_ui_editors::EditorKind::Generic));
+    let info = soundcraft_dsp::plugin_info("eq_7band").unwrap();
+    let first = info.params.iter().find(|p| eq.params.iter().any(|(k, _)| k == p.id)).unwrap();
+    assert!(h.query_all_by_label(first.name).count() >= 2, "its parameters by name (its name and its slider)");
+    // A third-party plug-in: name and bypass only.
+    let mut hosted = vocal.clone();
+    hosted.inserts = vec![soundcraft_net::studio::RemoteInsert {
+        slot: 0,
+        module: 99,
+        plugin: "clap:com.acme.verb".into(),
+        name: "Acme Verb".into(),
+        bypass: false,
+        hosted: true,
+        params: Vec::new(),
+    }];
+    {
+        let d = h.state_mut().net.as_mut().unwrap().studio.demo.as_mut().unwrap();
+        if let Some(s) = d.view.strips.iter_mut().find(|s| s.id == vocal.id) {
+            *s = hosted;
+        }
+    }
+    assert!(studio_ui::open_editor(h.state_mut(), vocal.id, 99).is_err(), "no editor here");
+    h.run_steps(3);
+    assert!(h.query_by_label("Bypass Acme Verb on Vocal").is_some());
 }

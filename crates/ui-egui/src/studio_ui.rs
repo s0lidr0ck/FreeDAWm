@@ -77,6 +77,8 @@ pub struct StudioState {
     /// connection already said yes once (the question is asked the first time only).
     pub confirm: Option<Confirm>,
     pub undo_ok: bool,
+    /// The insert editor open on one of the studio's built-in effects.
+    pub editor: Option<crate::studio_editors::RemoteEditor>,
 }
 
 /// Something that changes the studio's session as a whole, asked about first.
@@ -116,6 +118,7 @@ impl Default for StudioState {
             drag: None,
             confirm: None,
             undo_ok: false,
+            editor: None,
         }
     }
 }
@@ -160,6 +163,7 @@ impl StudioState {
         self.drag = None;
         self.confirm = None;
         self.undo_ok = false;
+        self.editor = None;
     }
 }
 
@@ -657,7 +661,7 @@ fn remote_window(app: &mut SoundApp, ctx: &egui::Context) {
     });
 }
 
-fn contents(_app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
+fn contents(app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
     let t = Tokens::current();
     let s = shown(net);
     let studio = net.studio.studio_name();
@@ -744,6 +748,7 @@ fn contents(_app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
         }
     }
     confirm_window(net, ui.ctx());
+    crate::studio_editors::window(app, net, &ui.ctx().clone(), &view, s.connected);
     if !s.connected {
         // Greyed, the last state kept visible, saying what it does.
         ui.painter().rect_filled(area, 0.0, t.window_bg.gamma_multiply(0.55));
@@ -879,15 +884,17 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
     ui.painter().text(pos2(sec.min.x + 3.0, sec.min.y + 1.0), Align2::LEFT_TOP, "INSERTS", regular(8.0), t.text_dim);
     for (k, ins) in s.inserts.iter().enumerate() {
         let ir = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 13.0 + 16.0 * k as f32), vec2(w - 4.0, 15.0));
-        if let Some(on) = insert_row(ui, s, ins, ir) {
-            act(
+        match insert_row(ui, s, ins, ir) {
+            Some(InsertClick::Bypass(on)) => act(
                 net,
                 Control::Bypass(s.id, ins.module),
                 if on { 1.0 } else { 0.0 },
                 false,
                 "mix.insert_bypass",
                 json!({"track": s.id, "slot": ins.slot, "value": on}),
-            );
+            ),
+            Some(InsertClick::Open) => crate::studio_editors::open(net, s, ins),
+            None => {}
         }
     }
     y = sec.max.y + 4.0;
@@ -1034,19 +1041,38 @@ fn readable_on(c: [u8; 3]) -> Color32 {
 
 /// One insert: its name (third-party ones say their window is on the studio) and a bypass key.
 /// Returns the bypass to set when the key is clicked.
-fn insert_row(ui: &mut Ui, s: &RemoteStrip, ins: &soundcraft_net::studio::RemoteInsert, r: Rect) -> Option<bool> {
+/// What a click on an insert row asked for.
+enum InsertClick {
+    Bypass(bool),
+    Open,
+}
+
+fn insert_row(ui: &mut Ui, s: &RemoteStrip, ins: &soundcraft_net::studio::RemoteInsert, r: Rect) -> Option<InsertClick> {
     let t = Tokens::current();
     let key = Rect::from_min_max(pos2(r.max.x - 15.0, r.min.y), r.max);
     let body = Rect::from_min_max(r.min, pos2(key.min.x - 1.0, r.max.y));
-    let resp = ui.interact(body, ui.id().with(("remote-insert", s.id, ins.module)), Sense::hover());
-    let fill = if ins.bypass { t.slot_bg.gamma_multiply(0.6) } else { t.slot_bg };
+    let opens = crate::studio_editors::kind_of(ins);
+    let resp = ui.interact(body, ui.id().with(("remote-insert", s.id, ins.module)), if opens.is_some() { Sense::click() } else { Sense::hover() });
+    let label = format!("{} on {}", ins.name, s.name);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &label));
+    let fill = if ins.bypass {
+        t.slot_bg.gamma_multiply(0.6)
+    } else if resp.hovered() && opens.is_some() {
+        t.slot_bg.gamma_multiply(1.3)
+    } else {
+        t.slot_bg
+    };
     ui.painter().rect_filled(body, 2.0, fill);
     let col = if ins.bypass { t.text_dim } else { t.text };
     let name = if ins.hosted { format!("{} ⧉", ins.name) } else { ins.name.clone() };
     ui.painter().with_clip_rect(body.shrink(1.0)).text(body.left_center() + vec2(3.0, 0.0), Align2::LEFT_CENTER, name, regular(9.5), col);
-    if ins.hosted {
-        resp.on_hover_text(HOSTED_NOTE);
-    }
+    let resp = match opens {
+        _ if ins.hosted => resp.on_hover_text(HOSTED_NOTE),
+        Some(crate::studio_editors::EditorKind::Full) => resp.on_hover_text("Click: its editor, working on the studio's insert"),
+        Some(crate::studio_editors::EditorKind::Generic) => resp.on_hover_text("Click: its parameters, working on the studio's insert"),
+        None => resp,
+    };
+    let open = resp.clicked();
     // The bypass key: lit while the insert plays.
     let kresp = ui.interact(key, ui.id().with(("remote-bypass", s.id, ins.module)), Sense::click());
     let label = format!("Bypass {} on {}", ins.name, s.name);
@@ -1057,7 +1083,32 @@ fn insert_row(ui: &mut Ui, s: &RemoteStrip, ins: &soundcraft_net::studio::Remote
     ui.painter().vline(key.center().x, key.center().y - 5.5..=key.center().y - 1.0, Stroke::new(1.5, if on { t.meter_green } else { t.text_dim }));
     let kresp =
         kresp.on_hover_text(if ins.bypass { "Bypassed on the studio: click to play it" } else { "Playing on the studio: click to bypass it" });
-    kresp.clicked().then_some(!ins.bypass)
+    if kresp.clicked() {
+        Some(InsertClick::Bypass(!ins.bypass))
+    } else if open {
+        Some(InsertClick::Open)
+    } else {
+        None
+    }
+}
+
+/// Opens the editor of insert `module` on the studio's strip `strip` (as a click on its name
+/// does; for tests and renders).
+pub fn open_editor(app: &mut SoundApp, strip: u64, module: u32) -> Result<(), String> {
+    let net = app.net.as_mut().ok_or("no network state")?;
+    let view = match (&net.studio.demo, &net.studio.link) {
+        (Some(d), _) => Some(d.view.clone()),
+        (None, Some(l)) => l.mirror().feed_view().cloned(),
+        _ => None,
+    }
+    .ok_or("not mixing a studio")?;
+    let s = view.strip(strip).ok_or("no such strip")?;
+    let ins = s.inserts.iter().find(|i| i.module == module).ok_or("no such insert")?;
+    crate::studio_editors::open(net, s, ins);
+    if net.studio.editor.is_none() {
+        return Err("that insert does not open here".into());
+    }
+    Ok(())
 }
 
 /// Connects this PC to `studio` with its kept pairing and opens the Remote Mix window (as the

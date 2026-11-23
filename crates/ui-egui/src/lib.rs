@@ -116,6 +116,7 @@ pub mod spot;
 pub mod step_grid;
 pub mod step_input;
 pub mod stretch_worker;
+pub mod studio_editors;
 pub mod studio_ui;
 pub mod surfaces;
 pub mod swale_ui;
