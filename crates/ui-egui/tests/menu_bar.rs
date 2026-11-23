@@ -17,7 +17,7 @@ use std::collections::HashMap;
 /// and in Event, MIDI editing: Give Notes Their Own Channels and Clear the Note's Expression
 /// (2026-11-18, before only in the MIDI Editor's Lanes menu), and Track › Import Wavetable…
 /// (2026-11-18, `docs/wavetable-import.md`), and Track › New Band (2026-11-19, `docs/band-checklist.md`), and File ›
-/// Connect to a Studio… (2026-11-23, `docs/remote-mixing.md`).
+/// Connect to a Studio… (2026-11-23, `docs/remote-mixing.md`), and Window › Full Screen (2026-11-23, `window.fullscreen`).
 const ROWS: [(&str, usize); 12] = [
     ("File", 15),
     ("Edit", 29),
@@ -30,7 +30,7 @@ const ROWS: [(&str, usize); 12] = [
     ("Transport", 28),
     ("Options", 14),
     ("Setup", 12),
-    ("Window", 12),
+    ("Window", 13),
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).

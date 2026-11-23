@@ -691,6 +691,7 @@ Setup > ML Models…
 Window > ## Main windows
 Window > Mix
 Window > Edit
+Window > Full Screen = @window.fullscreen
 Window > ---
 Window > Scout
 Window > ---

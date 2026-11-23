@@ -360,6 +360,7 @@ what's installed and each model's licence. The AI tools are in the desktop app o
 - <kbd>Ctrl</kbd><kbd>=</kbd>: switch between Mix and Edit
 - <kbd>Enter</kbd>: new marker
 - <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd>: new tracks
+- <kbd>Shift</kbd><kbd>F11</kbd> (<kbd>Ctrl</kbd><kbd>Cmd</kbd><kbd>F</kbd> on macOS): full screen, and back (Window › Full Screen)
 
 Every shortcut is listed, and can be changed, in **Setup › Keyboard Shortcuts**. The layout
 follows the Edit/Mix workflow many engineers already know: edit modes, tools, playlists, memory

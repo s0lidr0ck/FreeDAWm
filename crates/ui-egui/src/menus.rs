@@ -21,6 +21,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.mix", "Mix", "Window > Mix", Some("Cmd+=")),
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
     ("window.toggle_mix_edit", "Toggle Mix/Edit", "", Some("Cmd+=")),
+    ("window.fullscreen", "Full Screen", "", Some(crate::fullscreen::SHORTCUT)),
     ("window.mix_separate", "Mix in Separate Window", "", None),
     ("window.new_mix", "New Mix Window...", "", None),
     ("window.vocal_separate", "Vocal Editor in Separate Window", "", None),
@@ -978,6 +979,7 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
 fn hover_text(id: &str) -> Option<&'static str> {
     match id {
         "window.mix_separate" => Some("Show Edit and Mix at once, e.g. one per monitor"),
+        "window.fullscreen" => Some("The main window fills the screen, with no title bar or taskbar; the same key brings it back"),
         "window.vocal_separate" => Some("The Vocal Editor in its own window; closing it docks it back"),
         "window.notes" => Some("Session notes: a to-do list with check boxes, tags and times"),
         "window.set_list" => Some("The show's songs (memory locations) played in order, with a big stage view"),
@@ -1131,6 +1133,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.mix") => app.ui.window == MainWindow::Mix,
         Some("window.edit") => app.ui.window == MainWindow::Edit,
         Some("window.mix_separate") => app.ui.mix_separate,
+        Some("window.fullscreen") => app.ui.fullscreen,
         Some("window.vocal_separate") => app.ui.vocal_separate,
         Some("window.midi_editor_separate") => app.ui.midi_editor_separate,
         Some("ui.musical_typing") => app.typing.capture,
@@ -1733,6 +1736,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             v
         }
         "window.sync_scroll" => toggle(&mut app.ui.sync.scroll),
+        "window.fullscreen" => crate::fullscreen::command(app, p),
         "window.sync_folders" => toggle(&mut app.ui.sync.folders),
         "window.sync_visibility" => toggle(&mut app.ui.sync.visibility),
         "window.edit" => {

@@ -35,6 +35,7 @@ mod field_menu;
 pub mod fm_panel;
 pub mod fonts;
 pub mod fs_presets;
+pub mod fullscreen;
 pub mod hardware_credit;
 pub mod hearing_ui;
 pub mod hit_picker;
@@ -393,6 +394,10 @@ pub struct UiState {
     /// The Mix window lives in its own native window (Window › Separate Windows › Mix in Separate Window); the main
     /// window then always shows Edit.
     pub mix_separate: bool,
+    /// Window › Full Screen (`window.fullscreen`): the main window fills its screen. Not kept:
+    /// FreeDAWm always opens windowed (see [`fullscreen`]).
+    #[serde(skip)]
+    pub fullscreen: bool,
     /// More Mix windows (Window › Separate Windows › New Mix Window…), each with its own find, spill and sections
     /// ([`mix_more`]). Not kept: they close with the app.
     #[serde(skip)]
@@ -691,6 +696,7 @@ impl Default for UiState {
             audio: soundcraft_playback::AudioConfig::default(),
             record_offsets: std::collections::BTreeMap::new(),
             mix_separate: false,
+            fullscreen: false,
             more_mix: Vec::new(),
             vocal_separate: false,
             midi_editor_separate: false,
@@ -1111,6 +1117,8 @@ pub struct SoundApp {
     /// preview voice) and, going backwards, when the last frame's audio was sent.
     pub shuttle: f32,
     shuttle_at: Option<std::time::Instant>,
+    /// What the main window was told about full screen, and its hint (`fullscreen`).
+    pub(crate) fullscreen: fullscreen::Window,
     /// A Half-Speed Play is starting: it keeps its half speed whatever Varispeed says.
     half_speed_play: bool,
     /// A file or clip auditioning (`audition`).
@@ -1377,6 +1385,7 @@ impl SoundApp {
             varispeed: None,
             shuttle: 0.0,
             shuttle_at: None,
+            fullscreen: fullscreen::Window::default(),
             half_speed_play: false,
             loop_basis: (false, None),
             countoff: None,
@@ -3381,6 +3390,7 @@ impl SoundApp {
         let dt = self.last_frame.replace(now).map_or(1.0 / 60.0, |t| (now - t) as f32).clamp(0.0, 0.25);
         self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
         control::drain(self, ctx);
+        fullscreen::step(self, ctx);
         self.note_recent_session();
         self.apply_editor_edits();
         browser::thumbs::ThumbCache::capture_when_open(self, ctx);
@@ -3594,6 +3604,7 @@ impl SoundApp {
         palette::show(self, &ctx);
         window_sync::settle(self);
         dialogs::show(self, &ctx);
+        fullscreen::hint(self, &ctx);
         browser::drop::finish(self, &ctx);
         window_sync::watch_selection(self, None);
         // Here, not in logic(): a covered or minimized window runs only logic(), with no vsync to pace it.
@@ -3619,6 +3630,8 @@ impl SoundApp {
             "frame_ms": self.frame_ms,
             "audio_device": self.player.as_ref().map(|p| p.device_name.clone()),
             "status": self.ui.status,
+            "fullscreen": self.ui.fullscreen,
+            "fullscreen_hint": fullscreen::hint_showing(self, ctx),
             "midi_editor": midi_edit_tools::state(self),
         })
     }

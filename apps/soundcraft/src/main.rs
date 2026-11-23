@@ -357,7 +357,9 @@ impl App {
                 }
             }
         }
-        if !self.fit_pending {
+        // Full screen (Window › Full Screen) is never saved: the windowed size and state stay as they were.
+        let fullscreen = app.ui.fullscreen || ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        if !self.fit_pending && !fullscreen {
             app.ui.window_maximized = maximized;
             if let Some(r) = inner.filter(|_| !maximized) {
                 app.ui.window_size = (r.size() * ctx.zoom_factor()).round().into();
