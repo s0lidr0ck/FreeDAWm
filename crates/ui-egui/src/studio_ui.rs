@@ -23,7 +23,7 @@ use crate::theme::{Tokens, bold, regular, rgb};
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use soundcraft_net::config::KnownStudio;
-use soundcraft_net::studio::{MixerView, RemoteStrip, Studio, StudioTarget};
+use soundcraft_net::studio::{Control, MixerView, RemoteStrip, Studio, StudioTarget};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -71,6 +71,19 @@ pub struct StudioState {
     meters_at: Option<Instant>,
     /// For renders and UI tests: shown as connected or reconnecting with this mixer, no link.
     pub demo: Option<DemoLink>,
+    /// The control being dragged here now (one gesture on the studio until it is let go).
+    pub drag: Option<Control>,
+    /// Undo, Redo (or a snapshot recall) waiting for "yes, on the studio"; and whether this
+    /// connection already said yes once (the question is asked the first time only).
+    pub confirm: Option<Confirm>,
+    pub undo_ok: bool,
+}
+
+/// Something that changes the studio's session as a whole, asked about first.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Confirm {
+    Undo(String),
+    Redo(String),
 }
 
 /// A stand-in link for renders and UI tests.
@@ -100,6 +113,9 @@ impl Default for StudioState {
             meters: HashMap::new(),
             meters_at: None,
             demo: None,
+            drag: None,
+            confirm: None,
+            undo_ok: false,
         }
     }
 }
@@ -141,6 +157,46 @@ impl StudioState {
         self.demo = None;
         self.window = false;
         self.meters.clear();
+        self.drag = None;
+        self.confirm = None;
+        self.undo_ok = false;
+    }
+}
+
+/// Moves control `c` of the studio's mixer to `value` (shown here at once) with the command the
+/// studio's own Mix window runs. `held`: a drag still going (one gesture, one undo step on the
+/// studio, until it is let go).
+fn act(net: &mut NetState, c: Control, value: f32, held: bool, command: &str, params: Value) {
+    if held && net.studio.drag.as_ref() != Some(&c) {
+        end_drag(net);
+        net.studio.drag = Some(c.clone());
+    }
+    if let Some(link) = &net.studio.link {
+        link.mirror().set(c.clone(), value, held);
+        let g = c.gesture();
+        link.execute(command, params, held.then_some(g.as_str()));
+    } else if let Some(d) = &mut net.studio.demo
+        && let Some(s) = d.view.strips.iter_mut().find(|s| s.id == c.strip())
+    {
+        soundcraft_net::studio::set_control(s, &c, value);
+    }
+}
+
+/// The hand came off the control being dragged: the studio closes its undo step, and the feed
+/// shows what the studio has.
+fn end_drag(net: &mut NetState) {
+    if let Some(c) = net.studio.drag.take()
+        && let Some(link) = &net.studio.link
+    {
+        link.end_gesture(&c.gesture());
+        link.mirror().release(&c);
+    }
+}
+
+/// Runs a whole-session command on the studio (Undo, Redo).
+fn run_on_studio(net: &mut NetState, command: &str) {
+    if let Some(link) = &net.studio.link {
+        link.execute(command, json!({}), None);
     }
 }
 
@@ -184,6 +240,7 @@ pub(crate) fn connect_known(net: &mut NetState, ctx: &egui::Context, mut studio:
     studio.last_used = unix_now();
     remember(net, &studio);
     net.studio.status = format!("Connecting to {}…", studio.name);
+    net.studio.undo_ok = false;
     net.studio.link = Some(link);
     net.studio.current = Some(studio);
     net.studio.window = true;
@@ -614,6 +671,23 @@ fn contents(_app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
                 if ui.button("Disconnect").on_hover_text("Stop mixing this studio: its mix stays as it is now").clicked() {
                     net.studio.disconnect();
                 }
+                let (undo, redo) = s.view.as_ref().map_or((None, None), |v| (v.undo.clone(), v.redo.clone()));
+                let redo_text = redo.as_ref().map_or_else(|| "Redo".to_string(), |l| format!("Redo {l}"));
+                if ui
+                    .add_enabled(s.connected && redo.is_some(), egui::Button::new(redo_text))
+                    .on_hover_text("Redo on the studio PC (its own history)")
+                    .clicked()
+                {
+                    ask_or_run(net, Confirm::Redo(redo.clone().unwrap_or_default()));
+                }
+                let undo_text = undo.as_ref().map_or_else(|| "Undo".to_string(), |l| format!("Undo {l}"));
+                if ui
+                    .add_enabled(s.connected && undo.is_some(), egui::Button::new(undo_text))
+                    .on_hover_text("Undo on the studio PC: it takes back the studio's last change, whoever made it")
+                    .clicked()
+                {
+                    ask_or_run(net, Confirm::Undo(undo.clone().unwrap_or_default()));
+                }
                 ui.checkbox(&mut net.studio.muted, egui::RichText::new("Mute").color(Color32::WHITE));
                 ui.add(egui::Slider::new(&mut net.studio.volume, 0.0..=2.0).show_value(false))
                     .on_hover_text("How loud the studio's master plays here (it changes nothing at the studio)");
@@ -649,6 +723,27 @@ fn contents(_app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
         c.disable();
     }
     strips(net, &mut c, &view);
+    // The hand came off: the drag is one undo step on the studio, closed now.
+    if net.studio.drag.is_some() && !ui.input(|i| i.pointer.any_down()) {
+        end_drag(net);
+    }
+    if !s.connected {
+        net.studio.drag = None;
+        net.studio.confirm = None;
+    }
+    // Undo / Redo keys in this window act on the studio (asked the first time), never on this
+    // PC's own session (only in a window of its own: embedded, the keys are the main window's).
+    if s.connected && ui.ctx().viewport_id() != egui::ViewportId::ROOT {
+        let (undo, redo) = ui.input_mut(|i| {
+            (i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z), i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z))
+        });
+        if undo && let Some(l) = view.undo.clone() {
+            ask_or_run(net, Confirm::Undo(l));
+        } else if redo && let Some(l) = view.redo.clone() {
+            ask_or_run(net, Confirm::Redo(l));
+        }
+    }
+    confirm_window(net, ui.ctx());
     if !s.connected {
         // Greyed, the last state kept visible, saying what it does.
         ui.painter().rect_filled(area, 0.0, t.window_bg.gamma_multiply(0.55));
@@ -657,6 +752,54 @@ fn contents(_app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
         ui.painter().text(plate.center(), Align2::CENTER_CENTER, down_text(&s.state), bold(14.0), t.text);
     }
     ui.ctx().request_repaint_after(Duration::from_millis(50));
+}
+
+/// Undo or Redo on the studio: run at once once this connection said yes, else asked first.
+fn ask_or_run(net: &mut NetState, c: Confirm) {
+    if net.studio.undo_ok {
+        run_confirmed(net, &c);
+    } else {
+        net.studio.confirm = Some(c);
+    }
+}
+
+fn run_confirmed(net: &mut NetState, c: &Confirm) {
+    match c {
+        Confirm::Undo(_) => run_on_studio(net, "edit.undo"),
+        Confirm::Redo(_) => run_on_studio(net, "edit.redo"),
+    }
+}
+
+/// The question before the first Undo or Redo on someone else's machine.
+fn confirm_window(net: &mut NetState, ctx: &egui::Context) {
+    let Some(c) = net.studio.confirm.clone() else { return };
+    let studio = net.studio.studio_name();
+    let (title, what, button) = match &c {
+        Confirm::Undo(l) => ("Undo on the studio?", format!("This takes back “{l}” in {studio}'s session, whoever made that change."), "Undo there"),
+        Confirm::Redo(l) => ("Redo on the studio?", format!("This does “{l}” again in {studio}'s session."), "Redo there"),
+    };
+    let mut answer = None;
+    egui::Window::new(title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+        ui.label(what);
+        ui.label(egui::RichText::new("Your own session is not touched. You will not be asked again while connected.").small());
+        ui.horizontal(|ui| {
+            if ui.button(button).clicked() {
+                answer = Some(true);
+            }
+            if ui.button("Cancel").clicked() {
+                answer = Some(false);
+            }
+        });
+    });
+    match answer {
+        Some(true) => {
+            net.studio.undo_ok = true;
+            net.studio.confirm = None;
+            run_confirmed(net, &c);
+        }
+        Some(false) => net.studio.confirm = None,
+        None => {}
+    }
 }
 
 /// One frame of the strips' meters: the studio's levels (they carry its ballistics), with this
@@ -736,7 +879,16 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
     ui.painter().text(pos2(sec.min.x + 3.0, sec.min.y + 1.0), Align2::LEFT_TOP, "INSERTS", regular(8.0), t.text_dim);
     for (k, ins) in s.inserts.iter().enumerate() {
         let ir = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 13.0 + 16.0 * k as f32), vec2(w - 4.0, 15.0));
-        insert_row(ui, s, ins, ir);
+        if let Some(on) = insert_row(ui, s, ins, ir) {
+            act(
+                net,
+                Control::Bypass(s.id, ins.module),
+                if on { 1.0 } else { 0.0 },
+                false,
+                "mix.insert_bypass",
+                json!({"track": s.id, "slot": ins.slot, "value": on}),
+            );
+        }
     }
     y = sec.max.y + 4.0;
     // Sends: where to and how loud.
@@ -746,9 +898,26 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
     ui.painter().text(pos2(sec.min.x + 3.0, sec.min.y + 1.0), Align2::LEFT_TOP, "SENDS", regular(8.0), t.text_dim);
     for (k, x) in s.sends.iter().enumerate() {
         let sr = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 13.0 + 16.0 * k as f32), vec2(w - 4.0, 15.0));
+        let resp = ui.interact(sr, ui.id().with(("remote-send", s.id, x.slot)), Sense::click_and_drag());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, ui.is_enabled(), format!("Send {} to {}", s.name, x.target)));
+        let fill = if resp.hovered() || resp.dragged() { t.slot_bg.gamma_multiply(1.3) } else { t.slot_bg };
+        ui.painter().rect_filled(sr, 2.0, fill);
+        // The level as a bar along the row (0 dB at about four fifths).
+        let pos = soundcraft_model::fader_db_to_pos(x.level_db).clamp(0.0, 1.0);
+        ui.painter().rect_filled(Rect::from_min_size(sr.min, vec2(sr.width() * pos, sr.height())), 2.0, t.accent.gamma_multiply(0.35));
         let text = format!("{} {}", x.target, crate::widgets::db_text(x.level_db));
         let col = if x.mute { t.text_dim } else { t.text };
         ui.painter().with_clip_rect(sr).text(sr.left_center() + vec2(2.0, 0.0), Align2::LEFT_CENTER, text, regular(9.5), col);
+        let resp = resp.on_hover_text("Drag left or right: the send's level on the studio (double-click: 0 dB)");
+        let c = Control::Send(s.id, x.slot);
+        if resp.double_clicked() {
+            act(net, c, 0.0, false, "mix.send_level", json!({"track": s.id, "slot": x.slot, "db": 0.0}));
+        } else if resp.dragged() && resp.drag_delta().x != 0.0 {
+            let fine = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+            let p = (pos + resp.drag_delta().x / sr.width() * if fine { 0.1 } else { 1.0 }).clamp(0.0, 1.0);
+            let db = soundcraft_model::fader_pos_to_db(p).clamp(-144.0, 12.0);
+            act(net, c, db, true, "mix.send_level", json!({"track": s.id, "slot": x.slot, "db": db}));
+        }
     }
     y = sec.max.y + 4.0;
     // Groups and VCA.
@@ -767,9 +936,12 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
             let cx = if n == 2 { x0 + w * (0.25 + 0.5 * i as f32) } else { x0 + w * 0.5 };
             let kr = Rect::from_center_size(pos2(cx, y + 16.0), vec2(ks, ks));
             let mut c = ui.new_child(egui::UiBuilder::new().max_rect(kr));
-            c.disable();
             let mut v = s.pan.get(i).copied().unwrap_or(0.0);
-            let _ = crate::widgets::pan_knob(&mut c, ks, &mut v, "Pan");
+            let before = v;
+            let resp = crate::widgets::pan_knob(&mut c, ks, &mut v, &format!("Pan {} (drag; double-click centres)", s.name));
+            if (v - before).abs() > f32::EPSILON {
+                act(net, Control::Pan(s.id, i), v, resp.dragged(), "mix.pan", json!({"tracks": [s.id], "pan": v, "index": i}));
+            }
             ui.painter().text(pos2(cx, y + 38.0), Align2::CENTER_CENTER, crate::widgets::pan_text(v), regular(8.5), t.text_dim);
         }
         y += 48.0;
@@ -803,19 +975,33 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip) {
         } else {
             crate::widgets::SoloLook::Off
         };
-        row.disable();
-        let _ = crate::widgets::solo_key(&mut row, vec2(bw, 18.0), &look, &format!("Solo {}", s.name));
-        let _ = crate::widgets::mute_key(&mut row, vec2(bw, 18.0), s.mute, &look, &format!("Mute {}", s.name));
+        if crate::widgets::solo_key(&mut row, vec2(bw, 18.0), &look, &format!("Solo {}", s.name)).clicked() {
+            let on = !s.solo;
+            act(net, Control::Solo(s.id), if on { 1.0 } else { 0.0 }, false, "mix.solo", json!({"tracks": [s.id], "value": on}));
+        }
+        if crate::widgets::mute_key(&mut row, vec2(bw, 18.0), s.mute, &look, &format!("Mute {}", s.name)).clicked() {
+            let on = !s.mute;
+            act(net, Control::Mute(s.id), if on { 1.0 } else { 0.0 }, false, "mix.mute", json!({"tracks": [s.id], "value": on}));
+        }
     }
     y += 26.0;
     // Fader and meters.
     let bottom_h = 44.0;
     let fh = (r.max.y - bottom_h - y).max(120.0);
     let fr = Rect::from_min_size(pos2(x0, y), vec2(w * 0.6, fh));
-    {
-        let mut c = ui.new_child(egui::UiBuilder::new().max_rect(fr));
-        c.disable();
-        let _ = crate::widgets::fader(&mut c, fr, s.volume_db, egui::Id::new(("remote-fader", s.id)));
+    if let Some(db) = crate::widgets::fader(ui, fr, s.volume_db, egui::Id::new(("remote-fader", s.id))) {
+        let held = ui.input(|i| i.pointer.any_down());
+        act(net, Control::Volume(s.id), db, held, "mix.volume", json!({"tracks": [s.id], "db": db}));
+    }
+    if s.automation_mode != "off" && !s.automation_mode.is_empty() {
+        // The studio's automation moves this fader while it reads: say so.
+        ui.painter().text(
+            pos2(fr.center().x, fr.min.y - 2.0),
+            Align2::CENTER_BOTTOM,
+            format!("auto {}", s.automation_mode),
+            regular(8.0),
+            t.auto_read,
+        );
     }
     let md = net.studio.meters.get(&s.id).copied().unwrap_or_default();
     let slot = crate::widgets::fader_slot(fr);
@@ -846,20 +1032,32 @@ fn readable_on(c: [u8; 3]) -> Color32 {
     if l > 140.0 { Color32::from_gray(20) } else { Color32::WHITE }
 }
 
-fn insert_row(ui: &mut Ui, _s: &RemoteStrip, ins: &soundcraft_net::studio::RemoteInsert, r: Rect) {
+/// One insert: its name (third-party ones say their window is on the studio) and a bypass key.
+/// Returns the bypass to set when the key is clicked.
+fn insert_row(ui: &mut Ui, s: &RemoteStrip, ins: &soundcraft_net::studio::RemoteInsert, r: Rect) -> Option<bool> {
     let t = Tokens::current();
-    let resp = ui.interact(r, ui.id().with(("remote-insert", ins.module)), Sense::hover());
+    let key = Rect::from_min_max(pos2(r.max.x - 15.0, r.min.y), r.max);
+    let body = Rect::from_min_max(r.min, pos2(key.min.x - 1.0, r.max.y));
+    let resp = ui.interact(body, ui.id().with(("remote-insert", s.id, ins.module)), Sense::hover());
     let fill = if ins.bypass { t.slot_bg.gamma_multiply(0.6) } else { t.slot_bg };
-    ui.painter().rect_filled(r, 2.0, fill);
+    ui.painter().rect_filled(body, 2.0, fill);
     let col = if ins.bypass { t.text_dim } else { t.text };
     let name = if ins.hosted { format!("{} ⧉", ins.name) } else { ins.name.clone() };
-    ui.painter().with_clip_rect(r.shrink(1.0)).text(r.left_center() + vec2(3.0, 0.0), Align2::LEFT_CENTER, name, regular(9.5), col);
-    if ins.bypass {
-        ui.painter().text(r.right_center() - vec2(3.0, 0.0), Align2::RIGHT_CENTER, "byp", regular(8.0), t.text_dim);
-    }
+    ui.painter().with_clip_rect(body.shrink(1.0)).text(body.left_center() + vec2(3.0, 0.0), Align2::LEFT_CENTER, name, regular(9.5), col);
     if ins.hosted {
         resp.on_hover_text(HOSTED_NOTE);
     }
+    // The bypass key: lit while the insert plays.
+    let kresp = ui.interact(key, ui.id().with(("remote-bypass", s.id, ins.module)), Sense::click());
+    let label = format!("Bypass {} on {}", ins.name, s.name);
+    kresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), ins.bypass, &label));
+    let on = !ins.bypass;
+    ui.painter().rect_filled(key, 2.0, if kresp.hovered() { t.button_hi } else { t.button });
+    ui.painter().circle_stroke(key.center(), 4.0, Stroke::new(1.5, if on { t.meter_green } else { t.text_dim }));
+    ui.painter().vline(key.center().x, key.center().y - 5.5..=key.center().y - 1.0, Stroke::new(1.5, if on { t.meter_green } else { t.text_dim }));
+    let kresp =
+        kresp.on_hover_text(if ins.bypass { "Bypassed on the studio: click to play it" } else { "Playing on the studio: click to bypass it" });
+    kresp.clicked().then_some(!ins.bypass)
 }
 
 /// Connects this PC to `studio` with its kept pairing and opens the Remote Mix window (as the

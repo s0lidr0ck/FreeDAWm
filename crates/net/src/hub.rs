@@ -12,7 +12,7 @@
 //! touches the audio thread: the booth's take clock is read through a [`TakeClock`] (atomics).
 
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -259,6 +259,34 @@ struct Inner {
     mixer_subs: AtomicUsize,
     /// Paired PCs connected now (after `hello`), whatever they do.
     pcs: AtomicUsize,
+    /// Controls a remote's hand is on (`engine.execute {gesture}`), by gesture key: the first
+    /// touch holds the control until its release plus [`HOLD_GRACE`] (or [`HOLD_LEASE`] without
+    /// a move), and another remote's move of it is refused meanwhile.
+    holds: Mutex<HashMap<String, Hold>>,
+}
+
+/// A remote's hand on a control (see `Inner::holds`).
+#[derive(Debug, Clone)]
+struct Hold {
+    /// The connection holding it, and the PC's name (the refusal says whose hand it is).
+    conn: u64,
+    name: String,
+    /// Still down (no `engine.end_gesture` yet), and the last move or the release.
+    open: bool,
+    last: Instant,
+}
+
+/// A control stays its holder's this long after the release.
+pub const HOLD_GRACE: Duration = Duration::from_millis(500);
+/// A hold with no move this long ends by itself (a remote that never let go): as the engine's
+/// gesture lease.
+pub const HOLD_LEASE: Duration = Duration::from_millis(1500);
+
+impl Hold {
+    fn alive(&self) -> bool {
+        let age = self.last.elapsed();
+        if self.open { age < HOLD_LEASE } else { age < HOLD_GRACE }
+    }
 }
 
 /// The mixer feed's shared state (see [`Hub::publish_mixer`]). Bounded: a pusher that falls
@@ -356,6 +384,7 @@ impl Hub {
                 mixer_changed: Condvar::new(),
                 mixer_subs: AtomicUsize::new(0),
                 pcs: AtomicUsize::new(0),
+                holds: Mutex::new(HashMap::new()),
             }),
         }
         .seeded()
@@ -1359,6 +1388,37 @@ impl Hub {
         serde_json::from_str(&s.2).unwrap_or(json!({}))
     }
 
+    /// Connection `conn` (PC `name`) moves the control of gesture `key`: taken, or refused with
+    /// the holder's name while another connection's hand is on it.
+    fn hold(&self, conn: u64, key: &str, name: &str) -> Result<(), String> {
+        let mut h = lock(&self.inner.holds);
+        h.retain(|_, x| x.alive());
+        if let Some(x) = h.get(key).filter(|x| x.conn != conn) {
+            return Err(x.name.clone());
+        }
+        h.insert(key.to_string(), Hold { conn, name: name.to_string(), open: true, last: Instant::now() });
+        Ok(())
+    }
+
+    /// Connection `conn` let go of `key`: still its own for [`HOLD_GRACE`].
+    fn release_hold(&self, conn: u64, key: &str) {
+        if let Some(x) = lock(&self.inner.holds).get_mut(key).filter(|x| x.conn == conn) {
+            x.open = false;
+            x.last = Instant::now();
+        }
+    }
+
+    fn drop_holds(&self, conn: u64) {
+        lock(&self.inner.holds).retain(|_, x| x.conn != conn);
+    }
+
+    /// The controls held by a remote's hand now: (gesture key, PC name).
+    pub fn holds(&self) -> Vec<(String, String)> {
+        let mut h = lock(&self.inner.holds);
+        h.retain(|_, x| x.alive());
+        h.iter().map(|(k, x)| (k.clone(), x.name.clone())).collect()
+    }
+
     /// Runs a service remote action through the UI thread.
     pub fn action(&self, action: RemoteAction, device: &str) -> Result<Value, String> {
         let (tx, rx) = channel();
@@ -1438,6 +1498,9 @@ impl Hub {
         let mut status_push: Option<Arc<AtomicBool>> = None;
         let mut mixer_push: Option<Arc<AtomicBool>> = None;
         let mut counted = false;
+        // This connection (its holds), and the gestures it has open now.
+        let conn = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut gestures: Vec<String> = Vec::new();
         loop {
             if self.stopped(stop) {
                 break;
@@ -1665,11 +1728,31 @@ impl Hub {
                     Err(e) => Some(json!({"ok": false, "error": format!("bad take: {e}")})),
                 },
                 _ => {
-                    let (tx, rx) = channel();
-                    if !self.send(HubRequest::Control { method, params, reply: tx }) {
-                        break;
+                    let gesture = params.get("gesture").and_then(Value::as_str).map(str::to_string);
+                    let name = who.as_ref().map_or_else(String::new, |d| d.name.clone());
+                    let held = match (&gesture, method.as_str()) {
+                        (Some(g), "engine.execute" | "command") => self.hold(conn, g, &name).err(),
+                        (Some(g), "engine.end_gesture") => {
+                            self.release_hold(conn, g);
+                            gestures.retain(|x| x != g);
+                            None
+                        }
+                        _ => None,
+                    };
+                    if let Some(holder) = held {
+                        Some(json!({"ok": false, "error": format!("{holder} is moving that control"), "held_by": holder}))
+                    } else {
+                        if let Some(g) = gesture.filter(|_| method == "engine.execute" || method == "command")
+                            && !gestures.contains(&g)
+                        {
+                            gestures.push(g);
+                        }
+                        let (tx, rx) = channel();
+                        if !self.send(HubRequest::Control { method, params, reply: tx }) {
+                            break;
+                        }
+                        Some(rx.recv_timeout(Duration::from_secs(90)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"})))
                     }
-                    Some(rx.recv_timeout(Duration::from_secs(90)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"})))
                 }
             };
             if let (Some(mut r), Some(id)) = (reply, id) {
@@ -1687,6 +1770,14 @@ impl Hub {
         if let Some((id, _)) = exchange.take() {
             self.pair_exchange_failed(&id);
         }
+        // A remote gone mid-drag: its hands come off, and the studio closes each open undo step
+        // now (not when the lease runs out); the mix stays as last set.
+        for g in gestures {
+            self.release_hold(conn, &g);
+            let (tx, _) = channel();
+            self.send(HubRequest::Control { method: "engine.end_gesture".into(), params: json!({"gesture": g}), reply: tx });
+        }
+        self.drop_holds(conn);
         if let Some(p) = pusher {
             p.store(true, Ordering::SeqCst);
             self.inner.transport_changed.notify_all();

@@ -187,3 +187,83 @@ fn a_real_studio_shows_its_strips_here_and_its_record_is_kept() {
     assert_eq!(studio.engine.lock().unwrap().session().name, "Sunday Service Live");
     h.state_mut().net.as_mut().unwrap().studio.disconnect();
 }
+
+#[test]
+fn mute_and_bypass_clicked_here_change_the_studio() {
+    let Some(mut h) = app_with_net() else { return };
+    let (studio, known) = Studio::start();
+    let ctx = h.ctx.clone();
+    studio_ui::connect_to(h.state_mut(), &ctx, known);
+    run_until(&mut h, "the studio's mixer", |h| h.query_by_label("Mute Vocal").is_some());
+    h.get_by_label("Mute Vocal").click();
+    let vocal = |s: &Studio| s.engine.lock().unwrap().session().tracks.iter().find(|t| t.name == "Vocal").unwrap().clone();
+    run_until(&mut h, "the studio's mute", |_| vocal(&studio).mixer.mute);
+    // The EQ on the vocal: bypassed from here.
+    let label = h
+        .query_all_by_label_contains("Bypass")
+        .map(|n| n.accesskit_node().label().unwrap_or_default().to_string())
+        .find(|l| l.ends_with("on Vocal"))
+        .expect("a bypass key on the vocal's inserts");
+    h.get_by_label(&label).click();
+    run_until(&mut h, "the studio's bypass", |_| vocal(&studio).mixer.inserts.first().is_some_and(|i| i.bypass));
+    // Undo from here asks first (it is someone else's session).
+    run_until(&mut h, "the undo label", |h| h.query_by_label_contains("Undo Bypass").is_some() || h.query_by_label_contains("Undo ").is_some());
+    let undo = h
+        .query_all_by_label_contains("Undo ")
+        .map(|n| n.accesskit_node().label().unwrap_or_default().to_string())
+        .find(|l| l.starts_with("Undo "))
+        .unwrap();
+    h.get_by_label(&undo).click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Undo there").is_some(), "asked first");
+    h.get_by_label("Undo there").click();
+    run_until(&mut h, "undone on the studio", |_| vocal(&studio).mixer.inserts.first().is_some_and(|i| !i.bypass));
+    assert!(vocal(&studio).mixer.mute, "one step back: the mute stays");
+    h.state_mut().net.as_mut().unwrap().studio.disconnect();
+}
+
+#[test]
+fn on_the_studio_a_remote_fader_drag_is_one_undo_step_through_the_real_control_path() {
+    // This app is the studio: listening, a PC paired, its UI running the commands.
+    let app = SoundApp::new(studio_ui::demo_studio_engine(), None, Services::default());
+    let mut h = harness(app);
+    h.run_steps(2);
+    let Some(hub) = h.state().net.as_ref().map(|n| n.hub.clone()) else { return };
+    hub.update_config(|c| c.encrypted_only = false);
+    let port = hub.listen(0).unwrap();
+    let addr = format!("127.0.0.1:{port}");
+    let req = {
+        let a = addr.clone();
+        std::thread::spawn(move || soundcraft_net::follower::pair_request(&a, "Home PC"))
+    };
+    run_until(&mut h, "the pairing request", |h| !h.state().net.as_ref().unwrap().hub.pending_pairings().is_empty());
+    let id = req.join().unwrap().unwrap();
+    let code = hub.pending_pairings().into_iter().find(|p| p.id == id).unwrap().code;
+    let token = {
+        let a = addr.clone();
+        std::thread::spawn(move || soundcraft_net::follower::pair_confirm(&a, &id, code, soundcraft_net::pairing::exchange::LinkKeys::PLAIN))
+    };
+    run_until(&mut h, "paired", |h| !h.state().net.as_ref().unwrap().hub.config().paired.is_empty());
+    let (token, _) = token.join().unwrap().unwrap();
+    let remote =
+        soundcraft_net::studio::Studio::start(soundcraft_net::studio::StudioTarget { name: String::new(), addr, token, my_name: "Home PC".into() });
+    run_until(&mut h, "the remote's mirror", |_| remote.connected() && remote.mirror().has_state());
+    let v = h.state().engine.session().tracks.iter().find(|t| t.name == "Vocal").unwrap().id.0;
+    let vol = |h: &Harness<'static, SoundApp>| h.state().engine.session().tracks.iter().find(|t| t.id.0 == v).unwrap().mixer.volume_db;
+    let before = vol(&h);
+    let depth = h.state().engine.undo_depth();
+    let key = soundcraft_net::studio::Control::Volume(v).gesture();
+    for db in [-1.0f32, -2.0, -5.5] {
+        remote.execute("mix.volume", json!({"tracks": [v], "db": db}), Some(&key));
+        run_until(&mut h, "the move", |h| vol(h) == db);
+        // Studio frames go by with no pointer down.
+        h.run_steps(3);
+    }
+    remote.end_gesture(&key);
+    run_until(&mut h, "the release", |h| !h.state().engine.gesture_open(&key));
+    assert_eq!(h.state().engine.undo_depth(), depth + 1, "one undo step for the whole drag");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(vol(&h), before);
+    remote.stop();
+    hub.stop();
+}

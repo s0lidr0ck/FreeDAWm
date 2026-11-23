@@ -390,7 +390,8 @@ pub fn control_value(s: &RemoteStrip, c: &Control) -> Option<f32> {
     }
 }
 
-fn set_control(s: &mut RemoteStrip, c: &Control, v: f32) {
+/// Sets control `c` of strip `s` to `v` (bools from 0 or 1): what a move here shows.
+pub fn set_control(s: &mut RemoteStrip, c: &Control, v: f32) {
     match c {
         Control::Volume(_) => s.volume_db = v,
         Control::Pan(_, i) => {

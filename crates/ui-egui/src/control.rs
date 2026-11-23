@@ -4,7 +4,7 @@
 //!
 //! Methods:
 //! - `engine.execute {command, params}` (alias `command`): run any command programmatically (no dialogs);
-//!   with `gesture: "<key>"` consecutive calls are one undo step until `engine.end_gesture`
+//!   with `gesture: "<key>"` consecutive calls are one undo step until `engine.end_gesture {gesture}`
 //! - `engine.commands {filter?}`, `engine.parity`, `session.inspect {detail?}`, `ui.inspect`
 //! - `ui.menu.list`, `ui.menu.invoke {path: "Track > New..." | id}` (menu-style: may open dialogs)
 //! - `ui.click {x,y,button?,count?,mods?}`, `ui.move {x,y}`, `ui.drag {x,y,to_x,to_y,steps?}`
@@ -107,7 +107,11 @@ pub(crate) fn handle(app: &mut SoundApp, ctx: &egui::Context, req: &ControlReque
             }
         }
         "engine.end_gesture" => {
-            app.engine.end_merge();
+            // With its key, only that gesture's step ends (a drag of something else here goes on).
+            match p.get("gesture").and_then(Value::as_str) {
+                Some(key) => app.engine.end_gesture(key),
+                None => app.engine.end_merge(),
+            }
             ok(json!({}))
         }
         "engine.execute" | "command" => {

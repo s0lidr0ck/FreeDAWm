@@ -114,6 +114,11 @@ pub fn mixer_state(e: &Engine) -> Value {
         "busses": s.busses.iter().map(|b| json!({"id": b.id, "name": b.name, "format": b.format.label()})).collect::<Vec<_>>(),
         "groups": s.groups.iter().map(|g| json!({"id": g.id, "name": g.name, "letter": g.letter, "members": g.members, "active": g.active, "color": colour(g.color)})).collect::<Vec<_>>(),
         "transport": {"state": state, "loop": s.edit.loop_playback},
+        // The next Undo and Redo, by label (a remote's undo buttons act on this history).
+        "undo": e.undo_label(),
+        "redo": e.redo_label(),
+        // The session's mix snapshots (a remote recalls them by index).
+        "snapshots": s.mix_snapshots.iter().enumerate().map(|(i, m)| json!({"index": i, "name": m.name})).collect::<Vec<_>>(),
     })
 }
 
@@ -305,6 +310,22 @@ mod tests {
         assert_eq!(eq["hosted"], false);
         assert!(eq["params"].as_object().is_some_and(|p| !p.is_empty()), "a built-in carries its parameters: {eq}");
         assert!(st["strips"].as_array().unwrap().iter().any(|s| s["kind"] == "master"), "the master is a strip");
+        assert_eq!(st["undo"], e.undo_label().map_or(Value::Null, |l| json!(l)), "the next undo, by label");
+    }
+
+    #[test]
+    fn undo_labels_and_snapshots_are_in_the_feed() {
+        let (mut e, a, _) = engine();
+        let mut mirror = mixer_state(&e);
+        e.execute("mix.volume", &json!({"track": a, "db": -2.0})).unwrap();
+        let d = mixer_delta(&mirror, &mixer_state(&e)).unwrap();
+        assert_eq!(d["undo"], json!(e.undo_label().unwrap()), "{d}");
+        apply_delta(&mut mirror, &d);
+        e.execute("mix.snapshot_store", &json!({"name": "Sermon"})).unwrap();
+        let d = mixer_delta(&mirror, &mixer_state(&e)).unwrap();
+        assert!(d["snapshots"].as_array().unwrap().iter().any(|x| x["name"] == "Sermon"), "{d}");
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert!(mixer_state(&e)["redo"].is_string());
     }
 
     #[test]
@@ -388,6 +409,24 @@ mod tests {
         e.end_merge();
         e.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(db(&e), -5.0, "two steps: the first ended with its lease");
+    }
+
+    #[test]
+    fn a_remote_release_ends_only_its_own_gesture() {
+        let (mut e, a, b) = engine();
+        e.execute_gesture("mix.volume", &json!({"track": a, "db": -1.0}), "fader:a").unwrap();
+        e.end_gesture("fader:b");
+        assert!(e.gesture_open("fader:a"), "another control's release leaves this drag alone");
+        e.end_gesture("fader:a");
+        assert!(!e.gesture_open("fader:a"));
+        // A local drag under way is not ended by a remote's release either.
+        let start = e.session().tracks.iter().find(|t| t.id.0 == b).unwrap().mixer.volume_db;
+        e.execute_merged("mix.volume", &json!({"track": b, "db": -2.0}), "fader").unwrap();
+        e.end_gesture("fader:a");
+        e.execute_merged("mix.volume", &json!({"track": b, "db": -3.0}), "fader").unwrap();
+        e.end_merge();
+        e.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(e.session().tracks.iter().find(|t| t.id.0 == b).unwrap().mixer.volume_db, start, "one step");
     }
 
     #[test]
