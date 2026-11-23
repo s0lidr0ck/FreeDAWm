@@ -78,3 +78,53 @@ pub(crate) fn free_disk_space(path: &std::path::Path) -> Option<u64> {
 pub(crate) fn free_disk_space(_path: &std::path::Path) -> Option<u64> {
     None
 }
+
+/// The local time's offset from UTC at `unix_secs` (`localtime_r`'s `tm_gmtoff`).
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
+pub(crate) fn utc_offset_secs(unix_secs: i64) -> Option<i32> {
+    let t = libc::time_t::try_from(unix_secs).ok()?;
+    let mut tm = std::mem::MaybeUninit::<libc::tm>::zeroed();
+    // SAFETY: `t` is a valid time_t and `tm` is writable memory the size of a `tm`; localtime_r
+    // (the reentrant form) writes only into `tm` and returns null when it fails.
+    let r = unsafe { libc::localtime_r(&t, tm.as_mut_ptr()) };
+    if r.is_null() {
+        return None;
+    }
+    // SAFETY: localtime_r succeeded, so it filled `tm` (and it was zeroed before).
+    let tm = unsafe { tm.assume_init() };
+    i32::try_from(tm.tm_gmtoff).ok()
+}
+
+/// The local time's offset from UTC now: the local clock less the UTC clock, to the minute (read
+/// again when the minute turned while reading).
+#[cfg(windows)]
+pub(crate) fn utc_offset_secs(_unix_secs: i64) -> Option<i32> {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
+    // Minutes from a fixed day (only differences are used).
+    fn minutes(t: &SYSTEMTIME) -> i64 {
+        let (y, m) = (i64::from(t.wYear), i64::from(t.wMonth));
+        let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+        let days = 365 * y + y / 4 - y / 100 + y / 400 + (153 * m + 2) / 5 + i64::from(t.wDay);
+        (days * 24 + i64::from(t.wHour)) * 60 + i64::from(t.wMinute)
+    }
+    for _ in 0..3 {
+        let (mut utc, mut local, mut again) = (SYSTEMTIME::default(), SYSTEMTIME::default(), SYSTEMTIME::default());
+        // SAFETY: each call only writes the SYSTEMTIME it is given, which is valid and writable;
+        // none of them can fail.
+        unsafe {
+            GetSystemTime(&mut utc);
+            GetLocalTime(&mut local);
+            GetSystemTime(&mut again);
+        }
+        if again.wMinute == utc.wMinute {
+            return i32::try_from((minutes(&local) - minutes(&utc)) * 60).ok();
+        }
+    }
+    None
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos", target_os = "freebsd")))]
+pub(crate) fn utc_offset_secs(_unix_secs: i64) -> Option<i32> {
+    None
+}

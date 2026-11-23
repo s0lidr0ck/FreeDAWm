@@ -1,6 +1,6 @@
 [package]
 name = "soundcraft-sysmem"
-description = "SoundCraft: the computer's physical memory and a disk's free space (an isolated unsafe helper crate: one OS call per platform)"
+description = "SoundCraft: the computer's physical memory, a disk's free space and the time zone's offset (an isolated unsafe helper crate: a few OS calls per platform)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
