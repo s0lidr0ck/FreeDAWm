@@ -263,6 +263,44 @@ struct Inner {
     /// touch holds the control until its release plus [`HOLD_GRACE`] (or [`HOLD_LEASE`] without
     /// a move), and another remote's move of it is refused meanwhile.
     holds: Mutex<HashMap<String, Hold>>,
+    /// The PCs' connections after `hello`: (connection, the device's token, its name, its line
+    /// out), so the booth can end them (Disconnect, Forget) or tell them the lock changed.
+    conns: Mutex<Vec<(u64, String, String, Arc<Mutex<TcpStream>>)>>,
+    /// Devices sent away by Disconnect (their tokens): refused until let back in or the app
+    /// restarts.
+    away: Mutex<Vec<String>>,
+    /// Remote mixing so far, by device name: when its last change came.
+    mixing: Mutex<HashMap<String, Instant>>,
+}
+
+/// Why a change from a remote is refused while remote mixing is locked.
+pub const LOCKED: &str = "remote mixing is locked on the studio (Setup › Network): you can watch and listen";
+
+/// The methods a paired PC may still call while remote mixing is locked: they read, or end a
+/// gesture (its undo step closes).
+const READ_ONLY: &[&str] =
+    &["session.inspect", "engine.commands", "engine.parity", "ui.inspect", "ui.menu.list", "ui.screenshot", "engine.end_gesture"];
+
+/// Whether `method` with `params` changes nothing on the studio (allowed while locked).
+fn reads_only(method: &str, params: &Value) -> bool {
+    if READ_ONLY.contains(&method) {
+        return true;
+    }
+    if method == "engine.execute" || method == "command" {
+        let id = params.get("command").or_else(|| params.get("id")).and_then(Value::as_str).unwrap_or("");
+        return params.get("gesture").is_none() && soundcraft_engine::cmd::find_command(id).is_some_and(|c| !c.journal && !c.undoable && !c.view);
+    }
+    false
+}
+
+/// A PC connected now, for Setup › Network's list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemotePc {
+    pub name: String,
+    pub token: String,
+    /// It changed the studio's mix since it connected; how long ago the last change was (s).
+    pub mixing: bool,
+    pub last_change: Option<f64>,
 }
 
 /// A remote's hand on a control (see `Inner::holds`).
@@ -385,6 +423,9 @@ impl Hub {
                 mixer_subs: AtomicUsize::new(0),
                 pcs: AtomicUsize::new(0),
                 holds: Mutex::new(HashMap::new()),
+                conns: Mutex::new(Vec::new()),
+                away: Mutex::new(Vec::new()),
+                mixing: Mutex::new(HashMap::new()),
             }),
         }
         .seeded()
@@ -475,11 +516,85 @@ impl Hub {
 
     pub fn forget(&self, token: &str) {
         self.update_config(|c| c.paired.retain(|d| d.token != token));
+        self.end_connections(|t| t == token);
     }
 
     /// Forgets every paired device (each must pair again).
     pub fn forget_all(&self) {
         self.update_config(|c| c.paired.clear());
+        self.end_connections(|_| true);
+    }
+
+    /// Ends the connections of the devices whose token `which` picks (they see the link drop).
+    fn end_connections(&self, which: impl Fn(&str) -> bool) {
+        for (_, token, _, out) in lock(&self.inner.conns).iter() {
+            if which(token) {
+                let _ = lock(out).shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+
+    /// Disconnect (Setup › Network): ends the device's connections and refuses it until
+    /// [`Hub::let_back`] (or the app restarts). It stays paired.
+    pub fn disconnect(&self, token: &str) {
+        {
+            let mut a = lock(&self.inner.away);
+            if !a.iter().any(|t| t == token) {
+                a.push(token.to_string());
+            }
+        }
+        self.end_connections(|t| t == token);
+    }
+
+    /// Lets a device sent away by [`Hub::disconnect`] connect again.
+    pub fn let_back(&self, token: &str) {
+        lock(&self.inner.away).retain(|t| t != token);
+    }
+
+    /// The devices sent away now: (name, token).
+    pub fn sent_away(&self) -> Vec<(String, String)> {
+        let away = lock(&self.inner.away).clone();
+        let cfg = lock(&self.inner.cfg);
+        away.into_iter().map(|t| (cfg.device(&t).map_or_else(|| "a PC".to_string(), |d| d.name.clone()), t)).collect()
+    }
+
+    /// Lock remote mixing: paired PCs watch and listen, every change from them is refused. Each
+    /// PC connected is told at once (on a thread: the UI never waits on a link).
+    pub fn set_remote_lock(&self, on: bool) {
+        self.update_config(|c| c.lock_remote_mixing = on);
+        let outs: Vec<Arc<Mutex<TcpStream>>> = lock(&self.inner.conns).iter().map(|c| Arc::clone(&c.3)).collect();
+        let _ = std::thread::Builder::new().name("freedawm-net-lock".into()).spawn(move || {
+            let line = json!({"event": "remote_lock", "params": {"on": on}});
+            for out in outs {
+                let _ = write_line(&out, &line);
+            }
+        });
+    }
+
+    pub fn remote_lock(&self) -> bool {
+        lock(&self.inner.cfg).lock_remote_mixing
+    }
+
+    /// The paired PCs connected now (each once), and whether each is mixing.
+    pub fn remote_pcs(&self) -> Vec<RemotePc> {
+        let mixing = lock(&self.inner.mixing).clone();
+        let mut out: Vec<RemotePc> = Vec::new();
+        for (_, token, name, _) in lock(&self.inner.conns).iter() {
+            if out.iter().any(|r| r.token == *token) {
+                continue;
+            }
+            let last = mixing.get(name).map(|t| t.elapsed().as_secs_f64());
+            out.push(RemotePc { name: name.clone(), token: token.clone(), mixing: last.is_some(), last_change: last });
+        }
+        out
+    }
+
+    /// A change from `name` reached the app: it is mixing (a notice the first time).
+    fn note_mixing(&self, name: &str) {
+        let first = lock(&self.inner.mixing).insert(name.to_string(), Instant::now()).is_none();
+        if first {
+            self.notice(format!("{name} started mixing remotely"));
+        }
     }
 
     /// Sets the booth PIN (spaces around it dropped; at least
@@ -805,11 +920,16 @@ impl Hub {
             if l.listener {
                 if l.connected {
                     let mut parts: Vec<String> = Vec::new();
+                    let last = lock(&self.inner.mixing).get(&l.name).map(|t| t.elapsed().as_secs_f64());
+                    if let Some(s) = last {
+                        parts.push(format!("last change {}", ago(s)));
+                    }
                     if l.streaming {
                         parts.push("hears the mix".into());
                     }
                     parts.push(l.kind.text().into());
-                    out.push(RemoteStatus { name: l.name.clone(), state: "listening".into(), detail: parts.join(" · "), ..RemoteStatus::default() });
+                    let state = if last.is_some() { "mixing" } else { "listening" };
+                    out.push(RemoteStatus { name: l.name.clone(), state: state.into(), detail: parts.join(" · "), ..RemoteStatus::default() });
                 }
                 continue;
             }
@@ -1610,7 +1730,13 @@ impl Hub {
                         Some(dev) if !dev.key.is_empty() && (kind != LinkKind::Encrypted || peer.as_deref() != Some(dev.key.as_str())) => Some(
                             json!({"ok": false, "error": "this PC was paired over the encrypted local link: connect over it, with the same key", "pair": true}),
                         ),
+                        Some(dev) if lock(&self.inner.away).contains(&dev.token) => Some(
+                            json!({"ok": false, "error": "the studio disconnected this PC: it can let it back in from Setup › Network", "away": true}),
+                        ),
                         Some(dev) => {
+                            if who.is_none() {
+                                lock(&self.inner.conns).push((conn, dev.token.clone(), dev.name.clone(), Arc::clone(&out)));
+                            }
                             let role = params.get("role").and_then(Value::as_str);
                             let follower = role == Some("follower");
                             listening = role == Some("listener") && link.is_none();
@@ -1643,7 +1769,7 @@ impl Hub {
                                 ""
                             };
                             log::info!("network: {} connected from {addr}{what}", dev.name);
-                            let r = json!({"ok": true, "result": {"pc": self.pc_name(), "name": dev.name, "transport": self.transport()}});
+                            let r = json!({"ok": true, "result": {"pc": self.pc_name(), "name": dev.name, "transport": self.transport(), "locked": self.remote_lock()}});
                             who = Some(dev);
                             Some(r)
                         }
@@ -1727,9 +1853,13 @@ impl Hub {
                     Ok(t) => Some(answer(self.receive_take(t))),
                     Err(e) => Some(json!({"ok": false, "error": format!("bad take: {e}")})),
                 },
+                _ if self.remote_lock() && !reads_only(&method, &params) => Some(json!({"ok": false, "error": LOCKED, "locked": true})),
                 _ => {
                     let gesture = params.get("gesture").and_then(Value::as_str).map(str::to_string);
                     let name = who.as_ref().map_or_else(String::new, |d| d.name.clone());
+                    if !reads_only(&method, &params) && method != "engine.end_gesture" {
+                        self.note_mixing(&name);
+                    }
                     let held = match (&gesture, method.as_str()) {
                         (Some(g), "engine.execute" | "command") => self.hold(conn, g, &name).err(),
                         (Some(g), "engine.end_gesture") => {
@@ -1778,6 +1908,17 @@ impl Hub {
             self.send(HubRequest::Control { method: "engine.end_gesture".into(), params: json!({"gesture": g}), reply: tx });
         }
         self.drop_holds(conn);
+        {
+            let mut conns = lock(&self.inner.conns);
+            let name = conns.iter().find(|c| c.0 == conn).map(|c| c.2.clone());
+            conns.retain(|c| c.0 != conn);
+            // Mixing ends with its last connection.
+            if let Some(n) = name
+                && !conns.iter().any(|c| c.2 == n)
+            {
+                lock(&self.inner.mixing).remove(&n);
+            }
+        }
         if let Some(p) = pusher {
             p.store(true, Ordering::SeqCst);
             self.inner.transport_changed.notify_all();
@@ -2470,6 +2611,17 @@ fn same_secret(a: &str, b: &str) -> bool {
 }
 
 /// Seconds since 1970.
+/// "just now", "12 s ago", "3 min ago".
+pub fn ago(secs: f64) -> String {
+    if secs < 2.0 {
+        "just now".into()
+    } else if secs < 120.0 {
+        format!("{secs:.0} s ago")
+    } else {
+        format!("{:.0} min ago", secs / 60.0)
+    }
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }

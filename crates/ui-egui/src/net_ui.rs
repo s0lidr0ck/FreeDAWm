@@ -1106,6 +1106,10 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             ui.separator();
             ui.heading("Connect over the internet");
             internet_section(ui, &mut net, ctx);
+            ui.add_space(6.0);
+            ui.separator();
+            ui.heading("Remote mixing");
+            mixing_section(ui, &mut net);
         });
     });
     app.net = Some(net);
@@ -1307,6 +1311,70 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
         ui.colored_label(if badge.recording() { t.rec } else { t.text }, format!("{}{detail}", badge.text()));
         ui.label(egui::RichText::new(format!("Link: {}", net.follow_link())).small().color(t.text_dim))
             .on_hover_text("Encrypted local link: QUIC to the booth's key, kept since pairing. Not encrypted: the plain TCP link of earlier versions; pair again with a booth that offers the encrypted link to move to it");
+    }
+}
+
+/// What Setup › Network says under "Lock remote mixing".
+pub(crate) const LOCK_NOTE: &str = "Paired PCs can still see this mixer and hear the mix, but every change from them is refused \
+(faders, mutes, plug-ins, undo). For the whole session, every remote alike. Your own controls are not affected.";
+
+/// Remote mixing on this PC (File › Connect to a Studio… on another): the lock, and the PCs
+/// connected now, mixing or listening, with Disconnect and Forget.
+fn mixing_section(ui: &mut egui::Ui, net: &mut NetState) {
+    let t = Tokens::current();
+    let mut locked = net.hub.remote_lock();
+    if ui
+        .checkbox(&mut locked, "Lock remote mixing")
+        .on_hover_text("Remotes keep watching and listening; their changes are refused until this is off")
+        .changed()
+    {
+        net.hub.set_remote_lock(locked);
+    }
+    ui.label(egui::RichText::new(LOCK_NOTE).small().color(t.text_dim));
+    let pcs = net.hub.remote_pcs();
+    if pcs.is_empty() {
+        ui.label(egui::RichText::new("No PC is connected to this one now.").small().color(t.text_dim));
+    }
+    let mut disconnect = None;
+    let mut forget = None;
+    for pc in &pcs {
+        ui.horizontal(|ui| {
+            let state = match pc.last_change {
+                Some(s) => format!("{}: mixing · last change {}", pc.name, soundcraft_net::hub::ago(s)),
+                None => format!("{}: connected (watching or listening)", pc.name),
+            };
+            ui.label(state);
+            if ui
+                .small_button("Disconnect")
+                .on_hover_text(
+                    "Ends its connection now; it may not connect again until you let it back in (or FreeDAWm restarts). Its changes so far stay.",
+                )
+                .clicked()
+            {
+                disconnect = Some(pc.token.clone());
+            }
+            if ui.small_button("Forget").on_hover_text("Ends its connection and unpairs it: it must pair again").clicked() {
+                forget = Some(pc.token.clone());
+            }
+        });
+    }
+    if let Some(tok) = disconnect {
+        net.hub.disconnect(&tok);
+    }
+    if let Some(tok) = forget {
+        net.hub.forget(&tok);
+    }
+    let mut back = None;
+    for (name, tok) in net.hub.sent_away() {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("{name}: disconnected by you")).color(t.text_dim));
+            if ui.small_button("Let back in").clicked() {
+                back = Some(tok.clone());
+            }
+        });
+    }
+    if let Some(tok) = back {
+        net.hub.let_back(&tok);
     }
 }
 

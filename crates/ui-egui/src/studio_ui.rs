@@ -35,6 +35,9 @@ pub const REMOTE_COLOUR: Color32 = Color32::from_rgb(112, 64, 160);
 pub const DIALS_ONLY_NOTE: &str =
     "This PC only dials out: it opens nothing to the network. Your own session is not touched: the studio's mixer opens in its own window.";
 
+/// The banner while the studio has locked remote mixing.
+pub const LOCKED_NOTE: &str = "The studio has locked remote mixing: you can watch and listen.";
+
 /// A third-party plug-in's tooltip in the remote window.
 pub const HOSTED_NOTE: &str = "A third-party plug-in: its window and settings live on the studio PC. From here: name and bypass only.";
 
@@ -92,6 +95,8 @@ pub enum Confirm {
 #[derive(Debug, Clone, Default)]
 pub struct DemoLink {
     pub connected: bool,
+    /// The studio has locked remote mixing.
+    pub locked: bool,
     pub view: MixerView,
     pub levels: HashMap<u64, soundcraft_net::studio::MeterLevels>,
     pub rtt_ms: f64,
@@ -596,6 +601,8 @@ fn dialog(app: &mut SoundApp, ctx: &egui::Context) {
 /// What the window shows of the link: connected, its mixer, and the banner's quality line.
 struct Shown {
     connected: bool,
+    /// The studio locked remote mixing: watch and listen only.
+    locked: bool,
     state: String,
     view: Option<MixerView>,
     quality: String,
@@ -606,6 +613,7 @@ fn shown(net: &mut NetState) -> Shown {
     if let Some(d) = &net.studio.demo {
         return Shown {
             connected: d.connected,
+            locked: d.locked,
             state: if d.connected { "connected".into() } else { "reconnecting".into() },
             view: Some(d.view.clone()),
             quality: format!("Round trip {:.0} ms · stream buffer {:.0} ms · 0 dropouts", d.rtt_ms, d.buffer_ms),
@@ -613,7 +621,7 @@ fn shown(net: &mut NetState) -> Shown {
         };
     }
     let Some(link) = &net.studio.link else {
-        return Shown { connected: false, state: "not connected".into(), view: None, quality: String::new(), weak: false };
+        return Shown { connected: false, locked: false, state: "not connected".into(), view: None, quality: String::new(), weak: false };
     };
     let h = link.health();
     let view = link.mirror().view();
@@ -629,7 +637,7 @@ fn shown(net: &mut NetState) -> Shown {
         parts.push(format!("{} lost", h.lost));
     }
     let weak = h.rtt_ms.is_some_and(|r| r > 400.0) || (h.packets > 50 && h.lost * 20 > h.packets);
-    Shown { connected: h.connected, state: h.state, view, quality: parts.join(" · "), weak }
+    Shown { connected: h.connected, locked: link.locked(), state: h.state, view, quality: parts.join(" · "), weak }
 }
 
 /// The text of the greyed state while the link is down.
@@ -702,6 +710,9 @@ fn contents(app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
             let q = if s.connected { s.quality.clone() } else { down_text(&s.state) };
             let col = if !s.connected || s.weak { Color32::from_rgb(255, 214, 120) } else { Color32::from_gray(230) };
             ui.label(egui::RichText::new(q).font(regular(11.0)).color(col));
+            if s.connected && s.locked {
+                ui.label(egui::RichText::new(LOCKED_NOTE).font(bold(11.0)).color(Color32::from_rgb(255, 214, 120)));
+            }
             if s.connected && s.weak {
                 ui.label(egui::RichText::new("The connection is weak: changes and the sound may lag.").font(regular(11.0)).color(col));
             }
@@ -723,7 +734,7 @@ fn contents(app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
     };
     let area = ui.available_rect_before_wrap();
     let mut c = ui.new_child(egui::UiBuilder::new().max_rect(area));
-    if !s.connected {
+    if !s.connected || s.locked {
         c.disable();
     }
     strips(net, &mut c, &view);
@@ -1176,9 +1187,10 @@ pub fn demo(app: &mut SoundApp, state: &str) -> Result<(), String> {
     let net = app.net.as_mut().ok_or("no network state (run a frame first)")?;
     net.studio.disconnect();
     match state {
-        "connected" | "reconnecting" => {
+        "connected" | "reconnecting" | "locked" => {
             net.studio.current = Some(KnownStudio { name: "Studio PC".into(), ..KnownStudio::default() });
-            net.studio.demo = Some(DemoLink { connected: state == "connected", view, levels, rtt_ms: 38.0, buffer_ms: 150.0 });
+            net.studio.demo =
+                Some(DemoLink { connected: state != "reconnecting", locked: state == "locked", view, levels, rtt_ms: 38.0, buffer_ms: 150.0 });
             net.studio.window = true;
             if state == "reconnecting" {
                 net.studio.note("2 changes were not sent: the link to the studio was down.".into());

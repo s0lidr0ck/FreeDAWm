@@ -580,3 +580,77 @@ fn round_trip_of_a_fader_change_and_bandwidth_on_loopback() {
     );
     s.stop();
 }
+
+// ---- Stage four: the studio's side ----
+
+#[test]
+fn lock_remote_mixing_refuses_control_but_keeps_the_feed_and_the_audio() {
+    let studio = StudioPc::plain(live_session());
+    let token = studio.pair_by_code("Home PC");
+    let s = connect(&studio.addr.to_string(), &token, "Home PC");
+    let ears = Arc::new(StreamIn::default());
+    s.set_stream(true, Some(Arc::clone(&ears)), 48_000);
+    wait("the studio's tap on", Duration::from_secs(5), || studio.tap.is_on());
+    let v = studio.id("Vocal");
+    let before = studio.volume(v);
+    studio.hub.set_remote_lock(true);
+    wait("told it is locked", Duration::from_secs(5), || s.locked());
+    // A change: refused, the studio untouched.
+    s.execute("mix.volume", json!({"tracks": [v], "db": -30.0}), Some("fader"));
+    s.execute("edit.undo", json!({}), None);
+    let mut refused = Vec::new();
+    wait("refused", Duration::from_secs(5), || {
+        refused.extend(s.take_refusals());
+        refused.len() >= 2
+    });
+    assert!(refused.iter().all(|r| r.locked), "{refused:?}");
+    assert_eq!(studio.volume(v), before);
+    assert!(studio.hub.holds().is_empty(), "a refused move holds nothing");
+    // Watching goes on: a change on the studio arrives; listening goes on.
+    studio.engine().execute("mix.volume", &json!({"tracks": [v], "db": -7.0})).unwrap();
+    wait("the feed", Duration::from_secs(5), || strip_of(&s, v).volume_db == -7.0);
+    let packets = s.health().packets;
+    studio.play_stopped(40);
+    wait("the mix still heard", Duration::from_secs(5), || s.health().packets > packets + 5);
+    // A reading command still answers.
+    s.execute("mix.snapshots", json!({}), None);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(s.take_refusals().is_empty(), "reading is not refused");
+    // Off: changes go through again.
+    studio.hub.set_remote_lock(false);
+    wait("told it is open", Duration::from_secs(5), || !s.locked());
+    s.execute("mix.volume", json!({"tracks": [v], "db": -3.0}), None);
+    wait("the change", Duration::from_secs(5), || studio.volume(v) == -3.0);
+    // The lock is kept with the network settings.
+    studio.hub.set_remote_lock(true);
+    assert!(studio.hub.config().lock_remote_mixing);
+    s.stop();
+}
+
+#[test]
+fn the_studio_lists_a_remote_as_mixing_says_so_once_and_can_send_it_away() {
+    let studio = StudioPc::plain(live_session());
+    let token = studio.pair_by_code("Home PC");
+    let s = connect(&studio.addr.to_string(), &token, "Home PC");
+    wait("listed", Duration::from_secs(5), || studio.hub.remote_pcs().len() == 1);
+    assert!(!studio.hub.remote_pcs()[0].mixing, "watching only, so far");
+    let v = studio.id("Vocal");
+    s.execute("mix.mute", json!({"tracks": [v], "value": true}), None);
+    s.execute("mix.mute", json!({"tracks": [v], "value": false}), None);
+    wait("mixing", Duration::from_secs(5), || studio.hub.remote_pcs().first().is_some_and(|r| r.mixing && r.last_change.is_some()));
+    assert!(studio.hub.remotes().iter().any(|r| r.state == "mixing" && r.detail.contains("last change")), "{:?}", studio.hub.remotes());
+    let notices: Vec<String> = studio.hub.notices().into_iter().map(|(_, t)| t).collect();
+    assert_eq!(notices.iter().filter(|n| n.as_str() == "Home PC started mixing remotely").count(), 1, "{notices:?}");
+    // Disconnect: it goes, and stays away until let back in.
+    studio.hub.disconnect(&token);
+    wait("sent away", Duration::from_secs(10), || s.health().state == "sent away");
+    assert!(!s.connected());
+    assert!(studio.hub.remote_pcs().is_empty());
+    assert_eq!(studio.hub.sent_away(), vec![("Home PC".to_string(), token.clone())]);
+    studio.hub.let_back(&token);
+    wait("back in", Duration::from_secs(20), || s.connected());
+    // Forget: it goes and is no longer paired.
+    studio.hub.forget(&token);
+    wait("forgotten", Duration::from_secs(10), || s.health().state == "not paired");
+    s.stop();
+}

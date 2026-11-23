@@ -159,6 +159,11 @@ pub struct NetConfig {
     /// follows (the same studio may be both: each keeps its own pairing).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub studios: Vec<KnownStudio>,
+    /// Lock remote mixing (Setup › Network): paired PCs may watch the mixer and hear the mix,
+    /// but every command that would change something is refused. For the whole session, all
+    /// remotes alike.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lock_remote_mixing: bool,
 }
 
 /// A studio this PC has paired with to mix remotely: enough to reconnect with one click.
@@ -243,6 +248,7 @@ impl Default for NetConfig {
             pin_last_from: String::new(),
             invites: Vec::new(),
             studios: Vec::new(),
+            lock_remote_mixing: false,
         }
     }
 }

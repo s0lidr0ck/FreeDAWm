@@ -409,3 +409,74 @@ fn a_built_in_without_a_full_editor_opens_as_a_list_and_a_third_party_one_does_n
     h.run_steps(3);
     assert!(h.query_by_label("Bypass Acme Verb on Vocal").is_some());
 }
+
+// ---- Stage four: the studio's side ----
+
+#[test]
+fn the_remote_window_says_when_the_studio_locked_remote_mixing() {
+    let Some(mut h) = app_with_net() else { return };
+    studio_ui::demo(h.state_mut(), "locked").unwrap();
+    h.run_steps(4);
+    assert!(h.query_by_label_contains(studio_ui::LOCKED_NOTE).is_some());
+    assert!(h.get_by_label("Mute Vocal").accesskit_node().is_disabled(), "watch and listen only");
+}
+
+#[test]
+fn on_the_studio_setup_network_lists_a_remote_mixing_and_locks_remote_mixing() {
+    let app = SoundApp::new(studio_ui::demo_studio_engine(), None, Services::default());
+    let mut h = harness(app);
+    h.run_steps(2);
+    let Some(hub) = h.state().net.as_ref().map(|n| n.hub.clone()) else { return };
+    hub.update_config(|c| c.encrypted_only = false);
+    let port = hub.listen(0).unwrap();
+    let addr = format!("127.0.0.1:{port}");
+    let req = {
+        let a = addr.clone();
+        std::thread::spawn(move || soundcraft_net::follower::pair_request(&a, "Home PC"))
+    };
+    run_until(&mut h, "the pairing request", |h| !h.state().net.as_ref().unwrap().hub.pending_pairings().is_empty());
+    let id = req.join().unwrap().unwrap();
+    let code = hub.pending_pairings().into_iter().find(|p| p.id == id).unwrap().code;
+    let pairing = {
+        let a = addr.clone();
+        std::thread::spawn(move || soundcraft_net::follower::pair_confirm(&a, &id, code, soundcraft_net::pairing::exchange::LinkKeys::PLAIN))
+    };
+    run_until(&mut h, "paired", |h| !h.state().net.as_ref().unwrap().hub.config().paired.is_empty());
+    let (token, _) = pairing.join().unwrap().unwrap();
+    let remote =
+        soundcraft_net::studio::Studio::start(soundcraft_net::studio::StudioTarget { name: String::new(), addr, token, my_name: "Home PC".into() });
+    run_until(&mut h, "the remote's mirror", |_| remote.connected() && remote.mirror().has_state());
+    let v = h.state().engine.session().tracks.iter().find(|t| t.name == "Vocal").unwrap().id.0;
+    remote.execute("mix.solo", json!({"tracks": [v], "value": true}), None);
+    run_until(&mut h, "the solo", |h| h.state().engine.session().tracks.iter().any(|t| t.id.0 == v && t.mixer.solo));
+    h.state_mut().ui.show_network = true;
+    run_until(&mut h, "listed as mixing", |h| h.query_all_by_label_contains("Home PC: mixing · last change").count() >= 2);
+    assert!(h.query_by_label_contains("Home PC started mixing remotely").is_some(), "the notice");
+    assert!(h.query_by_label("Disconnect").is_some(), "Disconnect beside it");
+    assert!(h.query_all_by_label("Forget").count() >= 2, "Forget beside it, as in Paired devices");
+    // Lock remote mixing (at the end of the window: scrolled to): the remote is told, its
+    // changes refused.
+    let at = h.get_by_label("Paired devices").rect().center();
+    for _ in 0..6 {
+        h.input_mut().events.push(egui::Event::PointerMoved(at));
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -600.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+    }
+    h.get_by_label("Lock remote mixing").click();
+    h.run_steps(2);
+    assert!(hub.remote_lock());
+    run_until(&mut h, "the remote told", |_| remote.locked());
+    remote.execute("mix.solo", json!({"tracks": [v], "value": false}), None);
+    let end = Instant::now() + Duration::from_millis(600);
+    while Instant::now() < end {
+        h.run_steps(1);
+    }
+    assert!(h.state().engine.session().tracks.iter().any(|t| t.id.0 == v && t.mixer.solo), "refused while locked");
+    remote.stop();
+    hub.stop();
+}

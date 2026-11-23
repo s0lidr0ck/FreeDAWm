@@ -650,6 +650,8 @@ struct Inner {
     answered: Mutex<VecDeque<f64>>,
     next_id: AtomicU64,
     resubscribe: AtomicBool,
+    /// The studio has locked remote mixing (it says so at `hello` and when it changes).
+    locked: AtomicBool,
     want_stream: AtomicBool,
     stream_in: Mutex<Option<(Arc<soundcraft_playback::stream::StreamIn>, u32)>>,
     decoder: Mutex<Option<crate::stream::MixDecoder>>,
@@ -690,6 +692,7 @@ impl Studio {
                 answered: Mutex::new(VecDeque::new()),
                 next_id: AtomicU64::new(1),
                 resubscribe: AtomicBool::new(false),
+                locked: AtomicBool::new(false),
                 want_stream: AtomicBool::new(false),
                 stream_in: Mutex::new(None),
                 decoder: Mutex::new(None),
@@ -740,6 +743,12 @@ impl Studio {
 
     pub fn connected(&self) -> bool {
         lock(&self.inner.health).connected
+    }
+
+    /// The studio has locked remote mixing: this PC watches and listens, its changes are
+    /// refused.
+    pub fn locked(&self) -> bool {
+        self.inner.locked.load(Ordering::SeqCst)
     }
 
     /// The link as the banner shows it.
@@ -958,6 +967,7 @@ impl Studio {
         }
         stream.set_read_timeout(Some(Duration::from_secs(15))).map_err(|e| e.to_string())?;
         let pc = hello["result"]["pc"].as_str().unwrap_or("").to_string();
+        self.inner.locked.store(hello["result"]["locked"] == true, Ordering::SeqCst);
         lock(&self.inner.mirror).reconnected();
         self.inner.connects.fetch_add(1, Ordering::SeqCst);
         lock(&self.inner.outbox).clear();
@@ -1057,6 +1067,10 @@ impl Studio {
             if let Some(event) = v.get("event").and_then(Value::as_str) {
                 match event {
                     "stream" => self.on_stream(&v),
+                    "remote_lock" => {
+                        self.inner.locked.store(v["params"]["on"] == true, Ordering::SeqCst);
+                        self.wake();
+                    }
                     "mixer.snapshot" | "mixer.delta" | "mixer.meters" => {
                         let fed = lock(&self.inner.mirror).on_event(event, &v["params"]);
                         match fed {
@@ -1088,7 +1102,12 @@ impl Studio {
                 lock(&self.inner.refusals).push(Refusal {
                     command: what,
                     held_by: v["held_by"].as_str().map(str::to_string),
-                    locked: v["locked"] == true,
+                    locked: {
+                        if v["locked"] == true {
+                            self.inner.locked.store(true, Ordering::SeqCst);
+                        }
+                        v["locked"] == true
+                    },
                     error: crate::pairing::clean_text(&error, 300),
                 });
                 // What this PC showed was not taken: the feed shows what is.
