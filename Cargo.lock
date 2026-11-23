@@ -6440,6 +6440,7 @@ dependencies = [
  "soundcraft-model",
  "soundcraft-net",
  "soundcraft-playback",
+ "soundcraft-sysmem",
  "soundcraft-time",
  "soundcraft-video",
  "soundcraft-vocal",

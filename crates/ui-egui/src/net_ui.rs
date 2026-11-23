@@ -108,6 +108,12 @@ pub struct NetState {
     invite_reusable: bool,
     invite_secs: u64,
     invite_joins: u32,
+    /// The mixer feed: when it was last published (it runs only while a PC subscribes).
+    mixer_at: Option<std::time::Instant>,
+    /// Keeps this PC awake while it serves remotes ([`keep_awake`]), and why it could not.
+    awake: soundcraft_sysmem::KeepAwake,
+    awake_error: Option<String>,
+    awake_checked: Option<std::time::Instant>,
 }
 
 /// How long a reusable invite can last: the label and seconds.
@@ -170,6 +176,10 @@ impl NetState {
             invite_reusable: false,
             invite_secs: 86_400,
             invite_joins: 10,
+            mixer_at: None,
+            awake: soundcraft_sysmem::KeepAwake::default(),
+            awake_error: None,
+            awake_checked: None,
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -612,7 +622,9 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
         }
         // The status feed's clock and meters move while it rolls.
         ctx.request_repaint_after(Duration::from_millis(if app.is_playing() { 66 } else { 500 }));
+        publish_mixer(app, &mut net, ctx);
     }
+    keep_awake(app, &mut net);
     match &net.follower {
         Some(f) => {
             let timeout = Duration::from_secs(net.hub.config().contact_timeout_s.max(1));
@@ -627,6 +639,79 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
     app.net = Some(net);
 }
 
+/// The mixer feed to subscribed PCs (`mixer.subscribe`): the mixer and the meters as the Mix
+/// window shows them, about 20 times a second, built only while a PC subscribes. Never waits on
+/// the network: the hub keeps the latest and its pushers send it.
+fn publish_mixer(app: &SoundApp, net: &mut NetState, ctx: &egui::Context) {
+    use soundcraft_engine::surface::feed;
+    if net.hub.mixer_subscribers() == 0 {
+        net.mixer_at = None;
+        return;
+    }
+    ctx.request_repaint_after(Duration::from_millis(50));
+    if net.mixer_at.is_some_and(|t| t.elapsed() < Duration::from_millis(50)) {
+        return;
+    }
+    net.mixer_at = Some(std::time::Instant::now());
+    net.hub.publish_mixer(feed::mixer_state(&app.engine));
+    let s = app.engine.session();
+    let levels: Vec<(u64, feed::StripLevels)> = feed::feed_tracks(s)
+        .map(|t| {
+            let m = if t.kind == soundcraft_model::TrackKind::Master { Some(&app.main_meter) } else { app.meters.get(&t.id) };
+            let l = m.map_or_else(feed::StripLevels::default, |m| feed::StripLevels { peak: m.level, rms: m.rms, gr_db: m.gr });
+            (t.id.0, l)
+        })
+        .collect();
+    let rate = s.sample_rate.as_f64().max(1.0);
+    let pos = if app.engine.transport.playing { app.engine.transport.position } else { s.edit.playhead };
+    net.hub.publish_meters(feed::meters_json(pos as f64 / rate, &levels));
+}
+
+/// Whether this PC should stay awake: it lets the network in and either a paired PC is
+/// connected (a remote recorder, a listener, a PC controlling it) or a track hears its live input
+/// (Input Monitoring On, or armed on Auto): a live event or a remote mix in progress.
+fn wants_awake(app: &SoundApp, net: &NetState) -> bool {
+    let serving = net.hub.listening_port().is_some() || net.hub.internet_port().is_some();
+    let live = app.engine.session().tracks.iter().any(|t| {
+        !t.inactive
+            && match t.mixer.input_monitor {
+                soundcraft_model::InputMonitor::On => true,
+                soundcraft_model::InputMonitor::Auto => t.mixer.record_arm,
+                soundcraft_model::InputMonitor::Off => false,
+            }
+    });
+    serving && (net.hub.connected_pcs() > 0 || live)
+}
+
+/// Holds or lets go of the keep-awake once a frame (see [`wants_awake`]).
+fn keep_awake(app: &SoundApp, net: &mut NetState) {
+    // Only a real app (with a settings file): tests and renders never hold the PC awake.
+    let want = app.services.network_file.is_some() && wants_awake(app, net);
+    let recent = net.awake_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(5));
+    if want && net.awake.is_held() {
+        // Now and then: is the hold still standing (the helper may have ended)?
+        if !recent {
+            net.awake_checked = Some(std::time::Instant::now());
+            if !net.awake.still_held() {
+                net.awake_error = Some("Could not keep this PC awake: it may sleep as its power settings say.".into());
+            }
+        }
+        return;
+    }
+    if want && net.awake_error.is_some() && recent {
+        // Tried lately and failed: again in a few seconds, not every frame.
+        return;
+    }
+    net.awake_checked = Some(std::time::Instant::now());
+    match net.awake.set(want, "FreeDAWm is serving remotes (Setup › Network)") {
+        Ok(_) => net.awake_error = None,
+        Err(e) => {
+            log::info!("keep awake: {e}");
+            net.awake_error = Some(format!("Could not keep this PC awake: {e}"));
+        }
+    }
+}
+
 /// Pairing requests waiting: their codes, on screen, wherever the user is.
 /// What a paired device can do, and how far the local link can be trusted: shown in the Network
 /// window, under the switch that lets the network in.
@@ -635,6 +720,9 @@ open and save sessions. The phone's page, and PCs on the plain link, use a link 
 what passes over it. PCs pair over the encrypted local link when this PC offers it (below): a PC never sends the code, it proves both PCs' \
 keys with it, so another computer cannot sit between the two; connections over the internet are encrypted too. \
 Pair only devices you trust, on a network you trust.";
+
+/// Setup › Network while the keep-awake is held.
+pub(crate) const AWAKE_NOTE: &str = "Keeping this PC awake while remotes are connected (or live inputs are monitored).";
 
 /// Under a PC's pairing code: what the code does there.
 pub(crate) const PC_CODE_NOTE: &str = "The code is never sent over the network: the two PCs prove it to each other, with their keys.";
@@ -875,6 +963,11 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 if allow { net.start_listening() } else { net.stop_listening() }
             }
             ui.label(egui::RichText::new(LOCAL_LINK_NOTE).small().color(t.text_dim));
+            if net.awake.is_held() {
+                ui.label(egui::RichText::new(AWAKE_NOTE).color(t.text_dim));
+            } else if let Some(e) = &net.awake_error {
+                ui.colored_label(t.rec, e);
+            }
             ui.horizontal(|ui| {
                 ui.label("Port:");
                 let mut port = i64::from(cfg.port);
