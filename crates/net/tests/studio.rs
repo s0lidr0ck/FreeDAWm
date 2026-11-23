@@ -654,3 +654,25 @@ fn the_studio_lists_a_remote_as_mixing_says_so_once_and_can_send_it_away() {
     wait("forgotten", Duration::from_secs(10), || s.health().state == "not paired");
     s.stop();
 }
+
+// ---- Stage five: mix snapshots ----
+
+#[test]
+fn snapshots_are_listed_stored_and_recalled_from_here_one_undo_step_each() {
+    let studio = StudioPc::plain(live_session());
+    let token = studio.pair_by_code("Home PC");
+    let s = connect(&studio.addr.to_string(), &token, "Home PC");
+    let v = studio.id("Vocal");
+    s.execute("mix.volume", json!({"tracks": [v], "db": -4.0}), None);
+    wait("the move", Duration::from_secs(5), || studio.volume(v) == -4.0);
+    s.execute("mix.snapshot_store", json!({"name": "Worship"}), None);
+    wait("listed here", Duration::from_secs(5), || s.mirror().feed_view().is_some_and(|f| f.snapshots.iter().any(|x| x.name == "Worship")));
+    let index = s.mirror().feed_view().unwrap().snapshots.iter().find(|x| x.name == "Worship").unwrap().index;
+    studio.engine().execute("mix.volume", &json!({"tracks": [v], "db": -18.0})).unwrap();
+    let depth = studio.engine().undo_depth();
+    s.execute("mix.snapshot_recall", json!({"snapshot": index}), None);
+    wait("recalled on the studio", Duration::from_secs(5), || studio.volume(v) == -4.0);
+    wait("the feed shows it", Duration::from_secs(5), || strip_of(&s, v).volume_db == -4.0);
+    assert_eq!(studio.engine().undo_depth(), depth + 1, "one undo step");
+    s.stop();
+}

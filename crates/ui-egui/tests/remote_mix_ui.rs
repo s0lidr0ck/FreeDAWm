@@ -480,3 +480,42 @@ fn on_the_studio_setup_network_lists_a_remote_mixing_and_locks_remote_mixing() {
     remote.stop();
     hub.stop();
 }
+
+// ---- Stage five: mix snapshots ----
+
+#[test]
+fn a_snapshot_is_recalled_on_the_studio_after_asking() {
+    let Some(mut h) = app_with_net() else { return };
+    let (studio, known) = Studio::start();
+    let ctx = h.ctx.clone();
+    studio_ui::connect_to(h.state_mut(), &ctx, known);
+    run_until(&mut h, "the studio's mixer", |h| h.query_by_label("Recall…").is_some());
+    let vol = |s: &Studio| s.engine.lock().unwrap().session().tracks.iter().find(|t| t.name == "Vocal").unwrap().mixer.volume_db;
+    let stored = vol(&studio);
+    {
+        let mut e = studio.engine.lock().unwrap();
+        let v = e.session().tracks.iter().find(|t| t.name == "Vocal").unwrap().id.0;
+        e.execute("mix.volume", &json!({"tracks": [v], "db": -20.0})).unwrap();
+    }
+    // Pick "Worship" (stored at the demo's mix) and recall it: asked first, every time.
+    let worship = {
+        let net = h.state().net.as_ref().unwrap();
+        let link = net.studio.link.as_ref().unwrap();
+        let m = link.mirror();
+        m.feed_view().unwrap().snapshots.iter().find(|x| x.name == "Worship").unwrap().index
+    };
+    h.state_mut().net.as_mut().unwrap().studio.snap_pick = Some(worship);
+    h.run_steps(2);
+    h.get_by_label("Recall…").click();
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Every fader, mute, send and insert “Worship” holds").is_some(), "asked first");
+    assert_eq!(vol(&studio), -20.0, "nothing before the answer");
+    h.get_by_label("Recall there").click();
+    run_until(&mut h, "recalled", |_| vol(&studio) == stored);
+    // Store: the mix as it is, under a new name, on the studio.
+    h.state_mut().net.as_mut().unwrap().studio.snap_name = "Sermon B".into();
+    h.run_steps(2);
+    h.get_by_label("Store").click();
+    run_until(&mut h, "stored there", |_| studio.engine.lock().unwrap().session().mix_snapshots.iter().any(|s| s.name == "Sermon B"));
+    h.state_mut().net.as_mut().unwrap().studio.disconnect();
+}

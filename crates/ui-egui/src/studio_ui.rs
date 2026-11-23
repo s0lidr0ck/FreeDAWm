@@ -82,6 +82,9 @@ pub struct StudioState {
     pub undo_ok: bool,
     /// The insert editor open on one of the studio's built-in effects.
     pub editor: Option<crate::studio_editors::RemoteEditor>,
+    /// The mix snapshot picked in the banner (its index), and the name typed for a new one.
+    pub snap_pick: Option<usize>,
+    pub snap_name: String,
 }
 
 /// Something that changes the studio's session as a whole, asked about first.
@@ -89,6 +92,8 @@ pub struct StudioState {
 pub enum Confirm {
     Undo(String),
     Redo(String),
+    /// A mix snapshot recalled: its index and name (asked every time: a scene moves much).
+    Recall(usize, String),
 }
 
 /// A stand-in link for renders and UI tests.
@@ -124,6 +129,8 @@ impl Default for StudioState {
             confirm: None,
             undo_ok: false,
             editor: None,
+            snap_pick: None,
+            snap_name: String::new(),
         }
     }
 }
@@ -717,6 +724,9 @@ fn contents(app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
                 ui.label(egui::RichText::new("The connection is weak: changes and the sound may lag.").font(regular(11.0)).color(col));
             }
         });
+        if let Some(v) = &s.view {
+            snapshot_row(ui, net, v, s.connected && !s.locked);
+        }
         let notes: Vec<String> = net.studio.notes.iter().map(|(n, _)| n.clone()).collect();
         for n in notes {
             ui.label(egui::RichText::new(n).font(regular(11.0)).color(Color32::from_rgb(255, 214, 120)));
@@ -783,7 +793,52 @@ fn run_confirmed(net: &mut NetState, c: &Confirm) {
     match c {
         Confirm::Undo(_) => run_on_studio(net, "edit.undo"),
         Confirm::Redo(_) => run_on_studio(net, "edit.redo"),
+        Confirm::Recall(i, _) => {
+            if let Some(link) = &net.studio.link {
+                link.execute("mix.snapshot_recall", json!({"snapshot": i}), None);
+            }
+        }
     }
+}
+
+/// The studio's mix snapshots: pick one and recall it (asked first), or store the mix as it is
+/// now under a new name. Both are one undo step on the studio.
+fn snapshot_row(ui: &mut Ui, net: &mut NetState, view: &MixerView, enabled: bool) {
+    let white = Color32::from_gray(235);
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.label(egui::RichText::new("Mix snapshots:").font(regular(11.0)).color(white));
+            if view.snapshots.is_empty() {
+                ui.label(egui::RichText::new("none stored on the studio").font(regular(11.0)).color(white));
+            } else {
+                if net.studio.snap_pick.is_none_or(|i| i >= view.snapshots.len()) {
+                    net.studio.snap_pick = Some(0);
+                }
+                let pick = net.studio.snap_pick.unwrap_or(0);
+                let shown = view.snapshots.iter().find(|x| x.index == pick).map_or("", |x| x.name.as_str());
+                egui::ComboBox::from_id_salt("remote-snapshots").selected_text(shown).width(140.0).show_ui(ui, |ui| {
+                    for x in &view.snapshots {
+                        ui.selectable_value(&mut net.studio.snap_pick, Some(x.index), &x.name);
+                    }
+                });
+                if ui.button("Recall…").on_hover_text("Recall this snapshot on the studio (asked first)").clicked()
+                    && let Some(x) = view.snapshots.iter().find(|x| Some(x.index) == net.studio.snap_pick)
+                {
+                    net.studio.confirm = Some(Confirm::Recall(x.index, x.name.clone()));
+                }
+            }
+            ui.add(egui::TextEdit::singleline(&mut net.studio.snap_name).hint_text("new snapshot name").desired_width(130.0));
+            if ui
+                .add_enabled(!net.studio.snap_name.trim().is_empty(), egui::Button::new("Store"))
+                .on_hover_text("Store the studio's mix as it is now as a new snapshot there")
+                .clicked()
+                && let Some(link) = &net.studio.link
+            {
+                let name = std::mem::take(&mut net.studio.snap_name);
+                link.execute("mix.snapshot_store", json!({"name": name.trim()}), None);
+            }
+        });
+    });
 }
 
 /// The question before the first Undo or Redo on someone else's machine.
@@ -793,11 +848,19 @@ fn confirm_window(net: &mut NetState, ctx: &egui::Context) {
     let (title, what, button) = match &c {
         Confirm::Undo(l) => ("Undo on the studio?", format!("This takes back “{l}” in {studio}'s session, whoever made that change."), "Undo there"),
         Confirm::Redo(l) => ("Redo on the studio?", format!("This does “{l}” again in {studio}'s session."), "Redo there"),
+        Confirm::Recall(_, n) => (
+            "Recall a snapshot on the studio?",
+            format!("Every fader, mute, send and insert “{n}” holds changes now in {studio}'s live mix (one undo step there)."),
+            "Recall there",
+        ),
     };
+    let recall = matches!(c, Confirm::Recall(..));
     let mut answer = None;
     egui::Window::new(title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
         ui.label(what);
-        ui.label(egui::RichText::new("Your own session is not touched. You will not be asked again while connected.").small());
+        let again =
+            if recall { "Your own session is not touched." } else { "Your own session is not touched. You will not be asked again while connected." };
+        ui.label(egui::RichText::new(again).small());
         ui.horizontal(|ui| {
             if ui.button(button).clicked() {
                 answer = Some(true);
@@ -809,7 +872,9 @@ fn confirm_window(net: &mut NetState, ctx: &egui::Context) {
     });
     match answer {
         Some(true) => {
-            net.studio.undo_ok = true;
+            if !recall {
+                net.studio.undo_ok = true;
+            }
             net.studio.confirm = None;
             run_confirmed(net, &c);
         }
