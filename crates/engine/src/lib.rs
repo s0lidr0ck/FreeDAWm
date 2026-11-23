@@ -1186,6 +1186,20 @@ impl Engine {
         r
     }
 
+    /// A remote let go of the control it dragged with `key` (`engine.end_gesture {gesture}`):
+    /// its undo step ends, and only its own: a drag of something else under way here (or by
+    /// another remote) goes on as one step.
+    pub fn end_gesture(&mut self, key: &str) {
+        if self.merge_key.as_deref().is_some_and(|k| k.strip_prefix("remote:") == Some(key)) {
+            self.end_merge();
+        }
+    }
+
+    /// Whether a remote's gesture with `key` holds the open undo step now.
+    pub fn gesture_open(&self, key: &str) -> bool {
+        self.merge_key.as_deref().is_some_and(|k| k.strip_prefix("remote:") == Some(key))
+    }
+
     /// The UI's end of every frame with no pointer down: ends the gesture unless a remote's is
     /// still within its lease.
     pub fn end_idle_merge(&mut self) {

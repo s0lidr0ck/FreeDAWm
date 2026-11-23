@@ -114,6 +114,8 @@ pub struct NetState {
     awake: soundcraft_sysmem::KeepAwake,
     awake_error: Option<String>,
     awake_checked: Option<std::time::Instant>,
+    /// File › Connect to a Studio…: the studio this PC mixes remotely (`studio_ui`).
+    pub studio: crate::studio_ui::StudioState,
 }
 
 /// How long a reusable invite can last: the label and seconds.
@@ -180,6 +182,7 @@ impl NetState {
             awake: soundcraft_sysmem::KeepAwake::default(),
             awake_error: None,
             awake_checked: None,
+            studio: crate::studio_ui::StudioState::default(),
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -281,7 +284,7 @@ impl NetState {
 
     /// A local port bridged to the booth's encrypted local link at `addr` (`ip:udp port`) with
     /// key `key` (hex): only the PC holding that key can answer there.
-    fn lan_bridge(&mut self, addr: &str, key: &str) -> Result<String, String> {
+    pub(crate) fn lan_bridge(&mut self, addr: &str, key: &str) -> Result<String, String> {
         let sock: std::net::SocketAddr = addr.parse().map_err(|_| format!("the booth's encrypted link address `{addr}` is not one"))?;
         let host = soundcraft_net::internet::lan_addr(key, sock).ok_or("the booth's key is damaged: pair again")?;
         Ok(self.lan_client()?.bridge_to(host)?.to_string())
@@ -298,6 +301,31 @@ impl NetState {
             soundcraft_net::hub::LinkKind::Plain
         };
         kind.text()
+    }
+
+    /// This PC's key on the encrypted local link it dials from (hex), started when needed.
+    pub(crate) fn lan_client_key(&mut self) -> Option<String> {
+        self.lan_client().ok().map(soundcraft_net::internet::Internet::key_hex)
+    }
+
+    /// The FreeDAWm PCs found on this network so far (browsing starts on the first call).
+    pub(crate) fn found(&mut self) -> Vec<soundcraft_net::discovery::Found> {
+        if self.discovery.is_none() {
+            self.browse();
+        }
+        self.discovery.as_ref().map(Discovery::found).unwrap_or_default()
+    }
+
+    /// The list of PCs found, shared with a link that looks its peer up by name.
+    pub(crate) fn found_handle(&mut self) -> Option<Arc<Mutex<Vec<soundcraft_net::discovery::Found>>>> {
+        self.discovery().map(|d| d.found_handle())
+    }
+
+    /// Looks for FreeDAWm PCs on this network.
+    pub(crate) fn browse(&mut self) {
+        if let Some(d) = self.discovery() {
+            let _ = d.browse();
+        }
     }
 
     fn stop_listening(&mut self) {
@@ -397,7 +425,7 @@ impl NetState {
     }
 
     /// A local port bridged to the booth whose address (JSON, from its invite) is `addr`.
-    fn bridge(&mut self, addr: &str) -> Result<String, String> {
+    pub(crate) fn bridge(&mut self, addr: &str) -> Result<String, String> {
         Ok(self.internet()?.bridge_to_json(addr)?.to_string())
     }
 
@@ -599,12 +627,18 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
     net.hub.set_tap(app.player.as_ref().map(soundcraft_playback::Player::mix_tap), rate);
     if let Some(f) = &net.follower {
         let follow = net.hub.config().follow;
-        let input = app.player.as_ref().map(soundcraft_playback::Player::stream_in);
-        if let Some(i) = &input {
-            i.set_gain(follow.mix_gain);
+        if crate::studio_ui::owns_stream(&net) {
+            // Mixing a studio remotely: its master has the player's stream input.
+            f.set_stream(false, None, rate);
+        } else {
+            let input = app.player.as_ref().map(soundcraft_playback::Player::stream_in);
+            if let Some(i) = &input {
+                i.set_gain(follow.mix_gain);
+            }
+            f.set_stream(follow.hear_mix, input, rate);
         }
-        f.set_stream(follow.hear_mix, input, rate);
     }
+    crate::studio_ui::step(app, &mut net);
     if let Some(p) = &app.player {
         *net.clock.probe.write().unwrap_or_else(PoisonError::into_inner) = Some(p.probe());
         net.clock.rate.store(app.engine.session().sample_rate.hz(), Ordering::Relaxed);
@@ -922,6 +956,7 @@ fn pin_section(ui: &mut egui::Ui, net: &mut NetState) {
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     pairing_prompt(app, ctx);
     performer_panel(app, ctx);
+    crate::studio_ui::show(app, ctx);
     let mut open = app.ui.show_network;
     if !open {
         return;

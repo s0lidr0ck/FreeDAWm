@@ -1587,6 +1587,8 @@ impl Hub {
                     }
                 }
                 _ if who.is_none() => Some(json!({"ok": false, "error": "not paired: send pair.request / pair.confirm, then hello", "pair": true})),
+                // A round trip that never reaches the app (the Remote Mix window's link quality).
+                "net.ping" => Some(json!({"ok": true, "result": {}})),
                 "sync.ping" => {
                     let now = self.clock_now();
                     match (arrived, now) {

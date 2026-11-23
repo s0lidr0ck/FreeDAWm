@@ -116,6 +116,7 @@ pub mod spot;
 pub mod step_grid;
 pub mod step_input;
 pub mod stretch_worker;
+pub mod studio_ui;
 pub mod surfaces;
 pub mod swale_ui;
 pub mod synth_face;
@@ -430,6 +431,9 @@ pub struct UiState {
     /// Setup › Network… (`net_ui`).
     #[serde(default)]
     pub show_network: bool,
+    /// File › Connect to a Studio… (`studio_ui`): mixing another PC's studio remotely.
+    #[serde(default)]
+    pub show_connect_studio: bool,
     /// MIDI input ports enabled (true) or not, by port name (`midi.inputs`): per machine. A
     /// port not named is enabled.
     #[serde(default, rename = "midi.inputs")]
@@ -699,6 +703,7 @@ impl Default for UiState {
             midi_transport_maps: Vec::new(),
             surfaces: Vec::new(),
             show_network: false,
+            show_connect_studio: false,
             midi_inputs: std::collections::BTreeMap::new(),
             midi_outputs: std::collections::BTreeMap::new(),
             midi_aliases: std::collections::BTreeMap::new(),

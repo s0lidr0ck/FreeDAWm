@@ -20,6 +20,7 @@ File > New from Template... = @ui.new_from_template
 File > Open > Session...
 File > Open > Open Recent = !recent
 File > Close Session
+File > Connect to a Studio... = @window.connect_studio
 File > ---
 File > ## Save
 File > Save Session

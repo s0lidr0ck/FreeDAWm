@@ -155,6 +155,46 @@ pub struct NetConfig {
     /// Reusable internet invites still open (one-time ones live only while the app runs).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub invites: Vec<SavedInvite>,
+    /// Studios this PC mixes remotely (File › Connect to a Studio…), apart from the booth it
+    /// follows (the same studio may be both: each keeps its own pairing).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub studios: Vec<KnownStudio>,
+}
+
+/// A studio this PC has paired with to mix remotely: enough to reconnect with one click.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KnownStudio {
+    /// Its name as it announces itself.
+    pub name: String,
+    /// Its plain address (`host:port`), the last one it was found at.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub addr: String,
+    /// The token it gave this PC.
+    pub token: String,
+    /// Its encrypted local link: its key (hex, pinned at pairing) and address (`ip:udp port`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lan: String,
+    /// Over the internet: its address from the invite (JSON).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub internet: String,
+    /// When it was last connected (seconds since 1970).
+    #[serde(default)]
+    pub last_used: u64,
+}
+
+impl KnownStudio {
+    /// The link it is reached by, in words.
+    pub fn link(&self) -> &'static str {
+        if !self.internet.is_empty() {
+            "over the internet"
+        } else if !self.key.is_empty() && !self.lan.is_empty() {
+            "encrypted local link"
+        } else {
+            "local network (not encrypted)"
+        }
+    }
 }
 
 /// A reusable internet invite as the booth keeps it: the SHA-256 of its secret (hex), never the
@@ -202,6 +242,7 @@ impl Default for NetConfig {
             pin_wrong: 0,
             pin_last_from: String::new(),
             invites: Vec::new(),
+            studios: Vec::new(),
         }
     }
 }

@@ -47,6 +47,8 @@
 //! and its notice; `"internet"`: Setup › Network
 //! with an invite made and a friend joined over a real local internet connection). `{"follower_demo": "recording"}`
 //! (or `waiting`, `sent`) shows this PC as a piano PC following a booth (`net_ui::follower_demo`).
+//! `{"remote_mix_demo": "connected"}` (or `reconnecting`, `dialog`) shows File › Connect to a Studio…
+//! and the Remote Mix window mixing a demo studio, without the network (`studio_ui::demo`).
 //! `{"models_demo": "progress"}` (or `"confirm"`) shows Setup › ML Models over a fake model folder
 //! and manifest with a download in progress (and the personal-use confirm; `ml_downloads::demo`),
 //! without the network.
@@ -468,6 +470,17 @@ fn main() {
                 };
                 if let Err(e) = made {
                     eprintln!("net_demo: {e}");
+                }
+                for _ in 0..3 {
+                    step(&mut harness);
+                }
+                continue;
+            }
+            if let Some(state) = v.get("remote_mix_demo").and_then(|x| x.as_str()) {
+                // File › Connect to a Studio… and the Remote Mix window (`studio_ui::demo`):
+                // connected, reconnecting or the dialog.
+                if let Err(e) = soundcraft_ui_egui::studio_ui::demo(harness.state_mut(), state) {
+                    eprintln!("remote_mix_demo: {e}");
                 }
                 for _ in 0..3 {
                     step(&mut harness);
