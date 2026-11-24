@@ -62,6 +62,8 @@ pub mod tempo_detect;
 pub mod tick_clips;
 pub mod vocal;
 pub mod vocal_studio;
+pub mod word_align;
+pub mod word_time;
 
 use serde_json::{Value, json};
 use soundcraft_model::{Clip, Session, TrackId, ZoomState};

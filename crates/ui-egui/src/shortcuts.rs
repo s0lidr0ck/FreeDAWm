@@ -216,6 +216,8 @@ pub fn handle(app: &mut SoundApp, ctx: &egui::Context) {
     let window = crate::window_sync::window_of(app, ctx);
     // An open dialog takes the keys of the window it is in; the other window keeps its shortcuts.
     let dialog_here = app.dialogs.open.is_some() && crate::window_sync::draws_here(app.window_sync.dialog_home, ctx);
+    // Tap to time takes its keys first (J, Backspace, R, H, Esc) while it is on.
+    crate::lyrics_tap::take_keys(app, ctx);
     // Keys typed into Setup › Keyboard Shortcuts become a shortcut; they run nothing.
     let capturing = app.ui.show_shortcuts && app.ui.shortcut_editor.capturing.is_some();
     if ctx.egui_wants_keyboard_input() || dialog_here || capturing {

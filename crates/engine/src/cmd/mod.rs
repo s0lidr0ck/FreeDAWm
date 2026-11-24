@@ -70,6 +70,7 @@ pub mod lyric_check;
 pub mod lyric_chord_cmds;
 pub mod lyric_place;
 mod lyric_sheet;
+pub mod lyric_timing;
 mod lyric_words;
 mod lyrics;
 mod midi;
@@ -341,6 +342,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lyric_alt::specs());
         v.extend(lyric_words::specs());
         v.extend(lyric_place::specs());
+        v.extend(lyric_timing::specs());
         v.extend(lyric_chord_cmds::specs());
         v.extend(vocal::specs());
         v.extend(vocal_midi::specs());

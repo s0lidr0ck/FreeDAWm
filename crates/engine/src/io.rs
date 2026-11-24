@@ -695,10 +695,10 @@ fn midi_lyric_lines(s: &soundcraft_model::Session, base_tick: i64, at: Samples, 
         if text.is_empty() {
             continue;
         }
-        let word = LyricWord { start, end: next.min(start.saturating_add(gap)).max(start), text: text.to_string() };
+        let word = LyricWord::new(start, next.min(start.saturating_add(gap)).max(start), text);
         match lines.last_mut() {
             Some(l) if !breaks => l.words.push(word),
-            _ => lines.push(LyricLine { start, end: start, words: vec![word] }),
+            _ => lines.push(LyricLine { start, end: start, words: vec![word], sheet_line: None }),
         }
     }
     soundcraft_model::sanitize_lyrics(&mut lines);

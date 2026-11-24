@@ -362,7 +362,12 @@ fn rhyme_toggles(app: &mut SoundApp, ui: &mut Ui, t: &Tokens) {
 pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
     let t = Tokens::current();
     ui.painter().rect_filled(ui.max_rect(), 0.0, t.panel_bg);
+    if app.words.tap.on {
+        crate::lyrics_tap::show(app, ui);
+        return;
+    }
     ui.add_space(6.0);
+    now_singing(app, ui, &t);
     // The tools sit at the right of the toggles, or on a row of their own when the tab is narrow.
     let wide = ui.available_width() >= 1150.0;
     ui.horizontal(|ui| {
@@ -821,6 +826,7 @@ fn tools(app: &mut SoundApp, ui: &mut Ui, t: &Tokens) {
     ui.add_space(8.0);
     sheet_menu(app, ui);
     place_menu(app, ui);
+    timing_menu(app, ui);
     drafts_menu(app, ui);
     repetition_menus(app, ui);
     ai_button(app, ui);
@@ -1082,6 +1088,78 @@ fn place_menu(app: &mut SoundApp, ui: &mut Ui) {
             ui.close();
         }
     });
+}
+
+/// "Timing": the typed words onto the vocal, by guess (Time Words to Vocal) or by tapping.
+fn timing_menu(app: &mut SoundApp, ui: &mut Ui) {
+    let (lines, placed) = {
+        let s = app.engine.session();
+        (s.lyric_sheet.kinds().iter().any(|k| matches!(k, soundcraft_model::LineKind::Lyric(_))), !s.lyric_sheet.placed.is_empty())
+    };
+    ui.menu_button("Timing", |ui| {
+        let b = ui
+            .add_enabled(lines && placed, egui::Button::new("Time Words to Vocal"))
+            .on_hover_text("Spread each placed line's words over the notes sung in it on the vocal track: a first guess to check")
+            .on_disabled_hover_text(if lines {
+                "Place the lines on the Lyrics ruler first (or tap the line starts)"
+            } else {
+                "Type the lyrics first"
+            });
+        if b.clicked() {
+            show_ruler(app);
+            match app.run("lyrics.time_words", json!({})) {
+                Ok(v) => {
+                    app.ui.status = format!("{} words timed, {} still guessed: check them in the Vocal Editor's word lane", v["words"], v["guessed"])
+                }
+                Err(e) => app.ui.status = e,
+            }
+            ui.close();
+        }
+        ui.separator();
+        if ui.add_enabled(lines, egui::Button::new("Tap Words\u{2026}")).on_hover_text("Play the song and tap J on each word").clicked() {
+            if let Err(e) = crate::lyrics_tap::start(app, crate::lyrics_tap::TapMode::Words) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+        if ui
+            .add_enabled(lines, egui::Button::new("Tap Line Starts\u{2026}"))
+            .on_hover_text("Tap J where each line starts: the lines are placed and their words spread inside")
+            .clicked()
+        {
+            show_ruler(app);
+            if let Err(e) = crate::lyrics_tap::start(app, crate::lyrics_tap::TapMode::Lines) {
+                app.ui.status = e;
+            }
+            ui.close();
+        }
+    })
+    .response
+    .on_hover_text("Time the typed words to the vocal");
+}
+
+/// While the song plays: the line being sung, its word lit (from the timed words of the vocal).
+fn now_singing(app: &SoundApp, ui: &mut Ui, t: &Tokens) {
+    if !app.engine.transport.playing {
+        return;
+    }
+    let Ok(track) = soundcraft_engine::cmd::lyric_timing::timing_track(&app.engine, "lyrics", &json!({})) else { return };
+    let s = app.engine.session();
+    let words = soundcraft_engine::word_time::track_words(s, track);
+    let at = app.position();
+    let Some(i) = words.iter().rposition(|w| w.start <= at) else { return };
+    let Some(cur) = words.get(i) else { return };
+    let line = |w: &soundcraft_engine::word_time::TrackWord| (w.r.clip, w.r.line);
+    let lit = cur.start <= at && at < cur.end;
+    ui.horizontal_wrapped(|ui| {
+        ui.add_space(10.0);
+        for w in words.iter().filter(|w| line(w) == line(cur)) {
+            let mut rt = egui::RichText::new(&w.text).size(16.0);
+            rt = if w.r == cur.r && lit { rt.color(Color32::from_rgb(242, 196, 64)).strong() } else { rt.color(t.text_dim) };
+            ui.label(rt);
+        }
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("soundcraft-lyrics-now"), if lit { cur.text.clone() } else { String::new() }));
 }
 
 /// Shows the Lyrics ruler (placing a line makes it visible).

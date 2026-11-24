@@ -43,6 +43,8 @@ pub struct LyricsDialog {
     pub best: bool,
     /// Leave long silences out before decoding.
     pub skip_silence: bool,
+    /// Replace words typed or timed by hand in the range (off: transcribing stops and says so).
+    pub replace_typed: bool,
 }
 
 /// Generate Song's settings in the dialog.
@@ -346,6 +348,9 @@ pub fn lyrics_params(o: &mut serde_json::Map<String, Value>, l: &LyricsDialog) {
     o.insert("language".into(), json!(if l.auto_language { "auto" } else { "en" }));
     o.insert("quality".into(), json!(if l.best { "best" } else { "fast" }));
     o.insert("skip_silence".into(), json!(l.skip_silence));
+    if l.replace_typed {
+        o.insert("replace_typed".into(), json!(true));
+    }
     if !l.prompt.trim().is_empty() {
         o.insert("prompt".into(), json!(l.prompt.trim()));
     }
@@ -421,6 +426,9 @@ pub fn lyrics_options(ui: &mut egui::Ui, l: &mut LyricsDialog, seconds: f64) {
     .on_hover_text("Fast is whisper large-v3 quantized to 8 bits: the same words on the test verse, about 1.3x faster");
     ui.checkbox(&mut l.skip_silence, "Skip long silences")
         .on_hover_text("Leaves out silences over 2 s before transcribing. Off: it did not speed up the test vocal.");
+    ui.checkbox(&mut l.replace_typed, "Replace words typed or timed by hand").on_hover_text(
+        "Off: when this vocal has words from the lyric sheet or timed by hand, transcribing stops and says so instead of replacing them",
+    );
     // whisper.cpp large-v3 on the CPU (16 threads, Ryzen 9 8940HX, clang build): 4 min in 86 s
     // (q8_0) or 107 s (f16), model loading included.
     let est = (seconds * if l.best { 0.45 } else { 0.36 } + 5.0) / 60.0;

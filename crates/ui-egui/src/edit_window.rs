@@ -1125,7 +1125,7 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
             painter.rect(band, 0.0, t_accent_fill(), Stroke::new(1.0, Tokens::current().accent), StrokeKind::Inside);
         }
     }
-    crate::lyrics_lane::draw(&painter, &s, track, tl, lane);
+    // The words strip is drawn over the lane after its interaction (it takes its own clicks).
     if track.kind == TrackKind::Master || track.kind == TrackKind::Aux || track.kind == TrackKind::Vca {
         let p = auto_view.clone().unwrap_or(AutoParam::Volume);
         draw_automation(&painter, &s, track, &p, tl, lane, &selected_points(&p));
@@ -1140,6 +1140,7 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
         }
     }
     lane_interaction(app, ui, track, lane, tl, pitch_claimed, None);
+    crate::word_lane::track_strip(app, ui, track, tl, lane);
     if track.is_folder() && !track.folder_open {
         folder_block_interaction(app, ui, track, lane, tl);
     }

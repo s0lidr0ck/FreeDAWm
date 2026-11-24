@@ -192,6 +192,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.ml.midi", "Convert to MIDI…", "AI > Convert to MIDI…", None),
     ("ui.ml.chords", "Detect Chords…", "AI > Detect Chords…", None),
     ("ui.ml.lyrics", "Transcribe Lyrics…", "AI > Transcribe Lyrics…", None),
+    ("ui.lyrics_tap", "Tap Words to Time…", "", None),
     ("ui.ml.text_midi", "Generate MIDI from Text…", "AI > Generate MIDI from Text…", None),
     ("ui.ml.song", "Generate Song…", "AI > Generate Song…", None),
     ("ui.midi_cleanup", "MIDI Cleanup…", "AI > MIDI Cleanup…", None),
@@ -963,6 +964,11 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
         "ui.midi_undo_pass" | "ui.midi_erase_held" => {
             when(app.engine.transport.recording && app.midi_loop_preview.is_some(), "Works while loop recording MIDI")
         }
+        // Tap to time needs typed lyrics.
+        "ui.lyrics_tap" => when(
+            app.engine.session().lyric_sheet.kinds().iter().any(|k| matches!(k, soundcraft_model::LineKind::Lyric(_))),
+            "Type the lyrics first (Window › Transport & Session › Lyrics)",
+        ),
         // Make Harmony… harmonises a vocal track.
         "ui.vocal_harmony" => {
             when(app.engine.session().tracks.iter().any(soundcraft_model::Track::is_vocal), "No vocal track: mark one with Track › Vocal Track")
@@ -1555,7 +1561,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference" | "ui.band.import_chords")
+        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference" | "ui.band.import_chords" | "ui.lyrics_tap")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
@@ -1629,6 +1635,15 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.vocal_harmony" {
         return Some(crate::vocal_editor::harmony::command(app, p));
+    }
+    // Tap to time in the Lyrics window: `{mode?: words | lines}`.
+    if id == "ui.lyrics_tap" {
+        let mode = if p.get("mode").and_then(Value::as_str) == Some("lines") {
+            crate::lyrics_tap::TapMode::Lines
+        } else {
+            crate::lyrics_tap::TapMode::Words
+        };
+        return Some(crate::lyrics_tap::start(app, mode).map(|()| json!({"on": true})));
     }
     if id == "window.vocal_studio" {
         let cur = app.ui.show_vocal_editor && app.vocal.studio.on;

@@ -52,8 +52,8 @@ pub use control_room::{ControlRoom, CueMix, MAX_CUES, MAX_MONITOR_SETS, MonitorS
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use live_stretch::{LiveStretch, PitchRender, PitchRenders, StretchKind};
 pub use lyrics::{
-    LyricLine, LyricWord, MAX_LINE_WORDS, MAX_LYRIC_LINES, MAX_WORD_CHARS, clip_lines, rebase_lyrics, sanitize_lyrics, to_clip_time,
-    track_has_lyrics, track_lines,
+    LyricLine, LyricWord, MAX_LINE_WORDS, MAX_LYRIC_LINES, MAX_WORD_CHARS, WordTiming, clip_lines, rebase_lyrics, sanitize_lyrics, to_clip_time,
+    track_hand_words, track_has_lyrics, track_lines,
 };
 pub use markers::{Group, LocationView, MarkerKind, MemoryLocation, SetListEntry};
 pub use midi_fx::{

@@ -877,11 +877,8 @@ mod tests {
         });
         let id = s.new_clip_id();
         let mut clip = soundcraft_model::Clip::midi(id, "v", 0, 96_000, seq);
-        clip.lyrics = vec![soundcraft_model::LyricLine {
-            start: 0,
-            end: 10,
-            words: vec![soundcraft_model::LyricWord { start: 0, end: 10, text: "Sing".into() }],
-        }];
+        clip.lyrics =
+            vec![soundcraft_model::LyricLine { start: 0, end: 10, words: vec![soundcraft_model::LyricWord::new(0, 10, "Sing")], sheet_line: None }];
         s.track_mut(t).unwrap().playlist_mut().unwrap().clips.push(clip);
         let parts = layout(&s, &[]);
         assert_eq!(parts[0].measures[0].items[0].lyric.as_deref(), Some("Sing"));
