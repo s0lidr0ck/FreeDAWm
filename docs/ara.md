@@ -58,6 +58,14 @@ Bounces, freezes, commits and Consolidate render each such clip through the plug
 first (in its offline mode), so what they make is what you heard. Process and Render Clip Gain
 work on the clip's file, under the plug-in: the plug-in then plays the processed file.
 
+FreeDAWm's own vocal tuning (the Vocal Editor) can't be heard on a clip that plays through an ARA
+plug-in: the plug-in plays its own reading of the file. The Vocal Editor shows such a clip greyed
+with "Plays through *plug-in* (ARA)" instead of its notes, and its note commands refuse it with
+the same reason. Bypass or remove the plug-in for the clip to tune it in FreeDAWm; edits made
+before it was given to the plug-in play again once it is bypassed. A copy made by Duplicate Track
+keeps the plug-in (and so the same rule); Make Harmony copies the take without it, so the harmony
+plays its own tuned audio (without what the plug-in does on the lead).
+
 If the plug-in cannot be loaded, refuses to be bound to its document, gives no renderer, or renders
 something that is not a number, the clip plays its own audio and the window says why; the ARA log
 says what was asked and what failed.

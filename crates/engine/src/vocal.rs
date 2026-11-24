@@ -467,6 +467,20 @@ pub fn tune_blocked(s: &Session, clip: &Clip) -> bool {
     live || (stretched(clip) && (!clip.warp.is_empty() || clip.reversed || clip.loop_len != 0))
 }
 
+/// The name of the ARA plug-in `clip` plays through (given to one and not bypassed): the mix
+/// plays that plug-in's audio in place of the clip's own, so a tuning made here is not heard.
+/// "its ARA plug-in" when the plug-in has no name.
+pub fn plays_through_ara(clip: &Clip) -> Option<&str> {
+    clip.ara.as_ref().filter(|a| !a.bypass).map(|a| if a.name.trim().is_empty() { "its ARA plug-in" } else { a.name.as_str() })
+}
+
+/// Why a note command refuses a clip that [`plays_through_ara`] `name`.
+pub fn ara_blocked_text(name: &str) -> String {
+    format!(
+        "this clip plays through {name} (ARA), so tuning it here can't be heard: bypass or remove {name} for the clip (Clip › ARA Plug-ins...) to tune it here"
+    )
+}
+
 /// The render job of the clip that most needs one (see [`next_job`]).
 fn pick_render(snap: &Arc<Session>, focus: Option<ClipId>, playhead: Samples, only: Option<&[ClipId]>, skip: &BTreeSet<u64>) -> Option<RenderJob> {
     let s: &Session = snap;

@@ -46,7 +46,7 @@ pub fn level_lane(app: &mut SoundApp, ui: &mut Ui, rect: Rect, view: &RollView) 
         if dark { (Color32::from_rgb(143, 180, 216), Color32::WHITE) } else { (Color32::from_rgb(70, 110, 160), Color32::from_rgb(20, 20, 20)) };
     let mut bars = Vec::new();
     let mut ghosts = Vec::new();
-    for cv in clips.iter().filter(|c| !c.stretched) {
+    for cv in clips.iter().filter(|c| c.untunable.is_none()) {
         let fm = Frames::of(&cv.clip, cv.a.track.hop_samples);
         // The frame level, faint.
         if let Some((lo, hi)) = fm.visible(view) {

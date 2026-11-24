@@ -125,7 +125,7 @@ pub fn start(app: &mut SoundApp, track: TrackId, r: NoteRef, origin: Pos2, toggl
     let clips = clip_views_of(app, &refs);
     let mut base = Vec::new();
     for x in &refs {
-        let Some(cv) = clips.iter().find(|c| c.clip.id == x.clip && !c.stretched) else { continue };
+        let Some(cv) = clips.iter().find(|c| c.clip.id == x.clip && c.untunable.is_none()) else { continue };
         let Some(n) = cv.a.notes.iter().find(|n| n.id == x.note) else { continue };
         let e = cv.edits.get(&n.id).cloned().unwrap_or_default();
         let mode = soundcraft_engine::vocal::note_mode(&cv.clip);

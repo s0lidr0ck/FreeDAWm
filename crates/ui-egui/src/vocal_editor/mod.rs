@@ -1049,7 +1049,7 @@ pub fn selection_span(app: &mut SoundApp, track: TrackId) -> Option<(Samples, Sa
 /// in view or not; `in_view` (Ctrl+Shift+A): only the notes in view. The roll doesn't scroll.
 fn select_all(app: &mut SoundApp, track: TrackId, d: &roll::Drawn, in_view: bool) {
     let s = app.engine.session();
-    let stretched: Vec<ClipId> = d.clips.iter().filter(|c| c.stretched).map(|c| c.clip.id).collect();
+    let stretched: Vec<ClipId> = d.clips.iter().filter(|c| c.untunable.is_some()).map(|c| c.clip.id).collect();
     let shown: Vec<ClipId> = d.clips.iter().map(|c| c.clip.id).collect();
     let range = if in_view { Some(Range::new(d.view.t0, d.view.t1)) } else { None };
     app.vocal.selected = track_notes(s, track, range).into_iter().filter(|r| !stretched.contains(&r.clip) && shown.contains(&r.clip)).collect();

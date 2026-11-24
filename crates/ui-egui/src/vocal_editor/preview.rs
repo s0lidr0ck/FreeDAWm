@@ -54,7 +54,7 @@ pub fn render_ready(s: &Session, clip: &Clip) -> bool {
 /// Note `r`'s span in session time, clamped to its clip's window.
 pub fn note_span(app: &mut SoundApp, track: TrackId, r: NoteRef) -> Option<(Samples, Samples)> {
     let cvs = roll::clip_views(app, track, None);
-    let cv = cvs.iter().find(|c| c.clip.id == r.clip && !c.stretched)?;
+    let cv = cvs.iter().find(|c| c.clip.id == r.clip && c.untunable.is_none())?;
     let n = cv.a.notes.iter().find(|n| n.id == r.note)?;
     let fm = Frames::of(&cv.clip, cv.a.track.hop_samples);
     let (a, b) = (fm.clamp(fm.time(n.start)), fm.clamp(fm.time(n.end)));

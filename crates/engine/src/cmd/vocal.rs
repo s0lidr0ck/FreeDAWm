@@ -189,8 +189,13 @@ fn waiting_text(s: &soundcraft_model::Session, c: &soundcraft_model::Clip) -> St
     }
 }
 
-/// [`analysed`] for a command that edits notes: a stretched clip is refused too.
+/// [`analysed`] for a command that edits notes: a stretched clip is refused too, and so is one
+/// that plays through an ARA plug-in (the plug-in's audio plays, so a note moved here would look
+/// moved and sound as it was).
 fn editable(e: &Engine, id: &str, clip: ClipId) -> Result<VocalAnalysis> {
+    if let Some(name) = e.session().find_clip(clip).and_then(|(_, c)| crate::vocal::plays_through_ara(c)) {
+        return Err(bad(id, crate::vocal::ara_blocked_text(name)));
+    }
     let a = analysed(e, id, clip)?;
     if e.session().find_clip(clip).is_some_and(|(_, c)| crate::vocal::tune_blocked(e.session(), c)) {
         return Err(bad(id, STRETCHED));
