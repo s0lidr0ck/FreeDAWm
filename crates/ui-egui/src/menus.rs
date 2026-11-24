@@ -56,6 +56,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.about", "About FreeDAWm", "", None),
     ("window.close", "Close Window", "Window > Close Window", Some("Cmd+W")),
     ("window.hide_floating", "Hide All Floating Windows", "Window > Hide All Floating Windows", Some("Cmd+Ctrl+W")),
+    // Every plug-in and effect editor window at once (`plugin_close`); Cmd+Alt+W is the macOS
+    // "close all" key and was free.
+    ("window.close_plugin_windows", "Close Plug-in Windows", "", Some("Cmd+Alt+W")),
     ("window.midi_editor", "MIDI Editor", "Window > MIDI Editor", None),
     ("window.vocal_editor", "Vocal Editor", "Window > Vocal Editor", None),
     ("window.vocal_studio", "Vocal Studio", "", None),
@@ -914,6 +917,8 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
     match id {
         // Clip › ARA Plug-ins…: greyed out until the scan has found an ARA 2 plug-in.
         "window.ara" => crate::ara_ui::availability(),
+        // Greyed with nothing to close.
+        "window.close_plugin_windows" => when(crate::plugin_close::count(app) > 0, "No plug-in windows are open"),
         i if i.starts_with("window.")
             || i.starts_with("view.mix_section")
             || i == "view.mix_slim"
@@ -979,6 +984,7 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
 fn hover_text(id: &str) -> Option<&'static str> {
     match id {
         "window.mix_separate" => Some("Show Edit and Mix at once, e.g. one per monitor"),
+        "window.close_plugin_windows" => Some("Close every open plug-in and effect editor window, pinned ones too"),
         "window.fullscreen" => Some("The main window fills the screen, with no title bar or taskbar; the same key brings it back"),
         "window.vocal_separate" => Some("The Vocal Editor in its own window; closing it docks it back"),
         "window.notes" => Some("Session notes: a to-do list with check boxes, tags and times"),
@@ -1565,6 +1571,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.ara_editor" {
         return Some(crate::ara_ui::open_editor(app, p));
+    }
+    if id == crate::plugin_close::COMMAND {
+        return Some(crate::plugin_close::command(app));
     }
     if id == "window.new_mix" {
         return Some(crate::mix_more::open(app));

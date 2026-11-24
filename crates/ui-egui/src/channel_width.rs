@@ -108,6 +108,19 @@ pub fn bar(app: &mut SoundApp, ui: &mut Ui) {
     if segment(&mut c, "All", all, t.accent).on_hover_text("Size every channel").clicked() {
         let _ = app.run("ui.set", json!({"mix_width_all": true}));
     }
+    // Beside it: close every plug-in window at once (`plugin_close`).
+    c.add_space(14.0);
+    let open = crate::plugin_close::count(app);
+    let text = egui::RichText::new("Close Plug-ins").font(regular(11.0)).color(t.text);
+    let b = egui::Button::new(text).fill(t.button).min_size(vec2(0.0, 18.0)).corner_radius(3.0);
+    let resp = c.add_enabled(open > 0, b);
+    let tip = crate::plugin_close::tooltip(open);
+    let resp = resp.on_hover_text(&tip).on_disabled_hover_text(&tip);
+    if resp.clicked()
+        && let Err(e) = app.run(crate::plugin_close::COMMAND, json!({}))
+    {
+        app.ui.status = e;
+    }
 }
 
 /// One segment of the bar: a small selectable button.

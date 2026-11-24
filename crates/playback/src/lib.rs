@@ -3012,6 +3012,17 @@ impl Player {
         self.side().editors.get(&(track, slot)).is_some_and(|e| e.is_open())
     }
 
+    /// The slots whose plugin editor window is open now (Window › Layout › Close Plug-in Windows
+    /// closes each through [`Player::close_editor`]).
+    pub fn open_editors(&self) -> Vec<(TrackId, SlotKey)> {
+        self.side().editors.iter().filter(|(_, e)| e.is_open()).map(|(k, _)| *k).collect()
+    }
+
+    /// The Clip Effects slots whose hosted editor window is open now.
+    pub fn open_clip_editors(&self) -> Vec<ClipSlot> {
+        self.side().clip_editors.iter().filter(|(_, e)| e.is_open()).map(|(k, _)| *k).collect()
+    }
+
     pub fn any_editor_open(&self) -> bool {
         let side = self.side();
         side.editors.values().any(|e| e.is_open()) || side.clip_editors.values().any(|e| e.is_open())
@@ -3028,6 +3039,13 @@ impl Player {
     /// (see `PluginEditor::value_text`). Main thread only.
     pub fn editor_value_text(&self, track: TrackId, slot: SlotKey, id: &str, value: f32) -> Option<String> {
         self.side().editors.get_mut(&(track, slot))?.value_text(id, value)
+    }
+
+    /// Drives a Clip Effects slot's editor with `editor` from now on, as if a hosted module there
+    /// had one. For tests of the editor paths without a third-party plugin installed.
+    #[doc(hidden)]
+    pub fn attach_clip_editor(&self, slot: ClipSlot, editor: Box<dyn PluginEditor>) {
+        self.side().clip_editors.insert(slot, editor);
     }
 
     /// True when the hosted Clip Effects module in `slot` (track, clip, module) has its own editor.

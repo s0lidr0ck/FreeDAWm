@@ -89,6 +89,7 @@ pub mod ops_windows;
 pub mod palette;
 pub mod panels;
 pub mod pantry;
+pub mod plugin_close;
 pub mod plugin_titles;
 pub mod preferences;
 pub mod preset_house;

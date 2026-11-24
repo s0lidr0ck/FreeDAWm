@@ -748,4 +748,5 @@ Window > Layout > Configurations > Auto-Update Active Configuration = Window > C
 Window > Layout > Tile = Window > Arrange > Tile
 Window > Layout > Reset Panel Layout = Window > Reset Panel Layout
 Window > Layout > Close Floating Windows = Window > Close Window
+Window > Layout > Close Plug-in Windows = @window.close_plugin_windows
 Window > Layout > Close All Workspaces = Window > Workspaces > Close All Workspaces
