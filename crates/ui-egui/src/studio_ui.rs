@@ -750,7 +750,7 @@ fn contents(app: &mut SoundApp, net: &mut NetState, ui: &mut Ui) {
     if !s.connected || s.locked {
         c.disable();
     }
-    strips(net, &mut c, &view);
+    strips(net, &mut c, &view, app.ui.mix_strip_tint);
     // The hand came off: the drag is one undo step on the studio, closed now.
     if net.studio.drag.is_some() && !ui.input(|i| i.pointer.any_down()) {
         end_drag(net);
@@ -922,7 +922,8 @@ fn meter_frame(net: &mut NetState, view: &MixerView) {
 
 const STRIP_W: f32 = 96.0;
 
-fn strips(net: &mut NetState, ui: &mut Ui, view: &MixerView) {
+/// `tint`: the Mix window's Colour strips amount (`strip_tint`), the same here.
+fn strips(net: &mut NetState, ui: &mut Ui, view: &MixerView, tint: f32) {
     meter_frame(net, view);
     let t = Tokens::current();
     // Groups and VCA masters, in one line above the strips.
@@ -941,18 +942,24 @@ fn strips(net: &mut NetState, ui: &mut Ui, view: &MixerView) {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
             for s in view.strips.iter().filter(|s| !s.hidden) {
-                strip(net, ui, view, s, rows);
+                strip(net, ui, view, s, rows, tint);
             }
         });
     });
 }
 
 /// Every strip's sections are as tall as the fullest strip's (inserts, sends), so faders line up.
-fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip, rows: (usize, usize)) {
+fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip, rows: (usize, usize), tint: f32) {
     let t = Tokens::current();
     let h = ui.available_height().max(480.0);
     let (r, _) = ui.allocate_exact_size(vec2(STRIP_W, h), Sense::hover());
-    crate::widgets::vgradient(ui.painter(), r, crate::widgets::shade(t.strip_bg, 0.06), t.strip_bg);
+    // Colour strips, as in the Mix window.
+    let look = crate::strip_tint::look(s.color, tint, false);
+    match look {
+        Some(l) => crate::widgets::vgradient(ui.painter(), r, l.top, l.bg),
+        None => crate::widgets::vgradient(ui.painter(), r, crate::widgets::shade(t.strip_bg, 0.06), t.strip_bg),
+    }
+    let section_fill = look.map_or(t.strip_section, |l| l.section);
     ui.painter().vline(r.min.x + 0.5, r.y_range(), Stroke::new(1.0, t.edge_light));
     // The strip's colour along its top, as the studio's Mix window shows it.
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(STRIP_W, 4.0)), 0.0, rgb(s.color));
@@ -962,7 +969,7 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip, row
     // Inserts: name and bypass.
     let sec_h = 14.0 + 16.0 * rows.0.max(1) as f32;
     let sec = Rect::from_min_size(pos2(x0, y), vec2(w, sec_h));
-    crate::widgets::inset(ui.painter(), sec, t.strip_section);
+    crate::widgets::inset(ui.painter(), sec, section_fill);
     ui.painter().text(pos2(sec.min.x + 3.0, sec.min.y + 1.0), Align2::LEFT_TOP, "INSERTS", regular(8.0), t.text_dim);
     for (k, ins) in s.inserts.iter().enumerate() {
         let ir = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 13.0 + 16.0 * k as f32), vec2(w - 4.0, 15.0));
@@ -983,7 +990,7 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip, row
     // Sends: where to and how loud.
     let sec_h = 14.0 + 16.0 * rows.1.max(1) as f32;
     let sec = Rect::from_min_size(pos2(x0, y), vec2(w, sec_h));
-    crate::widgets::inset(ui.painter(), sec, t.strip_section);
+    crate::widgets::inset(ui.painter(), sec, section_fill);
     ui.painter().text(pos2(sec.min.x + 3.0, sec.min.y + 1.0), Align2::LEFT_TOP, "SENDS", regular(8.0), t.text_dim);
     for (k, x) in s.sends.iter().enumerate() {
         let sr = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 13.0 + 16.0 * k as f32), vec2(w - 4.0, 15.0));
@@ -1083,6 +1090,9 @@ fn strip(net: &mut NetState, ui: &mut Ui, view: &MixerView, s: &RemoteStrip, row
     let bottom_h = 44.0;
     let fh = (r.max.y - bottom_h - y).max(120.0);
     let fr = Rect::from_min_size(pos2(x0, y), vec2(w * 0.6, fh));
+    if let Some(l) = look {
+        crate::widgets::inset(ui.painter(), Rect::from_min_max(pos2(x0, y - 3.0), pos2(x0 + w, y + fh)), l.section);
+    }
     if let Some(db) = crate::widgets::fader(ui, fr, s.volume_db, egui::Id::new(("remote-fader", s.id))) {
         let held = ui.input(|i| i.pointer.any_down());
         act(net, Control::Volume(s.id), db, held, "mix.volume", json!({"tracks": [s.id], "db": db}));

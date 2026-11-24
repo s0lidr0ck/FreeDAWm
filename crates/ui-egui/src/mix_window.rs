@@ -476,8 +476,14 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     crate::browser::drop::target(app, ui, r, crate::browser::drop::DropTarget::Track(id));
     let selected = crate::window_sync::shows_selected(app, crate::MainWindow::Mix, id);
+    // Colour strips (`strip_tint`): the track's colour under the strip, its sections and fader well.
+    let tint = crate::strip_tint::look(track.color, app.ui.mix_strip_tint, selected);
     let bg = if selected { t.strip_selected } else { t.strip_bg };
-    vgradient(ui.painter(), r, shade(bg, 0.06), bg);
+    match tint {
+        Some(look) => vgradient(ui.painter(), r, look.top, look.bg),
+        None => vgradient(ui.painter(), r, shade(bg, 0.06), bg),
+    }
+    let section_fill = tint.map_or(t.strip_section, |look| look.section);
     ui.painter().vline(r.min.x + 0.5, r.y_range(), Stroke::new(1.0, t.edge_light));
     let mut y = r.min.y + 4.0;
     let inner_w = w - 8.0;
@@ -494,7 +500,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     if all || has("mic_preamps") {
         // Input gain stage ahead of the inserts (the track's trim).
         let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, 34.0));
-        inset(ui.painter(), sec, t.strip_section);
+        inset(ui.painter(), sec, section_fill);
         section_label(ui, sec, "PREAMP", narrow);
         if has_input {
             // The polarity button beside the trim: every channel; a right-click picks channels.
@@ -518,7 +524,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     }
     if all || has("instruments") {
         let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, 34.0));
-        inset(ui.painter(), sec, t.strip_section);
+        inset(ui.painter(), sec, section_fill);
         section_label(ui, sec, "INSTRUMENT", narrow);
         let sr = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 16.0), vec2(inner_w - 4.0, 15.0));
         let slot = track.mixer.inserts.iter().position(|i| plugin_info(&i.plugin).is_some_and(|p| p.is_instrument));
@@ -609,7 +615,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         }
         let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, sends_section_height(app.engine.session(), off)));
         crate::vocal_editor::hook(ui.ctx(), &format!("mix-{}-{key}", id.0), sec);
-        inset(ui.painter(), sec, t.strip_section);
+        inset(ui.painter(), sec, section_fill);
         section_label(ui, sec, title, narrow);
         let mut sy = sec.min.y + 15.0;
         for k in 0..5 {
@@ -636,7 +642,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     }
     if all || has("io") {
         let sec = Rect::from_min_size(pos2(x0, y), vec2(inner_w, 16.0 + 2.0 * 18.0 + 30.0));
-        inset(ui.painter(), sec, t.strip_section);
+        inset(ui.painter(), sec, section_fill);
         section_label(ui, sec, "I / O", narrow);
         // A musician strip keeps a Band key beside its input.
         let band_w = if crate::band::musician_of(track).is_some() { if narrow { 20.0 } else { 34.0 } } else { 0.0 };
@@ -844,6 +850,11 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     } else {
         app.engine.automation_shown(id, &soundcraft_model::AutoParam::Volume).unwrap_or(track.mixer.volume_db)
     };
+    if let Some(look) = tint {
+        // The fader well: the fader, its scale and the meter on the sections' tint.
+        let well = Rect::from_min_max(pos2(x0, y - 3.0), pos2(x0 + inner_w, y + fh + if wide_meter { 20.0 } else { 18.0 }));
+        inset(ui.painter(), well, look.section);
+    }
     crate::midi_learn::context_at(app, ui, fr, crate::midi_learn::volume(id));
     if let Some(db) = fader(ui, fr, shown_db, ui.id().with(("fader", id.0))) {
         app.gesture = Some(crate::Gesture::Fader { track: id, start_db: shown_db });
@@ -995,6 +1006,10 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         ui.painter().rect_filled(Rect::from_min_size(pos2(r.min.x, r.max.y - 5.0), vec2(w, 5.0)), 0.0, rgb(track.color));
     }
     ui.painter().line_segment([pos2(r.max.x, r.min.y), pos2(r.max.x, r.max.y)], Stroke::new(1.0, t.border));
+    if let Some(look) = tint.filter(|_| selected) {
+        // A tinted strip's selection: an outline, as the tint may take the selected fill's place.
+        ui.painter().rect_stroke(r.shrink(1.0), 2.0, Stroke::new(2.0, look.outline), StrokeKind::Inside);
+    }
     // Scout's PRE/POST lights either side of the track-type label, above the name plate.
     crate::scout::strip_lights(app, ui, id, Rect::from_center_size(pos2(r.center().x, vr.max.y + 9.0), vec2(inner_w - 4.0, 11.0)));
     r

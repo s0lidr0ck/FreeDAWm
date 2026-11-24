@@ -121,6 +121,19 @@ pub fn bar(app: &mut SoundApp, ui: &mut Ui) {
     {
         app.ui.status = e;
     }
+    // The strips' colour (`strip_tint`): Off, Subtle, Medium or Strong.
+    c.add_space(14.0);
+    c.label(egui::RichText::new("Colour").font(regular(11.0)).color(t.text_dim));
+    c.add_space(8.0);
+    let now = crate::strip_tint::step_of(app.ui.mix_strip_tint);
+    for (step, label) in crate::strip_tint::STEPS {
+        let tip = format!("Channel strips take their track's colour: {}", label.to_lowercase());
+        if segment(&mut c, label, now == Some(step), t.accent).on_hover_text(tip).clicked() {
+            // Set here, not through `ui.set` (its round trip resets the state it does not save,
+            // such as pinned plug-in windows); `ui.set {"mix_strip_tint"}` is the agents' way.
+            app.ui.mix_strip_tint = step;
+        }
+    }
 }
 
 /// One segment of the bar: a small selectable button.

@@ -118,6 +118,7 @@ pub mod spot;
 pub mod step_grid;
 pub mod step_input;
 pub mod stretch_worker;
+pub mod strip_tint;
 pub mod studio_editors;
 pub mod studio_ui;
 pub mod surfaces;
@@ -299,6 +300,11 @@ pub struct UiState {
     pub edit_views: Vec<String>,
     /// How strongly Edit window tracks take on their colour, 0..1 (0: only the colour strip).
     pub track_tint: f32,
+    /// How strongly Mix window strips (and the Remote Mix window's) take on their track's colour,
+    /// 0..1: Off 0 (the default: strips as before), Subtle, Medium, Strong (`strip_tint::STEPS`).
+    /// Kept with the preferences, not the session.
+    #[serde(default)]
+    pub mix_strip_tint: f32,
     /// Open plugin windows: (track, module or instrument). Keyed by module id, so a window
     /// follows its module when the chain is reordered.
     pub plugin_windows: Vec<(TrackId, SlotKey)>,
@@ -657,6 +663,7 @@ impl Default for UiState {
             mix_views_offered: NEW_MIX_VIEWS.iter().map(|v| v.to_string()).collect(),
             edit_views: vec!["color".into()],
             track_tint: 0.5,
+            mix_strip_tint: 0.0,
             plugin_windows: Vec::new(),
             full_editors: Vec::new(),
             detached_plugins: Vec::new(),
