@@ -105,6 +105,8 @@ struct PlannedClip {
     start: Samples,
     len: Samples,
     seq: Sequence,
+    /// The vocal clip's timed words in the new clip's time (MIDI export writes them as lyric events).
+    lyrics: Vec<soundcraft_model::LyricLine>,
 }
 
 /// Everything one vocal track gives.
@@ -292,7 +294,18 @@ fn plan(e: &Engine, id: &str, p: &Value) -> Result<Plan> {
         total += seq.notes.len();
         let at = s.track_index(t).unwrap_or(usize::MAX);
         let entry = by_track.entry(at).or_insert_with(|| PlannedTrack { from: t, clips: Vec::new() });
-        entry.clips.push(PlannedClip { name: format!("{} MIDI", c.name), start: c.start, len: c.length, seq });
+        // The words sung on the clip go along, in the MIDI clip's time (it starts where the clip does).
+        let lyrics: Vec<soundcraft_model::LyricLine> = soundcraft_model::clip_lines(c)
+            .into_iter()
+            .map(|mut l| {
+                for w in &mut l.words {
+                    (w.start, w.end) = (w.start - c.start, w.end - c.start);
+                }
+                (l.start, l.end) = (l.start - c.start, l.end - c.start);
+                l
+            })
+            .collect();
+        entry.clips.push(PlannedClip { name: format!("{} MIDI", c.name), start: c.start, len: c.length, seq, lyrics });
     }
     if total == 0 {
         let why = skipped
@@ -319,7 +332,9 @@ fn lay(s: &mut Session, plan: Plan) -> Vec<(TrackId, TrackId, usize, usize)> {
         for pc in pt.clips {
             notes += pc.seq.notes.len();
             let cid = s.new_clip_id();
-            crate::edit::place_clip(s, nt, Clip::midi(cid, pc.name, pc.start, pc.len, pc.seq));
+            let mut clip = Clip::midi(cid, pc.name, pc.start, pc.len, pc.seq);
+            clip.lyrics = pc.lyrics;
+            crate::edit::place_clip(s, nt, clip);
             clips += 1;
         }
         made.push((pt.from, nt, clips, notes));
@@ -449,6 +464,23 @@ mod tests {
 
     fn line_pitches() -> Vec<u8> {
         LINE.iter().map(|l| l.1).collect()
+    }
+
+    #[test]
+    fn the_vocals_timed_words_go_along_as_lyrics() {
+        let (mut e, vox, clip) = sung();
+        // Two words on the vocal clip (its source time), the clip at START.
+        if let Some(c) = e.session_mut().find_clip_mut(clip) {
+            let words = vec![soundcraft_model::LyricWord::new(100, 9_000, "Lord"), soundcraft_model::LyricWord::new(28_800, 40_000, "say")];
+            c.lyrics = vec![soundcraft_model::LyricLine { start: 100, end: 40_000, words, sheet_line: None }];
+        }
+        let r = e.execute(TO_TRACK, &json!({"track": vox.0})).unwrap();
+        let t = made_track(&r);
+        let s = e.session();
+        let lines = soundcraft_model::track_lines(s.track(t).unwrap());
+        let got: Vec<(String, Samples)> = lines.iter().flat_map(|l| l.words.iter().map(|w| (w.text.clone(), w.start))).collect();
+        assert_eq!(got, vec![("Lord".to_string(), START + 100), ("say".to_string(), START + 28_800)], "at the same timeline times");
+        assert_eq!(crate::lyrics::midi_lyrics(s, t).len(), 2, "MIDI export writes them as lyric events");
     }
 
     #[test]

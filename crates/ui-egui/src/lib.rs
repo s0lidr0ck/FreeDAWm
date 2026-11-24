@@ -54,6 +54,7 @@ pub mod live_midi;
 pub mod lyric_ruler;
 pub mod lyrics_lane;
 pub mod lyrics_panel;
+pub mod lyrics_tap;
 mod mend_ui;
 pub mod menus;
 pub mod midi_cleanup_panel;
@@ -149,6 +150,7 @@ pub mod widgets;
 pub mod window_sync;
 pub mod windows;
 pub mod word_finder;
+pub mod word_lane;
 
 use serde_json::{Value, json};
 use soundcraft_engine::{Engine, TransportRequest};
@@ -1203,6 +1205,8 @@ pub struct SoundApp {
     pub score: score_editor::ScoreState,
     /// The Vocal Editor's selection, scroll and panel state.
     pub vocal: vocal_editor::VocalEditorState,
+    /// The word lanes' selection, drag and retype, and tap mode.
+    pub words: word_lane::WordUi,
     /// While a Vocal Editor preview plays: the track the player hears soloed (it is handed a
     /// copy of the session with only that track soloed; the document is untouched).
     pub preview_solo: Option<TrackId>,
@@ -1431,6 +1435,7 @@ impl SoundApp {
             midi: midi_editor::MidiEditorState::default(),
             score: score_editor::ScoreState::default(),
             vocal: vocal_editor::VocalEditorState::default(),
+            words: word_lane::WordUi::default(),
             preview_solo: None,
             audition_session: None,
             ops: ops_windows::OpsState::default(),

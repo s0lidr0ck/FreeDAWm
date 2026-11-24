@@ -577,9 +577,12 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let chords = Rect::from_min_max(pos2(l, top), pos2(rr, top + roll::CHORD_H));
     let key = Rect::from_min_max(pos2(l, chords.bottom()), pos2(rr, chords.bottom() + roll::KEY_STRIP_H));
     let ruler = Rect::from_min_max(pos2(l, key.bottom()), pos2(rr, key.bottom() + roll::RULER_H));
-    let lane_top = (body.bottom() - LEVEL_H).max(ruler.bottom() + 40.0);
+    // The word lane under the ruler, when the track has timed words (or they are being tapped).
+    let show_words = app.engine.session().track(track).is_some_and(soundcraft_model::track_has_lyrics) || app.words.tap.on;
+    let words_r = Rect::from_min_max(pos2(l, ruler.bottom()), pos2(rr, ruler.bottom() + if show_words { crate::word_lane::LANE_H } else { 0.0 }));
+    let lane_top = (body.bottom() - LEVEL_H).max(words_r.bottom() + 40.0);
     let hbar = Rect::from_min_max(pos2(l, lane_top - 3.0 - bw), pos2(rr, lane_top - 3.0));
-    let roll_r = Rect::from_min_max(pos2(l, ruler.bottom()), pos2(rr, hbar.top() - 1.0));
+    let roll_r = Rect::from_min_max(pos2(l, words_r.bottom()), pos2(rr, hbar.top() - 1.0));
     let vbar = Rect::from_min_max(pos2(rr + 1.0, roll_r.top()), pos2(right, roll_r.bottom()));
     let keys = Rect::from_min_max(pos2(body.left(), roll_r.top()), pos2(l, roll_r.bottom()));
     let lane = Rect::from_min_max(pos2(body.left(), lane_top), pos2(right, body.bottom()));
@@ -597,6 +600,16 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     header_row(app, ui, header, track, &drawn);
     roll::interact(app, ui, track, &drawn);
     note_bar::show(app, ui, &drawn);
+    // The word lane before the editor's keys: its retype field takes the typing.
+    if show_words {
+        let v = &drawn.view;
+        let map = crate::word_lane::TimeMap { left: v.rect.left(), t0: v.t0, spp: (v.t1 - v.t0).max(1) as f64 / f64::from(v.rect.width().max(1.0)) };
+        let label = Rect::from_min_max(pos2(body.left(), words_r.top()), pos2(l, words_r.bottom()));
+        ui.painter().rect_filled(label, 0.0, t.panel_bg2);
+        ui.painter().text(pos2(label.left() + 6.0, label.center().y), Align2::LEFT_CENTER, "Words", regular(11.0), t.text_dim);
+        crate::word_lane::lane(app, ui, "vocal", track, words_r, map, true, true);
+        store(ui.ctx(), "words", words_r);
+    }
     keyboard(app, ui, full, track, &drawn);
     level_lane::level_lane(app, ui, lane, &drawn.view);
     scroll_bars(app, ui, &editable, (hbar, vbar), &drawn.view);
@@ -808,9 +821,16 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     let mut x = header.left() + 112.0;
     let selected = if app.vocal.whole_track && k > 0 { format!("Select all \u{b7} {k} notes") } else { format!("{k} selected") };
     hook(ui.ctx(), "selected-text", selected.clone());
+    // Timed words still guessed (Time Words to Vocal), so they get checked.
+    let words = match soundcraft_engine::word_time::counts(&s, track).0 {
+        0 => String::new(),
+        1 => " \u{b7} 1 word still guessed".to_string(),
+        n => format!(" \u{b7} {n} words still guessed"),
+    };
     for (text, strong) in [
         (format!("{name} \u{b7} {total} notes \u{b7} "), false),
         (selected, true),
+        (words, true),
         (" \u{b7} drag a note: cents, snaps at semitones (Alt: free) \u{b7} drag: rubber-band \u{b7} S split \u{b7} J join".to_string(), false),
     ] {
         let g = p.layout_no_wrap(text, if strong { bold(11.5) } else { regular(11.5) }, if strong { t.text } else { t.text_dim });
