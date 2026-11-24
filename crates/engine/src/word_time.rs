@@ -445,6 +445,34 @@ fn dip_db(a: &VocalAnalysis, f: usize) -> f32 {
     before.min(after) - low
 }
 
+/// A level dip this deep (dB) inside a note marks a syllable sung through a voiced consonant...
+const SYLLABLE_DIP_DB: f32 = 5.0;
+/// A shallower dip (dB) is only a hint ([`Onset::Soft`]).
+const SOFT_DIP_DB: f32 = 3.5;
+/// Dips are at least this far (frames, 60 ms) from the note's edges and from each other.
+const SYLLABLE_MIN_FRAMES: u32 = 12;
+
+/// The frames inside note `[start, end)` where the level dips like a syllable boundary: local
+/// minima (over ±4 frames) at least 3.5 dB under the peaks within 80 ms either side, with the
+/// kind of onset each one is (5 dB or more: a dip, else a soft one).
+fn syllable_dips(a: &VocalAnalysis, start: u32, end: u32) -> Vec<(u32, Onset)> {
+    let mut out: Vec<(u32, Onset)> = Vec::new();
+    let mut f = start + SYLLABLE_MIN_FRAMES;
+    while f + SYLLABLE_MIN_FRAMES < end {
+        let lv = level(a, f as usize);
+        let local_min = (f.saturating_sub(4)..f + 5).all(|g| level(a, g as usize) >= lv);
+        let far = out.last().is_none_or(|(p, _)| f - p >= SYLLABLE_MIN_FRAMES);
+        let depth = dip_db(a, f as usize);
+        if local_min && far && depth >= SOFT_DIP_DB {
+            out.push((f, if depth >= SYLLABLE_DIP_DB { Onset::Dip } else { Onset::Soft }));
+            f += SYLLABLE_MIN_FRAMES;
+            continue;
+        }
+        f += 1;
+    }
+    out
+}
+
 /// `Seg::gap_before` of a clip's first note until the notes of all clips are merged.
 const FIRST_IN_CLIP: Samples = Samples::MAX / 4;
 
@@ -542,7 +570,15 @@ pub fn track_segs(s: &Session, track: TrackId) -> (Vec<Seg>, Vec<(Samples, Sampl
                 start
             };
             let gap_before = if onset == Onset::Gap { prev_end.map_or(FIRST_IN_CLIP, |p| start - at(p).min(start)) } else { 0 };
-            segs.push(Seg { start, end, onset, lead, gap_before });
+            // Syllables inside the note: a voiced consonant (l, m, n, r, w, y) dips the level
+            // without stopping the voice.
+            let cuts = syllable_dips(&a, n.start, n.end);
+            let mut from = (n.start, onset, lead, gap_before);
+            for (f, kind) in cuts {
+                segs.push(Seg { start: at(from.0), end: at(f), onset: from.1, lead: from.2, gap_before: from.3 });
+                from = (f, kind, at(f), 0);
+            }
+            segs.push(Seg { start: at(from.0), end, onset: from.1, lead: from.2, gap_before: from.3 });
             prev_end = Some(n.end);
         }
     }

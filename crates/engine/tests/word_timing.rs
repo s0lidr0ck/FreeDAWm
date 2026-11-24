@@ -645,3 +645,77 @@ fn words_follow_moved_clips_duplicates_and_comps() {
     assert!(e.session().track(t).unwrap().playlists[1].clips.iter().all(|c| c.lyrics.is_empty()));
     let _ = WordTiming::Guess;
 }
+
+/// A real take, kept off the repo: `FREEDAWM_WORDTIME_SESSION` names a session whose sheet has
+/// placed lines and whose vocal track (the first vocal track, or `FREEDAWM_WORDTIME_TRACK`) holds
+/// the take; `FREEDAWM_WORDTIME_OUT` is where the word list goes. Reports what can be told without
+/// an answer key. Run with `--ignored --nocapture`.
+#[test]
+#[ignore = "needs a private take named by FREEDAWM_WORDTIME_SESSION"]
+fn real_take_report() {
+    let Ok(path) = std::env::var("FREEDAWM_WORDTIME_SESSION") else { return };
+    let mut e = Engine::default();
+    soundcraft_engine::io::open_session(&mut e, &path).unwrap();
+    let want = std::env::var("FREEDAWM_WORDTIME_TRACK").ok();
+    let t = e
+        .session()
+        .tracks
+        .iter()
+        .find(|t| want.as_deref().map_or(t.is_vocal() && !t.clips().is_empty(), |w| t.name == w))
+        .map(|t| t.id)
+        .expect("a vocal track");
+    let rate = e.session().sample_rate.as_f64();
+    let t0 = std::time::Instant::now();
+    let v = e.execute("lyrics.time_words", &json!({"track": t.0})).unwrap();
+    let took = t0.elapsed().as_secs_f64();
+    let s = e.session();
+    let (segs, breaths) = soundcraft_engine::word_time::track_segs(s, t);
+    let ws = soundcraft_engine::word_time::track_words(s, t);
+    let mut out = String::new();
+    let mut lens: Vec<f64> = Vec::new();
+    let mut in_breath = 0;
+    let m = |x: f64| format!("{}:{:06.3}", (x / 60.0) as u32, x % 60.0);
+    for l in v["lines"].as_array().unwrap() {
+        let id = l["line"].as_u64().unwrap();
+        let text = s.lyric_sheet.lines.iter().find(|x| x.id == id).map(|x| x.text.clone()).unwrap_or_default();
+        let n = s.lyric_sheet.number_of(id).unwrap_or(0);
+        let skipped = l["skipped"].as_str().map(|w| format!(" (skipped: {w})")).unwrap_or_default();
+        out += &format!("\nLine {n}: {text}\n  {} words placed on {} notes, {} sharing a note{skipped}\n", l["words"], l["notes"], l["shared"]);
+        if std::env::var("WORDTIME_DEBUG").is_ok()
+            && let Some(p) = s.lyric_sheet.place_of(id)
+        {
+            for g in segs.iter().filter(|g| g.start >= p.start - (0.2 * rate) as i64 && g.start < p.end) {
+                out +=
+                    &format!("    note {} - {} {:?} lead {}\n", m(g.start as f64 / rate), m(g.end as f64 / rate), g.onset, m(g.lead as f64 / rate));
+            }
+        }
+        for w in ws.iter().filter(|w| w.sheet_line == Some(id)) {
+            let (a, b) = (w.start as f64 / rate, w.end as f64 / rate);
+            out += &format!("  {:>10} to {:>10}  ({:4.0} ms)  {}\n", m(a), m(b), (b - a) * 1000.0, w.text);
+            lens.push((b - a) * 1000.0);
+            if breaths.iter().any(|(x, y)| w.start > *x + (0.01 * rate) as i64 && w.start < *y - (0.01 * rate) as i64) {
+                in_breath += 1;
+            }
+        }
+    }
+    lens.sort_by(f64::total_cmp);
+    let q = |p: f64| lens.get(((lens.len().max(1) - 1) as f64 * p).round() as usize).copied().unwrap_or(0.0);
+    let shared: u64 = v["lines"].as_array().unwrap().iter().map(|l| l["shared"].as_u64().unwrap_or(0)).sum();
+    let name = s.track(t).map(|t| t.name.clone()).unwrap_or_default();
+    let head = format!(
+        "Words timed from the typed lines (first guess, no speech model)\ntrack: {name}\nlines: {}  words: {}  notes on the track: {}  breaths or long unvoiced stretches: {}\nwords starting inside a breath: {in_breath}\nwords that had to share a note: {shared}\nword length ms: shortest {:.0}, 10% {:.0}, median {:.0}, 90% {:.0}, longest {:.0}\ntook {took:.1} s (analysis included)\n",
+        v["lines"].as_array().unwrap().len(),
+        ws.len(),
+        segs.len(),
+        breaths.len(),
+        q(0.0),
+        q(0.1),
+        q(0.5),
+        q(0.9),
+        q(1.0)
+    );
+    println!("{head}{out}");
+    if let Ok(dest) = std::env::var("FREEDAWM_WORDTIME_OUT") {
+        std::fs::write(dest, format!("{head}{out}")).unwrap();
+    }
+}

@@ -34,6 +34,8 @@ pub enum Onset {
     Gap,
     /// The level dips and comes back (a syllable sung again on the same pitch).
     Dip,
+    /// A shallow level dip (a syllable sung through a voiced consonant, or only a swell).
+    Soft,
     /// Only the pitch moves (legato): usually the same syllable going on.
     Glide,
 }
@@ -62,15 +64,16 @@ pub struct Fit {
     pub shared: bool,
 }
 
-/// Cost of a word starting after a gap, a dip, a pitch change, and inside a note: a long one
+/// Cost of a word starting after a gap, a dip, a shallow dip, a pitch change, and inside a
+/// note: a long one
 /// (two words held on one note), else a short one (less likely than a pitch change).
-const ONSET_COST: [f64; 3] = [0.0, 1.0, 3.0];
-const SPLIT_COST: f64 = 2.0;
-const SPLIT_SHORT_COST: f64 = 4.0;
+const ONSET_COST: [f64; 4] = [0.0, 1.0, 2.0, 4.0];
+const SPLIT_COST: f64 = 0.8;
+const SPLIT_SHORT_COST: f64 = 5.0;
 /// A note at least this long (seconds) can carry two words.
 const LONG_NOTE: f64 = 0.4;
 /// Per syllable the word has more than its notes, per note more than its syllables.
-const MISSING_COST: f64 = 2.5;
+const MISSING_COST: f64 = 1.0;
 const EXTRA_COST: f64 = 0.5;
 /// Per gap inside a word beyond what its syllables explain; per breath inside a word.
 const INNER_GAP_COST: f64 = 2.0;
@@ -80,7 +83,8 @@ fn onset_cost(o: Onset) -> f64 {
     match o {
         Onset::Gap => ONSET_COST[0],
         Onset::Dip => ONSET_COST[1],
-        Onset::Glide => ONSET_COST[2],
+        Onset::Soft => ONSET_COST[2],
+        Onset::Glide => ONSET_COST[3],
     }
 }
 
