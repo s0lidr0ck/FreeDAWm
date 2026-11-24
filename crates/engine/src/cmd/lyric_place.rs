@@ -213,7 +213,7 @@ pub fn match_line(line: &[String], heard: &[String], from: usize) -> Option<(usi
 
 /// `place_lines` from Transcribe Lyrics' timed words: each line takes the time of the run of
 /// words it matches on the track (within the range when one is given), in order.
-fn place_transcribed(e: &mut Engine, p: &Value, lines: &[u64], r: Range) -> Result<Value> {
+pub(crate) fn place_transcribed(e: &mut Engine, p: &Value, lines: &[u64], r: Range) -> Result<Value> {
     const C: &str = "lyrics.place_lines";
     let s = e.session();
     let asked = track_param(e, C, p, "track")?;

@@ -447,6 +447,22 @@ pub fn prepare(e: &Engine, cmd: &str, p: &Value) -> Result<MlJob> {
         // The bass guess is only right on a full mix.
         o.bass = s.track(*track).is_some_and(looks_like_full_mix);
     }
+    // Transcribing replaces the words in its range: typed or hand-timed ones only when asked.
+    if matches!(kind, JobKind::Lyrics(_))
+        && !bool_or(p, "replace_typed", false)
+        && let Some(Target::Track { track, start, len, .. }) = parts.first().map(|p| &p.target)
+    {
+        let n = crate::word_time::hand_words_in(s, *track, Range::new(*start, start.saturating_add(*len)));
+        if n > 0 {
+            return Err(bad(
+                cmd,
+                format!(
+                    "{n} typed or hand-timed word{} would be replaced: pass `replace_typed: true` to replace them (Undo brings them back)",
+                    if n == 1 { "" } else { "s" }
+                ),
+            ));
+        }
+    }
     Ok(MlJob { command, kind, parts, rate, device, models_dir, quality, keep, mute_original, lane })
 }
 

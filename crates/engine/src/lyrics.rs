@@ -40,7 +40,7 @@ pub fn place_lyrics(s: &mut Session, track: TrackId, start: Samples, len: Sample
             let (ws, we) = (at(w.start), at(w.end).max(at(w.start)));
             let Some(ci) = pl.clips.iter().position(|c| !c.is_video() && c.range().contains(ws)) else { continue };
             let c = &pl.clips[ci];
-            let word = LyricWord { start: to_clip_time(c, ws), end: to_clip_time(c, we.min(c.end())), text: w.text.clone() };
+            let word = LyricWord::new(to_clip_time(c, ws), to_clip_time(c, we.min(c.end())), w.text.clone());
             match pieces.last_mut() {
                 Some((i, v)) if *i == ci => v.push(word),
                 _ => pieces.push((ci, vec![word])),
@@ -51,7 +51,7 @@ pub fn place_lyrics(s: &mut Session, track: TrackId, start: Samples, len: Sample
             let (a, b) = (words.first().map_or(0, |w| w.start), words.iter().map(|w| w.end).max().unwrap_or(0));
             n_words += words.len();
             n_lines += 1;
-            c.lyrics.push(LyricLine { start: a, end: b, words });
+            c.lyrics.push(LyricLine { start: a, end: b, words, sheet_line: None });
             sanitize_lyrics(&mut c.lyrics);
         }
     }
