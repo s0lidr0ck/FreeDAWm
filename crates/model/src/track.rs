@@ -286,6 +286,9 @@ pub struct Track {
     /// the owner's choice always wins. See [`Track::is_vocal`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vocal: Option<bool>,
+    /// Gild on this track: Dry on/off and the level of what it adds ([`crate::GildTrack`]).
+    #[serde(default, skip_serializing_if = "crate::GildTrack::is_default")]
+    pub gild: crate::GildTrack,
     /// Comping: the take layers (every playlist but the active one, which is the comp) are shown
     /// under the track.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -405,6 +408,7 @@ impl Track {
             pinned: false,
             lyrics: Vec::new(),
             vocal: None,
+            gild: crate::GildTrack::default(),
             layers_open: false,
             record_layer: None,
             midi_fx: Vec::new(),

@@ -338,11 +338,12 @@ pub fn split(s: &mut Session, r: WordRef, at: Option<Samples>, texts: Option<(St
     let cut = to_clip_time(c, at);
     let line = c.lyrics.get_mut(r.line).ok_or("no such line")?;
     let w = line.words.get_mut(r.word).ok_or("no such word")?;
-    let (src_a, end_b) = (w.start, w.end);
+    let (src_a, end_b, id) = (w.start, w.end, w.id);
     w.end = cut;
     w.text = a.trim().to_string();
     w.timing = WordTiming::Confirmed;
-    let second = LyricWord { start: cut, end: end_b, text: b.trim().to_string(), timing: WordTiming::Confirmed };
+    // The second part keeps the word's id for now: a gilding on the word covers both parts.
+    let second = LyricWord { start: cut, end: end_b, text: b.trim().to_string(), timing: WordTiming::Confirmed, id };
     line.words.insert(r.word + 1, second);
     tidy(s, &[r.clip]);
     let first = edited(s, track, r.clip, src_a, a.trim()).ok_or("the word was lost")?;
@@ -415,7 +416,7 @@ pub fn insert(s: &mut Session, track: TrackId, at: Samples, end: Option<Samples>
     }
     let (src, src_end) = (to_clip_time(c, at), to_clip_time(c, end));
     let c = s.find_clip_mut(clip).ok_or("no such clip")?;
-    let w = LyricWord { start: src, end: src_end, text: text.to_string(), timing: WordTiming::Confirmed };
+    let w = LyricWord { start: src, end: src_end, text: text.to_string(), timing: WordTiming::Confirmed, id: 0 };
     let line = c.lyrics.iter().rposition(|l| l.start <= src && src <= l.end).or_else(|| c.lyrics.iter().rposition(|l| l.start <= src));
     match line.and_then(|i| c.lyrics.get_mut(i)) {
         Some(l) => l.words.push(w),
@@ -695,7 +696,7 @@ pub fn put_words(s: &mut Session, track: TrackId, line: Option<u64>, words: &[(S
     for (a, b, text) in words {
         let Some(ci) = pl.clips.iter().position(|c| !c.is_video() && !c.muted && c.range().contains(*a)) else { continue };
         let Some(c) = pl.clips.get(ci) else { continue };
-        let w = LyricWord { start: to_clip_time(c, *a), end: to_clip_time(c, (*b).min(c.end()).max(*a)), text: text.clone(), timing };
+        let w = LyricWord { start: to_clip_time(c, *a), end: to_clip_time(c, (*b).min(c.end()).max(*a)), text: text.clone(), timing, id: 0 };
         match pieces.last_mut() {
             Some((i, v)) if *i == ci => v.push(w),
             _ => pieces.push((ci, vec![w])),

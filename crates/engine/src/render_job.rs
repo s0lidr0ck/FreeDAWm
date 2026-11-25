@@ -88,7 +88,7 @@ impl RenderJob {
         Ok(Some(RenderJob {
             id,
             params: params.clone(),
-            session: e.session_arc(),
+            session: crate::gild::ready(&e.session_arc()),
             todo: todo.into(),
             current: None,
             done: Vec::new(),

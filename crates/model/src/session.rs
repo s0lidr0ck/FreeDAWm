@@ -445,6 +445,10 @@ pub struct Session {
     /// in the background; the engine carries it across undo and redo.
     #[serde(skip)]
     pub vocal: crate::VocalCache,
+    /// Derived Gild renders ([`crate::GildCache`]): never saved, made in the background; the
+    /// engine carries them across undo and redo.
+    #[serde(skip)]
+    pub gild: crate::GildCache,
     /// Stretch renders being made, by the source id each render will have: until a render's
     /// audio is in the pool, the mixer reads its original through the real-time stretcher
     /// ([`crate::LiveStretch`]). Never saved: a save renders what is still here first.
@@ -526,6 +530,7 @@ impl Session {
             assets: crate::AssetPool::default(),
             folder: None,
             vocal: crate::VocalCache::default(),
+            gild: crate::GildCache::default(),
             live_stretch: std::collections::BTreeMap::new(),
             pitch_renders: crate::PitchRenders::default(),
             ara_archives: Vec::new(),
@@ -891,10 +896,17 @@ impl Session {
                 t.active_playlist = 0;
             }
             crate::lyrics::migrate_track_lyrics(t);
+            t.gild.sanitize();
+            let rate = self.sample_rate.as_f64();
             for p in &mut t.playlists {
                 truncate_chars(&mut p.name, MAX_NAME_CHARS);
                 p.clips.retain(|c| c.length > 0);
                 p.clips.iter_mut().for_each(Clip::sanitize);
+                for c in &mut p.clips {
+                    if !c.gild.is_empty() {
+                        crate::gild::sanitize_gildings(&mut c.gild, rate);
+                    }
+                }
                 p.sort();
             }
             // Comping: a segment or record target names a take layer that exists, never the comp.

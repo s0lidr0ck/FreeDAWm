@@ -53,11 +53,19 @@ pub struct LyricWord {
     /// Where its time came from (saved only when not `Heard`).
     #[serde(default, skip_serializing_if = "WordTiming::is_heard")]
     pub timing: WordTiming,
+    /// A name for the word, unique in its clip (0: none yet), given when a gilding is made from
+    /// it ([`crate::Gilding::words`]) so the gilding can follow it. Saved only when set.
+    #[serde(default, skip_serializing_if = "is_zero_id")]
+    pub id: u32,
+}
+
+fn is_zero_id(v: &u32) -> bool {
+    *v == 0
 }
 
 impl LyricWord {
     pub fn new(start: Samples, end: Samples, text: impl Into<String>) -> LyricWord {
-        LyricWord { start, end, text: text.into(), timing: WordTiming::Heard }
+        LyricWord { start, end, text: text.into(), timing: WordTiming::Heard, id: 0 }
     }
 
     /// Typed or hand-timed: a transcription must not replace it without asking.
@@ -140,7 +148,7 @@ pub fn clip_lines(clip: &Clip) -> Vec<LyricLine> {
                 .words
                 .iter()
                 .filter(|w| w.start >= lo && w.start < hi)
-                .map(|w| LyricWord { start: at(w.start), end: at(w.end.min(hi)).max(at(w.start)), text: w.text.clone(), timing: w.timing })
+                .map(|w| LyricWord { start: at(w.start), end: at(w.end.min(hi)).max(at(w.start)), text: w.text.clone(), timing: w.timing, id: w.id })
                 .collect();
             let (a, b) = (words.first()?.start, words.iter().map(|w| w.end).max()?);
             Some(LyricLine { start: a, end: b, words, sheet_line: l.sheet_line })
@@ -192,7 +200,7 @@ pub fn migrate_track_lyrics(track: &mut Track) {
         let Some(c) = pl.clips.iter_mut().find(|c| c.range().contains(line.start)) else { continue };
         let to = |at: Samples| to_clip_time(c, at);
         let words: Vec<LyricWord> =
-            line.words.iter().map(|w| LyricWord { start: to(w.start), end: to(w.end), text: w.text.clone(), timing: w.timing }).collect();
+            line.words.iter().map(|w| LyricWord { start: to(w.start), end: to(w.end), text: w.text.clone(), timing: w.timing, id: w.id }).collect();
         let l = LyricLine { start: to(line.start), end: to(line.end), words, sheet_line: line.sheet_line };
         c.lyrics.push(l);
         sanitize_lyrics(&mut c.lyrics);

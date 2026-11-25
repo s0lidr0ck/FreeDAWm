@@ -59,6 +59,7 @@ pub mod clip_midi;
 pub mod clip_notes;
 pub mod clip_shared;
 pub mod clip_slip;
+pub mod gild;
 pub mod groove;
 mod health;
 pub mod hits_midi;
@@ -343,6 +344,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lyric_words::specs());
         v.extend(lyric_place::specs());
         v.extend(lyric_timing::specs());
+        v.extend(gild::specs());
         v.extend(lyric_chord_cmds::specs());
         v.extend(vocal::specs());
         v.extend(vocal_midi::specs());

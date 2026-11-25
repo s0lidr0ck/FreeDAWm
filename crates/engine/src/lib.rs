@@ -23,6 +23,8 @@ pub mod decode_cache;
 pub mod demo;
 pub mod edit;
 pub mod file_access;
+pub mod gild;
+pub mod gild_presets;
 pub mod inspect;
 pub mod io;
 pub mod juke_kits;
@@ -271,6 +273,10 @@ pub struct Engine {
     dirty_at: Cell<(u64, bool)>,
     /// Gesture key for undo coalescing (see `execute_merged`).
     merge_key: Option<String>,
+    /// Gild: the settings last used (a new gilding starts from them) and the copied ones
+    /// (`gild.copy` / `gild.paste`). Kept out of the document.
+    pub gild_last: soundcraft_model::GildFx,
+    pub gild_copy: Option<crate::gild::GildCopy>,
     /// The key every merged gesture takes while held (see `hold_merge`).
     merge_hold: Option<String>,
     /// A remote's gesture (`engine.execute {gesture}` over the control channel) keeps its undo
@@ -382,6 +388,8 @@ impl Engine {
             dirty: false,
             dirty_at: Cell::new((0, false)),
             merge_key: None,
+            gild_last: soundcraft_model::GildFx::default(),
+            gild_copy: None,
             merge_redo: None,
             merge_hold: None,
             gesture_lease: None,
@@ -541,6 +549,9 @@ impl Engine {
         // Vocal tuning fingerprints and caches are derived, not saved.
         crate::vocal::prune(&mut s);
         crate::vocal::refresh_fingerprints_in(&mut s);
+        // So are Gild's renders; its gildings take their words' times.
+        s.gild = soundcraft_model::GildCache::default();
+        crate::gild::follow(&mut s);
         // One key: the Key ruler's key at bar 1 is the band's.
         crate::song_key::on_load(&mut s);
         self.transport = TransportStatus { position: s.edit.selection.start.max(0), ..TransportStatus::default() };
@@ -804,6 +815,10 @@ impl Engine {
         if self.doc.ara_archives != from.ara_archives {
             Arc::make_mut(&mut self.doc).ara_archives = from.ara_archives.clone();
         }
+        // Gild's renders too (looked up by their inputs' key).
+        if !self.doc.gild.same(&from.gild) {
+            Arc::make_mut(&mut self.doc).gild = from.gild.clone();
+        }
     }
 
     /// Brings every vocal tuning's render fingerprint up to date (`VocalTune::fingerprint`), so
@@ -979,6 +994,14 @@ impl Engine {
                     && self.doc.tracks.iter().any(|t| t.clips().iter().any(|c| c.follow_chords.is_some()))
                 {
                     chord_follow::follow(Arc::make_mut(&mut self.doc));
+                }
+                // Gildings follow the words they were made from, in the same undo step.
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && self.loads == loads
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && crate::gild::needs_follow(&self.doc)
+                {
+                    crate::gild::follow(Arc::make_mut(&mut self.doc));
                 }
                 // Shared MIDI clips take a note edit made in one of them, in the same undo step.
                 if !Arc::ptr_eq(&before, &self.doc) && self.loads == loads && !matches!(id, "edit.undo" | "edit.redo") && midi_shared::any(&self.doc)

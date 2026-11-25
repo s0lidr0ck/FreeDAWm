@@ -113,6 +113,12 @@ fn sized_strip(s: &Session, t: &Track, ch: usize, mb: usize, room: usize) -> Str
     // makes the audio thread allocate.
     if t.kind == TrackKind::Audio {
         st.arabuf = vec![vec![0.0; mb]; ch];
+        // Gild's run list and return buffers, likewise (a gilding added later makes nothing on
+        // the audio thread).
+        st.gild.reserve_exact(crate::MAX_LIVE_GILDINGS);
+        st.gild_feed = vec![vec![0.0; mb]; ch];
+        st.gild_fx = vec![vec![0.0; mb]; ch];
+        st.gild_wet = vec![vec![0.0; mb]; ch];
     }
     let clips = t.clips().iter().filter(|c| c.is_audio() && clip_fx_params(c).is_some()).count();
     if clips > 0 {
@@ -177,6 +183,8 @@ pub struct Prepared {
     /// Plugin instances (hosted and built-in), see [`crate::PreparedInstance`].
     pub instances: Vec<crate::PreparedInstance>,
     pub clip_fx: Vec<PreparedClipFx>,
+    /// Gild's live modules (`crate::gild`).
+    pub gild: Vec<crate::PreparedGild>,
     /// The editors and state readers of the hosted Clip Effects modules in `clip_fx` (stay on
     /// the control thread: take them out before handing the rest over).
     pub clip_handles: Vec<ClipHandle>,
@@ -192,6 +200,7 @@ impl Prepared {
     pub fn is_empty(&self) -> bool {
         self.instances.is_empty()
             && self.clip_fx.is_empty()
+            && self.gild.is_empty()
             && self.clip_handles.is_empty()
             && self.strips.is_empty()
             && self.busses.is_empty()
@@ -221,6 +230,8 @@ struct HandedClip {
 pub struct BuiltinPrep {
     slots: HashMap<(TrackId, SlotKey), (String, usize, u64)>,
     clips: HashMap<(TrackId, u64), HandedClip>,
+    /// Gild's live modules handed over: (channels, delay, reverb) per gilding.
+    gild: HashMap<(TrackId, u64), (usize, bool, bool)>,
     /// Tracks whose strip was handed over, and busses whose buffers were (with the channels).
     tracks: HashSet<TrackId>,
     busses: HashMap<BusId, usize>,
@@ -236,6 +247,7 @@ impl BuiltinPrep {
     pub fn clear(&mut self) {
         self.slots.clear();
         self.clips.clear();
+        self.gild.clear();
         self.tracks.clear();
         self.busses.clear();
         self.room = 0;
@@ -255,6 +267,7 @@ impl BuiltinPrep {
         let mut out = Prepared::default();
         let mut seen = HashSet::new();
         let mut seen_clips = HashSet::new();
+        let mut seen_gild = HashSet::new();
         let room = ((HEADROOM_S * sr) as usize).saturating_mul(2);
         for t in &s.tracks {
             let ch = strip_channels(t, main_ch);
@@ -285,6 +298,22 @@ impl BuiltinPrep {
                     out.instances.push(crate::PreparedInstance { track: t.id, slot, id: ins.plugin.clone(), ch, plugin: n.plugin });
                 }
                 self.slots.insert(key, want);
+            }
+            for (gk, d, v) in crate::gild::live_wants(t) {
+                let key = (t.id, gk);
+                seen_gild.insert(key);
+                let had = self.gild.get(&key).filter(|h| h.0 == ch).copied();
+                let (hd, hv) = had.map_or((false, false), |h| (h.1, h.2));
+                if (d && !hd) || (v && !hv) {
+                    out.gild.push(crate::PreparedGild {
+                        track: t.id,
+                        key: gk,
+                        ch,
+                        delay: if d && !hd { crate::gild::make(crate::gild::DELAY_ID, sr, ch) } else { None },
+                        reverb: if v && !hv { crate::gild::make(crate::gild::REVERB_ID, sr, ch) } else { None },
+                    });
+                }
+                self.gild.insert(key, (ch, d, v));
             }
             for c in t.clips().iter().filter(|c| c.is_audio()) {
                 let Some(params) = clip_fx_params(c) else { continue };
@@ -334,6 +363,7 @@ impl BuiltinPrep {
         }
         self.slots.retain(|k, _| seen.contains(k));
         self.clips.retain(|k, _| seen_clips.contains(k));
+        self.gild.retain(|k, _| seen_gild.contains(k));
         self.tracks.retain(|id| s.track(*id).is_some());
         for b in &s.busses {
             let n = b.format.channels().clamp(1, MAX_CHANNELS);

@@ -13,6 +13,7 @@ mod clip;
 pub mod clip_automation;
 mod control_room;
 pub mod disk;
+pub mod gild;
 mod ids;
 mod live_stretch;
 mod lyrics;
@@ -49,6 +50,10 @@ pub use clip::{
     MidiFxRender, PatternClip, ProcessStep,
 };
 pub use control_room::{ControlRoom, CueMix, MAX_CUES, MAX_MONITOR_SETS, MonitorSet, Talkback};
+pub use gild::{
+    GILD_KINDS, GildAudio, GildCache, GildDouble, GildEcho, GildFx, GildGrit, GildHarmony, GildNote, GildRender, GildShift, GildSpace, GildSwell,
+    GildTrack, GildVerb, GildVoice, Gilding, GritFlavour,
+};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use live_stretch::{LiveStretch, PitchRender, PitchRenders, StretchKind};
 pub use lyrics::{

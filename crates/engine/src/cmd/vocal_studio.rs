@@ -112,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Make Harmony",
             [],
             None,
-            "{source?: track (default: the session's lead), interval?: 3rd | 5th | 6th | octave (default 3rd), direction?: up | down (default up), stay_in_key?: true, follow_chords?: true, range?: [low, high] (MIDI numbers or note names), into?: track (an existing audio track; default a new one), name?: string, formant?: semitones (-12..12, default 0)} — makes a harmony part from the source's own voice: each source audio clip is copied (same audio, same place) onto the destination, a new track named \"Harmony 3rd ↑\" (or `name`) right under the source with its input and output, marked vocal, or the existing `into` track (whatever the copies cover there is replaced), with its own tuning: the source's note edits with each note moved by the harmony interval (diatonic in the key when stay_in_key, the chord's tone when follow_chords and the lead sings one, folded by octaves into range) and the clip's formant shift `formant`, rendered offline like any tuning (formants kept). A source clip played through an ARA plug-in is copied without it (the copy plays its own audio, tuned; `ara_left_out` names the plug-ins). Edit it like any other part. One undo step. Refused while the source is being analysed. Returns {track, name, clips, notes, ara_left_out}",
+            "{source?: track (default: the session's lead), interval?: 3rd | 5th | 6th | octave (default 3rd), direction?: up | down (default up), stay_in_key?: true, follow_chords?: true, range?: [low, high] (MIDI numbers or note names), into?: track (an existing audio track; default a new one), name?: string, formant?: semitones (-12..12, default 0), keep_gild?: false (the copies keep the source's Gild)} — makes a harmony part from the source's own voice: each source audio clip is copied (same audio, same place) onto the destination, a new track named \"Harmony 3rd ↑\" (or `name`) right under the source with its input and output, marked vocal, or the existing `into` track (whatever the copies cover there is replaced), with its own tuning: the source's note edits with each note moved by the harmony interval (diatonic in the key when stay_in_key, the chord's tone when follow_chords and the lead sings one, folded by octaves into range) and the clip's formant shift `formant`, rendered offline like any tuning (formants kept). A source clip played through an ARA plug-in is copied without it (the copy plays its own audio, tuned; `ara_left_out` names the plug-ins). Edit it like any other part. One undo step. Refused while the source is being analysed. Returns {track, name, clips, notes, ara_left_out}",
             always,
             make_harmony
         ),
@@ -606,6 +606,7 @@ fn plan_json(plan: &[HarmonyNote]) -> Vec<Value> {
 fn make_harmony(e: &mut Engine, p: &Value) -> Result<Value> {
     let (source, rule) = harmony_rule(e, HARMONY, p)?;
     let formant = super::vocal::formant_param(HARMONY, p, "formant")?.unwrap_or(0.0);
+    let keep_gild = bool_or(p, "keep_gild", false);
     let into = track_param(e, HARMONY, p, "into")?;
     let name = match p.get("name") {
         None => harmony_name(&rule),
@@ -645,6 +646,10 @@ fn make_harmony(e: &mut Engine, p: &Value) -> Result<Value> {
             ara.push(name.to_string());
         }
         nc.ara = None;
+        // A harmony sings its own notes: the lead's gildings stay on the lead unless asked for.
+        if !keep_gild {
+            nc.gild.clear();
+        }
         let key = super::vocal::key_of(s, c.id);
         let mut tune = c.tune_live().cloned().unwrap_or_else(|| VocalTune {
             analysed: key,

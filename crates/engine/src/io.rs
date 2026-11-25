@@ -1143,6 +1143,8 @@ impl Bounce {
         export: &Export,
     ) -> Result<Bounce> {
         const C: &str = "file.bounce_mix";
+        // Gild's made-ahead parts are in what it prints.
+        let s = crate::gild::ready(&s);
         let normalize = normalize.into();
         let bus = bus.into();
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
@@ -1695,7 +1697,9 @@ impl StemsJob {
         tracks: Option<&[TrackId]>,
         busses: &[BusId],
     ) -> Result<StemsJob> {
-        let s = e.session();
+        // Gild's made-ahead parts, made once for every stem.
+        let ready = crate::gild::ready(&e.session_arc());
+        let s: &Session = &ready;
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
             return Err(EngineError::BadParams("file.bounce_stems".into(), "bounces are limited to 4 hours".into()));
         }
@@ -1980,7 +1984,8 @@ pub fn render_clip_gain(e: &mut Engine, cmd: &str, id: soundcraft_model::ClipId)
 /// into a new source of the session (written to `Audio Files/` when the session is saved, as
 /// Commit's are). Returns the source and its length in frames.
 pub fn freeze_track(e: &mut Engine, t: TrackId, end: Samples, upto: Option<soundcraft_model::ModuleId>) -> Result<(SourceId, Samples)> {
-    let s = e.session_arc();
+    // Gild's made-ahead parts are in what it prints.
+    let s = crate::gild::ready(&e.session_arc());
     let Some(tr) = s.track(t) else { return Err(crate::cmd::bad("track.freeze", "no such track")) };
     check_freeze_length(&s, tr, end)?;
     // A host may have rendered it already, through its live instances (`RenderJob`).
@@ -2077,7 +2082,8 @@ pub fn commit_track_range(e: &mut Engine, t: TrackId, start: Samples, end: Sampl
 }
 
 fn commit_with(e: &mut Engine, t: TrackId, range: Range, part: bool) -> Result<Option<TrackId>> {
-    let s = e.session_arc();
+    // Gild's made-ahead parts are in what it prints.
+    let s = crate::gild::ready(&e.session_arc());
     let Some(tr) = s.track(t) else { return Ok(None) };
     // A host may have rendered it already, through its live instances (`RenderJob`).
     let audio = match e.take_prepared(t, &crate::render_job::RenderKind::Commit { range }) {
