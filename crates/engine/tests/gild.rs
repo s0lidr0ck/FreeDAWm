@@ -233,6 +233,7 @@ fn made_ahead_effects_change_only_their_span() {
         (json!({"shift": {"semitones": 5.0, "layer": false}}), 0.0),
         (json!({"grit": {"drive": 0.8}}), 0.0),
         (json!({"shift": {"semitones": -12.0, "layer": true}}), 0.0),
+        (json!({"harmony": {"voices": [{"steps": 2, "level_db": -6.0}, {"steps": -3, "level_db": -8.0}]}}), 0.0),
     ] {
         let (mut e, _t, c) = session();
         let plain = render(&e, 4.0);
@@ -485,4 +486,22 @@ fn twenty_gildings_cost() {
         );
         assert!(gilded < audio_secs, "renders faster than real time");
     }
+}
+
+#[test]
+fn harmony_follows_the_song_key() {
+    let (mut e, t, c) = session();
+    add(&mut e, json!([word(c, 1)]), json!({"harmony": true}));
+    let key0 = list(&mut e, t)[0]["fx"]["harmony"]["key"].clone();
+    assert!(key0.is_array(), "the key at the word is kept: {key0}");
+    e.execute("gild.render", &json!({})).unwrap();
+    assert_eq!(list(&mut e, t)[0]["render"], "ready");
+    // A key change on the Key ruler before the word: the harmony is made again in it.
+    let mut s = e.session().clone();
+    s.key_signatures.push((0, "Eb minor".into()));
+    let mut e = Engine::new(s);
+    e.execute("gild.track", &json!({"track": t.0, "level_db": 0.0})).unwrap();
+    let g = &list(&mut e, t)[0];
+    assert_ne!(g["fx"]["harmony"]["key"], key0);
+    assert_eq!(g["render"], "making");
 }

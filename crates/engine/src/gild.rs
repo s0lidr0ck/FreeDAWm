@@ -196,6 +196,13 @@ pub fn settle(e: &mut Engine) -> usize {
 /// anything changed.
 pub fn follow(s: &mut Session) -> bool {
     let mut changed = false;
+    // Harmony renders in the key at its word.
+    for (c, id, k) in harmony_keys(s) {
+        if let Some(h) = s.find_clip_mut(c).and_then(|c| c.gild.iter_mut().find(|g| g.id == id)).and_then(|g| g.fx.harmony.as_mut()) {
+            h.key = Some(k);
+            changed = true;
+        }
+    }
     for t in &mut s.tracks {
         for p in &mut t.playlists {
             for c in p.clips.iter_mut().filter(|c| !c.gild.is_empty()) {
@@ -206,12 +213,29 @@ pub fn follow(s: &mut Session) -> bool {
     changed
 }
 
+/// The harmony gildings whose stored key is not the key at their word now.
+fn harmony_keys(s: &Session) -> Vec<(ClipId, u32, [u8; 2])> {
+    let mut out = Vec::new();
+    for c in s.tracks.iter().flat_map(|t| t.playlists.iter()).flat_map(|p| p.clips.iter()) {
+        for g in &c.gild {
+            if let Some(h) = &g.fx.harmony {
+                let (k, sc) = crate::vocal::key_pc_at(s, Gilding::timeline_of(c, g.start));
+                if h.key != Some([k, sc]) {
+                    out.push((c.id, g.id, [k, sc]));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Whether [`follow`] would change anything (read only: the engine calls it after every edit).
 pub fn needs_follow(s: &Session) -> bool {
-    s.tracks.iter().flat_map(|t| t.playlists.iter()).flat_map(|p| p.clips.iter()).filter(|c| !c.gild.is_empty()).any(|c| {
-        let mut probe = c.clone();
-        soundcraft_model::gild::follow_words(&mut probe)
-    })
+    !harmony_keys(s).is_empty()
+        || s.tracks.iter().flat_map(|t| t.playlists.iter()).flat_map(|p| p.clips.iter()).filter(|c| !c.gild.is_empty()).any(|c| {
+            let mut probe = c.clone();
+            soundcraft_model::gild::follow_words(&mut probe)
+        })
 }
 
 // ─── Making a render ──────────────────────────────────────────────────────────────────────────
@@ -419,7 +443,7 @@ pub fn make(s: &Session, clip: &Clip, g: &Gilding, cancel: &AtomicBool) -> Resul
     }
     if let Some(h) = &fx.harmony {
         let at = Gilding::timeline_of(clip, g.start);
-        let (key, sc) = crate::vocal::key_pc_at(s, at);
+        let (key, sc) = h.key.map_or_else(|| crate::vocal::key_pc_at(s, at), |[k, sc]| (k, sc));
         let set = crate::vocal::key_set(key, sc);
         let scale: Vec<i32> = (0..12).filter(|pc| set.contains(*pc as u8)).collect();
         for v in &h.voices {

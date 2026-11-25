@@ -345,11 +345,15 @@ impl Default for GildVoice {
 #[serde(default)]
 pub struct GildHarmony {
     pub voices: Vec<GildVoice>,
+    /// The song's key (tonic pitch class, scale) at the word, as the engine last found it on the
+    /// Key ruler: the voices are rendered in it, and a key change re-renders them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<[u8; 2]>,
 }
 
 impl Default for GildHarmony {
     fn default() -> Self {
-        GildHarmony { voices: vec![GildVoice::default()] }
+        GildHarmony { voices: vec![GildVoice::default()], key: None }
     }
 }
 
@@ -857,6 +861,7 @@ pub fn render_key(clip: &Clip, g: &Gilding, rate: u32) -> Option<u64> {
     }
     if let Some(x) = &fx.harmony {
         h.u64(4);
+        h.u64(x.key.map_or(u64::MAX, |[a, b]| (u64::from(a) << 8) | u64::from(b)));
         for v in &x.voices {
             h.i(i64::from(v.steps));
             h.f(v.level_db);
