@@ -1,4 +1,4 @@
-//! Auto Pitch's engine-level guarantees (the correction quality against the study's numbers is
+//! Plumb's engine-level guarantees (the correction quality against the study's numbers is
 //! measured in `crates/vocal/tests/autopitch_quality.rs`, with the Vocal Editor's tracker).
 
 #![allow(clippy::needless_range_loop, clippy::useless_vec)]

@@ -1,4 +1,4 @@
-//! Auto Pitch's pitch detector: causal YIN (the cumulative-mean-normalised difference computed by
+//! Plumb's pitch detector: causal YIN (the cumulative-mean-normalised difference computed by
 //! FFT) over the last `2 x` the longest period of the voice range, every detection hop, with a
 //! preference for continuity against octave jumps. It sees only input that has arrived; its
 //! estimate belongs to the middle of its window (half a window ago).

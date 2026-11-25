@@ -2206,7 +2206,7 @@ impl MixEngine {
             }
             let rate = s.sample_rate.hz();
             let lfe = lfe_mask(strip_format(t, ch));
-            // Effects that follow the song's key (Auto Pitch): the Key ruler as it is now.
+            // Effects that follow the song's key (Plumb): the Key ruler as it is now.
             let keys = chain.iter().flatten().any(|p| p.plugin.follows_song_key()).then(|| song_keys::song_key_table(s));
             for (slot, ins) in chain.iter_mut().zip(&t.mixer.inserts) {
                 if let Some(slot) = slot.as_mut() {
@@ -3537,7 +3537,7 @@ fn insert_step(
     xf: usize,
 ) -> (LlmRun, bool) {
     let lat = slot.plugin.latency();
-    // A module made to be heard live (Auto Pitch's Live mode) at a small enough delay stays in.
+    // A module made to be heard live (Plumb's Live mode) at a small enough delay stays in.
     let live = lat > 0 && lat <= slot.live_max && slot.plugin.live_monitoring();
     let run = llm_step(slot, bypass || (llm && lat > 0 && !live), xf);
     let delayed = lat > 0 || slot.dry.delay() > 0;

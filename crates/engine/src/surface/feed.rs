@@ -314,6 +314,16 @@ mod tests {
     }
 
     #[test]
+    fn remote_mix_names_the_pitch_corrector_plumb() {
+        let (mut e, a, _) = engine();
+        e.execute("mix.insert", &json!({"track": a, "plugin": "autopitch"})).unwrap();
+        let st = mixer_state(&e);
+        let all: Vec<&Value> = st["strips"].as_array().unwrap().iter().flat_map(|s| s["inserts"].as_array().into_iter().flatten()).collect();
+        let ins = all.iter().find(|i| i["plugin"] == "autopitch").unwrap_or_else(|| panic!("{st}"));
+        assert_eq!((&ins["name"], &ins["hosted"]), (&json!("Plumb"), &json!(false)));
+    }
+
+    #[test]
     fn undo_labels_and_snapshots_are_in_the_feed() {
         let (mut e, a, _) = engine();
         let mut mirror = mixer_state(&e);

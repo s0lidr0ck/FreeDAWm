@@ -1,5 +1,5 @@
 //! The real-time pitch-correction study's synthetic fixtures and measures, run through the real
-//! Auto Pitch module (`soundcraft_dsp`'s `autopitch`) block by block: generated sung vowels with
+//! Plumb module (`soundcraft_dsp`'s `autopitch`) block by block: generated sung vowels with
 //! known answers (no recordings), note-level scores by the Vocal Editor's own tracker, period
 //! shape and formants as `tuning_quality.rs` measures them, stereo coherence.
 #![allow(dead_code, clippy::type_complexity, clippy::needless_range_loop)]
@@ -294,7 +294,7 @@ pub struct Est {
     pub target: Option<f64>,
 }
 
-/// Runs `x` through Auto Pitch with `set` (and the key: own C major unless `set` says) in blocks
+/// Runs `x` through Plumb with `set` (and the key: own C major unless `set` says) in blocks
 /// of `block`; returns the output aligned to the input (latency removed), the decisions (one per
 /// 128-sample block when `block` is 128), the latency and the CPU seconds.
 pub fn run_with(x: &[Vec<f32>], set: &[(&str, f32)], block: usize, sr: f32) -> (Vec<Vec<f32>>, Vec<Est>, usize, f64) {

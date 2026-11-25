@@ -217,7 +217,7 @@ pub const HIDDEN_STOCK: &[Category] =
 /// FreeDAWm's own designs with an editor of their own, which no FireStation engine covers. One in
 /// a [`HIDDEN_STOCK`] category (Rez, Lull, Vault) is shown all the same. (Vault's editor is the
 /// drawer with its response picker, for now, and Mend's the drawer with its model's status.) Keel,
-/// the bass amp, is offered beside Amp, and Heft, the bass enhancer; Auto Pitch, the pitch corrector,
+/// the bass amp, is offered beside Amp, and Heft, the bass enhancer; Plumb, the pitch corrector,
 /// beside Mend.
 pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend", "keel", "heft", "autopitch"];
 
@@ -414,7 +414,7 @@ pub trait Plugin: Send {
     fn latency(&self) -> usize {
         0
     }
-    /// Whether the plugin is made to be heard live at its current latency (Auto Pitch's Live
+    /// Whether the plugin is made to be heard live at its current latency (Plumb's Live
     /// mode): Low Latency Monitoring then keeps it in on an armed or monitored track, where it
     /// takes out every other insert that reports a delay, as long as that delay is at most
     /// [`LIVE_MONITORING_MAX_MS`]. False by default. Must not allocate.

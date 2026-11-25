@@ -1,4 +1,4 @@
-//! Live mode: the feasibility study's low-delay "splice" engine, for singing through Auto Pitch.
+//! Live mode: the feasibility study's low-delay "splice" engine, for singing through Plumb.
 //! The voice is read back at the corrected speed (a touch faster to go up, slower to go down);
 //! when the read head has caught up with the input (going up) or fallen a period behind (going
 //! down), it jumps by exactly one sung period, matched by correlation, with a short crossfade.

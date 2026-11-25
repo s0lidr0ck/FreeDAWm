@@ -161,7 +161,7 @@ impl FsPreset {
 }
 
 /// The bundled factory presets of a plugin as `(name, json)` pairs: a FireStation engine's, or
-/// Rez's, Lull's, Sprawl's, Keel's, Heft's, Auto Pitch's, the Subtractive, Wavetable or FM Synth's own (built-ins with presets in the same form). Empty for any other id.
+/// Rez's, Lull's, Sprawl's, Keel's, Heft's, Plumb's, the Subtractive, Wavetable or FM Synth's own (built-ins with presets in the same form). Empty for any other id.
 pub fn factory_presets(plugin_id: &str) -> &'static [(&'static str, &'static str)] {
     match engine(plugin_id) {
         Some(e) => e.presets,
