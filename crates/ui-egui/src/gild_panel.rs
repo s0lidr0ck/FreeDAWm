@@ -288,7 +288,7 @@ pub fn panel(app: &mut SoundApp, ui: &mut Ui, rect: Rect, track: TrackId) {
 fn track_row(app: &mut SoundApp, ui: &mut Ui, track: TrackId) {
     let t = Tokens::current();
     let Some(g) = app.engine.session().track(track).map(|t| t.gild) else { return };
-    ui.horizontal(|ui| {
+    ui.vertical(|ui| {
         let dry = ui
             .add(
                 egui::Button::new(RichText::new(if g.dry { "Dry on" } else { "Dry off" }).color(if g.dry { t.text } else { t.mode_on_text }))
@@ -301,7 +301,7 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, track: TrackId) {
             report(app, r);
         }
         let mut lv = g.level_db;
-        let s = ui.add(egui::Slider::new(&mut lv, -24.0..=12.0).suffix(" dB").fixed_decimals(1).text("Gild level"));
+        let s = ui.add(egui::Slider::new(&mut lv, -24.0..=12.0).suffix(" dB").fixed_decimals(1).text("Level"));
         hook(ui.ctx(), "level", s.rect);
         if s.changed() {
             let p = json!({"track": track.0, "level_db": lv});

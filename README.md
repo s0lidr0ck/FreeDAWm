@@ -122,6 +122,10 @@ that.
   drawn thick by loudness. It shows the original and tuned pitch curves, breaths, and scoops (Keep,
   Smooth or Shorten), with the chords and key above. Split and join notes, preview a note soloed,
   or open the editor in its own window.
+- **Gild.** Effects on chosen words: pick words in the lyric and give just them a delay or reverb
+  throw, a reverse swell rising into the word, a double, a shift, grit or harmony. Non-destructive,
+  follows your edits, mixed back into the vocal track with a Dry on/off switch
+  ([docs/gild.md](docs/gild.md)).
 - **See who's off at a glance.** The *waveform + pitch* track view draws each note over the
   waveform. Every vocal channel in the Mix window has a pitch box with the current note and its
   offset, and *Centre note* / *Flatten drift* buttons.

@@ -618,7 +618,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     if show_words {
         let v = &drawn.view;
         let map = crate::word_lane::TimeMap { left: v.rect.left(), t0: v.t0, spp: (v.t1 - v.t0).max(1) as f64 / f64::from(v.rect.width().max(1.0)) };
-        let label = Rect::from_min_max(pos2(body.left(), words_r.top()), pos2(l, words_r.bottom()));
+        let label = Rect::from_min_max(pos2(body.left(), words_r_full.top()), pos2(l, words_r_full.bottom()));
         ui.painter().rect_filled(label, 0.0, t.panel_bg2);
         ui.painter().text(pos2(label.left() + 6.0, label.center().y), Align2::LEFT_CENTER, "Words", regular(11.0), t.text_dim);
         crate::word_lane::lane(app, ui, "vocal", track, words_r_full, map, true, true);

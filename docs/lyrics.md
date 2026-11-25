@@ -135,6 +135,9 @@ inside a run, it cannot know which note starts the next word, and a word can be 
 second. On real singing, especially long gospel runs, the accuracy is not known until checked by
 ear: check every line, and tap the lines it gets wrong.
 
+**Putting effects on words.** Once words are timed, Gild puts a delay or reverb throw, a swell, a
+double, a shift, grit or harmony on just the words you choose: see [Gild](gild.md).
+
 ## Import and export
 
 The **Sheet** menu at the top of the Lyrics tab:
