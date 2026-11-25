@@ -36,6 +36,8 @@ pub mod fm_panel;
 pub mod fonts;
 pub mod fs_presets;
 pub mod fullscreen;
+pub mod gild_panel;
+pub mod gild_worker;
 pub mod hardware_credit;
 pub mod hearing_ui;
 pub mod hit_picker;
@@ -1059,6 +1061,8 @@ pub struct SoundApp {
     pub point_readout: Option<String>,
     /// Vocal tuning's background analyses and renders (polled once per frame).
     pub vocal_worker: vocal_worker::VocalWorker,
+    /// Gild's made-ahead renders in the background.
+    pub gild_worker: gild_worker::GildWorker,
     /// Stretch renders made in the background while the stretch is heard live.
     pub stretch_worker: stretch_worker::StretchWorker,
     /// The session path as of the last frame, and whether the recent list changed since the host
@@ -1368,6 +1372,7 @@ impl SoundApp {
             recent_checked: None,
             engine,
             vocal_worker: vocal_worker::VocalWorker::new(),
+            gild_worker: gild_worker::GildWorker::new(),
             stretch_worker: stretch_worker::StretchWorker::default(),
             player,
             midi_hub: Some(soundcraft_playback::midi_in::MidiHub::new()),
@@ -3426,6 +3431,13 @@ impl SoundApp {
             ctx.request_repaint();
         }
         if self.vocal_worker.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        // Gild's made-ahead effects, likewise.
+        if self.gild_worker.poll(&mut self.engine) {
+            ctx.request_repaint();
+        }
+        if self.gild_worker.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         // Stretches heard live get their offline render in the background.

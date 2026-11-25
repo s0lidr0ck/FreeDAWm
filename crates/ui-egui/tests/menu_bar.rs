@@ -18,7 +18,8 @@ use std::collections::HashMap;
 /// (2026-11-18, before only in the MIDI Editor's Lanes menu), and Track › Import Wavetable…
 /// (2026-11-18, `docs/wavetable-import.md`), and Track › New Band (2026-11-19, `docs/band-checklist.md`), and File ›
 /// Connect to a Studio… (2026-11-23, `docs/remote-mixing.md`), and Window › Full Screen (2026-11-23, `window.fullscreen`), and AI ›
-/// Time Words to Vocal and Tap Words to Time… (2026-11-24, `docs/lyrics.md`).
+/// Time Words to Vocal and Tap Words to Time… (2026-11-24, `docs/lyrics.md`), and AI › Gild Words (2026-11-25,
+/// `docs/gild.md`).
 const ROWS: [(&str, usize); 12] = [
     ("File", 15),
     ("Edit", 29),
@@ -27,7 +28,7 @@ const ROWS: [(&str, usize); 12] = [
     ("Clip", 30),
     ("Event", 31),
     ("Process", 18),
-    ("AI", 14),
+    ("AI", 15),
     ("Transport", 28),
     ("Options", 14),
     ("Setup", 12),
@@ -237,6 +238,7 @@ fn the_ai_menu_holds_every_ml_tool() {
             "Transcribe Lyrics…",
             "Time Words to Vocal",
             "Tap Words to Time…",
+            "Gild Words",
             "Find in Transcript…",
             "MIDI Cleanup…",
             "Generate MIDI from Text…",

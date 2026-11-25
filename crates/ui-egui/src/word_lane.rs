@@ -180,6 +180,8 @@ pub fn lane(app: &mut SoundApp, ui: &mut Ui, name: &str, track: TrackId, rect: R
     let drag = app.words.drag.filter(|d| d.track == track);
     let font = regular(if rect.height() >= 20.0 { 12.0 } else { 10.0 });
     let mut drawn: Vec<Drawn> = Vec::new();
+    let gilded = crate::gild_panel::track_gildings(&s, track);
+    let mut gilded_rects: Vec<(Rect, String)> = Vec::new();
     for w in &words {
         // A word being dragged shows where it will go.
         let (a, b) = match drag {
@@ -212,6 +214,13 @@ pub fn lane(app: &mut SoundApp, ui: &mut Ui, name: &str, track: TrackId, rect: R
         let tp = painter.with_clip_rect(r.intersect(rect));
         let text = if w.timing == WordTiming::Guess { format!("{}?", w.text) } else { w.text.clone() };
         tp.text(pos2(r.left() + 3.0, r.center().y), Align2::LEFT_CENTER, &text, font.clone(), ink);
+        // A gilded word: a gold bar along its foot (Gild's marks are on the Gild strip and in the
+        // hover text).
+        if let Some(g) = gilded.iter().find(|g| g.words.contains(&w.r)) {
+            let foot = Rect::from_min_max(pos2(r.left(), r.bottom() - 3.0), r.right_bottom());
+            painter.rect_filled(foot, CornerRadius::same(1), crate::gild_panel::GOLD);
+            gilded_rects.push((r, g.fx.kinds().iter().map(|k| crate::gild_panel::kind_label(k)).collect::<Vec<_>>().join(", ")));
+        }
         drawn.push(Drawn { r: w.r, rect: r, text: w.text.clone(), timing: w.timing, lit: is_lit, selected: is_sel });
     }
     // The playhead.
@@ -244,6 +253,15 @@ pub fn lane(app: &mut SoundApp, ui: &mut Ui, name: &str, track: TrackId, rect: R
             painter.galley(g.min, galley, t.text_dim);
         }
     }
+    // Hovering a gilded word says what is on it.
+    if let Some(p) = ui.ctx().pointer_hover_pos()
+        && rect.contains(p)
+        && let Some((_, kinds)) = gilded_rects.iter().find(|(r, _)| r.contains(p))
+    {
+        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), ui.id().with(("gilded", name)), egui::PopupAnchor::Pointer)
+            .show(|ui| ui.label(format!("Gild: {kinds}")));
+    }
+    store(ui.ctx(), &format!("{name}-gilded"), gilded_rects.iter().map(|g| g.0).collect::<Vec<_>>());
     store(ui.ctx(), &format!("{name}-drawn"), drawn.clone());
     store(ui.ctx(), &format!("{name}-rect"), rect);
     store(ui.ctx(), &format!("{name}-guessed"), caption_text.clone());

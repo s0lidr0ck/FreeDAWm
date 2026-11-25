@@ -186,6 +186,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.ml.clean", "Clean Vocal…", "AI > Clean Vocal…", None),
     ("ui.vocal_editor", "Tune Vocal…", "AI > Tune Vocal…", None),
     ("ui.vocal_panel", "Tuning Panel", "", None),
+    ("ui.gild", "Gild Words…", "", None),
+    ("ui.gild_clear", "Remove All Gild on Track…", "", None),
     ("ui.vocal_studio", "Vocal Studio View", "", None),
     ("ui.vocal_harmony", "Make Harmony…", "", None),
     ("ui.vocal_preset_save", "Save Tuning Macro…", "", None),
@@ -969,6 +971,11 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
             app.engine.session().lyric_sheet.kinds().iter().any(|k| matches!(k, soundcraft_model::LineKind::Lyric(_))),
             "Type the lyrics first (Window › Transport & Session › Lyrics)",
         ),
+        // Remove All Gild on Track… needs something gilded.
+        "ui.gild_clear" => when(
+            app.engine.session().tracks.iter().any(|t| t.playlists.iter().any(|p| p.clips.iter().any(|c| !c.gild.is_empty()))),
+            "No words are gilded",
+        ),
         // Make Harmony… harmonises a vocal track.
         "ui.vocal_harmony" => {
             when(app.engine.session().tracks.iter().any(soundcraft_model::Track::is_vocal), "No vocal track: mark one with Track › Vocal Track")
@@ -1561,7 +1568,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference" | "ui.band.import_chords" | "ui.lyrics_tap")
+        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference" | "ui.band.import_chords" | "ui.lyrics_tap" | "ui.gild" | "ui.gild_clear")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
@@ -1655,6 +1662,24 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         return Some(Ok(json!({"value": false})));
     }
     // The Vocal Editor's Tuning panel, and saving its values as a user macro preset.
+    // Gild: its panel in the Vocal Editor (`{value?}`), and Remove All Gild on Track… (asks first).
+    if id == "ui.gild" || id == "ui.gild_clear" {
+        let on = p.get("value").and_then(Value::as_bool).unwrap_or(true);
+        if on {
+            if let Some(t) = app.engine.session().edit.selected_tracks.first().copied()
+                && app.engine.session().track(t).is_some_and(|x| x.kind == soundcraft_model::TrackKind::Audio)
+            {
+                app.vocal.track = Some(t);
+            }
+            app.ui.show_vocal_editor = true;
+            app.vocal.show_panel = true;
+            app.vocal.gild_tab = true;
+            app.vocal.gild_confirm = id == "ui.gild_clear";
+        } else {
+            app.vocal.gild_tab = false;
+        }
+        return Some(Ok(json!({"value": on})));
+    }
     if id == "ui.vocal_panel" {
         app.vocal.show_panel = p.get("value").and_then(Value::as_bool).unwrap_or(!app.vocal.show_panel);
         return Some(Ok(json!({"value": app.vocal.show_panel})));

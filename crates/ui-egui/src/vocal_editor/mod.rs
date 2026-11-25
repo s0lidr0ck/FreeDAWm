@@ -114,6 +114,12 @@ pub struct VocalEditorState {
     pub studio: studio::StudioState,
     /// Following the playhead while linked ([`follow_playhead`]).
     pub follow: crate::timeline_link::EditorFollow,
+    /// The right panel shows Gild rather than Tuning.
+    pub gild_tab: bool,
+    /// Remove All Gild on This Track… is asking.
+    pub gild_confirm: bool,
+    /// A gilding's handle being dragged on the Gild strip.
+    pub gild_drag: Option<crate::gild_panel::HandleDrag>,
 }
 
 impl Default for VocalEditorState {
@@ -145,6 +151,9 @@ impl Default for VocalEditorState {
             last_edit_scroll: None,
             studio: studio::StudioState::default(),
             follow: crate::timeline_link::EditorFollow::default(),
+            gild_tab: false,
+            gild_confirm: false,
+            gild_drag: None,
         }
     }
 }
@@ -580,6 +589,11 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     // The word lane under the ruler, when the track has timed words (or they are being tapped).
     let show_words = app.engine.session().track(track).is_some_and(soundcraft_model::track_has_lyrics) || app.words.tap.on;
     let words_r = Rect::from_min_max(pos2(l, ruler.bottom()), pos2(rr, ruler.bottom() + if show_words { crate::word_lane::LANE_H } else { 0.0 }));
+    // The Gild strip under the words, when the track has gildings.
+    let show_gild = show_words && !crate::gild_panel::track_gildings(app.engine.session(), track).is_empty();
+    let gild_r = Rect::from_min_max(pos2(l, words_r.bottom()), pos2(rr, words_r.bottom() + if show_gild { crate::gild_panel::STRIP_H } else { 0.0 }));
+    let words_r_full = words_r;
+    let words_r = words_r.union(gild_r);
     let lane_top = (body.bottom() - LEVEL_H).max(words_r.bottom() + 40.0);
     let hbar = Rect::from_min_max(pos2(l, lane_top - 3.0 - bw), pos2(rr, lane_top - 3.0));
     let roll_r = Rect::from_min_max(pos2(l, words_r.bottom()), pos2(rr, hbar.top() - 1.0));
@@ -607,14 +621,25 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
         let label = Rect::from_min_max(pos2(body.left(), words_r.top()), pos2(l, words_r.bottom()));
         ui.painter().rect_filled(label, 0.0, t.panel_bg2);
         ui.painter().text(pos2(label.left() + 6.0, label.center().y), Align2::LEFT_CENTER, "Words", regular(11.0), t.text_dim);
-        crate::word_lane::lane(app, ui, "vocal", track, words_r, map, true, true);
-        store(ui.ctx(), "words", words_r);
+        crate::word_lane::lane(app, ui, "vocal", track, words_r_full, map, true, true);
+        store(ui.ctx(), "words", words_r_full);
+        if show_gild {
+            let label = Rect::from_min_max(pos2(body.left(), gild_r.top()), pos2(l, gild_r.bottom()));
+            ui.painter().rect_filled(label, 0.0, t.panel_bg2);
+            ui.painter().text(pos2(label.left() + 6.0, label.center().y), Align2::LEFT_CENTER, "Gild", regular(10.5), crate::gild_panel::GOLD);
+            crate::gild_panel::strip(app, ui, track, gild_r, map);
+        }
     }
     keyboard(app, ui, full, track, &drawn);
     level_lane::level_lane(app, ui, lane, &drawn.view);
     scroll_bars(app, ui, &editable, (hbar, vbar), &drawn.view);
     if panel_w > 0.0 {
-        panel::panel(app, ui, Rect::from_min_max(pos2(right, body.top()), body.max));
+        let pr = Rect::from_min_max(pos2(right, body.top()), body.max);
+        if app.vocal.gild_tab {
+            crate::gild_panel::panel(app, ui, pr, track);
+        } else {
+            panel::panel(app, ui, pr);
+        }
     }
     if app.vocal.studio.on {
         harmony::dialog(app, ui, roll_r);
@@ -847,7 +872,25 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     if win.on_hover_text(if sep { "Put the Vocal Editor back in the Edit window" } else { "Open the Vocal Editor in its own window" }).clicked() {
         let _ = app.run("window.vocal_separate", json!({}));
     }
-    let on = app.vocal.show_panel;
+    // Gild: its panel in place of Tuning's; it says how many gildings and whether Dry is off.
+    let gilded = crate::gild_panel::track_gildings(&s, track).len();
+    let dry_off = s.track(track).is_some_and(|t| !t.gild.dry);
+    let gon = app.vocal.show_panel && app.vocal.gild_tab;
+    let glabel = match (gilded, dry_off) {
+        (0, false) => "Gild".to_string(),
+        (n, false) => format!("Gild {n}"),
+        (n, true) => format!("Gild {n} \u{b7} Dry off"),
+    };
+    let gild_b = tb.add(egui::Button::new(egui::RichText::new(glabel).color(if gon { t.mode_on_text } else { t.text })).fill(if gon {
+        t.mode_on
+    } else {
+        t.button
+    }));
+    store(ui.ctx(), "gild", gild_b.rect);
+    if gild_b.on_hover_text("Effects on chosen words: show or hide the Gild panel").clicked() {
+        let _ = app.run("ui.gild", json!({"value": !gon}));
+    }
+    let on = app.vocal.show_panel && !app.vocal.gild_tab;
     let tuning = tb.add(egui::Button::new(egui::RichText::new("Tuning").color(if on { t.mode_on_text } else { t.text })).fill(if on {
         t.mode_on
     } else {
@@ -855,7 +898,11 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     }));
     store(ui.ctx(), "tuning", tuning.rect);
     if tuning.on_hover_text("Show or hide the Tuning panel").clicked() {
-        let _ = app.run("ui.vocal_panel", json!({}));
+        if app.vocal.gild_tab && app.vocal.show_panel {
+            app.vocal.gild_tab = false;
+        } else {
+            let _ = app.run("ui.vocal_panel", json!({}));
+        }
     }
     zoom_control(app, &mut tb);
     let on = linked(app);

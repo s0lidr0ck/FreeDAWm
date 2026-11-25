@@ -248,7 +248,7 @@ fn status_bar(app: &mut SoundApp, ui: &mut Ui) {
             soundcraft_model::BitDepthSetting::Float32 => "32-bit float",
         },
         s.tracks.len(),
-        match app.vocal_worker.busy() {
+        match app.vocal_worker.busy().or_else(|| app.gild_worker.busy()) {
             Some(v) if app.ui.status.is_empty() => v,
             Some(v) => format!("{} · {v}", app.ui.status),
             None => app.ui.status.clone(),
