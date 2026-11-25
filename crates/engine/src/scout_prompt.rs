@@ -421,6 +421,16 @@ mod tests {
     }
 
     #[test]
+    fn plumb_is_named_and_says_it_is_pitch_correction() {
+        // The name says nothing by itself: its entry keeps the stable id and the purpose line.
+        let text = starting_prompt();
+        let at = text.find("### Plumb (`autopitch`").unwrap_or_else(|| panic!("no Plumb entry"));
+        let entry = text[at..].lines().take(2).collect::<Vec<_>>().join("\n");
+        assert!(entry.contains("Real-time pitch correction"), "{entry}");
+        assert!(!text.contains("Auto Pitch"));
+    }
+
+    #[test]
     fn the_prompt_stays_compact() {
         let text = starting_prompt();
         if let Some(out) = std::env::var_os("SCOUT_PROMPT_OUT") {

@@ -1,4 +1,4 @@
-//! The song's key for audio effects that follow it (Auto Pitch): the Key ruler with its key
+//! The song's key for audio effects that follow it (Plumb): the Key ruler with its key
 //! changes by timeline position, worked out off the audio thread and handed to each insert that
 //! asks ([`soundcraft_dsp::Plugin::follows_song_key`]) when the mix syncs the session, as the
 //! chord lane is handed to the MIDI Scale effect ([`crate::midi_fx::chord_table`]). The plugin
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn the_mixer_lines_auto_pitch_up_with_the_other_tracks_and_its_bypass_too() {
         // The same noise (let through untouched, only delayed) on two tracks panned apart, one
-        // through Auto Pitch: with delay compensation the two sides are identical, bypassed or
+        // through Plumb: with delay compensation the two sides are identical, bypassed or
         // not. A voice at Mix 0 % likewise.
         for (x, set) in [(noise(48_000), vec![]), (tone(1.0, 5660.0), vec![("style", 1.0), ("mix", 0.0)])] {
             let mut s = Session::default();
@@ -145,6 +145,19 @@ mod tests {
         let b = &back.track(t).unwrap().mixer.inserts[0];
         assert_eq!(a.params, b.params);
         assert_eq!(b.plugin, "autopitch");
+    }
+
+    #[test]
+    fn a_module_saved_while_plumb_was_called_auto_pitch_still_plays() {
+        // As a test build wrote it: the id, never the name. It loads, is Plumb, and corrects.
+        let saved = r#"{"id":1,"plugin":"autopitch","params":{"style":1.0,"key":1.0},"bypass":false,"active":true,"preset":"Hard"}"#;
+        let ins: Insert = serde_json::from_str(saved).unwrap();
+        assert_eq!(soundcraft_dsp::plugin_info(&ins.plugin).map(|i| i.name), Some("Plumb"));
+        let mut s = Session::default();
+        track(&mut s, 900, &tone(1.0, 5660.0), 0.0, &[ins]);
+        let out = render_range(&s, Range::new(0, 48_000), 512);
+        let got = pitch(&out[0], 0.4, 0.9);
+        assert!((got - 5700.0).abs() < 3.0, "40 c flat pulled onto A: {got}");
     }
 
     #[test]

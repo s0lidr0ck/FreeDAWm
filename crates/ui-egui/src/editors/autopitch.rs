@@ -1,4 +1,4 @@
-//! Auto Pitch's editor: FreeDAWm's own design, built on [`crate::editor_kit`] in the Engine
+//! Plumb's editor: FreeDAWm's own design, built on [`crate::editor_kit`] in the Engine
 //! family's look.
 //!
 //! - The header: the title, the preset strip (Gentle, Medium, Hard), the editor's Undo and A/B, and
@@ -47,7 +47,7 @@ const NOTE_W: f32 = 168.0;
 /// The editor's size.
 pub const SIZE: Vec2 = vec2(760.0, HEIGHT);
 
-/// Auto Pitch's accent: a clear teal.
+/// Plumb's accent: a clear teal.
 pub const ACCENT: u32 = 0xFF3E_C8B4;
 pub const PALETTE: VstPalette = VstPalette::engine_look(argb(ACCENT));
 
@@ -220,7 +220,7 @@ fn plain() -> PillLook {
 
 fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, header: Rect) {
     let pal = &PALETTE;
-    let title_w = paint_title(ui.painter(), header, "Auto Pitch", "Pitch Correction", pal);
+    let title_w = paint_title(ui.painter(), header, "Plumb", "Pitch Correction", pal);
     let h = pill_height(PillStyle::Small);
     let at = |right: f32, w: f32| Rect::from_min_size(pos2(right - w, header.center().y - h * 0.5), vec2(w, h));
     let bypass = at(header.right(), 58.0);
@@ -246,7 +246,7 @@ fn header_ui(st: &mut Editor, app: &mut SoundApp, ui: &mut Ui, host: &Host, head
             app.ui.status = e;
         }
     }
-    let _ = resp.on_hover_text("Take Auto Pitch out of the signal (the voice still comes out delayed alike, so nothing moves in time).");
+    let _ = resp.on_hover_text("Take Plumb out of the signal (the voice still comes out delayed alike, so nothing moves in time).");
     let free = Rect::from_min_max(pos2(header.left() + title_w + 16.0, header.top()), pos2(undo.left() - 16.0, header.bottom()));
     let name_w = (free.width() - 60.0).clamp(100.0, 200.0);
     let strip = Rect::from_center_size(free.center(), vec2(name_w + 60.0, h + 2.0));

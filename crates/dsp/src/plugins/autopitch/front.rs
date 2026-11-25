@@ -1,4 +1,4 @@
-//! What every Auto Pitch engine shares: the input history (each channel and their mono sum), the
+//! What every Plumb engine shares: the input history (each channel and their mono sum), the
 //! detector and corrector run on the mono sum every detection hop, and the log of their decisions
 //! by input time. An engine (Studio's phase vocoder; a low-delay one later) reads the input and
 //! the log and writes the output; all channels move by the same amount, so a stereo image holds.

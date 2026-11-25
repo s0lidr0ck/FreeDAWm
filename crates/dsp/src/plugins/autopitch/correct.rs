@@ -1,4 +1,4 @@
-//! Auto Pitch's corrector: from each pitch the detector reports, the note to aim at (the nearest
+//! Plumb's corrector: from each pitch the detector reports, the note to aim at (the nearest
 //! enabled note of the key, changed only when the voice has clearly moved: Note hold) and how far
 //! to move the voice towards it now (Retune speed, Humanize, Keep vibrato). Unsure, unvoiced or
 //! breathy moments let the voice through: the correction decays to nothing in 15 ms.

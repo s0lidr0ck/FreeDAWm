@@ -1,6 +1,6 @@
-//! Auto Pitch's factory presets: FreeDAWm's own starting points, by how firmly they correct.
+//! Plumb's factory presets: FreeDAWm's own starting points, by how firmly they correct.
 //!
-//! Each preset lists only what it changes from Auto Pitch's defaults (Gentle is the defaults);
+//! Each preset lists only what it changes from Plumb's defaults (Gentle is the defaults);
 //! the JSON a preset menu recalls (`{"name", "group", "desc", "values"}`, as the other built-ins'
 //! presets) carries every parameter. The editor keeps the key, the scale, the note switches, the
 //! mode and the voice range out of presets, so recalling one never changes the key or the mode.

@@ -1,8 +1,9 @@
-# Auto Pitch
+# Plumb
 
-Auto Pitch is FreeDAWm's real-time pitch corrector: an insert effect that pulls a voice onto the
+Plumb is FreeDAWm's real-time pitch correction: an insert effect that pulls a voice onto the
 notes of a key as it plays. Put it on a recorded vocal track like any other effect (Mix window,
-an insert slot, Auto Pitch - Pitch Correction).
+an insert slot, Plumb - Pitch Correction; typing "pitch correction" in the search finds it). Test builds called it Auto Pitch; sessions and
+presets saved then open unchanged, as Plumb.
 
 It works on **one voice at a time** (a lead, a single backing part). On two voices at once it
 hears no clear pitch and lets the sound through untouched; put it on each voice's own track. A
@@ -10,7 +11,7 @@ stereo vocal is corrected as one voice, both sides moved alike, so its stereo im
 
 ## Studio and Live
 
-Auto Pitch has two modes, switched at the top right of its editor:
+Plumb has two modes, switched at the top right of its editor:
 
 - **Studio** (the default) uses the Vocal Editor's own pitch shifter, which keeps the voice's
   character and each sung period's shape. It delays the voice by about 43 ms; the mixer lines
@@ -25,7 +26,7 @@ Auto Pitch has two modes, switched at the top right of its editor:
   and Formant does not apply.
 
 With **Low Latency Monitoring** on, every effect that delays the sound is taken out of an
-armed or monitored track, but Auto Pitch in Live mode stays in: you hear yourself corrected, later
+armed or monitored track, but Plumb in Live mode stays in: you hear yourself corrected, later
 by its few milliseconds plus your audio interface's own round trip (typically 5 to 10 ms at a
 128-sample buffer). In Studio mode it is taken out there like any other delaying effect. (The rule:
 a module made to be heard live stays in while its delay is at most 15 ms.)
@@ -46,7 +47,7 @@ a module made to be heard live stays in while its delay is at most 15 ms.)
 | **Mix** | The corrected voice against the original (both delayed alike; 0 % is the original exactly). |
 | **Studio / Live** | The mode (above). Switching it changes the delay; the mixer re-aligns the other tracks with a short crossfade. |
 | **Voice range** | Live mode only: Low, Middle or High (see above). |
-| **Bypass** | Takes Auto Pitch out (the voice still comes out delayed alike, so nothing moves in time). |
+| **Bypass** | Takes Plumb out (the voice still comes out delayed alike, so nothing moves in time). |
 
 Presets: **Gentle** (the defaults: Natural), **Medium** (firmer, vibrato kept) and **Hard**
 (Hard tune). Presets never change the key, the scale, the notes, the mode or the voice range.
@@ -66,5 +67,5 @@ off it was sung, in cents.
   slower setting, or tune that passage in the Vocal Editor, which sees the whole take.
 - **Harmonies or chords** (one voice only), and target notes played on a keyboard (not yet).
 
-For transparent, note-by-note tuning use the Vocal Editor; Auto Pitch is for speed and for the
+For transparent, note-by-note tuning use the Vocal Editor; Plumb is for speed and for the
 hard-tune sound.

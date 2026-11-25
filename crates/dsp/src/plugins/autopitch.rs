@@ -1,5 +1,7 @@
-//! Auto Pitch: real-time pitch correction for a recorded voice (one voice at a time). FreeDAWm's
-//! own design, from the feasibility study's prototype.
+//! Plumb (real-time pitch correction, id `autopitch`): pulls a recorded or live voice onto the
+//! key, one voice at a time. FreeDAWm's own design, from the feasibility study's prototype. It was
+//! called Plumb in test builds; the id stays `autopitch`, so sessions and user presets saved
+//! with it load unchanged.
 //!
 //! - **Detect** ([`detect`]): the pitch of the mono sum, every detection hop (about 2.7 ms), from
 //!   input that has arrived only.
@@ -173,8 +175,8 @@ const P_RANGE: usize = 22;
 
 pub static AUTOPITCH_INFO: PluginInfo = PluginInfo {
     id: "autopitch",
-    name: "Auto Pitch",
-    short_name: "AutoPtch",
+    name: "Plumb",
+    short_name: "Plumb",
     category: Category::Other,
     params: &AUTOPITCH_PARAMS,
     is_instrument: false,

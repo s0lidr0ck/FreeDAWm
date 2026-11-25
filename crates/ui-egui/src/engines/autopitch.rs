@@ -1,4 +1,4 @@
-//! Auto Pitch's UI hooks (a built-in pitch corrector, not a FireStation engine: it has an editor
+//! Plumb's UI hooks (a built-in pitch corrector, not a FireStation engine: it has an editor
 //! of its own).
 
 use crate::engine_ui::EngineUi;

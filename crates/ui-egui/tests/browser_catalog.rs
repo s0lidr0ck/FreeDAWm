@@ -168,6 +168,21 @@ fn filter_search_and_chips() {
 }
 
 #[test]
+fn plumb_is_carded_as_plumb_and_found_by_what_it_does() {
+    let cat = build_catalog(soundcraft_dsp::plugins(), &[], &[], &[], Vec::new());
+    let card = cat.items.iter().find(|i| i.id == "autopitch").expect("Plumb is offered");
+    assert_eq!(card.name, "Plumb");
+    let none = BTreeMap::new();
+    let found =
+        |text: &str| filter(&cat.items, &Query { text: text.into(), ..query() }, &none, &[], &[]).iter().any(|&i| cat.items[i].id == "autopitch");
+    // By its name, and by its subtitle (Pitch Correction); the former name is not a search word.
+    for text in ["plumb", "PLUMB", "pitch correction", "correction"] {
+        assert!(found(text), "{text}");
+    }
+    assert!(!found("zzzz"));
+}
+
+#[test]
 fn failures_counted() {
     let clap = ClapDescriptor {
         id: "clap:com.acme.verb".into(),

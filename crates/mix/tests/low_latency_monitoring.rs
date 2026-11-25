@@ -433,7 +433,7 @@ fn a_track_feeding_a_live_group_through_an_off_path_aux_stays_aligned() {
     assert_eq!(hits(&out), vec![400, 1100], "T waits for the returns as Q does");
 }
 
-/// Auto Pitch on `track` in `mode` (0 Studio, 1 Live; Live at the Middle voice range).
+/// Plumb on `track` in `mode` (0 Studio, 1 Live; Live at the Middle voice range).
 fn auto_pitch(s: &mut Session, track: TrackId, mode: f32) -> soundcraft_model::ModuleId {
     let mut ins = soundcraft_model::Insert::new("autopitch");
     ins.params.insert("mode".into(), mode);
@@ -472,7 +472,7 @@ fn llm_keeps_auto_pitch_in_live_mode_and_the_singer_hears_its_few_ms() {
 
 #[test]
 fn switching_auto_pitch_to_live_realigns_the_mix() {
-    // Two playback tracks with the same click, one through Auto Pitch, panned apart: they line up
+    // Two playback tracks with the same click, one through Plumb, panned apart: they line up
     // in Studio mode (2048 samples compensated) and again after a switch to Live mid-play (288).
     let click = |at: usize| {
         let mut v = vec![0.0f32; 48_000];

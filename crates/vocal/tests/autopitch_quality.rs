@@ -1,4 +1,4 @@
-//! Auto Pitch (the real-time insert) against the feasibility study's numbers for the same engines
+//! Plumb (the real-time insert) against the feasibility study's numbers for the same engines
 //! (Studio mode: its "PV-2048" column; Live mode: its "Splice" column, with the study's 70 Hz
 //! floor, the Low voice range): the study's synthetic fixtures run through the real module block
 //! by block, scored with the Vocal Editor's tracker. Settings are named "Gentle", "Medium", "Hard"

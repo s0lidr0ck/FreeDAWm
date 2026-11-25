@@ -1,4 +1,4 @@
-//! Renders audio through the real Auto Pitch module (`soundcraft_dsp`'s `autopitch`), block by
+//! Renders audio through the real Plumb module (`soundcraft_dsp`'s `autopitch`), block by
 //! block as the mixer runs it, for listening, and measures its CPU load.
 //!
 //! `cargo run --release -p soundcraft-vocal --example autopitch_render -- <out_dir>`: the study's

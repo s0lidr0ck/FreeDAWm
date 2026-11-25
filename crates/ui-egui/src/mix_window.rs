@@ -1431,8 +1431,9 @@ pub fn picker_groups(instruments: bool) -> Vec<(String, Vec<&'static soundcraft_
 }
 
 /// How well a plugin name answers a search (`query` lower-case), lower first: the exact name,
-/// then a name that starts with it, then a word that does, then anywhere in it; on a tie the
-/// FireStation engines before SoundCraft's own. `None`: no match.
+/// then a name that starts with it, then a word that does, then anywhere in it, then anywhere in
+/// its subtitle ("pitch correction" finds Plumb); on a tie the FireStation engines before
+/// SoundCraft's own. `None`: no match.
 pub fn search_rank(query: &str, p: &soundcraft_dsp::PluginInfo) -> Option<(u8, u8)> {
     let name = p.name.to_lowercase();
     let tier = if name == query {
@@ -1443,6 +1444,8 @@ pub fn search_rank(query: &str, p: &soundcraft_dsp::PluginInfo) -> Option<(u8, u
         2
     } else if name.contains(query) {
         3
+    } else if crate::plugin_titles::subtitle(p.id).to_lowercase().contains(query) {
+        4
     } else {
         return None;
     };
@@ -2688,7 +2691,11 @@ mod tests {
         let ids = |q: &str| super::ranked_built_ins(q, false).iter().map(|p| p.id).collect::<Vec<_>>();
         // "comp": FireStation's Comp; the hidden stock Compressor is not offered.
         assert_eq!(ids("comp"), ["fs_comp"]);
-        assert!(ids("compressor").is_empty() && ids("reverb").iter().all(|i| i.starts_with("fs_")));
+        // "compressor" and "reverb" find the modules whose subtitle says so, never the hidden
+        // stock Compressor, Room Reverb or Plate Reverb.
+        assert_eq!(ids("compressor"), ["fs_comp"], "by its subtitle, Multi-Style Compressor");
+        let reverbs = ids("reverb");
+        assert!(!reverbs.is_empty() && reverbs.iter().all(|i| i.starts_with("fs_") || *i == "vault"), "{reverbs:?}");
         // A prefix tie: the FireStation engines first, then by name.
         let c = ids("c");
         assert_eq!(c[..3], ["fs_chamber", "fs_cleanq", "fs_comp"]);
@@ -2699,6 +2706,11 @@ mod tests {
         let strip = soundcraft_dsp::plugin_info("channel_strip").unwrap();
         assert_eq!(super::search_rank("strip", strip), Some((2, 1)));
         assert_eq!(super::search_rank("trip", strip), Some((3, 1)));
+        // A subtitle answers after every name: Plumb is found by what it does.
+        assert_eq!(ids("plumb"), ["autopitch"]);
+        assert_eq!(ids("pitch correction"), ["autopitch"]);
+        let plumb = soundcraft_dsp::plugin_info("autopitch").unwrap();
+        assert_eq!(super::search_rank("correction", plumb), Some((4, 0)));
     }
 
     #[test]

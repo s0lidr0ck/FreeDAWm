@@ -211,7 +211,7 @@ fn test_signal() -> [Vec<f32>; 2] {
     out
 }
 
-/// A sung-like tone for Auto Pitch: F#4 30 cents sharp with a light vibrato, two seconds, stereo.
+/// A sung-like tone for Plumb: F#4 30 cents sharp with a light vibrato, two seconds, stereo.
 fn sung_tone() -> [Vec<f32>; 2] {
     let n = (SR * 2.0) as usize;
     let mut ph = 0.0f64;
@@ -240,7 +240,7 @@ fn feed(plugin: &str, params: &Map<String, Value>, module: ModuleId, state: Opti
     if let Some(state) = state {
         p.load_state(state);
     }
-    // Auto Pitch hears a voice (a sung tone 30 cents sharp of F#4), not the drum loop.
+    // Plumb hears a voice (a sung tone 30 cents sharp of F#4), not the drum loop.
     let input = if plugin == "autopitch" { sung_tone() } else { test_signal() };
     let mut m = ModuleMeter { module, ..ModuleMeter::default() };
     // CopyQ has to hear a few seconds before it trusts what it measured.
