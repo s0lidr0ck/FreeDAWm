@@ -885,7 +885,7 @@ mod tests {
 
     fn clip_with_words() -> Clip {
         let mut c = Clip::audio(ClipId(1), "v", SourceId(1), 1000, 5000, 100_000);
-        let mut w = |s, e, t: &str| LyricWord::new(s, e, t);
+        let w = |s, e, t: &str| LyricWord::new(s, e, t);
         c.lyrics = vec![LyricLine { start: 2000, end: 9000, words: vec![w(2000, 4000, "Amen"), w(5000, 9000, "Lord")], sheet_line: None }];
         c
     }
