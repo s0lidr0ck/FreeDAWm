@@ -219,8 +219,8 @@ mod tests {
         assert_eq!(day_word(now, (2025, 12, 31, 9, 0, 0)), "Dec 31, 2025");
         let mut t = TakeFiles::single("Idea 2026-11-22 21-41-00", Some("x.wav".into()), None, Some(75.0));
         assert_eq!(when_line(&t, now), "Yesterday · 1:15 · voice");
-        t.layers.push(crate::files::LayerFiles { n: 2, wav: Some("x (layer 2).wav".into()), mid: None, seconds: Some(75.0) });
-        t.layers.push(crate::files::LayerFiles { n: 3, wav: None, mid: Some("x (layer 3).mid".into()), seconds: None });
+        t.layers.push(crate::files::LayerFiles { n: 2, wav: Some("x (layer 2).wav".into()), mid: None, keys: None, seconds: Some(75.0) });
+        t.layers.push(crate::files::LayerFiles { n: 3, wav: None, mid: Some("x (layer 3).mid".into()), keys: None, seconds: None });
         assert_eq!(when_line(&t, now), "Yesterday · 3 layers · 1:15", "an idea with layers is one row");
     }
 

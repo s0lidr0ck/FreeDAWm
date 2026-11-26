@@ -29,6 +29,10 @@ soundcraft-playback.workspace = true
 soundcraft-net.workspace = true
 # Reading an idea's MIDI layers back (their length) for layering.
 soundcraft-midi.workspace = true
+# The keyboard's sound: the built-in synths and their factory presets, and the offline render of
+# what the keys played.
+soundcraft-dsp.workspace = true
+soundcraft-mix.workspace = true
 # The computer's time zone offset, so takes are named in local time (already in the tree through
 # soundcraft-model; its one isolated unsafe module makes the OS call).
 soundcraft-sysmem.workspace = true

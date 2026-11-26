@@ -132,6 +132,37 @@ the time sound takes to go out of the speakers and back in (as FreeDAWm places i
 MIDI played over the loop is placed by the output's latency as a take's is (it is heard late by
 that much). A note held across the loop's end is cut there.
 
+### The keyboard's sound
+
+With a MIDI keyboard plugged in, the "Recording from" card has a **Keyboard sound** line (a piano,
+Tine Piano, to start with); it, and **Change…** under KEYBOARD SOUND in the settings, open the
+keyboard sound screen:
+
+- **Play the keyboard through a sound** (on). Off: the keyboard is silent, as before.
+- **Sound**: every factory preset of FreeDAWm's built-in synths, listed by kind in plain words
+  (Piano & Keys, Organ, Bells & Mallets, Bass, Pad, Lead, Pluck, Strings & Brass, Drums &
+  Percussion, Textures & Effects…), with **‹ Previous** and **Next ›**, and which synth it is on.
+- **Volume**, and **Octave** (up to 3 up or down; the MIDI file keeps the notes as heard).
+- **This sound's knobs**: the preset's named macros (Open, Wobble, Grit, Space…), when it has them.
+- **Also save what I heard as a WAV** (on), and how soon a key is heard.
+- **More settings**: every parameter of the synth by name, with its value.
+
+The keys play live through the speakers or headphones, as FreeDAWm's own instruments do. A key is
+heard after the output's latency, about the buffer's length: 128 samples at 48 kHz is under 3 ms
+of buffer, and the whole delay is usually 5–15 ms. **Buffer** (settings, KEYBOARD SOUND) sets it;
+smaller answers sooner but a slow computer may crackle.
+
+An idea or layer played on keys keeps:
+- its `.mid` (the notes as heard),
+- the sound in its `.fdidea` (instrument, preset, every value, volume), so it plays back the same
+  in the Recorder and **Open in FreeDAWm** gives its track that instrument with those settings,
+- and, unless turned off, `<idea> (keys).wav` (or `<idea> (layer 2) (keys).wav`): what the keys
+  sounded like, rendered by FreeDAWm's own engine, the idea's (or loop's) length from its start, so
+  it plays in any program. The microphone's WAV never has the instrument in it (unless the
+  microphone heard the speakers). Open in FreeDAWm passes the MIDI file, not this WAV too.
+
+Each layer keeps its own sound: lay down a bass, then chords with another sound.
+
 ### The click (metronome)
 
 Off unless turned on: the Recorder stays "press Record and play". In the settings, **CLICK**:
@@ -288,8 +319,9 @@ overwrites another file.
 - One input (a channel or a stereo pair) at a time; no input monitoring (the input is never
   heard through this PC's output).
 - MIDI files are at 120 bpm, or at the click's tempo when it is on (the studio's own tempo map
-  applies to takes sent there). **Open in FreeDAWm** takes an idea's tempo from its MIDI file
-  (FreeDAWm sets the session's tempo map from it); an idea with no MIDI file opens at FreeDAWm's
-  own tempo, so its audio is not yet on FreeDAWm's grid.
-- No built-in instrument yet: a keyboard is recorded to a MIDI file and is not heard in the
-  Recorder.
+  applies to takes sent there). **Open in FreeDAWm** takes an idea's tempo from its MIDI file, or,
+  for an idea with no MIDI file, from its `.fdidea` (when FreeDAWm's session is still empty).
+- The keyboard sounds are the built-in synths' factory presets (Steeple, Burley, Cicada); the
+  sampler, Pantry and Juke are not offered. The panel shows the preset's named knobs and, under
+  More settings, every parameter as a plain slider; the DAW's own instrument editors are not here.
+  There is no reverb.

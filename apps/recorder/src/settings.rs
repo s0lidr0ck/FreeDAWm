@@ -54,9 +54,23 @@ pub struct Prefs {
     pub click_volume_db: f64,
     /// With the click on, a new idea is made a whole number of bars long.
     pub click_round_bars: bool,
+    /// The keyboard plays through a sound (off: silent, only the MIDI file is kept).
+    pub keys_on: bool,
+    /// That sound (`None`: the piano a new Recorder starts with).
+    pub keys: Option<crate::keys::KeySound>,
+    /// Also keep what the keys sounded like as `<idea> (keys).wav`.
+    pub keys_wav: bool,
 }
 
 impl Prefs {
+    /// The keyboard's sound as set (`None`: off).
+    pub fn key_sound(&self) -> Option<crate::keys::KeySound> {
+        if !self.keys_on {
+            return None;
+        }
+        self.keys.clone().or_else(crate::keys::KeySound::default_piano)
+    }
+
     /// The click as set (`None`: off).
     pub fn click(&self) -> Option<crate::rig::Click> {
         self.click_on.then(|| crate::rig::Click {
@@ -100,6 +114,9 @@ impl Default for Prefs {
             click_beats: 4,
             click_volume_db: -6.0,
             click_round_bars: true,
+            keys_on: true,
+            keys: None,
+            keys_wav: true,
         }
     }
 }

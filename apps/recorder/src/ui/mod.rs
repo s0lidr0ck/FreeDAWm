@@ -54,6 +54,8 @@ pub enum Screen {
     Settings,
     /// 4: record with a studio.
     Studio,
+    /// The keyboard's sound: its preset, volume, octave, knobs.
+    Keys,
 }
 
 /// The take screen 3 shows.
@@ -153,6 +155,10 @@ pub struct RecorderApp {
     taps: Vec<f64>,
     /// The tempo box while it is being typed in.
     click_typing: Option<String>,
+    /// The keyboard sounds offered (read once, when first shown).
+    key_choices: Vec<crate::keys::Choice>,
+    /// The keyboard sound's screen shows every parameter.
+    pub keys_more: bool,
 }
 
 /// FreeDAWm's program beside `exe` (the Recorder's own), when it is there.
@@ -167,8 +173,17 @@ pub fn daw_beside(exe: &Path) -> Option<PathBuf> {
 ///
 /// Every layer goes, in order (each WAV, then its MIDI file): each lands on a track of its own,
 /// named after its file (`Chorus idea (layer 2)`), all at the start, so they line up.
+/// A layer played on keys goes as its MIDI file (FreeDAWm gives its track the instrument and
+/// settings it was heard through, from the idea's `.fdidea`), not as its `(keys)` render too.
 pub fn daw_args(take: &TakeFiles) -> Vec<OsString> {
-    take.all_layers().into_iter().flat_map(|l| l.wav.into_iter().chain(l.mid)).map(|p| p.into_os_string()).collect()
+    take.all_layers()
+        .into_iter()
+        .flat_map(|l| {
+            let keys = l.keys.filter(|_| l.mid.is_none());
+            l.wav.into_iter().chain(l.mid).chain(keys)
+        })
+        .map(|p| p.into_os_string())
+        .collect()
 }
 
 /// A layer as the window names it.
@@ -219,7 +234,11 @@ impl RecorderApp {
         RecorderApp::new(None, prefs, None)
     }
 
-    fn new(rig: Option<Rig>, prefs: Prefs, paths: Option<Paths>) -> RecorderApp {
+    fn new(rig: Option<Rig>, mut prefs: Prefs, paths: Option<Paths>) -> RecorderApp {
+        // The keyboard's sound a new Recorder starts with, made once.
+        if prefs.keys.is_none() {
+            prefs.keys = crate::keys::KeySound::default_piano();
+        }
         let link = Link::new(paths.as_ref().map(|p| p.network.clone()), paths.as_ref().map(|p| p.outbox.clone()));
         RecorderApp {
             rig,
@@ -253,6 +272,8 @@ impl RecorderApp {
             line_up_note: None,
             taps: Vec::new(),
             click_typing: None,
+            key_choices: Vec::new(),
+            keys_more: false,
         }
     }
 
@@ -415,6 +436,7 @@ impl RecorderApp {
         rig.measured = self.prefs.layer_measured.as_ref().filter(|m| m.key == key).map(|m| (m.frames, m.feed));
         // (No change while a take records.)
         rig.set_click(self.prefs.click());
+        rig.set_keys(self.prefs.key_sound());
     }
 
     /// **Line up**: plays a click out of the output and listens for it on the input (a cable, or
@@ -546,13 +568,33 @@ impl RecorderApp {
         // Recorded to the click: the idea knows its tempo, and is a whole number of bars long
         // (so it loops in time) unless that is turned off.
         let mut looped_as = None;
-        if let Some((c, rate)) = self.rig.as_ref().and_then(|r| r.click().map(|c| (c, r.rate()))) {
-            if self.prefs.click_round_bars
-                && let Some(w) = &s.wav
-            {
-                looped_as = layers::round_to_bars(w, c.bar_frames(rate)).ok();
+        let rate = self.rig.as_ref().map_or(48_000, Rig::rate);
+        let click = self.rig.as_ref().and_then(Rig::click);
+        let mut side = Sidecar { tempo: click, ..Sidecar::default() };
+        if let Some(c) = click
+            && self.prefs.click_round_bars
+            && let Some(w) = &s.wav
+        {
+            looped_as = layers::round_to_bars(w, c.bar_frames(rate)).ok();
+        }
+        // Played on keys through a sound: the sound is kept with it, and (unless turned off)
+        // what it sounded like, as its own WAV the idea's length.
+        if let (Some(k), Some(mid)) = (&s.keys, &s.mid) {
+            side.keys.insert(1, k.clone());
+            if self.prefs.keys_wav {
+                let secs = s.wav.as_deref().and_then(files::wav_seconds).or_else(|| layers::midi_seconds(mid).map(|m| m + 1.0)).unwrap_or(s.seconds);
+                let mut frames = (secs * f64::from(rate)).round().max(1.0);
+                if let (Some(c), None) = (click.filter(|_| self.prefs.click_round_bars), &s.wav) {
+                    let bar = c.bar_frames(rate);
+                    frames = (frames / bar).ceil().max(1.0) * bar;
+                }
+                let to = mid.with_file_name(format!("{}.wav", crate::keys::keys_stem(&stem)));
+                if let Err(e) = crate::keys::render_wav(k, mid, rate, frames as usize, &to) {
+                    log::warn!("recorder: {}: {e}", to.display());
+                }
             }
-            let side = Sidecar { tempo: Some(c), ..Sidecar::default() };
+        }
+        if side != Sidecar::default() {
             let at = path.with_file_name(format!("{stem}.{}", layers::SIDECAR_EXT));
             if let Err(e) = side.save(&at) {
                 log::warn!("recorder: {}: {e}", at.display());
@@ -580,6 +622,47 @@ impl RecorderApp {
         self.screen = Screen::Idea;
     }
 
+    /// The keyboard sounds offered, grouped by kind (read the first time).
+    pub fn key_choices(&mut self) -> &[crate::keys::Choice] {
+        if self.key_choices.is_empty() {
+            self.key_choices = crate::keys::choices();
+        }
+        &self.key_choices
+    }
+
+    /// The keyboard plays through `choice`'s preset from now on (its knobs as the preset has
+    /// them; the volume and octave kept).
+    pub fn pick_key_sound(&mut self, choice: &crate::keys::Choice) {
+        let Some(mut k) = crate::keys::KeySound::from_preset(choice.plugin, &choice.preset) else { return };
+        if let Some(old) = &self.prefs.keys {
+            (k.volume_db, k.octave) = (old.volume_db, old.octave);
+        }
+        self.prefs.keys = Some(k);
+        self.prefs.keys_on = true;
+    }
+
+    /// The preset before (`-1`) or after (`1`) the one playing, in the list's order.
+    pub fn step_key_sound(&mut self, by: i32) {
+        let current = self.prefs.key_sound().and_then(|k| k.choice());
+        let list = self.key_choices().to_vec();
+        if list.is_empty() {
+            return;
+        }
+        let at = current.and_then(|c| list.iter().position(|x| *x == c)).map_or(0, |i| i as i64);
+        let n = list.len() as i64;
+        let next = (at + i64::from(by)).rem_euclid(n) as usize;
+        if let Some(c) = list.get(next) {
+            self.pick_key_sound(c);
+        }
+    }
+
+    /// Changes the keyboard's sound (a knob, the volume, the octave).
+    pub fn edit_key_sound(&mut self, f: impl FnOnce(&mut crate::keys::KeySound)) {
+        let Some(mut k) = self.prefs.key_sound() else { return };
+        f(&mut k);
+        self.prefs.keys = Some(k);
+    }
+
     /// **Tap**: the click's tempo from the last few taps (`now`: egui's clock, seconds). A tap
     /// more than 2 seconds after the last starts again.
     pub fn tap(&mut self, now: f64) {
@@ -605,12 +688,18 @@ impl RecorderApp {
     /// the idea with them.
     fn on_layer_saved(&mut self, raw: &layers::LayerRaw, s: Saved) {
         self.layer_hint = false;
-        let res = layers::finish(raw);
+        let res = layers::finish(&layers::LayerRaw { keys_wav: self.prefs.keys_wav, ..raw.clone() });
         let side_path = raw.folder.join(format!("{}.{}", raw.idea, layers::SIDECAR_EXT));
         let mut side = Sidecar::load(&side_path);
         side.pending = None;
         if !res.made.is_empty() {
             side.looped = true;
+        }
+        // Each layer played on keys keeps the sound it was played with.
+        if let Some(k) = &raw.keys {
+            for n in &res.keyed {
+                side.keys.insert(*n, k.clone());
+            }
         }
         if let Err(e) = side.save(&side_path) {
             log::warn!("recorder: {}: {e}", side_path.display());
@@ -973,7 +1062,7 @@ impl RecorderApp {
                 }
             }
             Screen::Settings => self.read_devices(),
-            Screen::Main | Screen::Idea => {}
+            Screen::Main | Screen::Idea | Screen::Keys => {}
         }
         if screen == Screen::Main {
             self.message = self.message.take().filter(|(_, bad)| *bad);
@@ -1065,7 +1154,7 @@ impl RecorderApp {
         if self.counting.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.counting = None;
         } else if !self.recording()
-            && matches!(self.screen, Screen::Studio | Screen::Settings | Screen::Idea)
+            && matches!(self.screen, Screen::Studio | Screen::Settings | Screen::Idea | Screen::Keys)
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
         {
             self.go(Screen::Main);

@@ -57,6 +57,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let bytes = crate::io::read_file(&path)?;
             let tracks = crate::io::import_midi_bytes(e, &bytes, at, bool_or(p, "tempo_map", true))?;
             name_after_file(e, &tracks, &bytes, &path);
+            // A FreeDAWm Recorder idea's layer played on keys: the instrument it was heard through.
+            crate::idea::apply_to_midi(e, &tracks, std::path::Path::new(&path));
             Ok(json!({"tracks": tracks}))
         }),
         cmd!(
@@ -327,6 +329,8 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
     let target = import_audio_target(e, p)?;
     let mut out = Vec::new();
     for path in &paths {
+        // A FreeDAWm Recorder idea recorded to its click, into an empty session: its tempo.
+        crate::idea::apply_tempo(e, std::path::Path::new(path));
         out.push(crate::io::import_audio_file(e, path, target, at)?);
     }
     Ok(json!({"imported": out}))

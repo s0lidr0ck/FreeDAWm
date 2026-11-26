@@ -101,11 +101,14 @@ pub struct Sidecar {
     pub pending: Option<Pending>,
     /// The tempo and beats a bar it was recorded to, when the click was on.
     pub tempo: Option<crate::rig::Click>,
+    /// By layer number: the keyboard sound a layer played on keys was heard through.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<u32, crate::keys::KeySound>,
 }
 
 impl Default for Sidecar {
     fn default() -> Self {
-        Sidecar { version: 1, looped: false, layers: BTreeMap::new(), pending: None, tempo: None }
+        Sidecar { version: 1, looped: false, layers: BTreeMap::new(), pending: None, tempo: None, keys: BTreeMap::new() }
     }
 }
 
@@ -197,16 +200,36 @@ pub fn mix(take: &TakeFiles, side: &Sidecar, rate: u32) -> Result<Mix, String> {
     let mut out = vec![vec![0.0f32; frames]; 2];
     for l in take.all_layers() {
         let m = side.mix(l.n);
-        let Some(wav) = l.wav.as_deref().filter(|_| !m.muted && m.level > 0.0) else { continue };
-        let ch = read_at(wav, rate)?;
-        for (c, o) in out.iter_mut().enumerate() {
-            let Some(src) = ch.get(c).or_else(|| ch.first()) else { continue };
-            for (o, x) in o.iter_mut().zip(src) {
-                *o += x * m.level.clamp(0.0, 2.0);
-            }
+        if m.muted || m.level <= 0.0 {
+            continue;
+        }
+        // Its sound, and the keys as heard: their WAV, else its notes played through the
+        // sound it was played with.
+        let mut sources = Vec::new();
+        if let Some(w) = l.wav.as_deref() {
+            sources.push(read_at(w, rate)?);
+        }
+        if let Some(k) = l.keys.as_deref() {
+            sources.push(read_at(k, rate)?);
+        } else if let (Some(mid), Some(sound)) = (l.mid.as_deref(), side.keys.get(&l.n)) {
+            let bytes = std::fs::read(mid).map_err(|e| format!("{}: {e}", mid.display()))?;
+            sources.push(crate::keys::render(sound, &bytes, rate, frames)?);
+        }
+        for ch in sources {
+            mix_into(&mut out, &ch, m.level);
         }
     }
     Ok(Mix { channels: out, rate, frames })
+}
+
+/// Adds `ch` (a mono one to both sides) into `out` at `level`.
+fn mix_into(out: &mut [Vec<f32>], ch: &[Vec<f32>], level: f32) {
+    for (c, o) in out.iter_mut().enumerate() {
+        let Some(src) = ch.get(c).or_else(|| ch.first()) else { continue };
+        for (o, x) in o.iter_mut().zip(src) {
+            *o += x * level.clamp(0.0, 2.0);
+        }
+    }
 }
 
 /// A layer take as it stopped: what [`finish`] cuts into layers.
@@ -230,6 +253,11 @@ pub struct LayerRaw {
     pub midi_latency: i64,
     /// The click it was recorded with (its MIDI is written at that tempo).
     pub click: Option<crate::rig::Click>,
+    /// The keyboard's sound it was played with, and how many semitones up it sounded.
+    pub keys: Option<crate::keys::KeySound>,
+    pub transpose: i32,
+    /// Also write what was heard from the keys as `<layer> (keys).wav`.
+    pub keys_wav: bool,
 }
 
 /// What a layer take became.
@@ -240,6 +268,8 @@ pub struct LayerResult {
     /// Times round with nothing played (not kept).
     pub empty: usize,
     pub problem: Option<String>,
+    /// The layers made that were played on keys through a sound (their sidecar entry).
+    pub keyed: Vec<u32>,
 }
 
 /// `frames` frames of `ch` from frame `k0` on (silence outside it).
@@ -292,8 +322,11 @@ pub fn finish(raw: &LayerRaw) -> LayerResult {
         let loud = sound.as_ref().is_some_and(|s| s.iter().flatten().any(|x| x.is_finite() && x.abs() >= SILENT));
         let events = midi.get(&p).cloned().unwrap_or_default();
         let take = MidiTake { start: 0, end: n, looped: None, punch: None, latency: 0 };
-        let notes =
-            if events.iter().any(|e| e.msg[0] & 0xF0 == 0x90 && e.msg[2] > 0) { midi_file(raw.rate, &take, &events, raw.click) } else { None };
+        let notes = if events.iter().any(|e| e.msg[0] & 0xF0 == 0x90 && e.msg[2] > 0) {
+            midi_file(raw.rate, &take, &events, raw.click, raw.transpose)
+        } else {
+            None
+        };
         if !loud && notes.is_none() {
             res.empty += 1;
             continue;
@@ -308,6 +341,20 @@ pub fn finish(raw: &LayerRaw) -> LayerResult {
             }
         }
         if let Some((bytes, _)) = notes {
+            if let Some(k) = &raw.keys {
+                res.keyed.push(next);
+                // What the keys sounded like, as its own WAV (never in the microphone's).
+                if raw.keys_wav {
+                    let heard = crate::keys::render(k, &bytes, raw.rate, frames).and_then(|channels| {
+                        let buf = soundcraft_audio_io::AudioBuffer { sample_rate: raw.rate, channels };
+                        soundcraft_audio_io::encode(&buf, &soundcraft_audio_io::EncodeOptions::default()).map_err(|e| e.to_string())
+                    });
+                    match heard {
+                        Ok(b) => writes.push((raw.folder.join(format!("{}.wav", crate::keys::keys_stem(&stem))), b)),
+                        Err(e) => log::warn!("recorder: the keys of {stem} could not be rendered: {e}"),
+                    }
+                }
+            }
             writes.push((raw.folder.join(format!("{stem}.mid")), bytes));
         }
         res.made.push(next);
@@ -399,6 +446,9 @@ pub fn recover(dir: &Path, skip: Option<&str>) -> Vec<(String, LayerResult)> {
             events: Vec::new(),
             midi_latency: 0,
             click: side.tempo,
+            keys: None,
+            transpose: 0,
+            keys_wav: false,
         };
         let res = finish(&raw);
         if res.problem.is_none() {

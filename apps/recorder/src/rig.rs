@@ -16,6 +16,7 @@
 //! when any MIDI came, `<stem>.mid` (120 bpm, notes at the real time they were played), made by
 //! the DAW's own MIDI recording and MIDI file export.
 
+use crate::keys::KeySound;
 use crate::layers::LayerRaw;
 use serde_json::json;
 use soundcraft_engine::Engine;
@@ -90,6 +91,8 @@ pub struct Saved {
     pub cause: Option<Cause>,
     /// A layer take: what [`crate::layers::finish`] cuts into layers (its files are not final yet).
     pub layer: Option<LayerRaw>,
+    /// The keyboard's sound it was played with (when it has MIDI).
+    pub keys: Option<KeySound>,
 }
 
 /// Why a take stopped early or lost part of itself.
@@ -140,6 +143,8 @@ pub struct Rig {
     pub nudge: i64,
     /// The click (see [`Rig::set_click`]).
     click: Option<Click>,
+    /// The keyboard's sound (see [`Rig::set_keys`]).
+    keys: Option<KeySound>,
 }
 
 /// The click (metronome): its tempo, beats a bar and volume.
@@ -185,6 +190,11 @@ fn apply_click(e: &mut Engine, click: Option<Click>) {
 /// The session the rig runs: one audio track on `choice`'s input and one MIDI track on all
 /// MIDI inputs, both armed, at `rate`. Returns it and the two tracks.
 fn session_for(rate: u32, choice: InputChoice) -> (Engine, TrackId, TrackId) {
+    session_with(rate, choice, None)
+}
+
+/// [`session_for`], the MIDI track an instrument track playing `keys` when there is a sound.
+fn session_with(rate: u32, choice: InputChoice, keys: Option<&KeySound>) -> (Engine, TrackId, TrackId) {
     let mut e = Engine::default();
     if let Ok(r) = SampleRate::new(rate) {
         e.session_mut().sample_rate = r;
@@ -195,7 +205,13 @@ fn session_for(rate: u32, choice: InputChoice) -> (Engine, TrackId, TrackId) {
     let id = |v: Result<serde_json::Value, soundcraft_engine::EngineError>| v.ok().and_then(|v| v["tracks"][0].as_u64()).map(TrackId);
     let format = if choice.stereo { "stereo" } else { "mono" };
     let audio = id(e.execute("track.new", &json!({"kind": "audio", "name": "Audio", "format": format}))).unwrap_or(TrackId(0));
-    let midi = id(e.execute("track.new", &json!({"kind": "midi", "name": "MIDI"}))).unwrap_or(TrackId(0));
+    let kind = if keys.is_some() { "instrument" } else { "midi" };
+    let midi = id(e.execute("track.new", &json!({"kind": kind, "name": "MIDI"}))).unwrap_or(TrackId(0));
+    if let Some(k) = keys
+        && let Err(err) = k.apply(&mut e, midi.0)
+    {
+        log::warn!("recorder: the keyboard sound could not be set: {err}");
+    }
     let _ = e.execute("track.input", &json!({"tracks": [audio.0], "input": choice.name()}));
     let _ = e.execute("track.input", &json!({"tracks": [midi.0], "input": "midi:all"}));
     let _ = e.execute("mix.volume", &json!({"tracks": [audio.0], "db": -144.0}));
@@ -262,6 +278,7 @@ impl Rig {
             measured: None,
             nudge: 0,
             click: None,
+            keys: None,
         }
     }
 
@@ -307,7 +324,7 @@ impl Rig {
             return;
         }
         self.choice = choice;
-        let (mut e, a, m) = session_for(self.rate(), choice);
+        let (mut e, a, m) = session_with(self.rate(), choice, self.keys.as_ref());
         apply_click(&mut e, self.click);
         (self.engine, self.audio_track, self.midi_track) = (e, a, m);
         self.player.update_session(self.engine.session_arc());
@@ -322,6 +339,54 @@ impl Rig {
         self.click = click;
         apply_click(&mut self.engine, click);
         self.player.update_session(self.engine.session_arc());
+    }
+
+    /// The keyboard's sound from now on (`None`: silent, as a MIDI track). A change of preset or
+    /// instrument makes a new session; turning a knob of the same preset sets that parameter.
+    /// Not while a take records.
+    pub fn set_keys(&mut self, keys: Option<KeySound>) {
+        if keys == self.keys || self.recording() {
+            return;
+        }
+        let same = matches!((&self.keys, &keys), (Some(a), Some(b)) if a.plugin == b.plugin && a.preset == b.preset && a.modulation == b.modulation);
+        if let (true, Some(new), Some(old)) = (same, &keys, &self.keys) {
+            let t = self.midi_track.0;
+            for (id, v) in &new.params {
+                if old.params.get(id) != Some(v) {
+                    let _ = self.engine.execute("mix.instrument_param", &json!({"tracks": [t], "param": id, "value": f64::from(*v)}));
+                }
+            }
+            if old.volume_db != new.volume_db || old.octave != new.octave {
+                let _ = self.engine.execute("mix.volume", &json!({"tracks": [t], "db": f64::from(new.volume_db.clamp(-60.0, 12.0))}));
+                let _ =
+                    self.engine.execute("track.midi_input_transform", &json!({"tracks": [t], "transpose": i64::from(new.octave.clamp(-3, 3)) * 12}));
+            }
+            self.keys = keys;
+        } else {
+            self.keys = keys;
+            let (mut e, a, m) = session_with(self.rate(), self.choice, self.keys.as_ref());
+            apply_click(&mut e, self.click);
+            (self.engine, self.audio_track, self.midi_track) = (e, a, m);
+        }
+        self.player.update_session(self.engine.session_arc());
+    }
+
+    /// Semitones the keyboard plays up (the sound's octave), as the MIDI files keep the notes.
+    fn transpose(&self) -> i32 {
+        self.keys.as_ref().map_or(0, |k| i32::from(k.octave.clamp(-3, 3)) * 12)
+    }
+
+    /// The keyboard's sound now.
+    pub fn keys(&self) -> Option<&KeySound> {
+        self.keys.as_ref()
+    }
+
+    /// How long a key takes to be heard (the output's latency and the buffer), in ms.
+    pub fn play_delay_ms(&self) -> f64 {
+        let l = self.player.reported_latency();
+        // The output's reported latency holds its buffer; without a report, the buffer at least.
+        let frames = f64::from(l.output.max(self.player.device_buffer.unwrap_or(0))) + f64::from(l.mix);
+        frames * 1000.0 / f64::from(self.rate().max(1))
     }
 
     /// The click on now.
@@ -625,10 +690,10 @@ impl Rig {
         self.heard.clear();
         let midi_take = MidiTake { start: take.from, end: end.max(take.from), looped: None, punch: None, latency: self.midi_latency() };
         let mut saved = Saved { wav: wav.clone(), seconds: take.began.elapsed().as_secs_f64(), problem, ..Saved::default() };
-        if let Some((bytes, notes)) = midi_file(rate, &midi_take, &events, self.click) {
+        if let Some((bytes, notes)) = midi_file(rate, &midi_take, &events, self.click, self.transpose()) {
             let path = take.folder.join(format!("{}.mid", take.stem));
             match std::fs::write(&path, bytes) {
-                Ok(()) => (saved.mid, saved.notes) = (Some(path), notes),
+                Ok(()) => (saved.mid, saved.notes, saved.keys) = (Some(path), notes, self.keys.clone()),
                 Err(e) => saved.problem = saved.problem.or(Some(format!("The MIDI file could not be written: {e}"))),
             }
         }
@@ -666,6 +731,9 @@ impl Rig {
             events,
             midi_latency: self.midi_latency(),
             click: self.click,
+            keys: self.keys.clone(),
+            transpose: self.transpose(),
+            keys_wav: false,
         };
         Saved { wav, seconds: take.began.elapsed().as_secs_f64(), problem, layer: Some(raw), ..Saved::default() }
     }
@@ -711,11 +779,16 @@ fn named(names: &[(usize, String)], r: &RecordedMidi) -> RecordedEvent {
 /// The take's MIDI as a Standard MIDI File at 120 bpm in 4/4, or at the click's tempo and beats a
 /// bar (`click`), each note at the real time it was played from the take's start, made the way the
 /// DAW records and exports MIDI; and its note count. `None` when no note or controller came.
-pub fn midi_file(rate: u32, take: &MidiTake, events: &[RecordedEvent], click: Option<Click>) -> Option<(Vec<u8>, usize)> {
+/// `transpose`: semitones the keys sounded up (the keyboard sound's octave), so the file holds
+/// the notes as they were heard.
+pub fn midi_file(rate: u32, take: &MidiTake, events: &[RecordedEvent], click: Option<Click>, transpose: i32) -> Option<(Vec<u8>, usize)> {
     if events.is_empty() {
         return None;
     }
     let (mut e, _, midi) = session_for(rate, InputChoice { on: false, channel: 0, stereo: false });
+    if transpose != 0 {
+        let _ = e.execute("track.midi_input_transform", &json!({"tracks": [midi.0], "transpose": transpose.clamp(-48, 48)}));
+    }
     let (bpm, beats) = click.map_or((120.0, 4), |c| (c.bpm, c.beats));
     if let Ok(t) = soundcraft_time::TempoMap::new(bpm, beats, 4) {
         e.session_mut().tempo = t;

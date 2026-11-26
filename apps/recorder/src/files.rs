@@ -14,6 +14,8 @@ pub struct LayerFiles {
     pub n: u32,
     pub wav: Option<PathBuf>,
     pub mid: Option<PathBuf>,
+    /// What the keys sounded like (`<layer> (keys).wav`), when it was saved.
+    pub keys: Option<PathBuf>,
     /// The WAV's length (seconds), read from its header.
     pub seconds: Option<f64>,
 }
@@ -24,6 +26,8 @@ pub struct TakeFiles {
     pub stem: String,
     pub wav: Option<PathBuf>,
     pub mid: Option<PathBuf>,
+    /// What the keys sounded like (`<layer> (keys).wav`), when it was saved.
+    pub keys: Option<PathBuf>,
     pub modified: Option<SystemTime>,
     /// The WAV's length (seconds), read from its header.
     pub seconds: Option<f64>,
@@ -36,15 +40,16 @@ pub struct TakeFiles {
 impl TakeFiles {
     /// A take of one layer.
     pub fn single(stem: &str, wav: Option<PathBuf>, mid: Option<PathBuf>, seconds: Option<f64>) -> TakeFiles {
-        TakeFiles { stem: stem.to_string(), wav, mid, modified: None, seconds, layers: Vec::new(), sidecar: None }
+        TakeFiles { stem: stem.to_string(), wav, mid, keys: None, modified: None, seconds, layers: Vec::new(), sidecar: None }
     }
 
     /// Every layer, the first take included (when it still has a file), in order.
     pub fn all_layers(&self) -> Vec<LayerFiles> {
-        let first = (self.wav.is_some() || self.mid.is_some()).then(|| LayerFiles {
+        let first = (self.wav.is_some() || self.mid.is_some() || self.keys.is_some()).then(|| LayerFiles {
             n: 1,
             wav: self.wav.clone(),
             mid: self.mid.clone(),
+            keys: self.keys.clone(),
             seconds: self.seconds,
         });
         first.into_iter().chain(self.layers.iter().cloned()).collect()
@@ -67,7 +72,7 @@ impl TakeFiles {
 
     /// Every file it has (layers and sidecar).
     pub fn files(&self) -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = self.all_layers().into_iter().flat_map(|l| l.wav.into_iter().chain(l.mid)).collect();
+        let mut v: Vec<PathBuf> = self.all_layers().into_iter().flat_map(|l| l.wav.into_iter().chain(l.mid).chain(l.keys)).collect();
         v.extend(self.sidecar.clone());
         v
     }
@@ -94,7 +99,8 @@ pub fn recent(dir: &Path, max: usize) -> Vec<TakeFiles> {
         if ext != "wav" && ext != "mid" && ext != SIDECAR_EXT {
             continue;
         }
-        let (idea, n) = if ext == SIDECAR_EXT { (stem.clone(), 0) } else { split_layer(&stem) };
+        let heard = stem.strip_suffix(" (keys)").filter(|_| ext == "wav");
+        let (idea, n) = if ext == SIDECAR_EXT { (stem.clone(), 0) } else { split_layer(heard.unwrap_or(&stem)) };
         let modified = e.metadata().ok().and_then(|m| m.modified().ok());
         if !takes.iter().any(|t| t.stem == idea) {
             takes.push(TakeFiles::single(&idea, None, None, None));
@@ -106,7 +112,9 @@ pub fn recent(dir: &Path, max: usize) -> Vec<TakeFiles> {
         }
         t.modified = t.modified.max(modified);
         if n <= 1 {
-            if ext == "wav" {
+            if heard.is_some() {
+                t.keys = Some(path);
+            } else if ext == "wav" {
                 t.seconds = wav_seconds(&path);
                 t.wav = Some(path);
             } else {
@@ -115,10 +123,12 @@ pub fn recent(dir: &Path, max: usize) -> Vec<TakeFiles> {
             continue;
         }
         if !t.layers.iter().any(|l| l.n == n) {
-            t.layers.push(LayerFiles { n, wav: None, mid: None, seconds: None });
+            t.layers.push(LayerFiles { n, wav: None, mid: None, keys: None, seconds: None });
         }
         if let Some(l) = t.layers.iter_mut().find(|l| l.n == n) {
-            if ext == "wav" {
+            if heard.is_some() {
+                l.keys = Some(path);
+            } else if ext == "wav" {
                 l.seconds = wav_seconds(&path);
                 l.wav = Some(path);
             } else {
@@ -253,10 +263,12 @@ pub fn rename(take: &TakeFiles, new: &str) -> Result<TakeFiles, String> {
         let (wav, mid) = (l.wav.as_ref().map(|p| moved(p, l.n)), l.mid.as_ref().map(|p| moved(p, l.n)));
         plan.extend(l.wav.iter().cloned().zip(wav.clone()));
         plan.extend(l.mid.iter().cloned().zip(mid.clone()));
+        let keys = l.keys.as_ref().map(|p| p.with_file_name(format!("{}.wav", crate::keys::keys_stem(&layer_stem(&new, l.n)))));
+        plan.extend(l.keys.iter().cloned().zip(keys.clone()));
         if l.n == 1 {
-            (out.wav, out.mid) = (wav, mid);
+            (out.wav, out.mid, out.keys) = (wav, mid, keys);
         } else {
-            out.layers.push(LayerFiles { wav, mid, ..l });
+            out.layers.push(LayerFiles { wav, mid, keys, ..l });
         }
     }
     if let Some(s) = &take.sidecar {
@@ -296,12 +308,12 @@ pub fn delete(take: &TakeFiles) -> Result<(), String> {
 /// idea's other layers stay as they are.
 pub fn delete_layer(take: &TakeFiles, n: u32) -> Result<TakeFiles, String> {
     let Some(l) = take.all_layers().into_iter().find(|l| l.n == n) else { return Err(format!("There is no layer {n}")) };
-    for p in l.wav.iter().chain(l.mid.iter()) {
+    for p in l.wav.iter().chain(l.mid.iter()).chain(l.keys.iter()) {
         std::fs::remove_file(p).map_err(|e| format!("Cannot delete {}: {e}", p.display()))?;
     }
     let mut out = take.clone();
     if n == 1 {
-        (out.wav, out.mid, out.seconds) = (None, None, None);
+        (out.wav, out.mid, out.keys, out.seconds) = (None, None, None, None);
     }
     out.layers.retain(|l| l.n != n);
     Ok(out)

@@ -301,6 +301,23 @@ fn main() {
     h.state_mut().go(Screen::Settings);
     h.state_mut().line_up_note = Some(("Lined up. Sound takes 12 ms to go out and come back in on this computer.".into(), false));
     shots.save(&mut h, "settings-full");
+    // The keyboard's sound: the card on the ready screen, its screen (a preset with named knobs),
+    // all of it, and off.
+    let (a, mut o) = app(true, &ideas, |p| p.keys = soundcraft_recorder::keys::KeySound::from_preset("subtractive_synth", "Breathing Pad"));
+    let mut h = shots.harness(a);
+    run(&mut h, &mut o, 0.2, 0.3);
+    shots.save(&mut h, "1-ready-keyboard-sound");
+    h.state_mut().go(Screen::Keys);
+    shots.save(&mut h, "6-keyboard-sound");
+    let (a, _o) = app(true, &ideas, |p| p.keys = soundcraft_recorder::keys::KeySound::from_preset("subtractive_synth", "Breathing Pad"));
+    let mut h = shots.tall(a, 1500.0);
+    h.state_mut().go(Screen::Keys);
+    shots.save(&mut h, "6-keyboard-sound-full");
+    let (a, _o) = app(true, &ideas, |p| p.keys_on = false);
+    let mut h = shots.harness(a);
+    h.state_mut().go(Screen::Keys);
+    shots.save(&mut h, "6-keyboard-sound-off");
+
     // The click: its settings, the bar before a take.
     let (a, _o) = app(true, &ideas, |p| (p.click_on, p.click_bpm, p.click_beats) = (true, 96.0, 4));
     let mut h = shots.tall(a, 1700.0);

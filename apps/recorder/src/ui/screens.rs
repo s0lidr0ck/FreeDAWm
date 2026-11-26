@@ -37,6 +37,7 @@ impl RecorderApp {
                         Some(Screen::Idea) => self.idea_screen(ui, inner_h),
                         Some(Screen::Settings) => self.settings_screen(ui),
                         Some(Screen::Studio) => self.studio_screen(ui, inner_h),
+                        Some(Screen::Keys) => self.keys_screen(ui),
                     }
                 });
             });
@@ -178,6 +179,9 @@ impl RecorderApp {
         let mic_missing = self.rig.as_ref().is_some_and(|r| self.prefs.audio_on && r.input_channels() == 0) && !no_input;
         let mut change = false;
         let mut retry = false;
+        let mut open_keys = false;
+        let keyboard = self.rig.as_ref().is_some_and(|r| r.midi_ports().iter().any(|(_, on)| *on));
+        let sound = key_sound_words(self.prefs.key_sound().as_ref());
         egui::Frame::NONE.fill(CARD).corner_radius(12).inner_margin(Margin::symmetric(16, 12)).show(ui, |ui| {
             ui.set_width(w - 32.0);
             let iw = ui.available_width();
@@ -210,6 +214,22 @@ impl RecorderApp {
             };
             let (bar, _) = ui.allocate_exact_size(vec2(iw, 10.0), Sense::hover());
             level_bar(ui, bar, level);
+            // A keyboard plugged in: what it sounds like, and the way to change it.
+            if keyboard {
+                ui.add_space(6.0);
+                let (row, _) = ui.allocate_exact_size(vec2(iw, look::TOUCH), Sense::hover());
+                let r = hit(ui, row, "Keyboard sound", true);
+                if r.hovered() {
+                    ui.painter().rect_filled(row, CornerRadius::same(8), egui::Color32::from_white_alpha(6));
+                }
+                let tr = text_at(ui, pos2(row.left(), row.center().y), Align2::LEFT_CENTER, "Keyboard sound", 13.0, Weight::Regular, DIM);
+                let shown = paint::fit(ui, &sound, 15.0, Weight::Semi, row.right() - tr.right() - 40.0);
+                text_at(ui, pos2(tr.right() + 10.0, row.center().y), Align2::LEFT_CENTER, &shown, 15.0, Weight::Semi, TEXT);
+                paint::chevron_icon(ui.painter(), pos2(row.right() - 10.0, row.center().y), 16.0, DIM);
+                paint::read_as(ui, row, &format!("Keyboard sound: {sound}"));
+                focus_ring(ui, &r, 8.0);
+                open_keys = r.clicked();
+            }
             if no_input {
                 ui.add_space(10.0);
                 paragraph(ui, "Plug in a microphone, a headset or a keyboard, then press Try again.", 13.0, Weight::Regular, DIM, 18.0);
@@ -220,6 +240,9 @@ impl RecorderApp {
         });
         if change {
             self.go(Screen::Settings);
+        }
+        if open_keys {
+            self.go(Screen::Keys);
         }
         if retry {
             self.reopen();
@@ -827,6 +850,36 @@ impl RecorderApp {
             label(ui, "Not joined to a studio. Nothing is sent on the network until you open “Record with a studio”.", 13.0, Weight::Regular, DIM);
         }
         ui.add_space(GAP);
+        // The keyboard's sound, and the buffer that sets how soon a key is heard.
+        caps(ui, "KEYBOARD SOUND");
+        ui.add_space(8.0);
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let bw = paint::text_width(ui, "Change…", 14.0, Weight::Medium) + 32.0;
+        let sound = key_sound_words(self.prefs.key_sound().as_ref());
+        let shown = paint::fit(ui, &sound, 15.0, Weight::Regular, w - bw - 12.0);
+        let tr = text_at(ui, row.left_center(), Align2::LEFT_CENTER, &shown, 15.0, Weight::Regular, TEXT);
+        paint::read_as(ui, tr, &format!("The keyboard plays: {sound}"));
+        let b = Rect::from_min_size(pos2(row.right() - bw, row.top()), vec2(bw, look::TOUCH));
+        if button_named(ui, b, "Change…", "Change the keyboard sound", Style::outlined(14.0, Weight::Medium, 10.0), true).clicked() {
+            self.go(Screen::Keys);
+        }
+        ui.add_space(8.0);
+        let rate = self.rig.as_ref().map_or(48_000, Rig::rate);
+        let ms = |b: u32| f64::from(b) * 1000.0 / f64::from(rate.max(1));
+        let current = match self.prefs.audio.buffer_size {
+            None => "Buffer: the device's own".to_string(),
+            Some(b) => format!("Buffer: {b} samples ({:.1} ms)", ms(b)),
+        };
+        let mut options: Vec<(String, Option<u32>)> = vec![("Buffer: the device's own".into(), None)];
+        options.extend([64u32, 128, 256, 512, 1024].map(|b| (format!("Buffer: {b} samples ({:.1} ms)", ms(b)), Some(b))));
+        if let Some(b) = combo(ui, "buffer", &current, w, &options, !recording) {
+            self.prefs.audio.buffer_size = b;
+            self.reopen();
+        }
+        ui.add_space(4.0);
+        paragraph(ui, "Smaller: the keys answer sooner, but a slow computer may crackle.", 13.0, Weight::Regular, DIM, 18.0);
+        ui.add_space(GAP);
+
         self.click_settings(ui, w, recording);
         ui.add_space(GAP);
 
@@ -978,6 +1031,160 @@ impl RecorderApp {
             self.prefs.click_round_bars = round;
         }
         paragraph(ui, "The click is only heard, never recorded. Use headphones so the microphone doesn't hear it.", 13.0, Weight::Regular, DIM, 18.0);
+    }
+
+    /// The keyboard's sound: on or off, the preset (a list by kind, previous and next), its
+    /// volume, its octave, the preset's named knobs, every parameter under More, the keys WAV,
+    /// and how long a key takes to be heard.
+    fn keys_screen(&mut self, ui: &mut Ui) {
+        let w = ui.available_width();
+        let recording = self.recording();
+        self.back(ui, "Back");
+        ui.add_space(14.0);
+        label(ui, "Keyboard sound", 24.0, Weight::Bold, TEXT);
+        ui.add_space(6.0);
+        paragraph(ui, "What you hear when you play the keyboard. The notes are saved as a MIDI file either way.", 14.0, Weight::Regular, DIM, 20.0);
+        ui.add_space(12.0);
+        let mut on = self.prefs.keys_on;
+        if paint::tick(ui, &mut on, "Play the keyboard through a sound", 15.0, w).changed() && !recording {
+            self.prefs.keys_on = on;
+        }
+        let Some(sound) = self.prefs.key_sound() else {
+            ui.add_space(4.0);
+            paragraph(ui, "Off: the keyboard is silent here.", 13.0, Weight::Regular, DIM, 18.0);
+            ui.add_space(GAP);
+            if button(ui, vec2(w, 48.0), "Done", Style::filled(TEXT, look::BG, 16.0, Weight::Bold, 12.0), true).clicked() {
+                self.go(Screen::Main);
+            }
+            return;
+        };
+        ui.add_space(GAP);
+
+        // The preset: the list, then previous and next.
+        caps(ui, "SOUND");
+        ui.add_space(8.0);
+        let current = sound.choice().map_or_else(|| sound.preset.clone(), |c| c.label());
+        let options: Vec<(String, crate::keys::Choice)> = self.key_choices().iter().map(|c| (c.label(), c.clone())).collect();
+        if let Some(c) = combo(ui, "keys-preset", &current, w, &options, !recording) {
+            self.pick_key_sound(&c);
+        }
+        ui.add_space(8.0);
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let half = (w - 12.0) / 2.0;
+        if button_named(
+            ui,
+            Rect::from_min_size(row.min, vec2(half, look::TOUCH)),
+            "‹ Previous",
+            "Previous sound",
+            Style::outlined(14.0, Weight::Medium, 10.0),
+            !recording,
+        )
+        .clicked()
+        {
+            self.step_key_sound(-1);
+        }
+        let next = Rect::from_min_size(pos2(row.right() - half, row.top()), vec2(half, look::TOUCH));
+        if button_named(ui, next, "Next ›", "Next sound", Style::outlined(14.0, Weight::Medium, 10.0), !recording).clicked() {
+            self.step_key_sound(1);
+        }
+        ui.add_space(6.0);
+        label(ui, &format!("On FreeDAWm's {} synth", sound.instrument_name()), 13.0, Weight::Regular, DIM);
+        ui.add_space(GAP);
+
+        // Volume and octave.
+        caps(ui, "VOLUME AND OCTAVE");
+        ui.add_space(4.0);
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        text_at(ui, row.left_center(), Align2::LEFT_CENTER, "Volume", 14.0, Weight::Regular, TEXT);
+        let mut v = ((sound.volume_db + 40.0) / 52.0).clamp(0.0, 1.0);
+        let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.right() - 240.0, row.top()), row.max)));
+        if paint::slider(&mut child, &mut v, 240.0, "Keyboard volume").changed() {
+            self.edit_key_sound(|k| k.volume_db = (v * 52.0 - 40.0).round());
+        }
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        text_at(ui, row.left_center(), Align2::LEFT_CENTER, "Octave", 14.0, Weight::Regular, TEXT);
+        let oct = sound.octave;
+        let plus = Rect::from_min_size(pos2(row.right() - look::TOUCH, row.top()), vec2(look::TOUCH, look::TOUCH));
+        let shown = Rect::from_min_size(pos2(plus.left() - 80.0, row.top()), vec2(80.0, look::TOUCH));
+        let minus = Rect::from_min_size(pos2(shown.left() - look::TOUCH, row.top()), vec2(look::TOUCH, look::TOUCH));
+        if button_named(ui, minus, "−", "Octave down", Style::outlined(18.0, Weight::Semi, 10.0), !recording && oct > -3).clicked() {
+            self.edit_key_sound(|k| k.octave = (k.octave - 1).max(-3));
+        }
+        if button_named(ui, plus, "+", "Octave up", Style::outlined(18.0, Weight::Semi, 10.0), !recording && oct < 3).clicked() {
+            self.edit_key_sound(|k| k.octave = (k.octave + 1).min(3));
+        }
+        let words = match oct {
+            0 => "As played".to_string(),
+            o if o > 0 => format!("{o} up"),
+            o => format!("{} down", -o),
+        };
+        let tr = text_at(ui, shown.center(), Align2::CENTER_CENTER, &words, 14.0, Weight::Semi, TEXT);
+        paint::read_as(ui, tr, &format!("Octave: {words}"));
+        ui.add_space(GAP);
+
+        // The preset's own knobs (its named macros).
+        let macros = sound.macros();
+        let info = soundcraft_dsp::plugin_info(&sound.plugin);
+        if !macros.is_empty() {
+            caps(ui, "THIS SOUND'S KNOBS");
+            ui.add_space(4.0);
+            for (id, name) in &macros {
+                let Some(pi) = info.and_then(|i| i.params.iter().find(|p| p.id == id)) else { continue };
+                let value = sound.params.get(id).copied().unwrap_or(pi.default);
+                let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+                text_at(ui, row.left_center(), Align2::LEFT_CENTER, name, 14.0, Weight::Regular, TEXT);
+                let mut t = pi.to_normalized(value);
+                let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.right() - 240.0, row.top()), row.max)));
+                if paint::slider(&mut child, &mut t, 240.0, name).changed() && !recording {
+                    let v = pi.from_normalized(t);
+                    let id = id.clone();
+                    self.edit_key_sound(|k| k.set_param(&id, v));
+                }
+            }
+            ui.add_space(GAP);
+        }
+
+        // Saving, and the delay.
+        let mut wav = self.prefs.keys_wav;
+        if paint::tick(ui, &mut wav, "Also save what I heard as a WAV", 15.0, w).changed() {
+            self.prefs.keys_wav = wav;
+        }
+        let delay = self.rig.as_ref().map_or(0.0, Rig::play_delay_ms);
+        let said = if delay >= 1.0 {
+            format!("A key is heard about {delay:.0} ms after you press it. A smaller buffer (Settings › Keyboard sound) makes that shorter.")
+        } else {
+            "A smaller buffer (Settings › Keyboard sound) makes the keys answer sooner.".to_string()
+        };
+        paragraph(ui, &said, 13.0, Weight::Regular, DIM, 18.0);
+        ui.add_space(GAP);
+
+        // Every parameter, by name, under More.
+        let more = if self.keys_more { "Fewer settings" } else { "More settings" };
+        if button_fit(ui, look::TOUCH, 14.0, more, Style::outlined(14.0, Weight::Medium, 10.0), true).clicked() {
+            self.keys_more = !self.keys_more;
+        }
+        if self.keys_more
+            && let Some(info) = info
+        {
+            ui.add_space(8.0);
+            for pi in info.params.iter().filter(|p| !p.id.starts_with("macro")) {
+                let value = sound.params.get(pi.id).copied().unwrap_or(pi.default);
+                let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+                let name = paint::fit(ui, pi.name, 13.0, Weight::Regular, w - 250.0);
+                text_at(ui, pos2(row.left(), row.center().y - 1.0), Align2::LEFT_BOTTOM, &name, 13.0, Weight::Regular, TEXT);
+                text_at(ui, pos2(row.left(), row.center().y + 1.0), Align2::LEFT_TOP, &pi.format(value), 12.0, Weight::Regular, DIM);
+                let mut t = pi.to_normalized(value);
+                let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.right() - 200.0, row.top()), row.max)));
+                if paint::slider(&mut child, &mut t, 200.0, pi.name).changed() && !recording {
+                    let v = pi.from_normalized(t);
+                    self.edit_key_sound(|k| k.set_param(pi.id, v));
+                }
+            }
+        }
+        ui.add_space(GAP);
+        if button(ui, vec2(w, 48.0), "Done", Style::filled(TEXT, look::BG, 16.0, Weight::Bold, 12.0), true).clicked() {
+            self.go(Screen::Main);
+        }
     }
 
     /// Screen 4: record with a studio.
@@ -1294,6 +1501,15 @@ fn layer_row(ui: &mut Ui, idea: &super::Idea, l: &crate::files::LayerFiles, acti
     let text = paint::fit(ui, &format!("{name} · {what}"), 14.0, Weight::Regular, tw);
     let tr = text_at(ui, pos2(tx, row.center().y), Align2::LEFT_CENTER, &text, 14.0, Weight::Regular, if m.muted { DIM } else { TEXT });
     paint::read_as(ui, tr, &format!("{name}: {what}"));
+}
+
+/// The keyboard's sound in a word or two: its preset, or Off.
+fn key_sound_words(k: Option<&crate::keys::KeySound>) -> String {
+    match k {
+        None => "Off (silent)".into(),
+        Some(k) if k.octave != 0 => format!("{} ({:+} oct)", k.preset, k.octave),
+        Some(k) => k.preset.clone(),
+    }
 }
 
 /// A line of text centred in the column.

@@ -289,6 +289,13 @@ pub fn cross_icon(p: &egui::Painter, c: Pos2, size: f32, colour: Color32) {
     p.line_segment([c + vec2(-h, h), c + vec2(h, -h)], s);
 }
 
+/// A chevron pointing right (opens a screen), `size` wide, at `c`.
+pub fn chevron_icon(p: &egui::Painter, c: Pos2, size: f32, colour: Color32) {
+    let k = size / 24.0;
+    let at = |x: f32, y: f32| pos2(c.x + (x - 12.0) * k, c.y + (y - 12.0) * k);
+    p.line(vec![at(9.0, 6.0), at(15.0, 12.0), at(9.0, 18.0)], Stroke::new(2.2 * k, colour));
+}
+
 /// A back chevron, `size` wide, at `c`.
 pub fn back_icon(p: &egui::Painter, c: Pos2, size: f32, colour: Color32) {
     let k = size / 24.0;
