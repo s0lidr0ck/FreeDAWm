@@ -241,7 +241,8 @@ fn golden_factory_song_as_a_band() {
     if std::env::var_os("FREEDAWM_BLESS_GOLDENS").is_some() {
         assert!(std::fs::write(&path, &text).is_ok(), "could not write {}", path.display());
     }
-    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    // (a Windows checkout may hold the file with CRLF line ends)
+    let want = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
     let first_diff = want.lines().zip(text.lines()).position(|(a, b)| a != b).map_or(want.lines().count().min(text.lines().count()), |i| i);
     assert!(want == text, "the factory song as a band changed near line {} (FREEDAWM_BLESS_GOLDENS=1 to accept)", first_diff + 1);
 }
