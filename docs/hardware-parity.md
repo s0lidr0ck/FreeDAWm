@@ -66,7 +66,7 @@ Legend: ✅ works · 🟡 partial · ❌ missing.
 |---|---|---|---|
 | Parallel mixing across cores | ✅ | ✅ | `soundcraft-mix` renders independent strips in parallel (rayon) |
 | Plugin delay compensation | ✅ | ✅ | Bounces of a bus that an aux returns onto are compensated like the main mix (#246). |
-| Disk streaming of long sources | ✅ | ❌ | Whole files decoded into the `SourcePool` |
+| Disk streaming of long sources | ✅ | ✅ | Sources stream through one block cache; waveform overviews page their fine levels from `Waveforms/` (`engine/tests/disk_budget.rs`, G-06) |
 | Track count (Ultimate: 2,048 voices) | ✅ | unmeasured | No benchmark exists; add `cargo xtask bench` |
 | Real-time audio thread discipline | ✅ | ✅ | No blocking/allocation in steady state, audio-thread-aware logger |
 | Freeze / commit to save CPU | ✅ | 🟡 | `track.commit` renders; `track.freeze` only sets a flag (no CPU saved) |
@@ -76,6 +76,7 @@ Legend: ✅ works · 🟡 partial · ❌ missing.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | trivial | Disk streaming of long sources marked built (sources stream; overviews page from the cache) |
 | 2026-10-30 | minor | Hardware MIDI input (spec 2026-10-30-midi-input): ports, MIDI Thru, track MIDI inputs, live monitoring and recording through instruments, Musical Typing. Readiness estimates unchanged until the owner's pass |
 | 2026-10-26 | trivial | The product is renamed FreeDAWm (was SoundCraft); sessions are saved as `.fdawm` and `.scraft` still opens. Estimates unchanged |
 | 2026-10-20 | minor | Audio I/O built: mix at the device buffer, duplex feed, I/O Setup channel maps, LLM, record offset and loopback Measure, ASIO driver latency; awaiting the owner's hardware checklist. Record to disk noted. Readiness estimates unchanged until that pass |

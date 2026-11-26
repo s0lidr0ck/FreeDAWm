@@ -3012,6 +3012,17 @@ impl Player {
         self.side().editors.get(&(track, slot)).is_some_and(|e| e.is_open())
     }
 
+    /// The slots whose plugin editor window is open now (Window › Layout › Close Plug-in Windows
+    /// closes each through [`Player::close_editor`]).
+    pub fn open_editors(&self) -> Vec<(TrackId, SlotKey)> {
+        self.side().editors.iter().filter(|(_, e)| e.is_open()).map(|(k, _)| *k).collect()
+    }
+
+    /// The Clip Effects slots whose hosted editor window is open now.
+    pub fn open_clip_editors(&self) -> Vec<ClipSlot> {
+        self.side().clip_editors.iter().filter(|(_, e)| e.is_open()).map(|(k, _)| *k).collect()
+    }
+
     pub fn any_editor_open(&self) -> bool {
         let side = self.side();
         side.editors.values().any(|e| e.is_open()) || side.clip_editors.values().any(|e| e.is_open())
@@ -3028,6 +3039,13 @@ impl Player {
     /// (see `PluginEditor::value_text`). Main thread only.
     pub fn editor_value_text(&self, track: TrackId, slot: SlotKey, id: &str, value: f32) -> Option<String> {
         self.side().editors.get_mut(&(track, slot))?.value_text(id, value)
+    }
+
+    /// Drives a Clip Effects slot's editor with `editor` from now on, as if a hosted module there
+    /// had one. For tests of the editor paths without a third-party plugin installed.
+    #[doc(hidden)]
+    pub fn attach_clip_editor(&self, slot: ClipSlot, editor: Box<dyn PluginEditor>) {
+        self.side().clip_editors.insert(slot, editor);
     }
 
     /// True when the hosted Clip Effects module in `slot` (track, clip, module) has its own editor.
@@ -7430,5 +7448,68 @@ mod lend_tests {
         assert!(!p.is_lent(), "nothing will come: the loan is over");
         p.play(0, None, None);
         assert!(p.is_playing());
+    }
+
+    /// The owner's report: an armed instrument on a named port plays while stopped, then a
+    /// Record. What is played must keep sounding and be recorded through the take, and keep
+    /// sounding after Stop.
+    #[test]
+    fn a_named_port_keeps_playing_through_record_and_stop() {
+        use soundcraft_model::{ChannelFormat, Insert, MidiIn, Route, TrackKind};
+        let mut s = Session::default();
+        s.edit.click = false;
+        let t = s.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        let tr = s.track_mut(t).unwrap();
+        tr.instrument = Some(Insert::new("subtractive_synth"));
+        tr.mixer.input = Route::Midi(MidiIn { device: Some("XPIANOGT".into()), channel: 0, ..MidiIn::default() });
+        tr.mixer.record_arm = true;
+        let (tx, rx) = channel();
+        let mut st = AudioState::new(rx, Arc::new(Shared::new()), Arc::new(s), 48_000.0, max_block_for(None), channel().0);
+        st.mix.set_external_instances(false);
+        let hub = midi_in::MidiHub::new();
+        hub.set_thru(true);
+        let fake = midi_in::FakeBackend::with_ports(&["XPIANOGT", "StudioRack", "SG Device I/O"]);
+        let mut inputs = midi_in::MidiInputs::new(fake.boxed(), Arc::clone(&hub), std::collections::BTreeMap::new());
+        inputs.rescan();
+        tx.send(Cmd::Midi(Arc::clone(&hub))).unwrap();
+        let mut out = vec![0.0f32; 2 * 256];
+        let peak = |out: &[f32]| out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        // A key played and let go, then a few blocks: the loudest of them.
+        let play = |st: &mut AudioState, out: &mut [f32], pitch: u8| {
+            assert!(fake.send("XPIANOGT", &[0x90, pitch, 100]), "the port is open");
+            let mut loud = 0.0f32;
+            for k in 0..12 {
+                if k == 8 {
+                    fake.send("XPIANOGT", &[0x80, pitch, 0]);
+                }
+                st.fill(out, 2);
+                loud = loud.max(peak(out));
+            }
+            loud
+        };
+        st.fill(&mut out, 2);
+        assert!(play(&mut st, &mut out, 60) > 1e-3, "stopped, armed: heard");
+        // Record.
+        tx.send(Cmd::Recording(true)).unwrap();
+        tx.send(Cmd::Play { from: 0, end: None, looped: None, countoff: None }).unwrap();
+        for (k, pitch) in (62..70u8).enumerate() {
+            assert!(play(&mut st, &mut out, pitch) > 1e-3, "recording, key {k}: heard");
+        }
+        let mut got = Vec::new();
+        hub.take_recorded(&mut got);
+        let ons = got.iter().filter(|e| e.msg[0] & 0xF0 == 0x90 && e.msg[2] > 0).count();
+        assert_eq!(ons, 8, "every key recorded: {got:?}");
+        // Stop.
+        tx.send(Cmd::Stop).unwrap();
+        tx.send(Cmd::Recording(false)).unwrap();
+        for _ in 0..40 {
+            st.fill(&mut out, 2);
+        }
+        for pitch in [72u8, 74, 76] {
+            assert!(play(&mut st, &mut out, pitch) > 1e-3, "after Stop: heard");
+        }
+        assert!(fake.is_open("XPIANOGT") && fake.opens("XPIANOGT") == 1);
+        let d = hub.diag(inputs.ports()[0].slot);
+        assert_eq!(d.received, 2 * 12);
     }
 }

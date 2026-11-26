@@ -44,42 +44,8 @@ pub fn mono(ch: &[Vec<f32>]) -> Vec<f32> {
     (0..len).map(|i| ch.iter().filter_map(|c| c.get(i)).sum::<f32>() / n).collect()
 }
 
-/// A key name as `event.add_key_change` stores it: a tonic `A`–`G` with an optional `#`/`b`
-/// (or `♯`/`♭`), then `major`/`maj`/`M`/nothing or `minor`/`min`/`m` (words in any case).
-/// Returns `(tonic pitch class, scale)` with scale 0 major, 1 minor (the band's numbering).
-pub fn parse_key(name: &str) -> Option<(u8, u8)> {
-    let t = name.trim();
-    let mut chars = t.chars();
-    let base: i32 = match chars.next()?.to_ascii_uppercase() {
-        'C' => 0,
-        'D' => 2,
-        'E' => 4,
-        'F' => 5,
-        'G' => 7,
-        'A' => 9,
-        'B' => 11,
-        _ => return None,
-    };
-    let rest = chars.as_str();
-    let (acc, rest) = if let Some(r) = rest.strip_prefix(['#', '♯']) {
-        (1, r)
-    } else if let Some(r) = rest.strip_prefix(['b', '♭']) {
-        (-1, r)
-    } else {
-        (0, rest)
-    };
-    let mode = rest.trim();
-    let scale = match mode {
-        "" | "M" => 0,
-        "m" => 1,
-        _ => match mode.to_ascii_lowercase().as_str() {
-            "major" | "maj" => 0,
-            "minor" | "min" => 1,
-            _ => return None,
-        },
-    };
-    Some(((base + acc).rem_euclid(12) as u8, scale))
-}
+/// A key name as `event.add_key_change` stores it (see [`soundcraft_model::parse_key`]).
+pub use soundcraft_model::parse_key;
 
 /// Whether the session sets a key to judge notes by: a key change that parses, band chords or
 /// sections, or a band key other than the default (the Key ruler's rule).
@@ -499,6 +465,20 @@ pub fn stretched(clip: &Clip) -> bool {
 pub fn tune_blocked(s: &Session, clip: &Clip) -> bool {
     let live = clip.source().is_some_and(|src| soundcraft_mix::live_stretch(s, src).is_some());
     live || (stretched(clip) && (!clip.warp.is_empty() || clip.reversed || clip.loop_len != 0))
+}
+
+/// The name of the ARA plug-in `clip` plays through (given to one and not bypassed): the mix
+/// plays that plug-in's audio in place of the clip's own, so a tuning made here is not heard.
+/// "its ARA plug-in" when the plug-in has no name.
+pub fn plays_through_ara(clip: &Clip) -> Option<&str> {
+    clip.ara.as_ref().filter(|a| !a.bypass).map(|a| if a.name.trim().is_empty() { "its ARA plug-in" } else { a.name.as_str() })
+}
+
+/// Why a note command refuses a clip that [`plays_through_ara`] `name`.
+pub fn ara_blocked_text(name: &str) -> String {
+    format!(
+        "this clip plays through {name} (ARA), so tuning it here can't be heard: bypass or remove {name} for the clip (Clip › ARA Plug-ins...) to tune it here"
+    )
 }
 
 /// The render job of the clip that most needs one (see [`next_job`]).

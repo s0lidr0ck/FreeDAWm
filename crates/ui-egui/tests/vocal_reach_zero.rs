@@ -81,7 +81,7 @@ fn the_edit_window_at_zero_takes_the_roll_to_zero() {
         &mut app,
         vec![
             Event::PointerMoved(r.right_center() - vec2(10.0, 0.0)),
-            Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, -600.0), phase: TouchPhase::Move, modifiers: Modifiers::CTRL },
+            Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, 600.0), phase: TouchPhase::Move, modifiers: Modifiers::CTRL },
         ],
         Modifiers::CTRL,
     );

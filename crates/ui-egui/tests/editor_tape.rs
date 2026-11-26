@@ -13,8 +13,10 @@ fn text_shown(h: &Harness<SoundApp>, want: &str) -> bool {
     h.output().shapes.iter().any(|c| matches!(&c.shape, Shape::Text(tx) if tx.galley.job.text == want))
 }
 
-fn count_shown(h: &Harness<SoundApp>, want: &str) -> usize {
-    h.output().shapes.iter().filter(|c| matches!(&c.shape, Shape::Text(tx) if tx.galley.job.text == want)).count()
+/// How many times `want` is drawn inside `within` (the editor's frame: the Mix window's own bar
+/// has an "Off" too, in its Colour control).
+fn count_shown(h: &Harness<SoundApp>, within: egui::Rect, want: &str) -> usize {
+    h.output().shapes.iter().filter(|c| matches!(&c.shape, Shape::Text(tx) if tx.galley.job.text == want && within.contains(tx.pos))).count()
 }
 
 #[test]
@@ -73,11 +75,12 @@ fn tape_editor_survives_hostile_params() {
 #[test]
 fn tape_editor_follows_undo() {
     let (mut h, t, m) = open("fs_tape", vec2(1800.0, 1000.0), "dark");
-    assert_eq!(count_shown(&h, "Off"), 2, "Wow & Flutter and Hiss read Off");
+    let f = frame(&h, t, m);
+    assert_eq!(count_shown(&h, f, "Off"), 2, "Wow & Flutter and Hiss read Off");
     h.state_mut().run("mix.module_param", json!({"track": t.0, "module": m.0, "param": "flutter", "value": 0.5})).unwrap();
     h.run_steps(3);
-    assert_eq!(count_shown(&h, "Off"), 1);
+    assert_eq!(count_shown(&h, f, "Off"), 1);
     undo(&mut h);
-    assert_eq!(count_shown(&h, "Off"), 2, "Wow & Flutter reads Off again");
+    assert_eq!(count_shown(&h, f, "Off"), 2, "Wow & Flutter reads Off again");
     let _ = pos2(0.0, 0.0);
 }

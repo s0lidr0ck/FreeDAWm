@@ -26,6 +26,7 @@
 //! licensed SDK. A EUCON bridge would be another [`SurfaceProtocol`] (its events and state are the
 //! same roles), written against that SDK by someone who holds its licence.
 
+pub mod feed;
 pub mod hui;
 pub mod mackie;
 

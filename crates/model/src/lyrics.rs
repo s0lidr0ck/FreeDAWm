@@ -14,12 +14,64 @@ pub const MAX_LINE_WORDS: usize = 256;
 /// Longest word, characters.
 pub const MAX_WORD_CHARS: usize = 64;
 
-/// A sung word.
+/// Where a word's time came from. Words typed or touched by hand are protected: a later
+/// transcription asks before replacing them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WordTiming {
+    /// Heard by a transcriber, or read from a file: the machine's words and times.
+    #[default]
+    Heard,
+    /// A typed word spread over the vocal's notes (Time Words to Vocal), not yet checked.
+    Guess,
+    /// Tapped in, or its time or text edited by hand.
+    Confirmed,
+}
+
+impl WordTiming {
+    pub fn is_heard(&self) -> bool {
+        *self == WordTiming::Heard
+    }
+
+    /// The protocol name: `heard`, `guess` or `confirmed`.
+    pub fn name(self) -> &'static str {
+        match self {
+            WordTiming::Heard => "heard",
+            WordTiming::Guess => "guess",
+            WordTiming::Confirmed => "confirmed",
+        }
+    }
+}
+
+/// A sung word. `end` is where the voice stops on it (for transcribed words, often the next
+/// word's start).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct LyricWord {
     pub start: Samples,
     pub end: Samples,
     pub text: String,
+    /// Where its time came from (saved only when not `Heard`).
+    #[serde(default, skip_serializing_if = "WordTiming::is_heard")]
+    pub timing: WordTiming,
+    /// A name for the word, unique in its clip (0: none yet), given when a gilding is made from
+    /// it ([`crate::Gilding::words`]) so the gilding can follow it. Saved only when set.
+    #[serde(default, skip_serializing_if = "is_zero_id")]
+    pub id: u32,
+}
+
+fn is_zero_id(v: &u32) -> bool {
+    *v == 0
+}
+
+impl LyricWord {
+    pub fn new(start: Samples, end: Samples, text: impl Into<String>) -> LyricWord {
+        LyricWord { start, end, text: text.into(), timing: WordTiming::Heard, id: 0 }
+    }
+
+    /// Typed or hand-timed: a transcription must not replace it without asking.
+    pub fn by_hand(&self) -> bool {
+        !self.timing.is_heard()
+    }
 }
 
 /// A line of lyrics: its words, in order.
@@ -28,6 +80,10 @@ pub struct LyricLine {
     pub start: Samples,
     pub end: Samples,
     pub words: Vec<LyricWord>,
+    /// The lyric-sheet line these words were typed in (`SheetLine::id`), for words timed from
+    /// the sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_line: Option<u64>,
 }
 
 impl LyricLine {
@@ -92,10 +148,10 @@ pub fn clip_lines(clip: &Clip) -> Vec<LyricLine> {
                 .words
                 .iter()
                 .filter(|w| w.start >= lo && w.start < hi)
-                .map(|w| LyricWord { start: at(w.start), end: at(w.end.min(hi)).max(at(w.start)), text: w.text.clone() })
+                .map(|w| LyricWord { start: at(w.start), end: at(w.end.min(hi)).max(at(w.start)), text: w.text.clone(), timing: w.timing, id: w.id })
                 .collect();
             let (a, b) = (words.first()?.start, words.iter().map(|w| w.end).max()?);
-            Some(LyricLine { start: a, end: b, words })
+            Some(LyricLine { start: a, end: b, words, sheet_line: l.sheet_line })
         })
         .collect()
 }
@@ -105,6 +161,11 @@ pub fn track_lines(track: &Track) -> Vec<LyricLine> {
     let mut v: Vec<LyricLine> = track.clips().iter().filter(|c| !c.muted).flat_map(clip_lines).collect();
     v.sort_by_key(|l| l.start);
     v
+}
+
+/// How many words on the track's clips (every playlist, hidden ones too) are typed or hand-timed.
+pub fn track_hand_words(track: &Track) -> usize {
+    track.playlists.iter().flat_map(|p| p.clips.iter()).flat_map(|c| c.lyrics.iter()).flat_map(|l| l.words.iter()).filter(|w| w.by_hand()).count()
 }
 
 /// Whether any clip of the track's playing playlist holds lyrics.
@@ -138,8 +199,9 @@ pub fn migrate_track_lyrics(track: &mut Track) {
     for line in lines {
         let Some(c) = pl.clips.iter_mut().find(|c| c.range().contains(line.start)) else { continue };
         let to = |at: Samples| to_clip_time(c, at);
-        let words: Vec<LyricWord> = line.words.iter().map(|w| LyricWord { start: to(w.start), end: to(w.end), text: w.text.clone() }).collect();
-        let l = LyricLine { start: to(line.start), end: to(line.end), words };
+        let words: Vec<LyricWord> =
+            line.words.iter().map(|w| LyricWord { start: to(w.start), end: to(w.end), text: w.text.clone(), timing: w.timing, id: w.id }).collect();
+        let l = LyricLine { start: to(line.start), end: to(line.end), words, sheet_line: line.sheet_line };
         c.lyrics.push(l);
         sanitize_lyrics(&mut c.lyrics);
     }
@@ -159,10 +221,15 @@ mod tests {
 
     #[test]
     fn hostile_lyrics_are_tamed() {
-        let w = |s: i64, e: i64, t: &str| LyricWord { start: s, end: e, text: t.into() };
+        let w = |s: i64, e: i64, t: &str| LyricWord::new(s, e, t);
         let mut l = vec![
-            LyricLine { start: 0, end: 0, words: vec![w(50, 10, " show\u{0}me "), w(-5, 3, "x".repeat(100).as_str()), w(7, 9, "  ")] },
-            LyricLine { start: 0, end: 0, words: vec![w(1, 2, "\n")] },
+            LyricLine {
+                start: 0,
+                end: 0,
+                words: vec![w(50, 10, " show\u{0}me "), w(-5, 3, "x".repeat(100).as_str()), w(7, 9, "  ")],
+                sheet_line: None,
+            },
+            LyricLine { start: 0, end: 0, words: vec![w(1, 2, "\n")], sheet_line: None },
         ];
         sanitize_lyrics(&mut l);
         assert_eq!(l.len(), 1);
@@ -172,5 +239,21 @@ mod tests {
         assert_eq!(l[0].words[1].text, "show me");
         let bad: Vec<LyricLine> = de_lyrics(serde_json::json!([{"start": "soon"}])).unwrap();
         assert!(bad.is_empty());
+    }
+
+    #[test]
+    fn timing_and_sheet_line_save_only_when_set() {
+        let heard = LyricLine { start: 0, end: 5, words: vec![LyricWord::new(0, 5, "Amen")], sheet_line: None };
+        let v = serde_json::to_value(&heard).unwrap();
+        assert_eq!(v, serde_json::json!({"start": 0, "end": 5, "words": [{"start": 0, "end": 5, "text": "Amen"}]}), "old files' shape");
+        let mut typed = heard.clone();
+        typed.sheet_line = Some(7);
+        typed.words[0].timing = WordTiming::Guess;
+        let v = serde_json::to_value(&typed).unwrap();
+        assert_eq!(v["sheet_line"], 7);
+        assert_eq!(v["words"][0]["timing"], "guess");
+        let back: Vec<LyricLine> = de_lyrics(serde_json::json!([v])).unwrap();
+        assert_eq!(back, vec![typed]);
+        assert!(back[0].words[0].by_hand());
     }
 }

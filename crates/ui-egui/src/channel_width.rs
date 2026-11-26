@@ -108,6 +108,32 @@ pub fn bar(app: &mut SoundApp, ui: &mut Ui) {
     if segment(&mut c, "All", all, t.accent).on_hover_text("Size every channel").clicked() {
         let _ = app.run("ui.set", json!({"mix_width_all": true}));
     }
+    // Beside it: close every plug-in window at once (`plugin_close`).
+    c.add_space(14.0);
+    let open = crate::plugin_close::count(app);
+    let text = egui::RichText::new("Close Plug-ins").font(regular(11.0)).color(t.text);
+    let b = egui::Button::new(text).fill(t.button).min_size(vec2(0.0, 18.0)).corner_radius(3.0);
+    let resp = c.add_enabled(open > 0, b);
+    let tip = crate::plugin_close::tooltip(open);
+    let resp = resp.on_hover_text(&tip).on_disabled_hover_text(&tip);
+    if resp.clicked()
+        && let Err(e) = app.run(crate::plugin_close::COMMAND, json!({}))
+    {
+        app.ui.status = e;
+    }
+    // The strips' colour (`strip_tint`): Off, Subtle, Medium or Strong.
+    c.add_space(14.0);
+    c.label(egui::RichText::new("Colour").font(regular(11.0)).color(t.text_dim));
+    c.add_space(8.0);
+    let now = crate::strip_tint::step_of(app.ui.mix_strip_tint);
+    for (step, label) in crate::strip_tint::STEPS {
+        let tip = format!("Channel strips take their track's colour: {}", label.to_lowercase());
+        if segment(&mut c, label, now == Some(step), t.accent).on_hover_text(tip).clicked() {
+            // Set here, not through `ui.set` (its round trip resets the state it does not save,
+            // such as pinned plug-in windows); `ui.set {"mix_strip_tint"}` is the agents' way.
+            app.ui.mix_strip_tint = step;
+        }
+    }
 }
 
 /// One segment of the bar: a small selectable button.

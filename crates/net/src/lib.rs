@@ -28,6 +28,7 @@ pub mod glue;
 pub mod hub;
 pub mod internet;
 pub mod stream;
+pub mod studio;
 pub mod sys;
 
 /// The DNS-SD service type FreeDAWm PCs announce.

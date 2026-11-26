@@ -23,7 +23,7 @@ Legend: ✅ supported and tested · 🟡 partial · ❌ missing · — not appli
 |---|---|---|---|---|
 | Pro Tools session `.ptx` (and `.ptf` from 7–9) | native | ❌ | ❌ | Proprietary, undocumented. Owner decision needed on black-box format study (G-03) |
 | Session templates `.ptxt` | read/write | ❌ | ❌ | We have no templates at all (G-16) |
-| AAF (Advanced Authoring Format) | import/export | ❌ | ❌ | #40. The post-production handoff from picture editors (G-03) |
+| AAF (Advanced Authoring Format) | import/export | 🟡 | ❌ | #40, G-03. Import of the audio (`file.import_aaf`, `crates/aaf`): tracks, clips, fades, crossfades, clip gain, track volume/pan/mute/solo, markers, timecode, embedded and external media (offline when missing), multichannel; tested on synthetic files and, with `FREEDAWM_AAF_SAMPLES`, 65 real Pro Tools, Media Composer, Premiere and Resolve files (62 match their known answer). Not read: speed changes, clip pan, MXF media, effects, video. No export |
 | OMF | import/export | ❌ | ❌ | Legacy, still delivered by some editors |
 | Media Composer–compatible session | export | ❌ | ❌ | AAF variant |
 | ADM BWF (Dolby Atmos master) | import/export | ❌ | ❌ | G-12 |

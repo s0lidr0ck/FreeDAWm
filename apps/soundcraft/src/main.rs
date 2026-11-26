@@ -357,7 +357,9 @@ impl App {
                 }
             }
         }
-        if !self.fit_pending {
+        // Full screen (Window › Full Screen) is never saved: the windowed size and state stay as they were.
+        let fullscreen = app.ui.fullscreen || ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        if !self.fit_pending && !fullscreen {
             app.ui.window_maximized = maximized;
             if let Some(r) = inner.filter(|_| !maximized) {
                 app.ui.window_size = (r.size() * ctx.zoom_factor()).round().into();
@@ -546,6 +548,19 @@ impl eframe::App for Host {
     }
 }
 
+/// The files named on the command line (the options and `--control`'s port left out): the
+/// sessions (the last one opens), and the rest, which import into the session that opens (a new,
+/// untitled one without a session) once it is open, each at the insertion point (the start in a
+/// new session): audio on a new audio track, a MIDI file on new instrument tracks
+/// ([`open_path`]). FreeDAWm Recorder's "Open in FreeDAWm" starts FreeDAWm with a take's WAV and
+/// MIDI file this way.
+fn launch_files(args: &[String]) -> (Vec<String>, Vec<String>) {
+    let files = args.iter().enumerate().filter(|(i, a)| !(a.starts_with("--") || (*i > 0 && args.get(i - 1).is_some_and(|p| p == "--control"))));
+    files
+        .map(|(_, a)| a.clone())
+        .partition(|f| soundcraft_engine::model::is_session_path(f.to_ascii_lowercase()) || soundcraft_engine::io::is_bundle_path(f))
+}
+
 fn open_path(app: &mut SoundApp, p: &str) {
     let lower = p.to_ascii_lowercase();
     let r = if soundcraft_engine::model::is_session_path(&lower) || soundcraft_engine::io::is_bundle_path(&lower) {
@@ -691,12 +706,6 @@ fn main() -> eframe::Result {
         .and_then(|i| args.get(i + 1))
         .and_then(|p| p.parse().ok())
         .or_else(|| soundcraft_engine::brand::env_var("CONTROL_PORT").and_then(|p| p.parse().ok()));
-    let files: Vec<String> = args
-        .iter()
-        .enumerate()
-        .filter(|(i, a)| !(a.starts_with("--") || (i > &0 && args.get(i - 1).is_some_and(|p| p == "--control"))))
-        .map(|(_, a)| a.clone())
-        .collect();
     log::info!("FreeDAWm {} ({} {})", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
     // The log file lives in the settings directory; opened after the arguments, so `--version`
     // leaves no file behind. Records logged until now are written to it first. Runs without
@@ -740,9 +749,7 @@ fn main() -> eframe::Result {
     // With the splash, the root window opens as the splash (borderless, the film's size) and
     // `App::end_splash` turns it into the main window; see `splash`.
     let viewport = if show_splash { splash::viewport() } else { main_viewport(window) };
-    let (sessions, others): (Vec<String>, Vec<String>) = files
-        .into_iter()
-        .partition(|f| soundcraft_engine::model::is_session_path(f.to_ascii_lowercase()) || soundcraft_engine::io::is_bundle_path(f));
+    let (sessions, others) = launch_files(&args);
     let audio_first = audio_before_engine(&sessions);
     let launch_rate = sessions.last().cloned();
     let load_progress = std::sync::Arc::new(std::sync::Mutex::new(soundcraft_engine::open_job::OpenProgress::default()));
@@ -1163,5 +1170,22 @@ mod tests {
         assert_eq!(titles("Song — FreeDAWm"), 1);
         assert_eq!(titles("Song — FreeDAWm"), 0);
         assert_eq!(titles("Song * — FreeDAWm"), 1);
+    }
+
+    #[test]
+    fn a_recorder_take_named_on_the_command_line_imports_into_a_new_session() {
+        // FreeDAWm Recorder's "Open in FreeDAWm": `freedawm <take>.wav <take>.mid`.
+        let args: Vec<String> = [
+            r"C:\Users\Dave\Documents\FreeDAWm Ideas\Idea 2026-11-23 14-03-10.wav",
+            r"C:\Users\Dave\Documents\FreeDAWm Ideas\Idea 2026-11-23 14-03-10.mid",
+        ]
+        .map(String::from)
+        .to_vec();
+        let (sessions, imports) = super::launch_files(&args);
+        assert!(sessions.is_empty(), "no session named: a new, untitled one opens");
+        assert_eq!(imports, args, "both import, the audio first");
+        // Options and the control port are not files; a session among them opens.
+        let args: Vec<String> = ["--control", "4000", "Song.fdawm", "--no-audio", "Take.wav"].map(String::from).to_vec();
+        assert_eq!(super::launch_files(&args), (vec!["Song.fdawm".to_string()], vec!["Take.wav".to_string()]));
     }
 }

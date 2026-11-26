@@ -485,6 +485,43 @@ pub(crate) fn lenient_state<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Ba
     Ok(st)
 }
 
+/// A key name as `event.add_key_change` stores it: a tonic `A`–`G` with an optional `#`/`b`
+/// (or `♯`/`♭`), then `major`/`maj`/`M`/nothing or `minor`/`min`/`m` (words in any case).
+/// Returns `(tonic pitch class, scale)` with scale 0 major, 1 minor (the band's numbering).
+pub fn parse_key(name: &str) -> Option<(u8, u8)> {
+    let t = name.trim();
+    let mut chars = t.chars();
+    let base: i32 = match chars.next()?.to_ascii_uppercase() {
+        'C' => 0,
+        'D' => 2,
+        'E' => 4,
+        'F' => 5,
+        'G' => 7,
+        'A' => 9,
+        'B' => 11,
+        _ => return None,
+    };
+    let rest = chars.as_str();
+    let (acc, rest) = if let Some(r) = rest.strip_prefix(['#', '♯']) {
+        (1, r)
+    } else if let Some(r) = rest.strip_prefix(['b', '♭']) {
+        (-1, r)
+    } else {
+        (0, rest)
+    };
+    let mode = rest.trim();
+    let scale = match mode {
+        "" | "M" => 0,
+        "m" => 1,
+        _ => match mode.to_ascii_lowercase().as_str() {
+            "major" | "maj" => 0,
+            "minor" | "min" => 1,
+            _ => return None,
+        },
+    };
+    Some(((base + acc).rem_euclid(12) as u8, scale))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

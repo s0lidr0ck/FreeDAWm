@@ -85,15 +85,10 @@ pub fn export<W: Write + Seek>(s: &Session, w: W) -> Result<(W, Exported), Strin
             }
             FileData::Source(id) => {
                 let Some(audio) = s.pool.get(id) else { continue };
-                let opts = soundcraft_audio_io::EncodeOptions {
-                    format: soundcraft_audio_io::FileFormat::Wav,
-                    bit_depth: soundcraft_audio_io::BitDepth::Float32,
-                    dither: false,
-                    bwf: None,
-                    bitrate_kbps: 0,
-                };
-                let bytes = soundcraft_audio_io::encode(&audio.buffer(), &opts).map_err(|e| format!("{path}: {e}"))?;
-                zip.add(&path, &bytes)?;
+                // Written into the archive a block at a time (a source played from disk is never
+                // read whole).
+                let len = (audio.frames() as u64).saturating_mul(audio.num_channels() as u64).saturating_mul(4).saturating_add(128);
+                zip.add_with(&path, len, |mut w| crate::io::write_source_wav(audio, &mut w))?;
                 ex.out.audio_files += 1;
             }
         }

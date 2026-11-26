@@ -254,8 +254,9 @@ fn unvoiced_noise_is_untouched() {
     let y = render_all(&f.x, &f.t, &c, &nc()).unwrap();
     let hop = f.t.hop_samples as usize;
     let voiced: Vec<usize> = f.t.frames.iter().enumerate().filter(|(_, fr)| fr.cents.is_some()).map(|(i, _)| i * hop).collect();
-    // 10 ms smoothing + the 1-frame dilation + the 1-frame linear ramp from frames to samples.
-    let margin = 480 + 2 * hop;
+    // 10 ms smoothing + the dilation (3 frames next to a moved note: its held tail and onset)
+    // + the 1-frame linear ramp from frames to samples.
+    let margin = 480 + 4 * hop;
     let mut checked = 0;
     for (s, (yv, xv)) in y.iter().zip(&f.x).enumerate().take(f.v2_start).skip(f.v1_end) {
         if voiced.iter().all(|&v| s.abs_diff(v) > margin) {

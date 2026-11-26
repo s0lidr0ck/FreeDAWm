@@ -285,6 +285,52 @@ pub(crate) fn stamp_at_rate(stamp: u64, file_rate: u32, session_rate: u32) -> u6
     u64::try_from((u128::from(stamp) * to + from / 2) / from).unwrap_or(u64::MAX)
 }
 
+/// Imports the audio file at `path` (`file.import_audio`): a WAV at the session rate larger than
+/// the in-memory threshold plays from disk where it is (its header and metadata are read, never
+/// its audio, so its length has no limit); anything else is read and decoded
+/// ([`import_audio_bytes`]).
+pub fn import_audio_file(e: &mut Engine, path: &str, target: Option<TrackId>, at: Samples) -> Result<Value> {
+    let name = Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("Audio").to_string();
+    let rate = e.session().sample_rate.hz();
+    let Some(f) = streamable(Path::new(path), rate).filter(|f| f.frames() > 0) else {
+        let bytes = read_file(path)?;
+        return import_audio_bytes(e, &name, &bytes, Some(path), target, at);
+    };
+    // The chunks before the audio (an `acid` loop chunk is there) and the iXML, wherever it is.
+    let head = read_prefix(Path::new(path), WAV_HEAD_BYTES).unwrap_or_default();
+    let said = soundcraft_audio_io::loop_info::loop_info(&head, &name);
+    let ixml = soundcraft_audio_io::ixml::read_ixml(Path::new(path));
+    let short = f.frames() as f64 <= DETECT_MAX_SECS * f64::from(rate);
+    let (channels, stamp) = (f.channels(), f.time_reference());
+    let audio = streamed_audio(f, None, Path::new(path), rate);
+    let mono =
+        (said.bpm.is_none() && short && e.session().edit.flag(LOOPS_FOLLOW)).then(|| soundcraft_dsp::beat::downmix(&audio.window(0, audio.frames())));
+    let copy = e.copy_imported_audio;
+    let s = e.session_mut();
+    let src = insert_source(s, &name, audio, Some(path), FileFormat::Wav);
+    if let Some(sx) = s.sources.last_mut() {
+        // Referred to where it is unless imports are copied into the project (at the save).
+        sx.unsaved = copy || !Path::new(path).is_absolute();
+        sx.time_reference = stamp;
+    }
+    if let Some(x) = ixml {
+        s.field_info.insert(src.0, x);
+    }
+    place_import(e, src, channels, &name, &said, mono, target, at)
+}
+
+/// How much of a streamed WAV's start is read for the chunks before its audio.
+const WAV_HEAD_BYTES: u64 = 1 << 16;
+
+/// The first `max` bytes of the file at `path` (fewer when it is shorter).
+fn read_prefix(path: &Path, max: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let err = |err: std::io::Error| EngineError::Io(format!("{}: {err}", path.display()));
+    let mut out = Vec::new();
+    open_read(path)?.take(max).read_to_end(&mut out).map_err(err)?;
+    Ok(out)
+}
+
 /// Decode and place an audio file. With no target track, a new track of matching width is made.
 pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option<&str>, target: Option<TrackId>, at: Samples) -> Result<Value> {
     let ext = Path::new(name).extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
@@ -323,6 +369,24 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
     {
         s.field_info.insert(src.0, x);
     }
+    place_import(e, src, channels, name, &said, mono, target, at)
+}
+
+/// Places imported source `src` as a clip at `at` on `target` (else a new track of its width
+/// named after the file), follows the tempo and key the file says ([`LOOPS_FOLLOW`]) or detects
+/// its tempo from `mono` (a short file's downmix).
+#[allow(clippy::too_many_arguments)]
+fn place_import(
+    e: &mut Engine,
+    src: SourceId,
+    channels: usize,
+    name: &str,
+    said: &soundcraft_audio_io::loop_info::LoopInfo,
+    mono: Option<Vec<f32>>,
+    target: Option<TrackId>,
+    at: Samples,
+) -> Result<Value> {
+    let s = e.session_mut();
     let frames = s.source(src).map_or(0, |x| i64::try_from(x.frames).unwrap_or(0));
     let track = match target {
         Some(t) => t,
@@ -334,7 +398,7 @@ pub fn import_audio_bytes(e: &mut Engine, name: &str, bytes: &[u8], path: Option
     let cid = s.new_clip_id();
     let stem = s.source(src).map(|x| x.name.clone()).unwrap_or_default();
     crate::edit::place_clip(s, track, Clip::audio(cid, stem, src, 0, at, frames));
-    let mut matched = match_loop(e, cid, &said)?;
+    let mut matched = match_loop(e, cid, said)?;
     if let Some(mono) = mono {
         let d = crate::tempo_detect::detect(e.session(), &mono, 0, (70.0, 180.0));
         if d.bpm.is_finite() && d.bpm > 0.0 && d.beats.len() >= 8 {
@@ -631,10 +695,10 @@ fn midi_lyric_lines(s: &soundcraft_model::Session, base_tick: i64, at: Samples, 
         if text.is_empty() {
             continue;
         }
-        let word = LyricWord { start, end: next.min(start.saturating_add(gap)).max(start), text: text.to_string() };
+        let word = LyricWord::new(start, next.min(start.saturating_add(gap)).max(start), text);
         match lines.last_mut() {
             Some(l) if !breaks => l.words.push(word),
-            _ => lines.push(LyricLine { start, end: start, words: vec![word] }),
+            _ => lines.push(LyricLine { start, end: start, words: vec![word], sheet_line: None }),
         }
     }
     soundcraft_model::sanitize_lyrics(&mut lines);
@@ -754,7 +818,7 @@ fn shift_smf(smf: &mut soundcraft_midi::Smf, origin: i64) {
     }
 }
 
-fn export_midi_of(s: &Session, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
+pub(crate) fn export_midi_of(s: &Session, only: Option<&[TrackId]>) -> Result<Vec<u8>> {
     let smf = smf_of(s, only)?;
     soundcraft_midi::write_smf(&smf).map_err(|err| EngineError::Io(err.to_string()))
 }
@@ -1079,6 +1143,8 @@ impl Bounce {
         export: &Export,
     ) -> Result<Bounce> {
         const C: &str = "file.bounce_mix";
+        // Gild's made-ahead parts are in what it prints.
+        let s = crate::gild::ready(&s);
         let normalize = normalize.into();
         let bus = bus.into();
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
@@ -1631,7 +1697,9 @@ impl StemsJob {
         tracks: Option<&[TrackId]>,
         busses: &[BusId],
     ) -> Result<StemsJob> {
-        let s = e.session();
+        // Gild's made-ahead parts, made once for every stem.
+        let ready = crate::gild::ready(&e.session_arc());
+        let s: &Session = &ready;
         if r.len() > s.sample_rate.samples(MAX_BOUNCE_SECS) {
             return Err(EngineError::BadParams("file.bounce_stems".into(), "bounces are limited to 4 hours".into()));
         }
@@ -1916,7 +1984,8 @@ pub fn render_clip_gain(e: &mut Engine, cmd: &str, id: soundcraft_model::ClipId)
 /// into a new source of the session (written to `Audio Files/` when the session is saved, as
 /// Commit's are). Returns the source and its length in frames.
 pub fn freeze_track(e: &mut Engine, t: TrackId, end: Samples, upto: Option<soundcraft_model::ModuleId>) -> Result<(SourceId, Samples)> {
-    let s = e.session_arc();
+    // Gild's made-ahead parts are in what it prints.
+    let s = crate::gild::ready(&e.session_arc());
     let Some(tr) = s.track(t) else { return Err(crate::cmd::bad("track.freeze", "no such track")) };
     check_freeze_length(&s, tr, end)?;
     // A host may have rendered it already, through its live instances (`RenderJob`).
@@ -2013,7 +2082,8 @@ pub fn commit_track_range(e: &mut Engine, t: TrackId, start: Samples, end: Sampl
 }
 
 fn commit_with(e: &mut Engine, t: TrackId, range: Range, part: bool) -> Result<Option<TrackId>> {
-    let s = e.session_arc();
+    // Gild's made-ahead parts are in what it prints.
+    let s = crate::gild::ready(&e.session_arc());
     let Some(tr) = s.track(t) else { return Ok(None) };
     // A host may have rendered it already, through its live instances (`RenderJob`).
     let audio = match e.take_prepared(t, &crate::render_job::RenderKind::Commit { range }) {
@@ -2195,21 +2265,34 @@ fn stream_saved(e: &mut Engine, file: &Path) {
     let rate = s.sample_rate.hz();
     let sampled = crate::spill::sampled(s);
     let mut swaps: Vec<(Arc<SourceAudio>, Arc<SourceAudio>)> = Vec::new();
+    let project = file.parent().map(Path::to_path_buf).unwrap_or_default();
     for src in s.sources.iter().filter(|src| !src.unsaved && !sampled.contains(&src.id)) {
         let Some(audio) = s.pool.get(src.id) else { continue };
-        if audio.in_memory().is_none()
-            || audio.frames().saturating_mul(audio.num_channels()) < crate::spill::MIN_SAMPLES
-            || swaps.iter().any(|(old, _)| Arc::ptr_eq(old, audio))
-        {
+        if swaps.iter().any(|(old, _)| Arc::ptr_eq(old, audio)) {
             continue;
         }
         let Ok(p) = stored_path(&src.path, file) else { continue };
+        // Played from disk already with its overview whole (imported or made before the save):
+        // from now on its fine levels are read from the cache the save wrote for its file (an
+        // import copied into the project: the copy's, the same audio).
+        if let Some(f) = audio.disk_file() {
+            if !audio.peaks.iter().all(soundcraft_audio_io::peaks::Peaks::is_paged)
+                && let Some(peaks) = crate::peak_pages::open(&project, &p, rate, f)
+                && let Ok(a) = SourceAudio::from_disk(Arc::clone(f), peaks)
+            {
+                swaps.push((Arc::clone(audio), Arc::new(a)));
+            }
+            continue;
+        }
+        if soundcraft_model::disk::keeps_in_memory(audio.frames(), audio.num_channels()) {
+            continue;
+        }
         let Some(f) = streamable(&p, rate) else { continue };
         if f.channels() != audio.num_channels() || f.frames() != audio.frames() {
             continue;
         }
         if let Ok(streamed) = SourceAudio::from_disk(f, audio.peaks.clone()) {
-            swaps.push((Arc::clone(audio), Arc::new(streamed)));
+            swaps.push((Arc::clone(audio), Arc::new(crate::peak_pages::paged_audio(&project, &p, rate, streamed))));
         }
     }
     e.swap_audio(&swaps);
@@ -2309,19 +2392,11 @@ fn write_session(session: &Session, path: &str, overwrite: bool, copy_refs: bool
         }
         // A float WAV played from disk is copied as it is (never read whole into memory).
         let copied = audio.disk_file().filter(|f| f.is_float32()).and_then(|f| copy_wav_new(f.path(), &into, &stem));
+        // Anything else is written a block at a time (a file played from disk is never read
+        // whole).
         let (name, new) = match copied {
             Some(name) => (name, true),
-            None => {
-                let opts = EncodeOptions {
-                    format: FileFormat::Wav,
-                    bit_depth: soundcraft_audio_io::BitDepth::Float32,
-                    dither: false,
-                    bwf: None,
-                    bitrate_kbps: 0,
-                };
-                let bytes = soundcraft_audio_io::encode(&audio.buffer(), &opts).map_err(|err| EngineError::Io(err.to_string()))?;
-                store_wav(&into, &stem, &bytes)?
-            }
+            None => store_source_wav(&into, &stem, audio)?,
         };
         src.path = format!("{rel}{name}");
         src.unsaved = false;
@@ -2568,24 +2643,160 @@ fn same_path(a: &Path, b: &Path) -> bool {
     a == b || matches!((full(a), full(b)), (Ok(x), Ok(y)) if x == y)
 }
 
-/// Store `bytes` as the first of `<stem>.wav`, `<stem>_01.wav`, … in `dir` that is free or already
-/// holds exactly these bytes, so saving never replaces audio; returns the name and whether it was
+/// Frames of every channel read from a source per pass when it is written out.
+const WRITE_FRAMES: usize = 1 << 16;
+
+/// Writes a 32-bit float WAV of `frames` frames of `channels` channels to `out`, its samples
+/// given a block at a time by `read(start, planar, n)` (each channel's first `n` to fill), and
+/// handed to `each` as written: the bytes `encode` makes of the whole buffer (no BWF, the default
+/// speaker mask, samples clamped to ±1), never more than a block in memory. Returns the bytes
 /// written.
-fn store_wav(dir: &Path, stem: &str, bytes: &[u8]) -> Result<(String, bool)> {
+pub(crate) fn write_wav_blocks(
+    out: &mut impl std::io::Write,
+    channels: usize,
+    rate: u32,
+    frames: usize,
+    read: &mut dyn FnMut(usize, &mut [Vec<f32>], usize),
+    each: &mut dyn FnMut(&[Vec<f32>], usize),
+) -> std::io::Result<u64> {
+    let head = soundcraft_audio_io::wav_float_header(channels, rate, frames as u64).map_err(std::io::Error::other)?;
+    out.write_all(&head)?;
+    let mut planar = vec![vec![0.0f32; WRITE_FRAMES]; channels];
+    let mut bytes: Vec<u8> = Vec::with_capacity(WRITE_FRAMES.saturating_mul(channels).saturating_mul(4));
+    let mut at = 0usize;
+    while at < frames {
+        let n = (frames - at).min(WRITE_FRAMES);
+        planar.iter_mut().for_each(|b| b.fill(0.0));
+        read(at, &mut planar, n);
+        each(&planar, n);
+        bytes.clear();
+        for i in 0..n {
+            for buf in &planar {
+                let x = buf.get(i).copied().unwrap_or(0.0);
+                let x = if x.is_nan() { 0.0 } else { x.clamp(-1.0, 1.0) };
+                bytes.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        out.write_all(&bytes)?;
+        at += n;
+    }
+    Ok((head.len() as u64).saturating_add((frames as u64).saturating_mul(channels as u64).saturating_mul(4)))
+}
+
+/// Writes `audio` to `out` as a 32-bit float WAV: byte for byte what `encode` makes of its whole
+/// buffer, read a block at a time ([`write_wav_blocks`]), so a source played from disk is never
+/// held whole in memory (save, autosave, exports). Returns the bytes written.
+pub fn write_source_wav(audio: &SourceAudio, out: &mut impl std::io::Write) -> std::io::Result<u64> {
+    let mut read = |at: usize, planar: &mut [Vec<f32>], n: usize| {
+        for (ch, buf) in planar.iter_mut().enumerate() {
+            if let Some(dst) = buf.get_mut(..n) {
+                audio.read(ch, at, dst);
+            }
+        }
+    };
+    write_wav_blocks(out, audio.num_channels(), audio.sample_rate(), audio.frames(), &mut read, &mut |_, _| {})
+}
+
+/// Writes a new float WAV `<stem>.wav` (or `<stem>_NN.wav`) in `dir` from `read` a block at a
+/// time ([`write_wav_blocks`]), synced to disk, and builds its overviews as it goes: generated
+/// audio that is never whole in memory. The file, its name and its overviews; `None` (nothing left
+/// behind) when it cannot be written.
+pub(crate) fn write_wav_new_from(
+    dir: &Path,
+    stem: &str,
+    (channels, rate, frames): (usize, u32, usize),
+    read: &mut dyn FnMut(usize, &mut [Vec<f32>], usize),
+) -> Option<(PathBuf, String, Vec<soundcraft_audio_io::peaks::Peaks>)> {
     use std::io::Write;
+    crate::file_access::check_write(dir).ok()?;
+    std::fs::create_dir_all(dir).ok()?;
     for k in 0..10_000u32 {
         let name = if k == 0 { format!("{stem}.wav") } else { format!("{stem}_{k:02}.wav") };
         let path = dir.join(&name);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut f) => {
-                if let Err(err) = f.write_all(bytes).and_then(|()| f.sync_all()) {
-                    let _ = std::fs::remove_file(&path);
-                    return Err(EngineError::Io(format!("{}: {err}", path.display())));
-                }
-                return Ok((name, true));
+        let Ok(f) = std::fs::OpenOptions::new().write(true).create_new(true).open(&path) else { continue };
+        let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+        let mut peaks: Vec<soundcraft_audio_io::peaks::PeaksBuilder> = (0..channels).map(|_| Default::default()).collect();
+        let mut each = |planar: &[Vec<f32>], n: usize| {
+            for (b, ch) in peaks.iter_mut().zip(planar) {
+                b.push(ch.get(..n).unwrap_or_default());
             }
+        };
+        let ok = write_wav_blocks(&mut w, channels, rate, frames, read, &mut each).is_ok() && w.flush().is_ok() && w.get_ref().sync_all().is_ok();
+        if ok {
+            return Some((path, name, peaks.into_iter().map(|b| b.finish()).collect()));
+        }
+        drop(w);
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    None
+}
+
+/// Writes `audio` as a float WAV ([`write_source_wav`]) to the new file `path`, synced to disk;
+/// nothing is left behind when it fails.
+fn write_source_new(path: &Path, audio: &SourceAudio) -> std::io::Result<u64> {
+    use std::io::Write;
+    let f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+    let done = write_source_wav(audio, &mut w).and_then(|n| {
+        w.flush()?;
+        w.get_ref().sync_all()?;
+        Ok(n)
+    });
+    if done.is_err() {
+        drop(w);
+        let _ = std::fs::remove_file(path);
+    }
+    done
+}
+
+/// Writes `audio` as a float WAV ([`write_source_wav`]) to `path` (inside the write root),
+/// replacing what is there. Returns the bytes written.
+pub(crate) fn write_source_file(path: &Path, audio: &SourceAudio) -> Result<u64> {
+    crate::file_access::check_write(path).map_err(EngineError::Io)?;
+    write_streamed(path, |mut w| write_source_wav(audio, &mut w).map(|n| (w, n)).map_err(|e| e.to_string()))
+}
+
+/// A writer that only checks the bytes given it are what `inner` reads next.
+struct SameAs<R> {
+    inner: R,
+    same: bool,
+    buf: Vec<u8>,
+}
+
+impl<R: std::io::Read> std::io::Write for SameAs<R> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.same {
+            self.buf.resize(data.len(), 0);
+            self.same = self.inner.read_exact(&mut self.buf).is_ok() && self.buf == data;
+        }
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Whether the file at `path` holds exactly the float WAV [`write_source_wav`] makes of `audio`
+/// (compared a block at a time).
+fn holds_source(path: &Path, audio: &SourceAudio) -> bool {
+    let want = (audio.frames() as u64).saturating_mul(audio.num_channels() as u64).saturating_mul(4);
+    let Ok(f) = std::fs::File::open(path) else { return false };
+    let Ok(len) = f.metadata().map(|m| m.len()) else { return false };
+    let mut cmp = SameAs { inner: std::io::BufReader::new(f), same: len >= want, buf: Vec::new() };
+    write_source_wav(audio, &mut cmp).is_ok_and(|n| n == len) && cmp.same
+}
+
+/// Writes `audio` block by block ([`write_source_wav`]) as a new `<stem>.wav` (or
+/// `<stem>_NN.wav`) in `dir`, or finds the one there that holds the same bytes; true when written.
+fn store_source_wav(dir: &Path, stem: &str, audio: &SourceAudio) -> Result<(String, bool)> {
+    for k in 0..10_000u32 {
+        let name = if k == 0 { format!("{stem}.wav") } else { format!("{stem}_{k:02}.wav") };
+        let path = dir.join(&name);
+        match write_source_new(&path, audio) {
+            Ok(_) => return Ok((name, true)),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                if std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64) && std::fs::read(&path).is_ok_and(|b| b == bytes) {
+                if holds_source(&path, audio) {
                     return Ok((name, false));
                 }
             }
@@ -2738,10 +2949,26 @@ pub(crate) fn load_session_file_reporting(
             decoded.push(Ok(Loaded::Disk(f)));
             continue;
         }
-        decoded.push(read_file(shown).map_err(|_| shown.clone()).and_then(|bytes| {
-            decode_buffer(&bytes, Path::new(shown).extension().and_then(|x| x.to_str()), rate)
-                .map(Loaded::Memory)
-                .map_err(|err| format!("{shown}: {err}"))
+        let loaded = read_file(shown).map_err(|_| shown.clone()).and_then(|bytes| {
+            decode_buffer(&bytes, Path::new(shown).extension().and_then(|x| x.to_str()), rate).map_err(|err| format!("{shown}: {err}"))
+        });
+        // Kept decoded in the project, and played from that from now on: the decode is let go
+        // before the next file is read, so an open holds at most one file decoded.
+        decoded.push(loaded.map(|b| {
+            if absolute || sampled.contains(&i) || soundcraft_model::disk::keeps_in_memory(b.frames(), b.num_channels()) {
+                return Loaded::Memory(b);
+            }
+            let file = Path::new(shown);
+            crate::decode_cache::store(&dir, file, rate, &b);
+            match crate::decode_cache::open(&dir, file, rate).filter(|f| f.frames() == b.frames() && f.channels() == b.num_channels()) {
+                Some(f) => {
+                    if crate::peak_cache::load(&dir, file, rate, &b).is_none() {
+                        crate::peak_cache::store(&dir, file, rate, &SourceAudio::new(b).peaks);
+                    }
+                    Loaded::Disk(f)
+                }
+                None => Loaded::Memory(b),
+            }
         }));
     }
     let mut audio: Vec<std::result::Result<Arc<SourceAudio>, String>> = Vec::with_capacity(total);
@@ -2755,13 +2982,7 @@ pub(crate) fn load_session_file_reporting(
                 audio.push(Ok(streamed_audio(f, (!absolute).then_some(dir.as_path()), file, rate)));
                 continue;
             }
-            Ok(Loaded::Memory(b)) => {
-                // Kept decoded for the next open, which then plays it from disk.
-                if !absolute && !sampled.contains(&i) && soundcraft_model::disk::streaming_enabled() {
-                    crate::decode_cache::store(&dir, file, rate, &b);
-                }
-                Ok(b)
-            }
+            Ok(Loaded::Memory(b)) => Ok(b),
             Err(e) => Err(e),
         };
         audio.push(buf.map(|b| {
@@ -2803,30 +3024,45 @@ enum Loaded {
 }
 
 /// The file at `p` opened to play from disk, when it can at `rate`: a native PCM/float WAV at
-/// that rate (others are decoded into memory as before). `FREEDAWM_STREAM=0` turns it off.
+/// that rate, not smaller than the in-memory threshold (others are decoded into memory as
+/// before). `FREEDAWM_STREAM=0` turns it off.
 pub(crate) fn streamable(p: &Path, rate: u32) -> Option<Arc<soundcraft_model::disk::DiskFile>> {
     if !soundcraft_model::disk::streaming_enabled() {
         return None;
     }
     crate::file_access::check_read(p).ok()?;
-    soundcraft_model::disk::DiskFile::open(p).ok().filter(|f| f.sample_rate() == rate)
+    // Small files stay in memory (`disk::memory_threshold`, an engine setting).
+    soundcraft_model::disk::DiskFile::open(p)
+        .ok()
+        .filter(|f| f.sample_rate() == rate && !soundcraft_model::disk::keeps_in_memory(f.frames(), f.channels()))
 }
 
 /// `f` as a source's audio, its waveform from the project's cache in `project` when it has one
 /// for the file as it is, else made by reading the file through once (and kept in the cache).
+/// With a project, only the overview's coarse levels stay in memory; its fine levels are read
+/// from the cache as they are drawn ([`crate::peak_pages`]).
 pub(crate) fn streamed_audio(f: Arc<soundcraft_model::disk::DiskFile>, project: Option<&Path>, file: &Path, rate: u32) -> Arc<SourceAudio> {
-    let cached = project.and_then(|d| crate::peak_cache::load_sized(d, file, rate, f.channels(), f.frames()));
-    let made = match cached {
-        Some(peaks) => SourceAudio::from_disk(f, peaks),
-        None => Err(f),
+    let paged = |d: &Path, f: &Arc<soundcraft_model::disk::DiskFile>| {
+        crate::peak_pages::open(d, file, rate, f).and_then(|peaks| SourceAudio::from_disk(Arc::clone(f), peaks).ok())
     };
-    Arc::new(made.unwrap_or_else(|f| {
-        let a = SourceAudio::from_disk_scanned(f);
-        if let Some(d) = project {
-            crate::peak_cache::store(d, file, rate, &a.peaks);
+    if let Some(d) = project {
+        if let Some(a) = paged(d, &f) {
+            return Arc::new(a);
         }
-        a
-    }))
+        // Too short to page (or a cache that can't be completed): held whole, as before.
+        let cached = crate::peak_cache::load_sized(d, file, rate, f.channels(), f.frames());
+        if let Some(a) = cached.and_then(|peaks| SourceAudio::from_disk(Arc::clone(&f), peaks).ok()) {
+            return Arc::new(a);
+        }
+    }
+    let a = SourceAudio::from_disk_scanned(Arc::clone(&f));
+    if let Some(d) = project {
+        crate::peak_cache::store(d, file, rate, &a.peaks);
+        if let Some(p) = paged(d, &f) {
+            return Arc::new(p);
+        }
+    }
+    Arc::new(a)
 }
 
 /// The file name a progress line shows for a path.
@@ -2910,11 +3146,8 @@ pub fn session_bundle(session: &Session) -> Result<(Vec<u8>, Session)> {
             target = format!("Audio Files/{base}_{k:02}.wav");
             k += 1;
         }
-        let opts_wav =
-            EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, dither: false, bwf: None, bitrate_kbps: 0 };
-        let bytes = soundcraft_audio_io::encode(&audio.buffer(), &opts_wav).map_err(|err| EngineError::Io(err.to_string()))?;
         w.start_file(target.as_str(), opts).map_err(zerr)?;
-        w.write_all(&bytes).map_err(ioerr)?;
+        write_source_wav(audio, &mut w).map_err(ioerr)?;
         taken.insert(target.clone());
         src.path = target;
         src.unsaved = false;
@@ -3742,10 +3975,12 @@ fn place_takes(
         if e.session().track(tid).is_none_or(|t| t.frozen_audio().is_some()) {
             continue;
         }
-        // A take at the session rate plays from its file (its waveform read from it once).
+        // A take at the session rate plays from its file (its waveform read from it once; in a
+        // saved project's `Audio Files` kept in its cache, the fine levels read from there).
         let rate = e.session().sample_rate.hz();
         if let Some(f) = streamable(&path, rate) {
-            let audio = streamed_audio(f, None, &path, rate);
+            let project = e.path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| path.parent().and_then(Path::parent) == Some(*d));
+            let audio = streamed_audio(f, project, &path, rate);
             let s = e.session_mut();
             let src = insert_source(s, name, audio, Some(&path.to_string_lossy()), FileFormat::Wav);
             if let Some(x) = s.sources.last_mut() {

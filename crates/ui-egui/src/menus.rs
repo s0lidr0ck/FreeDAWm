@@ -21,6 +21,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.mix", "Mix", "Window > Mix", Some("Cmd+=")),
     ("window.edit", "Edit", "Window > Edit", Some("Cmd+=")),
     ("window.toggle_mix_edit", "Toggle Mix/Edit", "", Some("Cmd+=")),
+    ("window.fullscreen", "Full Screen", "", Some(crate::fullscreen::SHORTCUT)),
     ("window.mix_separate", "Mix in Separate Window", "", None),
     ("window.new_mix", "New Mix Window...", "", None),
     ("window.vocal_separate", "Vocal Editor in Separate Window", "", None),
@@ -55,6 +56,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.about", "About FreeDAWm", "", None),
     ("window.close", "Close Window", "Window > Close Window", Some("Cmd+W")),
     ("window.hide_floating", "Hide All Floating Windows", "Window > Hide All Floating Windows", Some("Cmd+Ctrl+W")),
+    // Every plug-in and effect editor window at once (`plugin_close`); Cmd+Alt+W is the macOS
+    // "close all" key and was free.
+    ("window.close_plugin_windows", "Close Plug-in Windows", "", Some("Cmd+Alt+W")),
     ("window.midi_editor", "MIDI Editor", "Window > MIDI Editor", None),
     ("window.vocal_editor", "Vocal Editor", "Window > Vocal Editor", None),
     ("window.vocal_studio", "Vocal Studio", "", None),
@@ -130,6 +134,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.control_surfaces", "Control Surfaces", "Setup > Control Surfaces...", None),
     ("window.midi_mappings", "MIDI Mappings", "Setup > MIDI Mappings...", None),
     ("window.network", "Network", "Setup > Network...", None),
+    ("window.connect_studio", "Connect to a Studio", "File > Connect to a Studio...", None),
     ("window.shortcuts", "Keyboard Shortcuts", "", None),
     ("window.preferences", "Preferences", "", None),
     ("ui.meter_ballistics", "Meter Ballistics", "", None),
@@ -181,12 +186,15 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.ml.clean", "Clean Vocal…", "AI > Clean Vocal…", None),
     ("ui.vocal_editor", "Tune Vocal…", "AI > Tune Vocal…", None),
     ("ui.vocal_panel", "Tuning Panel", "", None),
+    ("ui.gild", "Gild Words…", "", None),
+    ("ui.gild_clear", "Remove All Gild on Track…", "", None),
     ("ui.vocal_studio", "Vocal Studio View", "", None),
     ("ui.vocal_harmony", "Make Harmony…", "", None),
     ("ui.vocal_preset_save", "Save Tuning Macro…", "", None),
     ("ui.ml.midi", "Convert to MIDI…", "AI > Convert to MIDI…", None),
     ("ui.ml.chords", "Detect Chords…", "AI > Detect Chords…", None),
     ("ui.ml.lyrics", "Transcribe Lyrics…", "AI > Transcribe Lyrics…", None),
+    ("ui.lyrics_tap", "Tap Words to Time…", "", None),
     ("ui.ml.text_midi", "Generate MIDI from Text…", "AI > Generate MIDI from Text…", None),
     ("ui.ml.song", "Generate Song…", "AI > Generate Song…", None),
     ("ui.midi_cleanup", "MIDI Cleanup…", "AI > MIDI Cleanup…", None),
@@ -912,6 +920,8 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
     match id {
         // Clip › ARA Plug-ins…: greyed out until the scan has found an ARA 2 plug-in.
         "window.ara" => crate::ara_ui::availability(),
+        // Greyed with nothing to close.
+        "window.close_plugin_windows" => when(crate::plugin_close::count(app) > 0, "No plug-in windows are open"),
         i if i.starts_with("window.")
             || i.starts_with("view.mix_section")
             || i == "view.mix_slim"
@@ -956,6 +966,16 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
         "ui.midi_undo_pass" | "ui.midi_erase_held" => {
             when(app.engine.transport.recording && app.midi_loop_preview.is_some(), "Works while loop recording MIDI")
         }
+        // Tap to time needs typed lyrics.
+        "ui.lyrics_tap" => when(
+            app.engine.session().lyric_sheet.kinds().iter().any(|k| matches!(k, soundcraft_model::LineKind::Lyric(_))),
+            "Type the lyrics first (Window › Transport & Session › Lyrics)",
+        ),
+        // Remove All Gild on Track… needs something gilded.
+        "ui.gild_clear" => when(
+            app.engine.session().tracks.iter().any(|t| t.playlists.iter().any(|p| p.clips.iter().any(|c| !c.gild.is_empty()))),
+            "No words are gilded",
+        ),
         // Make Harmony… harmonises a vocal track.
         "ui.vocal_harmony" => {
             when(app.engine.session().tracks.iter().any(soundcraft_model::Track::is_vocal), "No vocal track: mark one with Track › Vocal Track")
@@ -977,6 +997,8 @@ pub fn availability(app: &SoundApp, id: &str) -> Result<(), String> {
 fn hover_text(id: &str) -> Option<&'static str> {
     match id {
         "window.mix_separate" => Some("Show Edit and Mix at once, e.g. one per monitor"),
+        "window.close_plugin_windows" => Some("Close every open plug-in and effect editor window, pinned ones too"),
+        "window.fullscreen" => Some("The main window fills the screen, with no title bar or taskbar; the same key brings it back"),
         "window.vocal_separate" => Some("The Vocal Editor in its own window; closing it docks it back"),
         "window.notes" => Some("Session notes: a to-do list with check boxes, tags and times"),
         "window.set_list" => Some("The show's songs (memory locations) played in order, with a big stage view"),
@@ -1130,6 +1152,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.mix") => app.ui.window == MainWindow::Mix,
         Some("window.edit") => app.ui.window == MainWindow::Edit,
         Some("window.mix_separate") => app.ui.mix_separate,
+        Some("window.fullscreen") => app.ui.fullscreen,
         Some("window.vocal_separate") => app.ui.vocal_separate,
         Some("window.midi_editor_separate") => app.ui.midi_editor_separate,
         Some("ui.musical_typing") => app.typing.capture,
@@ -1545,7 +1568,7 @@ pub fn opens_dialog(id: &str, path: &str) -> bool {
         || id.starts_with("ui.ml.")
         || MENU_WINDOWS.iter().any(|(p, _)| *p == path)
         // Pre/Post-Roll… asks for the amounts; Revert… asks before throwing changes away.
-        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference" | "ui.band.import_chords")
+        || matches!(id, "ui.quantize_audio" | "ui.wavetable_import" | "event.quantize" | "event.change_duration" | "event.select_split_notes" | "process.run" | "event.tempo_detect" | "options.pre_post_roll" | "session.revert" | "ui.midi_cleanup" | "ui.vocal_editor" | "ui.vocal_harmony" | "ui.vocal_preset_save" | "ui.scout.import_reference" | "ui.band.import_chords" | "ui.lyrics_tap" | "ui.gild" | "ui.gild_clear")
 }
 
 /// Handle UI-layer commands. Returns None when `id` is not a UI command.
@@ -1561,6 +1584,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     }
     if id == "ui.ara_editor" {
         return Some(crate::ara_ui::open_editor(app, p));
+    }
+    if id == crate::plugin_close::COMMAND {
+        return Some(crate::plugin_close::command(app));
     }
     if id == "window.new_mix" {
         return Some(crate::mix_more::open(app));
@@ -1617,6 +1643,15 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
     if id == "ui.vocal_harmony" {
         return Some(crate::vocal_editor::harmony::command(app, p));
     }
+    // Tap to time in the Lyrics window: `{mode?: words | lines}`.
+    if id == "ui.lyrics_tap" {
+        let mode = if p.get("mode").and_then(Value::as_str) == Some("lines") {
+            crate::lyrics_tap::TapMode::Lines
+        } else {
+            crate::lyrics_tap::TapMode::Words
+        };
+        return Some(crate::lyrics_tap::start(app, mode).map(|()| json!({"on": true})));
+    }
     if id == "window.vocal_studio" {
         let cur = app.ui.show_vocal_editor && app.vocal.studio.on;
         let on = p.get("value").and_then(Value::as_bool).unwrap_or(!cur);
@@ -1627,6 +1662,24 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         return Some(Ok(json!({"value": false})));
     }
     // The Vocal Editor's Tuning panel, and saving its values as a user macro preset.
+    // Gild: its panel in the Vocal Editor (`{value?}`), and Remove All Gild on Track… (asks first).
+    if id == "ui.gild" || id == "ui.gild_clear" {
+        let on = p.get("value").and_then(Value::as_bool).unwrap_or(true);
+        if on {
+            if let Some(t) = app.engine.session().edit.selected_tracks.first().copied()
+                && app.engine.session().track(t).is_some_and(|x| x.kind == soundcraft_model::TrackKind::Audio)
+            {
+                app.vocal.track = Some(t);
+            }
+            app.ui.show_vocal_editor = true;
+            app.vocal.show_panel = true;
+            app.vocal.gild_tab = true;
+            app.vocal.gild_confirm = id == "ui.gild_clear";
+        } else {
+            app.vocal.gild_tab = false;
+        }
+        return Some(Ok(json!({"value": on})));
+    }
     if id == "ui.vocal_panel" {
         app.vocal.show_panel = p.get("value").and_then(Value::as_bool).unwrap_or(!app.vocal.show_panel);
         return Some(Ok(json!({"value": app.vocal.show_panel})));
@@ -1680,7 +1733,9 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         if let Some(pl) = &app.player {
             pl.reset_underruns();
         }
-        return Some(Ok(json!({"underruns": 0})));
+        // Blocks played from disk that came late are counted with them.
+        soundcraft_model::disk::reset_underruns();
+        return Some(Ok(json!({"underruns": 0, "disk_underruns": 0})));
     }
     if id == "presets.import_firestation" {
         return Some(crate::fs_presets::command(app, p));
@@ -1730,6 +1785,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             v
         }
         "window.sync_scroll" => toggle(&mut app.ui.sync.scroll),
+        "window.fullscreen" => crate::fullscreen::command(app, p),
         "window.sync_folders" => toggle(&mut app.ui.sync.folders),
         "window.sync_visibility" => toggle(&mut app.ui.sync.visibility),
         "window.edit" => {
@@ -1817,6 +1873,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.control_surfaces" => toggle(&mut app.ui.show_surfaces),
         "window.midi_mappings" => toggle(&mut app.ui.show_midi_maps),
         "window.network" => toggle(&mut app.ui.show_network),
+        "window.connect_studio" => toggle(&mut app.ui.show_connect_studio),
         "window.shortcuts" => toggle(&mut app.ui.show_shortcuts),
         "window.color_palette" => toggle(&mut app.ui.show_color_palette),
         "window.disk_usage" => toggle(&mut app.ui.show_disk_usage),

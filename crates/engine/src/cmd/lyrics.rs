@@ -220,8 +220,8 @@ mod search_tests {
     use soundcraft_model::{ChannelFormat, Clip, LyricLine, LyricWord, TrackKind};
 
     fn line(words: &[(&str, Samples)]) -> LyricLine {
-        let words: Vec<LyricWord> = words.iter().map(|(t, at)| LyricWord { start: *at, end: at + 1000, text: t.to_string() }).collect();
-        LyricLine { start: words.first().map_or(0, |w| w.start), end: words.last().map_or(0, |w| w.end), words }
+        let words: Vec<LyricWord> = words.iter().map(|(t, at)| LyricWord::new(*at, at + 1000, *t)).collect();
+        LyricLine { start: words.first().map_or(0, |w| w.start), end: words.last().map_or(0, |w| w.end), words, sheet_line: None }
     }
 
     /// Two tracks with a transcript each: one MIDI clip each, starting at 0 (clip time is

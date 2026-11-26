@@ -35,6 +35,9 @@ mod field_menu;
 pub mod fm_panel;
 pub mod fonts;
 pub mod fs_presets;
+pub mod fullscreen;
+pub mod gild_panel;
+pub mod gild_worker;
 pub mod hardware_credit;
 pub mod hearing_ui;
 pub mod hit_picker;
@@ -53,6 +56,7 @@ pub mod live_midi;
 pub mod lyric_ruler;
 pub mod lyrics_lane;
 pub mod lyrics_panel;
+pub mod lyrics_tap;
 mod mend_ui;
 pub mod menus;
 pub mod midi_cleanup_panel;
@@ -88,6 +92,7 @@ pub mod ops_windows;
 pub mod palette;
 pub mod panels;
 pub mod pantry;
+pub mod plugin_close;
 pub mod plugin_titles;
 pub mod preferences;
 pub mod preset_house;
@@ -116,6 +121,9 @@ pub mod spot;
 pub mod step_grid;
 pub mod step_input;
 pub mod stretch_worker;
+pub mod strip_tint;
+pub mod studio_editors;
+pub mod studio_ui;
 pub mod surfaces;
 pub mod swale_ui;
 pub mod synth_face;
@@ -146,6 +154,7 @@ pub mod widgets;
 pub mod window_sync;
 pub mod windows;
 pub mod word_finder;
+pub mod word_lane;
 
 use serde_json::{Value, json};
 use soundcraft_engine::{Engine, TransportRequest};
@@ -295,6 +304,11 @@ pub struct UiState {
     pub edit_views: Vec<String>,
     /// How strongly Edit window tracks take on their colour, 0..1 (0: only the colour strip).
     pub track_tint: f32,
+    /// How strongly Mix window strips (and the Remote Mix window's) take on their track's colour,
+    /// 0..1: Off 0 (the default: strips as before), Subtle, Medium, Strong (`strip_tint::STEPS`).
+    /// Kept with the preferences, not the session.
+    #[serde(default)]
+    pub mix_strip_tint: f32,
     /// Open plugin windows: (track, module or instrument). Keyed by module id, so a window
     /// follows its module when the chain is reordered.
     pub plugin_windows: Vec<(TrackId, SlotKey)>,
@@ -391,6 +405,10 @@ pub struct UiState {
     /// The Mix window lives in its own native window (Window › Separate Windows › Mix in Separate Window); the main
     /// window then always shows Edit.
     pub mix_separate: bool,
+    /// Window › Full Screen (`window.fullscreen`): the main window fills its screen. Not kept:
+    /// FreeDAWm always opens windowed (see [`fullscreen`]).
+    #[serde(skip)]
+    pub fullscreen: bool,
     /// More Mix windows (Window › Separate Windows › New Mix Window…), each with its own find, spill and sections
     /// ([`mix_more`]). Not kept: they close with the app.
     #[serde(skip)]
@@ -430,6 +448,9 @@ pub struct UiState {
     /// Setup › Network… (`net_ui`).
     #[serde(default)]
     pub show_network: bool,
+    /// File › Connect to a Studio… (`studio_ui`): mixing another PC's studio remotely.
+    #[serde(default)]
+    pub show_connect_studio: bool,
     /// MIDI input ports enabled (true) or not, by port name (`midi.inputs`): per machine. A
     /// port not named is enabled.
     #[serde(default, rename = "midi.inputs")]
@@ -646,6 +667,7 @@ impl Default for UiState {
             mix_views_offered: NEW_MIX_VIEWS.iter().map(|v| v.to_string()).collect(),
             edit_views: vec!["color".into()],
             track_tint: 0.5,
+            mix_strip_tint: 0.0,
             plugin_windows: Vec::new(),
             full_editors: Vec::new(),
             detached_plugins: Vec::new(),
@@ -686,6 +708,7 @@ impl Default for UiState {
             audio: soundcraft_playback::AudioConfig::default(),
             record_offsets: std::collections::BTreeMap::new(),
             mix_separate: false,
+            fullscreen: false,
             more_mix: Vec::new(),
             vocal_separate: false,
             midi_editor_separate: false,
@@ -699,6 +722,7 @@ impl Default for UiState {
             midi_transport_maps: Vec::new(),
             surfaces: Vec::new(),
             show_network: false,
+            show_connect_studio: false,
             midi_inputs: std::collections::BTreeMap::new(),
             midi_outputs: std::collections::BTreeMap::new(),
             midi_aliases: std::collections::BTreeMap::new(),
@@ -1037,6 +1061,8 @@ pub struct SoundApp {
     pub point_readout: Option<String>,
     /// Vocal tuning's background analyses and renders (polled once per frame).
     pub vocal_worker: vocal_worker::VocalWorker,
+    /// Gild's made-ahead renders in the background.
+    pub gild_worker: gild_worker::GildWorker,
     /// Stretch renders made in the background while the stretch is heard live.
     pub stretch_worker: stretch_worker::StretchWorker,
     /// The session path as of the last frame, and whether the recent list changed since the host
@@ -1105,6 +1131,8 @@ pub struct SoundApp {
     /// preview voice) and, going backwards, when the last frame's audio was sent.
     pub shuttle: f32,
     shuttle_at: Option<std::time::Instant>,
+    /// What the main window was told about full screen, and its hint (`fullscreen`).
+    pub(crate) fullscreen: fullscreen::Window,
     /// A Half-Speed Play is starting: it keeps its half speed whatever Varispeed says.
     half_speed_play: bool,
     /// A file or clip auditioning (`audition`).
@@ -1189,6 +1217,8 @@ pub struct SoundApp {
     pub score: score_editor::ScoreState,
     /// The Vocal Editor's selection, scroll and panel state.
     pub vocal: vocal_editor::VocalEditorState,
+    /// The word lanes' selection, drag and retype, and tap mode.
+    pub words: word_lane::WordUi,
     /// While a Vocal Editor preview plays: the track the player hears soloed (it is handed a
     /// copy of the session with only that track soloed; the document is untouched).
     pub preview_solo: Option<TrackId>,
@@ -1342,6 +1372,7 @@ impl SoundApp {
             recent_checked: None,
             engine,
             vocal_worker: vocal_worker::VocalWorker::new(),
+            gild_worker: gild_worker::GildWorker::new(),
             stretch_worker: stretch_worker::StretchWorker::default(),
             player,
             midi_hub: Some(soundcraft_playback::midi_in::MidiHub::new()),
@@ -1371,6 +1402,7 @@ impl SoundApp {
             varispeed: None,
             shuttle: 0.0,
             shuttle_at: None,
+            fullscreen: fullscreen::Window::default(),
             half_speed_play: false,
             loop_basis: (false, None),
             countoff: None,
@@ -1416,6 +1448,7 @@ impl SoundApp {
             midi: midi_editor::MidiEditorState::default(),
             score: score_editor::ScoreState::default(),
             vocal: vocal_editor::VocalEditorState::default(),
+            words: word_lane::WordUi::default(),
             preview_solo: None,
             audition_session: None,
             ops: ops_windows::OpsState::default(),
@@ -1630,6 +1663,13 @@ impl SoundApp {
                 }
                 if id == "file.import_dawproject" {
                     dawproject_report::offer(self, &v);
+                }
+                if id == "file.import_aaf"
+                    && let Some(summary) = v.get("summary").and_then(serde_json::Value::as_str)
+                {
+                    // Tracks, clips, markers, offline files, anything not carried (the full
+                    // report is in the Notes tab).
+                    self.ui.status = summary.to_string();
                 }
                 if id == "app.quit" {
                     self.quit_requested = true;
@@ -3368,6 +3408,7 @@ impl SoundApp {
         let dt = self.last_frame.replace(now).map_or(1.0 / 60.0, |t| (now - t) as f32).clamp(0.0, 0.25);
         self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
         control::drain(self, ctx);
+        fullscreen::step(self, ctx);
         self.note_recent_session();
         self.apply_editor_edits();
         browser::thumbs::ThumbCache::capture_when_open(self, ctx);
@@ -3392,6 +3433,13 @@ impl SoundApp {
         if self.vocal_worker.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
+        // Gild's made-ahead effects, likewise.
+        if self.gild_worker.poll(&mut self.engine) {
+            ctx.request_repaint();
+        }
+        if self.gild_worker.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         // Stretches heard live get their offline render in the background.
         if self.stretch_worker.poll(&mut self.engine) {
             ctx.request_repaint();
@@ -3409,7 +3457,8 @@ impl SoundApp {
             let now = ctx.input(|i| i.time);
             let tapping = self.ops.tap_times.last().is_some_and(|t| now - t < soundcraft_engine::cmd::tap_tempo::TAP_RESET_SECONDS);
             if !ctx.egui_wants_keyboard_input() && !self.engine.automation_pass_writing() && !tapping {
-                self.engine.end_merge();
+                // A remote's fader drag stays one step until it lets go (`engine.end_gesture`).
+                self.engine.end_idle_merge();
             }
         }
         self.watch_output();
@@ -3580,6 +3629,7 @@ impl SoundApp {
         palette::show(self, &ctx);
         window_sync::settle(self);
         dialogs::show(self, &ctx);
+        fullscreen::hint(self, &ctx);
         browser::drop::finish(self, &ctx);
         window_sync::watch_selection(self, None);
         // Here, not in logic(): a covered or minimized window runs only logic(), with no vsync to pace it.
@@ -3605,6 +3655,8 @@ impl SoundApp {
             "frame_ms": self.frame_ms,
             "audio_device": self.player.as_ref().map(|p| p.device_name.clone()),
             "status": self.ui.status,
+            "fullscreen": self.ui.fullscreen,
+            "fullscreen_hint": fullscreen::hint_showing(self, ctx),
             "midi_editor": midi_edit_tools::state(self),
         })
     }

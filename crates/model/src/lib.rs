@@ -13,6 +13,7 @@ mod clip;
 pub mod clip_automation;
 mod control_room;
 pub mod disk;
+pub mod gild;
 mod ids;
 mod live_stretch;
 mod lyrics;
@@ -41,17 +42,23 @@ pub use automation::{
     AutoParam, AutomationLane, AutomationMode, AutomationPoint, BYPASS_PARAM, CURVE_EPSILON, MIX_PARAM, PencilShape, SURROUND_AXES, curve_shape,
     letter_slot,
 };
-pub use band::{BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials};
+pub use band::{
+    BandFeel, BandState, ChordEvent, MAX_BLOCKS, MAX_CHORDS, MusicianSlot, SectionBlock, SectionDef, SectionMusician, SongFeelDials, parse_key,
+};
 pub use clip::{
     CleanAlt, CleanupPreview, Clip, ClipAra, ClipContent, ClipModule, Fade, FadeShape, FxRender, MAX_CLIP_MODULES, MAX_TRANSPOSE_CENTS, MidiCleanup,
     MidiFxRender, PatternClip, ProcessStep,
 };
 pub use control_room::{ControlRoom, CueMix, MAX_CUES, MAX_MONITOR_SETS, MonitorSet, Talkback};
+pub use gild::{
+    GILD_KINDS, GildAudio, GildCache, GildDouble, GildEcho, GildFx, GildGrit, GildHarmony, GildNote, GildRender, GildShift, GildSpace, GildSwell,
+    GildTrack, GildVerb, GildVoice, Gilding, GritFlavour,
+};
 pub use ids::{BusId, ClipId, GroupId, MarkerId, SourceId, TrackId};
 pub use live_stretch::{LiveStretch, PitchRender, PitchRenders, StretchKind};
 pub use lyrics::{
-    LyricLine, LyricWord, MAX_LINE_WORDS, MAX_LYRIC_LINES, MAX_WORD_CHARS, clip_lines, rebase_lyrics, sanitize_lyrics, to_clip_time,
-    track_has_lyrics, track_lines,
+    LyricLine, LyricWord, MAX_LINE_WORDS, MAX_LYRIC_LINES, MAX_WORD_CHARS, WordTiming, clip_lines, rebase_lyrics, sanitize_lyrics, to_clip_time,
+    track_hand_words, track_has_lyrics, track_lines,
 };
 pub use markers::{Group, LocationView, MarkerKind, MemoryLocation, SetListEntry};
 pub use midi_fx::{

@@ -452,6 +452,10 @@ pub struct Dialogs {
     pub dirs: crate::user_files::UserDirs,
     /// Runs once the session has been saved from `SaveChanges`.
     after_save: Option<(String, Value)>,
+    /// More parameters for the open path prompt's command `(command, params)`, merged in on OK
+    /// (the Vocal Editor's Export Notes as MIDI File... names its track and notes). Cleared by
+    /// [`Dialogs::open_for_command`].
+    pub path_extra: Option<(String, Value)>,
 }
 
 impl Dialogs {
@@ -559,6 +563,7 @@ impl Dialogs {
     /// Open the dialog for a command; false when the command has no dialog.
     pub fn open_for_command(&mut self, e: &Engine, id: &str) -> bool {
         self.after_save = None;
+        self.path_extra = None;
         let home = default_dir();
         let name = e.session().name.clone();
         self.open = Some(match id {
@@ -808,7 +813,7 @@ fn path_dialog(id: &str, home: &str, name: &str) -> Option<Dialog> {
     let key = path_key(id)?;
     let importing = id.contains("import") || id.contains("open");
     let ext = match id {
-        "file.export_midi" | "file.export_clip_midi" => ".mid",
+        "file.export_midi" | "file.export_clip_midi" | "vocal.export_midi" => ".mid",
         "file.export_lyrics" => ".lrc",
         "file.export_lyrics_text" | "lyrics.export_sheet_text" => ".txt",
         "lyrics.export_sheet_chords" => " chords.txt",
@@ -1366,6 +1371,14 @@ pub fn show_open(app: &mut SoundApp, ctx: &egui::Context) {
                         }
                         if cmd == "file.import_session_data" {
                             SessionDataChoice::get(ui.ctx()).params(&mut v);
+                        }
+                        if let Some((for_cmd, Value::Object(extra))) = &app.dialogs.path_extra
+                            && for_cmd == cmd
+                            && let Some(o) = v.as_object_mut()
+                        {
+                            for (k, x) in extra {
+                                o.entry(k.clone()).or_insert_with(|| x.clone());
+                            }
                         }
                         // Saved templates are listed in File › New from their folder: made on save.
                         if cmd == "session.save_template"
@@ -2005,9 +2018,10 @@ fn capture_fields(ui: &mut egui::Ui, c: &mut CapturePantry) {
         ui.end_row();
         ui.label("Notes");
         ui.horizontal(|ui| {
-            ui.add(egui::DragValue::new(&mut c.low).range(0..=127).custom_formatter(note));
+            let range = "Notes as FreeDAWm names them: middle C is C3, so a piano's 88 keys run from A-1 to C7 (A0 to C8 where middle C is C4)";
+            ui.add(egui::DragValue::new(&mut c.low).range(0..=127).custom_formatter(note)).on_hover_text(range);
             ui.label("to");
-            ui.add(egui::DragValue::new(&mut c.high).range(0..=127).custom_formatter(note));
+            ui.add(egui::DragValue::new(&mut c.high).range(0..=127).custom_formatter(note)).on_hover_text(range);
             ui.label("every");
             ui.add(egui::DragValue::new(&mut c.step).range(1..=12));
             ui.label(if c.step == 1 { "semitone" } else { "semitones" });

@@ -11,6 +11,7 @@ impl Musician {
     /// `bool laneHit (int who, int lane, int gstep, int step, int pass)`
     pub(crate) fn lane_hit(&mut self, who: i32, lane: i32, gstep: i32, step: i32, pass: i32, cx: &mut Ctx<'_>) -> bool {
         let prob = self.grid_at(who, lane, gstep, 0, cx.lib);
+        let (step, pass) = self.hit_keys(step, pass); // "As a band": the part's hits, by phrase
         prob > 0 && self.rand01(step, pass, 611 + lane * 7, who, cx) * 100.0f32 < prob as f32
     }
 

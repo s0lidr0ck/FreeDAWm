@@ -209,7 +209,7 @@ fn targets(app: &mut SoundApp) -> Vec<(NoteRef, NoteEdit)> {
     let cvs = clip_views_of(app, &sel);
     let mut out = Vec::new();
     for r in sel {
-        let Some(cv) = cvs.iter().find(|c| c.clip.id == r.clip && !c.stretched) else { continue };
+        let Some(cv) = cvs.iter().find(|c| c.clip.id == r.clip && c.untunable.is_none()) else { continue };
         if !cv.a.notes.iter().any(|n| n.id == r.note) {
             continue;
         }

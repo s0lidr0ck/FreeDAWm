@@ -75,6 +75,8 @@ mod band_lanes;
 pub use band_lanes::{band_song_end, half_ticks, lane_song, lanes_from_song};
 mod delay_line;
 pub mod external_midi;
+mod gild;
+pub use gild::{GILD_TAIL_MAX_S, MAX_LIVE_GILDINGS, PreparedGild, verb_params};
 pub mod hw_insert;
 pub mod inst_outs;
 pub mod summing;
@@ -94,6 +96,7 @@ pub use prepare::{BuiltinPrep, ClipHandle, ClipSlot, Prepared, PreparedClipFx, P
 pub mod scout;
 pub use link::{LinkProblem, LinkRoute, describe_link, link_refusal, link_regressions, link_routes, link_routes_with, short_link_problem};
 mod sidechain;
+pub mod song_keys;
 pub use sidechain::{
     INSTRUMENT_OUT, ModuleInputRoute, SidechainProblem, SidechainRoute, describe_route, module_input_refusal, module_input_routes, short_problem,
     sidechain_refusal, sidechain_regressions, sidechain_routes, sidechain_routes_with,
@@ -547,6 +550,9 @@ struct PluginSlot {
     /// The loudest note-on velocity handed to it since the strip last read it (the track's MIDI
     /// activity meter, `StripMeter::midi_velocity`).
     heard: u8,
+    /// The most delay (samples) at which a plugin made to be heard live
+    /// (`Plugin::live_monitoring`) stays in under low-latency monitoring.
+    live_max: usize,
 }
 
 impl PluginSlot {
@@ -619,6 +625,12 @@ struct Strip {
     /// Per-clip effect chains (Clip Effects) and a scratch buffer to render clips into.
     clip_fx: HashMap<u64, ClipFx>,
     clipbuf: Vec<Vec<f32>>,
+    /// Gild: the live modules of the track's gildings ([`gild::GildRun`]; room reserved), and the
+    /// return's buffers (the gated feed, a module's scratch and the summed wet; sized in `sync`).
+    gild: Vec<gild::GildRun>,
+    gild_feed: Vec<Vec<f32>>,
+    gild_fx: Vec<Vec<f32>>,
+    gild_wet: Vec<Vec<f32>>,
     /// What a clip's ARA voice renders a block into (sized when the track has a clip given to an
     /// ARA plug-in).
     arabuf: Vec<Vec<f32>>,
@@ -895,6 +907,10 @@ impl Strip {
             gr: 0.0,
             clip_fx: HashMap::new(),
             clipbuf: Vec::new(),
+            gild: Vec::new(),
+            gild_feed: Vec::new(),
+            gild_fx: Vec::new(),
+            gild_wet: Vec::new(),
             arabuf: Vec::new(),
             latency: 0,
             post_lat: 0,
@@ -1096,6 +1112,8 @@ pub struct MixEngine {
     builtins: bool,
     /// Clip Effects modules handed over by the host, waiting for `sync` (by track and clip).
     adopt_clip: HashMap<(TrackId, u64), PreparedClipFx>,
+    /// Gild's live modules handed over by the host, waiting for `sync` (by track, clip, gilding).
+    adopt_gild: HashMap<(TrackId, u64), PreparedGild>,
     /// Built-in instances and Clip Effects modules `sync` made itself although the host makes them
     /// ([`MixEngine::made_in_sync`]).
     made_in_sync: u64,
@@ -1306,6 +1324,7 @@ impl SlotCtx<'_> {
             wet_to: 1.0,
             quiet: 0,
             heard: 0,
+            live_max: (soundcraft_dsp::LIVE_MONITORING_MAX_MS * 1e-3 * f64::from(self.sr)) as usize,
         })
     }
 }
@@ -1369,6 +1388,7 @@ impl MixEngine {
             adopt: HashMap::new(),
             builtins: false,
             adopt_clip: HashMap::new(),
+            adopt_gild: HashMap::new(),
             made_in_sync: 0,
             adopt_strips: Vec::new(),
             adopt_busses: Vec::new(),
@@ -1551,7 +1571,12 @@ impl MixEngine {
     pub fn adopt_prepared(&mut self, p: Prepared) {
         // `clip_handles` stays with the host (it takes them out before handing `p` over: an
         // empty list, nothing to free here).
-        let Prepared { instances, clip_fx, strips, busses, room, clip_handles: _ } = p;
+        let Prepared { instances, clip_fx, gild, strips, busses, room, clip_handles: _ } = p;
+        for g in gild {
+            if let Some(old) = self.adopt_gild.insert((g.track, g.key), g) {
+                self.retired.extend(old.into_plugins());
+            }
+        }
         self.adopt(instances);
         if let Some(r) = room {
             self.take_room(r);
@@ -1842,6 +1867,12 @@ impl MixEngine {
         }
         out.extend(self.adopt.drain().map(|(_, p)| p.plugin));
         out.extend(self.adopt_clip.drain().flat_map(|(_, p)| p.eq.into_iter().chain(p.comp).chain(p.mods.into_iter().flatten().map(|(_, m)| m))));
+        out.extend(self.adopt_gild.drain().flat_map(|(_, p)| p.into_plugins()));
+        for st in self.strips.values_mut() {
+            for r in st.gild.iter_mut() {
+                out.extend(r.delay.take().into_iter().chain(r.reverb.take()));
+            }
+        }
         // Clip Effects modules too (a hosted one is dropped where the host drops these).
         for st in self.strips.values_mut() {
             for fx in st.clip_fx.values_mut() {
@@ -1975,6 +2006,7 @@ impl MixEngine {
             for fx in s.clip_fx.values_mut() {
                 fx.reset();
             }
+            gild::reset(s);
         }
         self.hw_delay.iter_mut().for_each(DelayLine::clear);
         self.meters.clear();
@@ -2093,6 +2125,8 @@ impl MixEngine {
             // Hosted clip modules are made here only by an offline engine (no realtime host).
             let hosted = !cx.external && !self.builtins;
             sync_clip_fx(strip, t, cx.sr, mb, cx.retired, host, cx.made, (hosted, cx.offline));
+            let host = self.builtins.then_some(&mut self.adopt_gild);
+            gild::sync_strip(strip, t, cx.sr, mb, cx.retired, host, cx.made);
             sync_arabuf(strip, t, mb);
             // Sidechain keys: one per keyed module, keeping a module's lines (and their history).
             strip.level = plan.level.get(ti).copied().unwrap_or(0);
@@ -2172,8 +2206,15 @@ impl MixEngine {
             }
             let rate = s.sample_rate.hz();
             let lfe = lfe_mask(strip_format(t, ch));
+            // Effects that follow the song's key (Plumb): the Key ruler as it is now.
+            let keys = chain.iter().flatten().any(|p| p.plugin.follows_song_key()).then(|| song_keys::song_key_table(s));
             for (slot, ins) in chain.iter_mut().zip(&t.mixer.inserts) {
                 if let Some(slot) = slot.as_mut() {
+                    if let Some(keys) = &keys
+                        && slot.plugin.follows_song_key()
+                    {
+                        slot.plugin.set_song_keys(keys);
+                    }
                     slot.plugin.set_lfe_channels(lfe);
                     sync_assets(slot, ins, s, rate, cx.retired_assets);
                     sync_link(slot, t.id, ins, &self.links, cx.retired_links);
@@ -2275,6 +2316,9 @@ impl MixEngine {
         if !cx.lent {
             for (_, p) in self.adopt_clip.drain() {
                 cx.retired.extend(p.eq.into_iter().chain(p.comp));
+            }
+            for (_, p) in self.adopt_gild.drain() {
+                cx.retired.extend(p.into_plugins());
             }
             self.retired_strips.strips.extend(self.adopt_strips.drain(..).map(|p| p.strip));
         }
@@ -2435,6 +2479,8 @@ impl MixEngine {
                     release_clip_notes(s, *id, st);
                 }
                 st.chase = true;
+                // Gild's throws start clean where play starts again.
+                gild::reset(st);
             }
         } else if stopped && !self.last_stopped {
             // The transport stopped by itself (the end of play) with clip notes sounding: they
@@ -3491,7 +3537,9 @@ fn insert_step(
     xf: usize,
 ) -> (LlmRun, bool) {
     let lat = slot.plugin.latency();
-    let run = llm_step(slot, bypass || (llm && lat > 0), xf);
+    // A module made to be heard live (Plumb's Live mode) at a small enough delay stays in.
+    let live = lat > 0 && lat <= slot.live_max && slot.plugin.live_monitoring();
+    let run = llm_step(slot, bypass || (llm && lat > 0 && !live), xf);
     let delayed = lat > 0 || slot.dry.delay() > 0;
     let mixed = slot.wet < 1.0 || slot.wet_to < 1.0;
     if run == LlmRun::Run && !delayed && !mixed {
@@ -3501,7 +3549,7 @@ fn insert_step(
     let mut fits = true;
     if delayed {
         // Only a line the output uses asks for more room (a sync then grows the strip's lines).
-        fits = slot.dry.set(if llm { 0 } else { lat }, dry.len(), xf) || run == LlmRun::Run;
+        fits = slot.dry.set(if llm && !live { 0 } else { lat }, dry.len(), xf) || run == LlmRun::Run;
         slot.dry.process(dry, frames);
         if run == LlmRun::Skip {
             copy_dry(dry, buf, frames);
@@ -4096,6 +4144,19 @@ fn process_strip(
     for post in [false, true] {
         if post {
             pre_latency = latency.min(MAX_LATENCY);
+            // Gild's return: after the pre-fader inserts, before the fader section. A frozen
+            // track's render holds it; live input, a stopped transport and backwards play skip it.
+            if t.kind == TrackKind::Audio
+                && frozen.is_none()
+                && !live.reverse
+                && !live.monitor_only
+                && !strip.hears_live
+                && (!strip.gild.is_empty() || !t.gild.dry || t.heard_clips().iter().any(|c| !c.gild.is_empty()))
+            {
+                let lag = strip.base.saturating_add(pre_latency).saturating_add(usize::try_from(t.mixer.delay).unwrap_or(0));
+                let t0 = pos.saturating_sub(i64::try_from(lag).unwrap_or(0));
+                gild::render_return(s, t, strip, &transport, t0, frames);
+            }
             let at = FaderAt { prints, silent_print, gr, bits, skipped, latency: pre_latency };
             fader_section(s, t, strip, live, pos, frames, solo_muted, at);
             if !t.mixer.inserts.iter().any(|i| i.post_fader) {
@@ -4822,6 +4883,11 @@ fn structure_fingerprint(s: &Session) -> usize {
                 }
             }
         }
+        // Which gildings run live modules (`sync` makes them), and whether the return runs.
+        for w in gild::live_wants(t) {
+            w.hash(&mut h);
+        }
+        gild::track_uses(t).hash(&mut h);
         for snd in t.mixer.sends.iter().flatten() {
             snd.target.hash(&mut h);
             // A pre-fader send needs the pre-fader delay line, which `sync` reserves.
@@ -5373,6 +5439,14 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
     let grain = (s.sample_rate.as_f64() * TRANSPOSE_GRAIN_SECS).max(64.0);
     let live_grain = (s.sample_rate.as_f64() * soundcraft_dsp::live_stretch::GRAIN_SECS).max(64.0);
     let tuned = tuned_spans(s, clip);
+    // Gild's changed words (Shift in place, Grit) play in place of the clip's audio over their
+    // renders (which hold the tuning and the cleaned blend already), on a plain clip.
+    let changed = if unstretched {
+        let lo = offset.saturating_add(isect.start - clip.start);
+        gild::changes(s, clip, lo, lo.saturating_add(isect.end - isect.start))
+    } else {
+        [None; 4]
+    };
     // A stereo source on a mono track folds to mono; a chosen source channel plays alone.
     let (taps, tap) = clip.channel_taps(nsrc, buf.len());
     for which in 0..taps {
@@ -5423,7 +5497,7 @@ fn render_clip(s: &Session, clip: &Clip, pos: Samples, frames: usize, buf: &mut 
                 let rel = pos.saturating_add(k as i64).saturating_sub(clip.start);
                 let v = if unstretched {
                     let at = offset.saturating_add(rel);
-                    match tuned.and_then(|t| t.sample_at(ch, at)) {
+                    match changed.iter().flatten().find_map(|c| c.sample_at(ch, at)).or_else(|| tuned.and_then(|t| t.sample_at(ch, at))) {
                         Some(tv) => tv,
                         None => {
                             let v = sv.get(k - run_at).copied().unwrap_or(0.0);
@@ -8382,6 +8456,7 @@ mod tests {
             wet_to: 1.0,
             quiet: 0,
             heard: 0,
+            live_max: 512,
         };
         (slot, ins, tr)
     }
@@ -8503,6 +8578,7 @@ mod tests {
             wet_to: 1.0,
             quiet: 0,
             heard: 0,
+            live_max: 512,
         };
         apply_params(&mut slot, &ins, &tr, Some(ins.id), 0);
         assert_eq!(slot.plugin.param("outGain"), Some(0.25));
@@ -8600,6 +8676,7 @@ mod tests {
             wet_to: 1.0,
             quiet: 0,
             heard: 0,
+            live_max: 512,
         };
         run_blocks(&mut slot, &ins, &tr);
         assert_eq!(slot.plugin.param("depth"), Some(0.9));

@@ -295,3 +295,64 @@ fn hostile_tracks_do_not_panic() {
         assert!(cv.shift_cents.iter().all(|v| v.is_finite()));
     }
 }
+
+/// A held note sung 60 c flat that rises straight into the next note (no glide between their
+/// cores, as in the owner's take): moving the first note up and leaving the second must not put a
+/// hiccup in the vowel where one move hands over to the other.
+#[test]
+fn touching_notes_moved_differently_blend_without_a_step() {
+    let line = Line::default().hold(5347.0, 66, 3.0).glide(5347.0, 5400.0, 10).hold(5400.0, 180, 15.0).0;
+    let a = analysis(track(&line), NoteMode::Musical);
+    assert_eq!(a.notes.len(), 2, "{:?}", a.notes.iter().map(|n| (n.start, n.end, n.centre_cents)).collect::<Vec<_>>());
+    let (_, c1) = core_range(&a.track, &a.notes[0]);
+    let (c0, _) = core_range(&a.track, &a.notes[1]);
+    assert!(c0 <= c1, "the cores touch: {c1} vs {c0}");
+    let mut edits = BTreeMap::new();
+    edits.insert(a.notes[0].id, NoteEdit { offset_cents: 64.0, ..NoteEdit::default() });
+    let y = tuned(&a, &edits);
+    let sung_step = line.windows(2).map(|w| (w[1] - w[0]).abs() as f64).fold(0.0, f64::max);
+    let tuned_step = y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f64::max);
+    // Old curve: a 40-odd cent drop in one frame at the boundary.
+    assert!(tuned_step <= sung_step + 6.0, "largest tuned step {tuned_step:.1} c (sung {sung_step:.1} c)");
+    // Both notes still land where they were sent, away from the blend.
+    let mid = |s: usize, e: usize| y[s..e].iter().sum::<f64>() / (e - s) as f64;
+    assert!((mid(10, 50) - (5347.0 + 64.0)).abs() < 5.0, "first note at {:.1}", mid(10, 50));
+    assert!((mid(120, 240) - 5400.0).abs() < 5.0, "second note at {:.1}", mid(120, 240));
+}
+
+/// Select all and drag +30 c: two touching notes, then a slide into a third, all moved alike. The
+/// correction is +30 c on every voiced frame, joins and slide included: nothing eases towards 0
+/// between notes that move together.
+#[test]
+fn notes_moved_alike_keep_one_offset_through_joins_and_slides() {
+    let line =
+        Line::default().hold(5347.0, 66, 3.0).glide(5347.0, 5400.0, 10).hold(5400.0, 120, 15.0).glide(5400.0, 5700.0, 16).hold(5700.0, 120, 20.0).0;
+    let a = analysis(track(&line), NoteMode::Musical);
+    assert!(a.notes.len() >= 3, "{:?}", a.notes.iter().map(|n| (n.start, n.end)).collect::<Vec<_>>());
+    let edits: BTreeMap<NoteId, NoteEdit> = a.notes.iter().map(|n| (n.id, NoteEdit { offset_cents: 30.0, ..NoteEdit::default() })).collect();
+    let scale: Option<PitchClassSet> = None;
+    let cv = build_curves_with(&a, &edits, &scale, NoteMode::Musical);
+    let worst = cv.shift_cents.iter().map(|s| (s - 30.0).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 0.5, "the correction strays {worst:.2} c from +30");
+}
+
+/// Two notes moved by different amounts (+30 c, then +60 c) across a slide: the correction goes
+/// from one move to the other and never outside them (no dip towards 0, no overshoot), and the
+/// tuned line moves no faster than the sung one plus a little.
+#[test]
+fn different_moves_interpolate_across_the_slide() {
+    let line = Line::default().hold(5400.0, 120, 15.0).glide(5400.0, 5700.0, 16).hold(5700.0, 120, 20.0).0;
+    let a = analysis(track(&line), NoteMode::Musical);
+    assert_eq!(a.notes.len(), 2, "{:?}", a.notes.iter().map(|n| (n.start, n.end)).collect::<Vec<_>>());
+    let mut edits = BTreeMap::new();
+    edits.insert(a.notes[0].id, NoteEdit { offset_cents: 30.0, ..NoteEdit::default() });
+    edits.insert(a.notes[1].id, NoteEdit { offset_cents: 60.0, ..NoteEdit::default() });
+    let scale: Option<PitchClassSet> = None;
+    let cv = build_curves_with(&a, &edits, &scale, NoteMode::Musical);
+    assert!(cv.shift_cents.iter().all(|s| (29.5..=60.5).contains(s)), "outside 30..60: {:?}", cv.shift_cents);
+    assert!(cv.shift_cents.windows(2).all(|w| w[1] >= w[0] - 0.5), "the move goes back down");
+    let y = tuned(&a, &edits);
+    let sung_step = line.windows(2).map(|w| (w[1] - w[0]).abs() as f64).fold(0.0, f64::max);
+    let tuned_step = y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f64::max);
+    assert!(tuned_step <= sung_step + 6.0, "largest tuned step {tuned_step:.1} c (sung {sung_step:.1} c)");
+}

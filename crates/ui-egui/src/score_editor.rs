@@ -846,8 +846,13 @@ mod tests {
         let len = s.tempo.tick_to_samples(3840, s.sample_rate);
         let mut clip = soundcraft_model::Clip::midi(soundcraft_model::ClipId(1), "c", 0, len, seq);
         let at = |tick: i64| s.tempo.tick_to_samples(tick, s.sample_rate);
-        let word = |tick: i64, text: &str| soundcraft_model::LyricWord { start: at(tick), end: at(tick + 100), text: text.into() };
-        clip.lyrics = vec![soundcraft_model::LyricLine { start: 0, end: at(3000), words: vec![word(0, "Hap"), word(960, "py"), word(2880, "day")] }];
+        let word = |tick: i64, text: &str| soundcraft_model::LyricWord::new(at(tick), at(tick + 100), text);
+        clip.lyrics = vec![soundcraft_model::LyricLine {
+            start: 0,
+            end: at(3000),
+            words: vec![word(0, "Hap"), word(960, "py"), word(2880, "day")],
+            sheet_line: None,
+        }];
         let m = super::notation(&soundcraft_engine::score::clip_items(&s, &clip));
         assert_eq!(m.lyrics, vec![(0, "Hap".to_string()), (960, "py".to_string()), (2880, "day".to_string())]);
         clip.lyrics.clear();

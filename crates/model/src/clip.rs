@@ -370,6 +370,10 @@ pub struct Clip {
     /// audio straight from the session and follows its edits. `None` for every other clip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ara: Option<ClipAra>,
+    /// Gild: effects on chosen words of this clip ([`crate::Gilding`]), in its source time like
+    /// its lyrics, so they follow the clip's edits. Empty for every other clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::gild::de_gild")]
+    pub gild: Vec<crate::Gilding>,
 }
 
 /// An ARA plug-in on an audio clip (Clip › ARA Plug-ins…, the clip menu's ARA submenu): the
@@ -488,6 +492,7 @@ impl Clip {
             notes: String::new(),
             processes: Vec::new(),
             ara: None,
+            gild: Vec::new(),
         }
     }
 

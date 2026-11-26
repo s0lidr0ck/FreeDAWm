@@ -10,7 +10,7 @@ checksum = "5ce183b975b8fc736a20919c4002717255fbd867df575c792aeefa9a56a73ad0"
 
 [[package]]
 name = "soundcraft-ara-host"
-version = "0.10.0"
+version = "0.11.0"
 
 [[package]]
 name = "vst3"

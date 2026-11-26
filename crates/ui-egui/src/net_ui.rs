@@ -19,7 +19,7 @@ use soundcraft_engine::Engine;
 use soundcraft_model::{Route, Session, Track, TrackId};
 use soundcraft_net::config::NetConfig;
 use soundcraft_net::discovery::Discovery;
-use soundcraft_net::follower::{FollowTarget, Follower, pair_confirm, pair_request};
+use soundcraft_net::follower::{FollowTarget, Follower, pair_confirm, pair_request_info};
 use soundcraft_net::glue::{BoothGlue, FinishedAudio, FinishedTake, FollowBadge, FollowerGlue, HostView, LiveAudio, RigHost};
 use soundcraft_net::hub::{Hub, HubRequest, TakeClock};
 use soundcraft_net::pairing::exchange::LinkKeys;
@@ -96,6 +96,45 @@ pub struct NetState {
     lan_note: String,
     lan_client: Option<soundcraft_net::internet::Internet>,
     pair_lan: Option<(String, String)>,
+    /// The booth PIN as typed in Setup › Network (not yet set), shown in the clear, and what
+    /// the window says about it.
+    pin_edit: String,
+    pin_show: bool,
+    pin_msg: String,
+    /// "Forget all…" pressed once: the second press forgets.
+    forget_all_armed: bool,
+    /// The next invite: reusable (else for one person), for how long (seconds) and how many
+    /// joins.
+    invite_reusable: bool,
+    invite_secs: u64,
+    invite_joins: u32,
+    /// The mixer feed: when it was last published (it runs only while a PC subscribes).
+    mixer_at: Option<std::time::Instant>,
+    /// Keeps this PC awake while it serves remotes ([`keep_awake`]), and why it could not.
+    awake: soundcraft_sysmem::KeepAwake,
+    awake_error: Option<String>,
+    awake_checked: Option<std::time::Instant>,
+    /// File › Connect to a Studio…: the studio this PC mixes remotely (`studio_ui`).
+    pub studio: crate::studio_ui::StudioState,
+    /// For renders: a remote mixing this PC (in-process), and the Remote mixing section scrolled
+    /// into view once.
+    pub(crate) studio_side_demo: Option<soundcraft_net::studio::Studio>,
+    pub(crate) reveal_mixing: bool,
+}
+
+/// How long a reusable invite can last: the label and seconds.
+const INVITE_SPANS: [(&str, u64); 3] = [("1 hour", 3600), ("1 day", 86_400), ("7 days", 7 * 86_400)];
+
+/// "23 min", "5 h", "3 days".
+fn time_left(secs: f64) -> String {
+    let m = (secs / 60.0).ceil();
+    if m < 120.0 {
+        format!("{m} min")
+    } else if m < 48.0 * 60.0 {
+        format!("{} h", (m / 60.0).round())
+    } else {
+        format!("{} days", (m / 1440.0).round())
+    }
 }
 
 impl NetState {
@@ -136,6 +175,20 @@ impl NetState {
             lan_note: String::new(),
             lan_client: None,
             pair_lan: None,
+            pin_edit: String::new(),
+            pin_show: false,
+            pin_msg: String::new(),
+            forget_all_armed: false,
+            invite_reusable: false,
+            invite_secs: 86_400,
+            invite_joins: 10,
+            mixer_at: None,
+            awake: soundcraft_sysmem::KeepAwake::default(),
+            awake_error: None,
+            awake_checked: None,
+            studio: crate::studio_ui::StudioState::default(),
+            studio_side_demo: None,
+            reveal_mixing: false,
         };
         // Only a real app (with a settings file) opens the network at launch.
         if app.services.network_file.is_some() {
@@ -237,7 +290,7 @@ impl NetState {
 
     /// A local port bridged to the booth's encrypted local link at `addr` (`ip:udp port`) with
     /// key `key` (hex): only the PC holding that key can answer there.
-    fn lan_bridge(&mut self, addr: &str, key: &str) -> Result<String, String> {
+    pub(crate) fn lan_bridge(&mut self, addr: &str, key: &str) -> Result<String, String> {
         let sock: std::net::SocketAddr = addr.parse().map_err(|_| format!("the booth's encrypted link address `{addr}` is not one"))?;
         let host = soundcraft_net::internet::lan_addr(key, sock).ok_or("the booth's key is damaged: pair again")?;
         Ok(self.lan_client()?.bridge_to(host)?.to_string())
@@ -254,6 +307,31 @@ impl NetState {
             soundcraft_net::hub::LinkKind::Plain
         };
         kind.text()
+    }
+
+    /// This PC's key on the encrypted local link it dials from (hex), started when needed.
+    pub(crate) fn lan_client_key(&mut self) -> Option<String> {
+        self.lan_client().ok().map(soundcraft_net::internet::Internet::key_hex)
+    }
+
+    /// The FreeDAWm PCs found on this network so far (browsing starts on the first call).
+    pub(crate) fn found(&mut self) -> Vec<soundcraft_net::discovery::Found> {
+        if self.discovery.is_none() {
+            self.browse();
+        }
+        self.discovery.as_ref().map(Discovery::found).unwrap_or_default()
+    }
+
+    /// The list of PCs found, shared with a link that looks its peer up by name.
+    pub(crate) fn found_handle(&mut self) -> Option<Arc<Mutex<Vec<soundcraft_net::discovery::Found>>>> {
+        self.discovery().map(|d| d.found_handle())
+    }
+
+    /// Looks for FreeDAWm PCs on this network.
+    pub(crate) fn browse(&mut self) {
+        if let Some(d) = self.discovery() {
+            let _ = d.browse();
+        }
     }
 
     fn stop_listening(&mut self) {
@@ -353,14 +431,16 @@ impl NetState {
     }
 
     /// A local port bridged to the booth whose address (JSON, from its invite) is `addr`.
-    fn bridge(&mut self, addr: &str) -> Result<String, String> {
+    pub(crate) fn bridge(&mut self, addr: &str) -> Result<String, String> {
         Ok(self.internet()?.bridge_to_json(addr)?.to_string())
     }
 
-    /// Makes an invite (valid 30 minutes, once): the code to send the performer.
+    /// Makes an invite (for one person: valid 30 minutes, once; reusable: for the time and the
+    /// joins chosen): the code to send the performer. Both kinds are the same code.
     fn make_invite(&mut self) -> Result<String, String> {
         let addr = self.internet()?.addr(Duration::from_secs(5));
-        let secret = self.hub.new_invite_secret();
+        let secret =
+            if self.invite_reusable { self.hub.new_reusable_invite(self.invite_secs, self.invite_joins) } else { self.hub.new_invite_secret() };
         Ok(soundcraft_net::internet::Invite { addr, secret, name: self.hub.pc_name() }.code())
     }
 
@@ -553,12 +633,18 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
     net.hub.set_tap(app.player.as_ref().map(soundcraft_playback::Player::mix_tap), rate);
     if let Some(f) = &net.follower {
         let follow = net.hub.config().follow;
-        let input = app.player.as_ref().map(soundcraft_playback::Player::stream_in);
-        if let Some(i) = &input {
-            i.set_gain(follow.mix_gain);
+        if crate::studio_ui::owns_stream(&net) {
+            // Mixing a studio remotely: its master has the player's stream input.
+            f.set_stream(false, None, rate);
+        } else {
+            let input = app.player.as_ref().map(soundcraft_playback::Player::stream_in);
+            if let Some(i) = &input {
+                i.set_gain(follow.mix_gain);
+            }
+            f.set_stream(follow.hear_mix, input, rate);
         }
-        f.set_stream(follow.hear_mix, input, rate);
     }
+    crate::studio_ui::step(app, &mut net);
     if let Some(p) = &app.player {
         *net.clock.probe.write().unwrap_or_else(PoisonError::into_inner) = Some(p.probe());
         net.clock.rate.store(app.engine.session().sample_rate.hz(), Ordering::Relaxed);
@@ -576,7 +662,9 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
         }
         // The status feed's clock and meters move while it rolls.
         ctx.request_repaint_after(Duration::from_millis(if app.is_playing() { 66 } else { 500 }));
+        publish_mixer(app, &mut net, ctx);
     }
+    keep_awake(app, &mut net);
     match &net.follower {
         Some(f) => {
             let timeout = Duration::from_secs(net.hub.config().contact_timeout_s.max(1));
@@ -591,6 +679,79 @@ pub fn step(app: &mut SoundApp, ctx: &egui::Context) {
     app.net = Some(net);
 }
 
+/// The mixer feed to subscribed PCs (`mixer.subscribe`): the mixer and the meters as the Mix
+/// window shows them, about 20 times a second, built only while a PC subscribes. Never waits on
+/// the network: the hub keeps the latest and its pushers send it.
+fn publish_mixer(app: &SoundApp, net: &mut NetState, ctx: &egui::Context) {
+    use soundcraft_engine::surface::feed;
+    if net.hub.mixer_subscribers() == 0 {
+        net.mixer_at = None;
+        return;
+    }
+    ctx.request_repaint_after(Duration::from_millis(50));
+    if net.mixer_at.is_some_and(|t| t.elapsed() < Duration::from_millis(50)) {
+        return;
+    }
+    net.mixer_at = Some(std::time::Instant::now());
+    net.hub.publish_mixer(feed::mixer_state(&app.engine));
+    let s = app.engine.session();
+    let levels: Vec<(u64, feed::StripLevels)> = feed::feed_tracks(s)
+        .map(|t| {
+            let m = if t.kind == soundcraft_model::TrackKind::Master { Some(&app.main_meter) } else { app.meters.get(&t.id) };
+            let l = m.map_or_else(feed::StripLevels::default, |m| feed::StripLevels { peak: m.level, rms: m.rms, gr_db: m.gr });
+            (t.id.0, l)
+        })
+        .collect();
+    let rate = s.sample_rate.as_f64().max(1.0);
+    let pos = if app.engine.transport.playing { app.engine.transport.position } else { s.edit.playhead };
+    net.hub.publish_meters(feed::meters_json(pos as f64 / rate, &levels));
+}
+
+/// Whether this PC should stay awake: it lets the network in and either a paired PC is
+/// connected (a remote recorder, a listener, a PC controlling it) or a track hears its live input
+/// (Input Monitoring On, or armed on Auto): a live event or a remote mix in progress.
+fn wants_awake(app: &SoundApp, net: &NetState) -> bool {
+    let serving = net.hub.listening_port().is_some() || net.hub.internet_port().is_some();
+    let live = app.engine.session().tracks.iter().any(|t| {
+        !t.inactive
+            && match t.mixer.input_monitor {
+                soundcraft_model::InputMonitor::On => true,
+                soundcraft_model::InputMonitor::Auto => t.mixer.record_arm,
+                soundcraft_model::InputMonitor::Off => false,
+            }
+    });
+    serving && (net.hub.connected_pcs() > 0 || live)
+}
+
+/// Holds or lets go of the keep-awake once a frame (see [`wants_awake`]).
+fn keep_awake(app: &SoundApp, net: &mut NetState) {
+    // Only a real app (with a settings file): tests and renders never hold the PC awake.
+    let want = app.services.network_file.is_some() && wants_awake(app, net);
+    let recent = net.awake_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(5));
+    if want && net.awake.is_held() {
+        // Now and then: is the hold still standing (the helper may have ended)?
+        if !recent {
+            net.awake_checked = Some(std::time::Instant::now());
+            if !net.awake.still_held() {
+                net.awake_error = Some("Could not keep this PC awake: it may sleep as its power settings say.".into());
+            }
+        }
+        return;
+    }
+    if want && net.awake_error.is_some() && recent {
+        // Tried lately and failed: again in a few seconds, not every frame.
+        return;
+    }
+    net.awake_checked = Some(std::time::Instant::now());
+    match net.awake.set(want, "FreeDAWm is serving remotes (Setup › Network)") {
+        Ok(_) => net.awake_error = None,
+        Err(e) => {
+            log::info!("keep awake: {e}");
+            net.awake_error = Some(format!("Could not keep this PC awake: {e}"));
+        }
+    }
+}
+
 /// Pairing requests waiting: their codes, on screen, wherever the user is.
 /// What a paired device can do, and how far the local link can be trusted: shown in the Network
 /// window, under the switch that lets the network in.
@@ -600,6 +761,9 @@ what passes over it. PCs pair over the encrypted local link when this PC offers 
 keys with it, so another computer cannot sit between the two; connections over the internet are encrypted too. \
 Pair only devices you trust, on a network you trust.";
 
+/// Setup › Network while the keep-awake is held.
+pub(crate) const AWAKE_NOTE: &str = "Keeping this PC awake while remotes are connected (or live inputs are monitored).";
+
 /// Under a PC's pairing code: what the code does there.
 pub(crate) const PC_CODE_NOTE: &str = "The code is never sent over the network: the two PCs prove it to each other, with their keys.";
 
@@ -608,39 +772,197 @@ pub(crate) const PAIRING_NOTE: &str = "Pair only a device you trust: once paired
 
 pub fn pairing_prompt(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(net) = &app.net else { return };
+    notices_window(net, ctx);
     let pending = net.hub.pending_pairings();
     if pending.is_empty() {
         return;
     }
     let t = Tokens::current();
     let mut deny = None;
+    let mut allow = None;
     egui::Window::new("Pairing request").anchor(egui::Align2::RIGHT_TOP, vec2(-16.0, 60.0)).collapsible(false).resizable(false).show(ctx, |ui| {
         for p in &pending {
-            ui.label(format!("{} wants to {}.", p.name, if p.kind == "pc" { "connect as a remote recorder" } else { "control this PC" }));
-            ui.horizontal(|ui| {
-                ui.label("Type this code on it:");
-                ui.label(egui::RichText::new(&p.code).size(28.0).strong().monospace().color(t.text));
-            });
-            if p.kind == "pc" {
-                ui.label(egui::RichText::new(PC_CODE_NOTE).small().color(t.text_dim));
-            }
-            if ui.button("Deny").clicked() {
-                deny = Some(p.id.clone());
+            let wants = if p.kind == "pc" { "connect as a remote recorder" } else { "control this PC" };
+            if p.pin && !p.allowed {
+                // Ask me before each device joins: Allow instead of a code.
+                ui.label(format!("{} wants to {} with the booth PIN.", p.from, wants));
+                ui.horizontal(|ui| {
+                    if ui.button("Allow").clicked() {
+                        allow = Some(p.id.clone());
+                    }
+                    if ui.button("Deny").clicked() {
+                        deny = Some(p.id.clone());
+                    }
+                });
+            } else if p.pin {
+                ui.label(format!("{} is pairing with the booth PIN, to {}.", p.from, wants));
+                if ui.button("Deny").clicked() {
+                    deny = Some(p.id.clone());
+                }
+            } else {
+                ui.label(format!("{} wants to {}.", p.name, wants));
+                ui.horizontal(|ui| {
+                    ui.label("Type this code on it:");
+                    ui.label(egui::RichText::new(&p.code).size(28.0).strong().monospace().color(t.text));
+                });
+                if p.kind == "pc" {
+                    ui.label(egui::RichText::new(PC_CODE_NOTE).small().color(t.text_dim));
+                }
+                if ui.button("Deny").clicked() {
+                    deny = Some(p.id.clone());
+                }
             }
             ui.separator();
         }
-        ui.label(egui::RichText::new("Nothing pairs without this code.").small().color(t.text_dim));
+        if pending.iter().any(|p| !p.pin) {
+            ui.label(egui::RichText::new("Nothing pairs without this code.").small().color(t.text_dim));
+        } else {
+            ui.label(egui::RichText::new("Nothing pairs without the booth PIN.").small().color(t.text_dim));
+        }
         ui.label(egui::RichText::new(PAIRING_NOTE).small().color(t.text_dim));
     });
     if let Some(id) = deny {
         net.hub.deny_pairing(&id);
     }
+    if let Some(id) = allow {
+        net.hub.allow_pairing(&id);
+    }
     ctx.request_repaint_after(Duration::from_millis(500));
+}
+
+/// What the network tells the booth's owner (a device paired with the booth PIN, PIN pairing
+/// paused or turned off), wherever the user is, until dismissed.
+fn notices_window(net: &NetState, ctx: &egui::Context) {
+    let notices = net.hub.notices();
+    if notices.is_empty() {
+        return;
+    }
+    let mut dismiss = Vec::new();
+    egui::Window::new("Network")
+        .id(egui::Id::new("net-notices"))
+        .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-16.0, -60.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            for (id, text) in &notices {
+                ui.horizontal(|ui| {
+                    ui.label(text);
+                    if ui.small_button("OK").clicked() {
+                        dismiss.push(*id);
+                    }
+                });
+            }
+            if notices.len() > 1 && ui.small_button("Dismiss all").clicked() {
+                dismiss.extend(notices.iter().map(|(id, _)| *id));
+            }
+        });
+    for id in dismiss {
+        net.hub.dismiss_notice(id);
+    }
+}
+
+/// What the booth PIN is for, under its field.
+pub(crate) const PIN_NOTE: &str = "With a booth PIN, devices pair by typing it instead of a code shown here, so nobody needs to be at the booth. \
+PCs never send it (it proves both PCs' keys, as the code does); the phone's page sends it over the plain link, as it does the code. \
+It never works over the internet: performers there still need an invite.";
+
+/// Under the booth PIN: what changing it does to devices already paired.
+pub(crate) const PIN_KEEPS_NOTE: &str = "Changing or clearing the PIN does not unpair devices already paired: they keep their own keys. \
+Use Forget (or Forget all) for that.";
+
+/// Setup › Network › Booth PIN: set, show, suggest or clear it; ask before each device joins;
+/// where it stands (paused or turned off after wrong tries, with the way back on).
+fn pin_section(ui: &mut egui::Ui, net: &mut NetState) {
+    use soundcraft_net::hub::PinState;
+    let t = Tokens::current();
+    let cfg = net.hub.config();
+    let set = !cfg.booth_pin.is_empty();
+    ui.horizontal(|ui| {
+        ui.label(if set { "Booth PIN:" } else { "Booth PIN (none):" });
+        // The PIN set is shown (masked unless Show) until a new one is typed.
+        if net.pin_edit.is_empty() && set && !ui.memory(|m| m.has_focus(egui::Id::new("net-pin"))) {
+            net.pin_edit = cfg.booth_pin.clone();
+        }
+        ui.add(
+            egui::TextEdit::singleline(&mut net.pin_edit)
+                .id(egui::Id::new("net-pin"))
+                .password(!net.pin_show)
+                .hint_text("at least 6 characters")
+                .desired_width(140.0),
+        );
+        ui.checkbox(&mut net.pin_show, "Show");
+        if ui.button("Suggest one").on_hover_text("A random 6-digit PIN").clicked() {
+            net.pin_edit = soundcraft_net::pairing::suggest_pin(soundcraft_net::hub::random_u64);
+            net.pin_show = true;
+            net.pin_msg = "Suggested: press Set PIN to use it.".into();
+        }
+        let changed = net.pin_edit.trim() != cfg.booth_pin;
+        if ui.add_enabled(changed && !net.pin_edit.trim().is_empty(), egui::Button::new("Set PIN")).clicked() {
+            net.pin_msg = match net.hub.set_booth_pin(&net.pin_edit) {
+                Ok(()) => {
+                    net.pin_edit = net.hub.config().booth_pin;
+                    "Booth PIN set: devices can pair by typing it.".into()
+                }
+                Err(e) => e,
+            };
+        }
+        if set && ui.button("Clear").on_hover_text("No booth PIN: a random code per request, shown here").clicked() {
+            net.hub.clear_booth_pin();
+            net.pin_edit.clear();
+            net.pin_msg = "Booth PIN cleared: each request shows a code here again.".into();
+        }
+    });
+    if !net.pin_msg.is_empty() {
+        let bad = net.pin_msg.starts_with("The booth PIN");
+        ui.colored_label(if bad { t.rec } else { t.text_dim }, &net.pin_msg);
+    }
+    if set {
+        let mut ask = cfg.pin_ask;
+        if ui.checkbox(&mut ask, "Ask me before each device joins").on_hover_text("A device typing the PIN waits for Allow on this screen").changed()
+        {
+            net.hub.set_pin_ask(ask);
+        }
+        match net.hub.pin_state() {
+            PinState::Unset | PinState::On => {
+                ui.label(
+                    egui::RichText::new("PIN pairing on: each device that joins with it is shown here and in Paired devices.").color(t.text_dim),
+                );
+            }
+            PinState::Paused { secs_left, from } => {
+                ui.colored_label(
+                    t.rec,
+                    format!(
+                        "PIN pairing paused: {} wrong tries from {from}. Back on in {} min (a code shows here meanwhile).",
+                        soundcraft_net::pairing::PIN_STREAK,
+                        (secs_left / 60.0).ceil()
+                    ),
+                );
+                if ui.button("Resume PIN pairing now").clicked() {
+                    net.hub.reset_pin_guard();
+                }
+            }
+            PinState::Off { from } => {
+                ui.colored_label(
+                    t.rec,
+                    format!(
+                        "PIN pairing turned off after {} wrong tries (the last from {from}). Consider a new PIN.",
+                        soundcraft_net::pairing::PIN_OFF_AFTER
+                    ),
+                );
+                if ui.button("Turn PIN pairing back on").clicked() {
+                    net.hub.reset_pin_guard();
+                }
+            }
+        }
+    }
+    ui.label(egui::RichText::new(PIN_NOTE).small().color(t.text_dim));
+    ui.label(egui::RichText::new(PIN_KEEPS_NOTE).small().color(t.text_dim));
 }
 
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     pairing_prompt(app, ctx);
     performer_panel(app, ctx);
+    crate::studio_ui::show(app, ctx);
     let mut open = app.ui.show_network;
     if !open {
         return;
@@ -682,6 +1004,11 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 if allow { net.start_listening() } else { net.stop_listening() }
             }
             ui.label(egui::RichText::new(LOCAL_LINK_NOTE).small().color(t.text_dim));
+            if net.awake.is_held() {
+                ui.label(egui::RichText::new(AWAKE_NOTE).color(t.text_dim));
+            } else if let Some(e) = &net.awake_error {
+                ui.colored_label(t.rec, e);
+            }
             ui.horizontal(|ui| {
                 ui.label("Port:");
                 let mut port = i64::from(cfg.port);
@@ -708,7 +1035,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                         ui.label("Service remote (any browser on this network):");
                         ui.hyperlink_to(egui::RichText::new(&url).size(16.0).strong(), &url);
                         ui.label(
-                            egui::RichText::new("Scan with the phone's camera. The first visit asks for the code shown here.")
+                            egui::RichText::new("Scan with the phone's camera. The first visit asks for the code shown here, or the booth PIN.")
                                 .small()
                                 .color(t.text_dim),
                         );
@@ -755,6 +1082,23 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             if let Some(tok) = forget {
                 net.hub.forget(&tok);
             }
+            if !cfg.paired.is_empty() {
+                ui.horizontal(|ui| {
+                    let label = if net.forget_all_armed { format!("Really forget all {}?", cfg.paired.len()) } else { "Forget all…".to_string() };
+                    if ui.button(label).on_hover_text("Every device must pair again").clicked() {
+                        if net.forget_all_armed {
+                            net.hub.forget_all();
+                        }
+                        net.forget_all_armed = !net.forget_all_armed;
+                    }
+                    if net.forget_all_armed && ui.button("Cancel").clicked() {
+                        net.forget_all_armed = false;
+                    }
+                });
+            }
+            ui.add_space(6.0);
+            ui.heading("Booth PIN");
+            pin_section(ui, &mut net);
             ui.add_space(6.0);
             ui.separator();
             ui.heading("Follow a booth");
@@ -768,6 +1112,10 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
             ui.separator();
             ui.heading("Connect over the internet");
             internet_section(ui, &mut net, ctx);
+            ui.add_space(6.0);
+            ui.separator();
+            ui.heading("Remote mixing");
+            mixing_section(ui, &mut net);
         });
     });
     app.net = Some(net);
@@ -827,7 +1175,7 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
         let addr = cfg.follow.booth_addr.clone();
         if ui
             .add_enabled(!addr.is_empty(), egui::Button::new(if paired { "Pair again…" } else { "Pair…" }))
-            .on_hover_text("The booth shows a 4-digit code")
+            .on_hover_text("The booth shows a 4-digit code, or has a booth PIN")
             .clicked()
         {
             let job = Arc::clone(&net.pair.result);
@@ -855,7 +1203,7 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
             let me = me.clone();
             let c = ctx.clone();
             std::thread::spawn(move || {
-                let r = pair_request(&addr, &me).map(|id| json!({"request": id}));
+                let r = pair_request_info(&addr, &me).map(|r| json!({"request": r.request, "pin": r.pin, "ask": r.ask}));
                 *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
                 c.request_repaint();
             });
@@ -866,7 +1214,13 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
         match r {
             Ok(v) if v.get("request").is_some() => {
                 net.pair.request = v["request"].as_str().map(str::to_string);
-                net.pair_status = "Type the code the booth shows:".into();
+                net.pair_status = if v["ask"] == true {
+                    "Type the booth PIN (someone at the booth must also press Allow):".into()
+                } else if v["pin"] == true {
+                    "Type the booth PIN:".into()
+                } else {
+                    "Type the code the booth shows:".into()
+                };
             }
             Ok(v) => {
                 let token = v["token"].as_str().unwrap_or("").to_string();
@@ -897,7 +1251,8 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
     }
     if let Some(req) = net.pair.request.clone() {
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut net.code_edit).desired_width(70.0).hint_text("0000"));
+            ui.label("Code or booth PIN:");
+            ui.add(egui::TextEdit::singleline(&mut net.code_edit).id(egui::Id::new("net-code")).desired_width(140.0).hint_text("code or PIN"));
             if ui.button("Pair").clicked() {
                 let job = Arc::clone(&net.pair.result);
                 // The code is the exchange's password, over the booth's key this PC dialled and its
@@ -962,6 +1317,73 @@ fn follow_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context, pi
         ui.colored_label(if badge.recording() { t.rec } else { t.text }, format!("{}{detail}", badge.text()));
         ui.label(egui::RichText::new(format!("Link: {}", net.follow_link())).small().color(t.text_dim))
             .on_hover_text("Encrypted local link: QUIC to the booth's key, kept since pairing. Not encrypted: the plain TCP link of earlier versions; pair again with a booth that offers the encrypted link to move to it");
+    }
+}
+
+/// What Setup › Network says under "Lock remote mixing".
+pub(crate) const LOCK_NOTE: &str = "Paired PCs can still see this mixer and hear the mix, but every change from them is refused \
+(faders, mutes, plug-ins, undo). For the whole session, every remote alike. Your own controls are not affected.";
+
+/// Remote mixing on this PC (File › Connect to a Studio… on another): the lock, and the PCs
+/// connected now, mixing or listening, with Disconnect and Forget.
+fn mixing_section(ui: &mut egui::Ui, net: &mut NetState) {
+    let t = Tokens::current();
+    if std::mem::take(&mut net.reveal_mixing) {
+        ui.scroll_to_cursor(Some(egui::Align::Min));
+    }
+    let mut locked = net.hub.remote_lock();
+    if ui
+        .checkbox(&mut locked, "Lock remote mixing")
+        .on_hover_text("Remotes keep watching and listening; their changes are refused until this is off")
+        .changed()
+    {
+        net.hub.set_remote_lock(locked);
+    }
+    ui.label(egui::RichText::new(LOCK_NOTE).small().color(t.text_dim));
+    let pcs = net.hub.remote_pcs();
+    if pcs.is_empty() {
+        ui.label(egui::RichText::new("No PC is connected to this one now.").small().color(t.text_dim));
+    }
+    let mut disconnect = None;
+    let mut forget = None;
+    for pc in &pcs {
+        ui.horizontal(|ui| {
+            let state = match pc.last_change {
+                Some(s) => format!("{}: mixing · last change {}", pc.name, soundcraft_net::hub::ago(s)),
+                None => format!("{}: connected (watching or listening)", pc.name),
+            };
+            ui.label(state);
+            if ui
+                .small_button("Disconnect")
+                .on_hover_text(
+                    "Ends its connection now; it may not connect again until you let it back in (or FreeDAWm restarts). Its changes so far stay.",
+                )
+                .clicked()
+            {
+                disconnect = Some(pc.token.clone());
+            }
+            if ui.small_button("Forget").on_hover_text("Ends its connection and unpairs it: it must pair again").clicked() {
+                forget = Some(pc.token.clone());
+            }
+        });
+    }
+    if let Some(tok) = disconnect {
+        net.hub.disconnect(&tok);
+    }
+    if let Some(tok) = forget {
+        net.hub.forget(&tok);
+    }
+    let mut back = None;
+    for (name, tok) in net.hub.sent_away() {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("{name}: disconnected by you")).color(t.text_dim));
+            if ui.small_button("Let back in").clicked() {
+                back = Some(tok.clone());
+            }
+        });
+    }
+    if let Some(tok) = back {
+        net.hub.let_back(&tok);
     }
 }
 
@@ -1053,17 +1475,58 @@ fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) 
     }
     if host {
         ui.horizontal(|ui| {
-            if ui.button("Invite…").on_hover_text("A code for the performer: valid for 30 minutes, once").clicked() {
+            ui.radio_value(&mut net.invite_reusable, false, "One person").on_hover_text("Valid for 30 minutes, once");
+            ui.radio_value(&mut net.invite_reusable, true, "Reusable").on_hover_text("Several people can join with the same code");
+            if net.invite_reusable {
+                let shown = INVITE_SPANS.iter().find(|(_, s)| *s == net.invite_secs).map_or("1 day", |(l, _)| l);
+                egui::ComboBox::from_id_salt("net-invite-span").selected_text(format!("for {shown}")).show_ui(ui, |ui| {
+                    for (label, secs) in INVITE_SPANS {
+                        ui.selectable_value(&mut net.invite_secs, secs, label);
+                    }
+                });
+                ui.add(egui::DragValue::new(&mut net.invite_joins).range(1..=soundcraft_net::hub::MAX_INVITE_JOINS).suffix(" joins"));
+            }
+            let hover = if net.invite_reusable {
+                "One code for several performers, until it runs out or you revoke it"
+            } else {
+                "A code for the performer: valid for 30 minutes, once"
+            };
+            if ui.button("Invite…").on_hover_text(hover).clicked() {
                 match net.make_invite() {
                     Ok(code) => net.invite = Some((code, std::time::Instant::now())),
                     Err(e) => net.error = Some(e),
                 }
             }
-            let open = net.hub.open_invites();
-            if let Some(left) = open.iter().copied().fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.max(b)))) {
-                ui.label(egui::RichText::new(format!("Invite waiting: {} min left", (left / 60.0).ceil())).color(t.text_dim));
-            }
         });
+        if net.invite_reusable {
+            let span = INVITE_SPANS.iter().find(|(_, s)| *s == net.invite_secs).map_or("1 day", |(l, _)| l);
+            ui.label(
+                egui::RichText::new(format!(
+                    "Reusable: up to {} people can join with the same code within {span}. Revoke ends it at once; those who joined stay paired.",
+                    net.invite_joins
+                ))
+                .small()
+                .color(t.text_dim),
+            );
+        }
+        let open = net.hub.invites();
+        let mut revoke = None;
+        for i in &open {
+            ui.horizontal(|ui| {
+                let text = if i.reusable {
+                    format!("Reusable invite: {} left, {} of {} joins used", time_left(i.secs_left), i.joins, i.max_joins)
+                } else {
+                    format!("Invite for one person: {} left", time_left(i.secs_left))
+                };
+                ui.label(egui::RichText::new(text).color(t.text_dim));
+                if ui.small_button("Revoke").on_hover_text("Ends it now; devices that joined with it stay paired").clicked() {
+                    revoke = Some(i.id.clone());
+                }
+            });
+        }
+        if let Some(id) = revoke {
+            net.hub.revoke_invite(&id);
+        }
         if let Some((code, _)) = net.invite.clone() {
             let mut shown = code.clone();
             ui.add(egui::TextEdit::multiline(&mut shown).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
@@ -1105,6 +1568,9 @@ fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) 
                 Err(e) => net.join_status = e,
                 Ok(inv) => {
                     let addr_json = serde_json::to_string(&inv.addr).unwrap_or_default();
+                    // Joined this booth before: its token goes along (to that booth only), so a
+                    // reusable invite recognises this PC instead of using a join.
+                    let again = same_booth(&cfg.follow.internet, &addr_json).then(|| cfg.follow.token.clone());
                     match net.bridge(&addr_json) {
                         Err(e) => net.join_status = e,
                         Ok(bridge) => {
@@ -1114,7 +1580,7 @@ fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) 
                             let c = ctx.clone();
                             let booth = inv.name.clone();
                             std::thread::spawn(move || {
-                                let r = soundcraft_net::follower::pair_invite(&bridge, &inv.secret, &me)
+                                let r = soundcraft_net::follower::pair_invite_as(&bridge, &inv.secret, &me, again.as_deref())
                                     .map(|(token, pc)| json!({"token": token, "pc": if pc.is_empty() { booth } else { pc }, "addr": addr_json}));
                                 *job.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
                                 c.request_repaint();
@@ -1188,6 +1654,12 @@ fn internet_section(ui: &mut egui::Ui, net: &mut NetState, ctx: &egui::Context) 
         .small()
         .color(t.text_dim),
     );
+}
+
+/// Two booth addresses (JSON, from invites) name the same booth: the same key.
+fn same_booth(a: &str, b: &str) -> bool {
+    let id = |s: &str| serde_json::from_str::<Value>(s).ok().map(|v| v["id"].clone()).filter(|v| !v.is_null());
+    id(a).is_some_and(|a| Some(a) == id(b))
 }
 
 /// What this PC's screen says about the booth it follows (the toolbar badge), while following.

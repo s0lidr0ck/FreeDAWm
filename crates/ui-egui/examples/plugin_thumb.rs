@@ -68,6 +68,7 @@ fn look(id: &str) -> Look {
             ("high_shelf_gain", 5.0),
         ]),
         "compressor" => params(&[("threshold", -30.0), ("ratio", 6.0), ("makeup", 6.0)]),
+        "autopitch" => params(&[("key", 7.0)]),
         "expander_gate" => params(&[("threshold", -30.0), ("range", 40.0)]),
         "de_esser" => params(&[("freq", 7500.0), ("threshold", -42.0), ("range", 14.0)]),
         "maximizer" => params(&[("threshold", -9.0), ("ceiling", -1.0)]),
@@ -210,6 +211,21 @@ fn test_signal() -> [Vec<f32>; 2] {
     out
 }
 
+/// A sung-like tone for Plumb: F#4 30 cents sharp with a light vibrato, two seconds, stereo.
+fn sung_tone() -> [Vec<f32>; 2] {
+    let n = (SR * 2.0) as usize;
+    let mut ph = 0.0f64;
+    let one: Vec<f32> = (0..n)
+        .map(|i| {
+            let t = f64::from(i as u32) / f64::from(SR);
+            let cents = 6630.0 + 25.0 * (std::f64::consts::TAU * 5.5 * t).sin();
+            ph += std::f64::consts::TAU * 440.0 * 2f64.powf((cents - 6900.0) / 1200.0) / f64::from(SR);
+            ((1..=12).map(|k| (f64::from(k) * ph).sin() / f64::from(k)).sum::<f64>() * 0.15) as f32
+        })
+        .collect();
+    [one.clone(), one]
+}
+
 /// The meters of `module` with `params` set, after the test signal ran through the plugin.
 /// `state`: the module's stored state, for a plugin that works from one (CopyQ's target).
 fn feed(plugin: &str, params: &Map<String, Value>, module: ModuleId, state: Option<&[u8]>) -> Option<StripMeter> {
@@ -224,7 +240,8 @@ fn feed(plugin: &str, params: &Map<String, Value>, module: ModuleId, state: Opti
     if let Some(state) = state {
         p.load_state(state);
     }
-    let input = test_signal();
+    // Plumb hears a voice (a sung tone 30 cents sharp of F#4), not the drum loop.
+    let input = if plugin == "autopitch" { sung_tone() } else { test_signal() };
     let mut m = ModuleMeter { module, ..ModuleMeter::default() };
     // CopyQ has to hear a few seconds before it trusts what it measured.
     let rounds = if plugin == "fs_copyq" { 4 } else { 1 };

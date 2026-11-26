@@ -396,7 +396,7 @@ pub fn draw_references(app: &mut SoundApp, ui: &Ui, painter: &Painter, v: &RollV
     for t in shown {
         let c = colour(app, t);
         let typical = roll::typical(app, t);
-        for cv in roll::clip_views(app, t, Some((v.t0, v.t1))).iter().filter(|c| !c.stretched) {
+        for cv in roll::clip_views(app, t, Some((v.t0, v.t1))).iter().filter(|c| c.untunable.is_none()) {
             let shapes: Vec<NoteShape> =
                 note_shapes(v, &cv.clip, &cv.a, cv.curves.as_deref(), typical, |n| moved_target_of(cv, n), |n| tuned_centre_of(cv, n));
             for sh in shapes {

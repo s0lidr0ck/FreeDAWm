@@ -1,6 +1,6 @@
 # Four-DAW parity, section 7: writing MIDI
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-18 · **Change:** minor (bug fixes and tier-2 items over three rounds, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-22 · **Change:** minor (bug fixes and tier-2 items over three rounds, see the revision history) · **Compared with:** Avid Pro Tools 2026.4.1, Fender Studio Pro 8.2 (formerly PreSonus Studio One), Apple Logic Pro 13.0, Steinberg Cubase Pro 15
 
 > Pro Tools, Studio Pro / Studio One, Logic Pro and Cubase are trademarks of their owners (Avid,
 > Fender/PreSonus, Apple, Steinberg). Third-party instruments named below belong to their makers.
@@ -223,7 +223,7 @@ The gaps are of four kinds:
 | Feature | PT | SP | Logic | Cubase | FreeDAWm |
 |---|:-:|:-:|:-:|:-:|---|
 | Virtual players that follow chords and sections | ○ | ○ | ● | ◐ | **Works**: the Band, six players (drums, bass, keys, organ, guitar, bowed) with feels; printed to editable clips |
-| Audio to MIDI | ● | ● | ● | ● | **Works**: general, piano, drum and vocal models, and a single-line pitch tracker |
+| Audio to MIDI | ● | ● | ● | ● | **Works**: general, piano, drum and vocal models, a single-line pitch tracker, and the Vocal Editor's tuned notes (with the user's splits, joins and drags) to a MIDI track under the vocal or a .mid file (AI › Tune Vocal, the editor's MIDI menu) |
 | Drum hits in audio to notes | ◐ | ● | ● | ● | **Works**: through the drum model (kick, snare, hats apart), and Beat Detective › Write MIDI (`event.hits_to_midi`): a note for each hit found in the selection on the selected audio tracks (one pitch, the kick's unless given, and one velocity; hits within 30 ms are one), in a new MIDI clip on a new drum-synth track. Hits are not sorted into drums by sound, and their loudness is not read (58c4add) |
 | Arpeggio, strum and chord-progression writers | ○ | ● | ● | ● | **Works**: Event › Write Arpeggio (`event.write_arpeggio`) turns the selected clip's held notes into the notes an arpeggiator plays (rate, pattern, octaves, gate; the track's own MIDI effects when it has some, the clip then playing past them as Record Effects' Output does), by the same effect code run offline on the song's grid. Write Progression (`event.write_progression`) writes a clip of voiced chords on the selected MIDI track over the edit selection (else four bars): the chord lane's chords, or a progression in the key (I–V–vi–IV and six others, or degrees typed so), whole, half, quarter or strummed, each chord moving to the inversion nearest the one before with its root below. Strum: the MIDI Operations' Strum. One undo step each. The menu items run with the defaults; scripts set the rest |
 | MIDI from a text description; a song from a prompt | ○ | ○ | ○ | ○ | **Works** (downloaded models) |
@@ -617,3 +617,4 @@ What instruments count as "in the box" differs by edition and bundle.
 | 2026-11-18 | minor | The synths named Burley, Cicada and Steeple, each drawn as an instrument panel with patching on its front and cables on its back |
 | 2026-11-18 | minor | Wavetable Synth: tables made from the user's own audio (fixed, pitch-tracked, spectral) |
 | 2026-11-19 | minor | Factory preset suites for Burley, Cicada and Steeple (68, 66, 68 presets in four tiers), a preset lab and tests |
+| 2026-11-22 | minor | Audio to MIDI: the Vocal Editor's notes as a MIDI track or a .mid file |

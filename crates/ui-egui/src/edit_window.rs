@@ -248,7 +248,7 @@ fn status_bar(app: &mut SoundApp, ui: &mut Ui) {
             soundcraft_model::BitDepthSetting::Float32 => "32-bit float",
         },
         s.tracks.len(),
-        match app.vocal_worker.busy() {
+        match app.vocal_worker.busy().or_else(|| app.gild_worker.busy()) {
             Some(v) if app.ui.status.is_empty() => v,
             Some(v) => format!("{} · {v}", app.ui.status),
             None => app.ui.status.clone(),
@@ -264,17 +264,31 @@ fn status_bar(app: &mut SoundApp, ui: &mut Ui) {
         regular(11.0),
         t.text_dim,
     );
-    // Underruns since the last reset, never silent; a click resets the count.
+    // Underruns since the last reset, never silent; a click resets the count. The device's
+    // (the buffer too small) and the disk's (audio played from disk not read in time) apart.
     let underruns = app.player.as_ref().map_or(0, soundcraft_playback::Player::underruns);
-    if underruns > 0 {
-        let at = pos2(right.min.x - 16.0, r.center().y);
-        let text = ui.painter().text(at, Align2::RIGHT_CENTER, format!("Underruns: {underruns}"), regular(11.0), t.meter_red);
-        let resp = ui
-            .interact(text.expand(2.0), ui.id().with("underruns"), Sense::click())
-            .on_hover_text("Audio dropouts: the buffer is too small for the session. Click to reset the count.");
+    let late = soundcraft_model::disk::underruns_since_reset();
+    let mut at = pos2(right.min.x - 16.0, r.center().y);
+    for (n, label, key, tip) in [
+        (underruns, "Underruns", "underruns", "Audio dropouts: the buffer is too small for the session. Click to reset the count."),
+        (
+            late,
+            "Disk too slow",
+            "disk_underruns",
+            "Blocks of audio played from disk that were not read in time (each played as a short silence). Click to reset the count.",
+        ),
+    ] {
+        if n == 0 {
+            continue;
+        }
+        let shown = format!("{label}: {n}");
+        let text = ui.painter().text(at, Align2::RIGHT_CENTER, &shown, regular(11.0), t.meter_red);
+        let resp = ui.interact(text.expand(2.0), ui.id().with(key), Sense::click()).on_hover_text(tip);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &shown));
         if resp.clicked() {
             let _ = app.run("ui.reset_underruns", serde_json::json!({}));
         }
+        at.x = text.min.x - 16.0;
     }
 }
 
@@ -1111,7 +1125,7 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
             painter.rect(band, 0.0, t_accent_fill(), Stroke::new(1.0, Tokens::current().accent), StrokeKind::Inside);
         }
     }
-    crate::lyrics_lane::draw(&painter, &s, track, tl, lane);
+    // The words strip is drawn over the lane after its interaction (it takes its own clicks).
     if track.kind == TrackKind::Master || track.kind == TrackKind::Aux || track.kind == TrackKind::Vca {
         let p = auto_view.clone().unwrap_or(AutoParam::Volume);
         draw_automation(&painter, &s, track, &p, tl, lane, &selected_points(&p));
@@ -1126,6 +1140,7 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect, 
         }
     }
     lane_interaction(app, ui, track, lane, tl, pitch_claimed, None);
+    crate::word_lane::track_strip(app, ui, track, tl, lane);
     if track.is_folder() && !track.folder_open {
         folder_block_interaction(app, ui, track, lane, tl);
     }

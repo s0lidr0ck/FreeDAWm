@@ -1,0 +1,17 @@
+[package]
+name = "soundcraft-aaf"
+description = "AAF and OMF interchange readers: Microsoft compound files, the AAF object model and a neutral audio-timeline description"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[features]
+# The minimal compound-file and AAF writers the tests build synthetic files with.
+test-writer = []
+
+[lints]
+workspace = true

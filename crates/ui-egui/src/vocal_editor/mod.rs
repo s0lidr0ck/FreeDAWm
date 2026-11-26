@@ -12,6 +12,7 @@ pub mod panel;
 pub mod presets;
 pub mod preview;
 pub mod roll;
+pub mod scroll;
 pub mod studio;
 pub mod window;
 
@@ -113,6 +114,12 @@ pub struct VocalEditorState {
     pub studio: studio::StudioState,
     /// Following the playhead while linked ([`follow_playhead`]).
     pub follow: crate::timeline_link::EditorFollow,
+    /// The right panel shows Gild rather than Tuning.
+    pub gild_tab: bool,
+    /// Remove All Gild on This Track… is asking.
+    pub gild_confirm: bool,
+    /// A gilding's handle being dragged on the Gild strip.
+    pub gild_drag: Option<crate::gild_panel::HandleDrag>,
 }
 
 impl Default for VocalEditorState {
@@ -144,6 +151,9 @@ impl Default for VocalEditorState {
             last_edit_scroll: None,
             studio: studio::StudioState::default(),
             follow: crate::timeline_link::EditorFollow::default(),
+            gild_tab: false,
+            gild_confirm: false,
+            gild_drag: None,
         }
     }
 }
@@ -534,9 +544,9 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     let track = editor_track(app);
     let panel_w = if app.vocal.show_panel { PANEL_W } else { 0.0 };
     if let Some(t) = track {
-        sync_view(app, t, body.width() - roll::KEY_W - panel_w);
+        sync_view(app, t, body.width() - roll::KEY_W - panel_w - scroll::BAR_W - 1.0);
     }
-    let (t0, t1) = view_range(app, body.width() - roll::KEY_W - panel_w);
+    let (t0, t1) = view_range(app, body.width() - roll::KEY_W - panel_w - scroll::BAR_W - 1.0);
     let empty = empty_state(app, track, Range::new(t0, t1));
     if let Some((msg, mark)) = empty {
         if msg.starts_with("Analysing")
@@ -569,17 +579,32 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     roll::prune(app, &editable);
     let right = (body.right() - panel_w).max(body.left() + roll::KEY_W + 60.0);
     let (l, top) = (body.left() + roll::KEY_W, body.top());
-    let chords = Rect::from_min_max(pos2(l, top), pos2(right, top + roll::CHORD_H));
-    let key = Rect::from_min_max(pos2(l, chords.bottom()), pos2(right, chords.bottom() + roll::KEY_STRIP_H));
-    let ruler = Rect::from_min_max(pos2(l, key.bottom()), pos2(right, key.bottom() + roll::RULER_H));
-    let lane_top = (body.bottom() - LEVEL_H).max(ruler.bottom() + 40.0);
-    let roll_r = Rect::from_min_max(pos2(l, ruler.bottom()), pos2(right, lane_top - 4.0));
+    // The pitch bar takes a column at the roll's right, the time bar a row under it: the strips,
+    // the ruler and the roll end left of the column, so they keep one time mapping.
+    let bw = scroll::BAR_W;
+    let rr = right - bw - 1.0;
+    let chords = Rect::from_min_max(pos2(l, top), pos2(rr, top + roll::CHORD_H));
+    let key = Rect::from_min_max(pos2(l, chords.bottom()), pos2(rr, chords.bottom() + roll::KEY_STRIP_H));
+    let ruler = Rect::from_min_max(pos2(l, key.bottom()), pos2(rr, key.bottom() + roll::RULER_H));
+    // The word lane under the ruler, when the track has timed words (or they are being tapped).
+    let show_words = app.engine.session().track(track).is_some_and(soundcraft_model::track_has_lyrics) || app.words.tap.on;
+    let words_r = Rect::from_min_max(pos2(l, ruler.bottom()), pos2(rr, ruler.bottom() + if show_words { crate::word_lane::LANE_H } else { 0.0 }));
+    // The Gild strip under the words, when the track has gildings.
+    let show_gild = show_words && !crate::gild_panel::track_gildings(app.engine.session(), track).is_empty();
+    let gild_r = Rect::from_min_max(pos2(l, words_r.bottom()), pos2(rr, words_r.bottom() + if show_gild { crate::gild_panel::STRIP_H } else { 0.0 }));
+    let words_r_full = words_r;
+    let words_r = words_r.union(gild_r);
+    let lane_top = (body.bottom() - LEVEL_H).max(words_r.bottom() + 40.0);
+    let hbar = Rect::from_min_max(pos2(l, lane_top - 3.0 - bw), pos2(rr, lane_top - 3.0));
+    let roll_r = Rect::from_min_max(pos2(l, words_r.bottom()), pos2(rr, hbar.top() - 1.0));
+    let vbar = Rect::from_min_max(pos2(rr + 1.0, roll_r.top()), pos2(right, roll_r.bottom()));
     let keys = Rect::from_min_max(pos2(body.left(), roll_r.top()), pos2(l, roll_r.bottom()));
     let lane = Rect::from_min_max(pos2(body.left(), lane_top), pos2(right, body.bottom()));
     let areas = roll::Areas { chords, key, ruler, roll: roll_r, keys };
     sync_view(app, track, roll_r.width());
     centre_rows(app, track, roll_r.height());
-    wheel(app, ui, roll_r);
+    // The wheel over the roll, its bars and the Level lane, as over the MIDI Editor's.
+    wheel(app, ui, roll_r.union(hbar).union(vbar).union(lane), roll_r);
     follow_playhead(app, roll_r.width());
     let (t0, t1) = view_range(app, roll_r.width());
     let rows = roll_r.height() / app.vocal.row_h.max(1.0);
@@ -589,10 +614,32 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
     header_row(app, ui, header, track, &drawn);
     roll::interact(app, ui, track, &drawn);
     note_bar::show(app, ui, &drawn);
+    // The word lane before the editor's keys: its retype field takes the typing.
+    if show_words {
+        let v = &drawn.view;
+        let map = crate::word_lane::TimeMap { left: v.rect.left(), t0: v.t0, spp: (v.t1 - v.t0).max(1) as f64 / f64::from(v.rect.width().max(1.0)) };
+        let label = Rect::from_min_max(pos2(body.left(), words_r_full.top()), pos2(l, words_r_full.bottom()));
+        ui.painter().rect_filled(label, 0.0, t.panel_bg2);
+        ui.painter().text(pos2(label.left() + 6.0, label.center().y), Align2::LEFT_CENTER, "Words", regular(11.0), t.text_dim);
+        crate::word_lane::lane(app, ui, "vocal", track, words_r_full, map, true, true);
+        store(ui.ctx(), "words", words_r_full);
+        if show_gild {
+            let label = Rect::from_min_max(pos2(body.left(), gild_r.top()), pos2(l, gild_r.bottom()));
+            ui.painter().rect_filled(label, 0.0, t.panel_bg2);
+            ui.painter().text(pos2(label.left() + 6.0, label.center().y), Align2::LEFT_CENTER, "Gild", regular(10.5), crate::gild_panel::GOLD);
+            crate::gild_panel::strip(app, ui, track, gild_r, map);
+        }
+    }
     keyboard(app, ui, full, track, &drawn);
     level_lane::level_lane(app, ui, lane, &drawn.view);
+    scroll_bars(app, ui, &editable, (hbar, vbar), &drawn.view);
     if panel_w > 0.0 {
-        panel::panel(app, ui, Rect::from_min_max(pos2(right, body.top()), body.max));
+        let pr = Rect::from_min_max(pos2(right, body.top()), body.max);
+        if app.vocal.gild_tab {
+            crate::gild_panel::panel(app, ui, pr, track);
+        } else {
+            panel::panel(app, ui, pr);
+        }
     }
     if app.vocal.studio.on {
         harmony::dialog(app, ui, roll_r);
@@ -661,11 +708,70 @@ fn centre_rows(app: &mut SoundApp, track: TrackId, roll_h: f32) {
     app.vocal.centred = Some(track);
 }
 
-/// The wheel over the roll: rows (plain), time (Shift or sideways), the roll's own zoom (Ctrl:
-/// a hand zoom, which deselects the factor) and row height (Ctrl+Shift, or Ctrl+Alt as in the
-/// MIDI Editor).
-fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
-    if !ui.rect_contains_pointer(roll) {
+/// Moves the roll `by` samples in time (negative: earlier). Unlinked (or following the
+/// playhead) the roll moves on its own; linked and stopped the Edit window scrolls and the roll
+/// follows it ([`sync_view`]), and what the Edit window can't take (it stops at 0) moves the roll
+/// itself, so the roll reaches the session start even when its edge is ahead of the Edit window's.
+fn pan_time(app: &mut SoundApp, by: Samples) {
+    if by == 0 {
+        return;
+    }
+    if !linked(app) || playing(app) {
+        app.vocal.follow.user_moved = true;
+        if let Some(t0) = app.vocal.t0 {
+            app.vocal.t0 = Some(t0.saturating_add(by).max(0));
+        }
+        return;
+    }
+    let before = app.engine.session().edit.zoom.scroll;
+    let _ = app.engine.execute("view.scroll", &json!({"to": before.saturating_add(by).max(0)}));
+    let moved = app.engine.session().edit.zoom.scroll.saturating_sub(before);
+    let rest = by.saturating_sub(moved);
+    if rest < 0
+        && let Some(t0) = app.vocal.t0
+    {
+        app.vocal.t0 = Some(t0.saturating_add(rest).max(0));
+    }
+}
+
+/// The time bar's range (session samples): the editable tracks' audio clips, with a sixteenth
+/// of their length of room either side (the MIDI Editor's Fit room), never before 0; `None`
+/// without clips.
+pub fn time_range(s: &Session, tracks: &[TrackId]) -> Option<(Samples, Samples)> {
+    let clips = tracks.iter().filter_map(|t| s.track(*t)).flat_map(|t| t.clips().iter().filter(|c| c.is_audio()));
+    let (lo, hi) =
+        clips.fold(None, |acc: Option<(Samples, Samples)>, c| Some(acc.map_or((c.start, c.end()), |(lo, hi)| (lo.min(c.start), hi.max(c.end())))))?;
+    let pad = hi.saturating_sub(lo).max(0) / 16;
+    Some((lo.saturating_sub(pad).max(0), hi.saturating_add(pad)))
+}
+
+/// The scroll bars: time under the roll (`bars.0`), pitch at its right (`bars.1`), for `view` as
+/// drawn this frame. Stores both bars and thumbs (`hbar`, `vbar`, `hbar-thumb`, `vbar-thumb`).
+fn scroll_bars(app: &mut SoundApp, ui: &Ui, tracks: &[TrackId], (hbar, vbar): (Rect, Rect), view: &layout::RollView) {
+    let (t0, t1) = (view.t0, view.t1);
+    let (lo, hi) = time_range(app.engine.session(), tracks).unwrap_or((t0, t1));
+    let h = scroll::Span::new(lo as f64, hi as f64, t0 as f64, t1.saturating_sub(t0) as f64);
+    let (by, h_thumb) = scroll::bar(ui, hbar, ui.id().with("vocal-hbar"), h, false);
+    let by = soundcraft_time::to_samples(by);
+    pan_time(app, by);
+    let rows = (view.rect.height() / app.vocal.row_h.max(1.0)).min(128.0);
+    let v = scroll::Span::new(0.0, 128.0, f64::from(app.vocal.scroll_rows), f64::from(rows));
+    let (dy, v_thumb) = scroll::bar(ui, vbar, ui.id().with("vocal-vbar"), v, true);
+    if dy != 0.0 {
+        app.vocal.scroll_rows = (app.vocal.scroll_rows + dy as f32).clamp(0.0, (128.0 - rows).max(0.0));
+    }
+    store(ui.ctx(), "hbar", hbar);
+    store(ui.ctx(), "vbar", vbar);
+    store(ui.ctx(), "hbar-thumb", h_thumb);
+    store(ui.ctx(), "vbar-thumb", v_thumb);
+    hook(ui.ctx(), "bar-spans", (h, v));
+}
+
+/// The wheel over `area` (the roll, its bars and the Level lane), as over the MIDI Editor: rows
+/// (plain), time (Shift or sideways), the roll's own zoom about the pointer (Ctrl, up zooms in:
+/// a hand zoom, which deselects the factor) and row height (Ctrl+Shift, or Ctrl+Alt).
+fn wheel(app: &mut SoundApp, ui: &Ui, area: Rect, roll: Rect) {
+    if !ui.rect_contains_pointer(area) {
         return;
     }
     let events: Vec<(egui::Vec2, egui::Modifiers, Pos2)> = ui.input(|i| {
@@ -690,13 +796,16 @@ fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
         let ctrl = m.command || m.ctrl;
         if ctrl && (m.shift || m.alt) {
             let dy = if d.y != 0.0 { d.y } else { d.x };
-            let h = app.vocal.row_h * (1.0 + dy * 0.004);
+            // The MIDI Editor's rate.
+            let h = app.vocal.row_h * 1.0015f32.powf(dy * 4.0);
             set_row_h(app, h);
         } else if ctrl {
-            // By hand: about the pointer, the factor buttons deselected.
-            let factor = 1.0015f64.powf(f64::from(d.y));
+            // By hand: about the pointer, the factor buttons deselected. Up zooms in (fewer
+            // samples per px) at the MIDI Editor's rate, as there and in the Edit window.
+            let dy = if d.y != 0.0 { d.y } else { d.x };
+            let factor = 1.0015f64.powf(-f64::from(dy) * 4.0);
             let (t0, spp) = (app.vocal.t0.unwrap_or(0), app.vocal.spp.unwrap_or_else(|| factor_spp(app)));
-            let x = f64::from(p.x - roll.left());
+            let x = f64::from((p.x - roll.left()).clamp(0.0, roll.width().max(0.0)));
             let at = t0 as f64 + x * spp;
             let new = (spp * factor).clamp(0.01, 1e9);
             app.vocal.spp = Some(new);
@@ -707,30 +816,12 @@ fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
             let dx = if m.shift { d.x + d.y } else { d.x };
             if dx != 0.0 && (!linked(app) || playing(app)) {
                 // Unlinked (or following the playhead): the roll pans on its own.
-                app.vocal.follow.user_moved = true;
                 let spp = app.vocal.spp.unwrap_or_else(|| factor_spp(app));
-                if let Some(t0) = app.vocal.t0 {
-                    let by = soundcraft_time::to_samples(f64::from(-dx) * spp);
-                    app.vocal.t0 = Some(t0.saturating_add(by).max(0));
-                }
+                pan_time(app, soundcraft_time::to_samples(f64::from(-dx) * spp));
             } else if dx != 0.0 {
-                let by_px = f64::from(-dx * to_edit_px);
-                let (before, edit_spp) = {
-                    let z = &app.engine.session().edit.zoom;
-                    (z.scroll, z.samples_per_px)
-                };
-                let _ = app.engine.execute("view.scroll", &json!({"by_px": by_px}));
-                // What the Edit window couldn't take (it stops at 0) moves the roll itself, so
-                // the roll reaches the session start even when its edge is ahead of the Edit
-                // window's.
-                let moved = app.engine.session().edit.zoom.scroll.saturating_sub(before);
-                let asked = soundcraft_time::to_samples(by_px * edit_spp);
-                let rest = asked.saturating_sub(moved);
-                if rest < 0
-                    && let Some(t0) = app.vocal.t0
-                {
-                    app.vocal.t0 = Some(t0.saturating_add(rest).max(0));
-                }
+                // Linked: the Edit window scrolls as far across its own timeline.
+                let edit_spp = app.engine.session().edit.zoom.samples_per_px;
+                pan_time(app, soundcraft_time::to_samples(f64::from(-dx * to_edit_px) * edit_spp));
             }
             if !m.shift && d.y != 0.0 {
                 app.vocal.scroll_rows -= d.y / app.vocal.row_h.max(1.0);
@@ -739,9 +830,9 @@ fn wheel(app: &mut SoundApp, ui: &Ui, roll: Rect) {
     }
 }
 
-/// The header's right-hand bar width (px): Select all / Split / Join / Preview / row height /
-/// zoom / Tuning / Window (Dock).
-const HEADER_BAR_W: f32 = 800.0;
+/// The header's right-hand bar width (px): MIDI / Studio / Select all / Split / Join / Preview /
+/// row height / zoom / Tuning / Window (Dock).
+const HEADER_BAR_W: f32 = 860.0;
 
 /// The header: "VOCAL EDITOR", the counts and hints, and Select all / Split / Join / Preview /
 /// Tuning.
@@ -755,9 +846,16 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     let mut x = header.left() + 112.0;
     let selected = if app.vocal.whole_track && k > 0 { format!("Select all \u{b7} {k} notes") } else { format!("{k} selected") };
     hook(ui.ctx(), "selected-text", selected.clone());
+    // Timed words still guessed (Time Words to Vocal), so they get checked.
+    let words = match soundcraft_engine::word_time::counts(&s, track).0 {
+        0 => String::new(),
+        1 => " \u{b7} 1 word still guessed".to_string(),
+        n => format!(" \u{b7} {n} words still guessed"),
+    };
     for (text, strong) in [
         (format!("{name} \u{b7} {total} notes \u{b7} "), false),
         (selected, true),
+        (words, true),
         (" \u{b7} drag a note: cents, snaps at semitones (Alt: free) \u{b7} drag: rubber-band \u{b7} S split \u{b7} J join".to_string(), false),
     ] {
         let g = p.layout_no_wrap(text, if strong { bold(11.5) } else { regular(11.5) }, if strong { t.text } else { t.text_dim });
@@ -774,7 +872,25 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     if win.on_hover_text(if sep { "Put the Vocal Editor back in the Edit window" } else { "Open the Vocal Editor in its own window" }).clicked() {
         let _ = app.run("window.vocal_separate", json!({}));
     }
-    let on = app.vocal.show_panel;
+    // Gild: its panel in place of Tuning's; it says how many gildings and whether Dry is off.
+    let gilded = crate::gild_panel::track_gildings(&s, track).len();
+    let dry_off = s.track(track).is_some_and(|t| !t.gild.dry);
+    let gon = app.vocal.show_panel && app.vocal.gild_tab;
+    let glabel = match (gilded, dry_off) {
+        (0, false) => "Gild".to_string(),
+        (n, false) => format!("Gild {n}"),
+        (n, true) => format!("Gild {n} \u{b7} Dry off"),
+    };
+    let gild_b = tb.add(egui::Button::new(egui::RichText::new(glabel).color(if gon { t.mode_on_text } else { t.text })).fill(if gon {
+        t.mode_on
+    } else {
+        t.button
+    }));
+    store(ui.ctx(), "gild", gild_b.rect);
+    if gild_b.on_hover_text("Effects on chosen words: show or hide the Gild panel").clicked() {
+        let _ = app.run("ui.gild", json!({"value": !gon}));
+    }
+    let on = app.vocal.show_panel && !app.vocal.gild_tab;
     let tuning = tb.add(egui::Button::new(egui::RichText::new("Tuning").color(if on { t.mode_on_text } else { t.text })).fill(if on {
         t.mode_on
     } else {
@@ -782,7 +898,11 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     }));
     store(ui.ctx(), "tuning", tuning.rect);
     if tuning.on_hover_text("Show or hide the Tuning panel").clicked() {
-        let _ = app.run("ui.vocal_panel", json!({}));
+        if app.vocal.gild_tab && app.vocal.show_panel {
+            app.vocal.gild_tab = false;
+        } else {
+            let _ = app.run("ui.vocal_panel", json!({}));
+        }
     }
     zoom_control(app, &mut tb);
     let on = linked(app);
@@ -828,6 +948,89 @@ fn header_row(app: &mut SoundApp, ui: &mut Ui, header: Rect, track: TrackId, d: 
     if studio_b.on_hover_text("Vocal Studio: every vocal track in one pitch view").clicked() {
         let _ = app.run("ui.vocal_studio", json!({"value": !st_on}));
     }
+    midi_menu(app, &mut tb, track);
+}
+
+/// Why the header's MIDI menu is greyed out.
+pub const NO_NOTES_FOR_MIDI: &str = "No detected notes on this track yet: wait for the analysis, or Analyse Now";
+
+/// The header's MIDI drop-down: the track's notes (the selected ones, if any) as a MIDI track
+/// under it, or as a .mid file. Greyed out while the track has no detected notes.
+fn midi_menu(app: &mut SoundApp, tb: &mut Ui, track: TrackId) {
+    use soundcraft_engine::cmd::vocal_midi::{EXPORT, TO_TRACK, track_has_notes};
+    let has = track_has_notes(app.engine.session(), track);
+    hook(tb.ctx(), "midi-enabled", has);
+    let k = notes_on(app, track).len();
+    let what = if k > 0 { format!("the {k} selected note{}", if k == 1 { "" } else { "s" }) } else { "every note".to_string() };
+    let mut chosen = None;
+    let r = tb.add_enabled_ui(has, |ui| {
+        ui.menu_button("MIDI", |ui| {
+            let a = ui.button("Notes to MIDI Track").on_hover_text(format!("Copy {what} to a new instrument track under this one"));
+            store(ui.ctx(), "midi-to-track", a.rect);
+            if a.clicked() {
+                chosen = Some(TO_TRACK);
+            }
+            let b = ui.button("Export Notes as MIDI File...").on_hover_text(format!("Write {what} to a .mid file"));
+            store(ui.ctx(), "midi-export", b.rect);
+            if b.clicked() {
+                chosen = Some(EXPORT);
+            }
+            if chosen.is_some() {
+                ui.close();
+            }
+        })
+        .response
+    });
+    store(tb.ctx(), "midi", r.inner.rect);
+    r.inner.on_hover_text("The notes as MIDI: double the melody on an instrument, or write harmonies").on_disabled_hover_text(NO_NOTES_FOR_MIDI);
+    match chosen {
+        Some(TO_TRACK) => notes_to_midi_track(app, track),
+        Some(_) => export_notes(app, track),
+        None => {}
+    }
+}
+
+/// The selected notes on `track`'s clips.
+fn notes_on(app: &SoundApp, track: TrackId) -> Vec<NoteRef> {
+    let s = app.engine.session();
+    app.vocal.selected.iter().copied().filter(|r| s.find_clip(r.clip).is_some_and(|(t, _)| t == track)).collect()
+}
+
+/// The MIDI commands' parameters for `track`: it, and its selected notes when there are any.
+pub fn midi_params(app: &SoundApp, track: TrackId) -> Value {
+    let notes: Vec<Value> = notes_on(app, track).iter().map(|r| json!({"clip": r.clip.0, "note": r.note.0})).collect();
+    if notes.is_empty() { json!({"track": track.0}) } else { json!({"track": track.0, "notes": notes}) }
+}
+
+/// Notes to MIDI Track for `track` (its selected notes, else all), the outcome in the status line.
+pub fn notes_to_midi_track(app: &mut SoundApp, track: TrackId) {
+    let p = midi_params(app, track);
+    app.ui.status = match app.run(soundcraft_engine::cmd::vocal_midi::TO_TRACK, p) {
+        Ok(r) => {
+            let s = app.engine.session();
+            let name = r["tracks"][0]["track"].as_u64().and_then(|t| s.track(TrackId(t))).map(|t| t.name.clone()).unwrap_or_default();
+            let skipped = r["skipped"].as_array().map_or(0, Vec::len);
+            let more = if skipped > 0 { format!(" ({skipped} clip{} skipped)", if skipped == 1 { "" } else { "s" }) } else { String::new() };
+            format!("{} notes copied to {name}{more}", r["notes"])
+        }
+        Err(e) => e,
+    };
+}
+
+/// Export Notes as MIDI File... for `track`: the path prompt, named after the track, with the
+/// track and its selected notes going to the command.
+pub fn export_notes(app: &mut SoundApp, track: TrackId) {
+    let id = soundcraft_engine::cmd::vocal_midi::EXPORT;
+    if !app.dialogs.open_for_command(&app.engine, id) {
+        return;
+    }
+    let name = app.engine.session().track(track).map(|t| crate::user_files::file_name(&format!("{} notes", t.name))).unwrap_or_default();
+    if let Some(crate::dialogs::Dialog::PathPrompt { path, .. }) = app.dialogs.open.as_mut()
+        && let Some(dir) = std::path::Path::new(path.as_str()).parent().map(|d| d.display().to_string())
+    {
+        *path = format!("{dir}/{name}.mid");
+    }
+    app.dialogs.path_extra = Some((id.to_string(), midi_params(app, track)));
 }
 
 /// The zoom factor's segmented control, right of Preview: ¼× ½× 1× 2× 4× relative to the Edit
@@ -913,7 +1116,7 @@ pub fn selection_span(app: &mut SoundApp, track: TrackId) -> Option<(Samples, Sa
 /// in view or not; `in_view` (Ctrl+Shift+A): only the notes in view. The roll doesn't scroll.
 fn select_all(app: &mut SoundApp, track: TrackId, d: &roll::Drawn, in_view: bool) {
     let s = app.engine.session();
-    let stretched: Vec<ClipId> = d.clips.iter().filter(|c| c.stretched).map(|c| c.clip.id).collect();
+    let stretched: Vec<ClipId> = d.clips.iter().filter(|c| c.untunable.is_some()).map(|c| c.clip.id).collect();
     let shown: Vec<ClipId> = d.clips.iter().map(|c| c.clip.id).collect();
     let range = if in_view { Some(Range::new(d.view.t0, d.view.t1)) } else { None };
     app.vocal.selected = track_notes(s, track, range).into_iter().filter(|r| !stretched.contains(&r.clip) && shown.contains(&r.clip)).collect();

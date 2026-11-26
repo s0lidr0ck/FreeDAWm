@@ -5,6 +5,7 @@
 //! The engine owns the [`Session`] behind an `Arc` (copy-on-write), so undo snapshots are cheap.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod aaf_import;
 pub mod amp_irs;
 pub mod ara;
 pub mod auto_arm;
@@ -22,6 +23,8 @@ pub mod decode_cache;
 pub mod demo;
 pub mod edit;
 pub mod file_access;
+pub mod gild;
+pub mod gild_presets;
 pub mod inspect;
 pub mod io;
 pub mod juke_kits;
@@ -47,6 +50,7 @@ pub mod note_index;
 pub mod open_job;
 pub mod pattern;
 pub mod peak_cache;
+pub mod peak_pages;
 pub mod render_job;
 pub mod score;
 pub mod scout_profiles;
@@ -60,6 +64,8 @@ pub mod tempo_detect;
 pub mod tick_clips;
 pub mod vocal;
 pub mod vocal_studio;
+pub mod word_align;
+pub mod word_time;
 
 use serde_json::{Value, json};
 use soundcraft_model::{Clip, Session, TrackId, ZoomState};
@@ -267,8 +273,16 @@ pub struct Engine {
     dirty_at: Cell<(u64, bool)>,
     /// Gesture key for undo coalescing (see `execute_merged`).
     merge_key: Option<String>,
+    /// Gild: the settings last used (a new gilding starts from them) and the copied ones
+    /// (`gild.copy` / `gild.paste`). Kept out of the document.
+    pub gild_last: soundcraft_model::GildFx,
+    pub gild_copy: Option<crate::gild::GildCopy>,
     /// The key every merged gesture takes while held (see `hold_merge`).
     merge_hold: Option<String>,
+    /// A remote's gesture (`engine.execute {gesture}` over the control channel) keeps its undo
+    /// step open until this instant, though no pointer is down here (see
+    /// [`Engine::execute_gesture`]).
+    gesture_lease: Option<std::time::Instant>,
     /// The redo stack a gesture's first step cleared, kept while that step is still the newest
     /// and brought back when the step is discarded (see `undo_discard`): a drag that ends where
     /// it began costs no Redo.
@@ -374,8 +388,11 @@ impl Engine {
             dirty: false,
             dirty_at: Cell::new((0, false)),
             merge_key: None,
+            gild_last: soundcraft_model::GildFx::default(),
+            gild_copy: None,
             merge_redo: None,
             merge_hold: None,
+            gesture_lease: None,
             step_label: None,
             tempo_pinned: Vec::new(),
             messages: Vec::new(),
@@ -532,6 +549,9 @@ impl Engine {
         // Vocal tuning fingerprints and caches are derived, not saved.
         crate::vocal::prune(&mut s);
         crate::vocal::refresh_fingerprints_in(&mut s);
+        // So are Gild's renders; its gildings take their words' times.
+        s.gild = soundcraft_model::GildCache::default();
+        crate::gild::follow(&mut s);
         // One key: the Key ruler's key at bar 1 is the band's.
         crate::song_key::on_load(&mut s);
         self.transport = TransportStatus { position: s.edit.selection.start.max(0), ..TransportStatus::default() };
@@ -795,6 +815,10 @@ impl Engine {
         if self.doc.ara_archives != from.ara_archives {
             Arc::make_mut(&mut self.doc).ara_archives = from.ara_archives.clone();
         }
+        // Gild's renders too (looked up by their inputs' key).
+        if !self.doc.gild.same(&from.gild) {
+            Arc::make_mut(&mut self.doc).gild = from.gild.clone();
+        }
     }
 
     /// Brings every vocal tuning's render fingerprint up to date (`VocalTune::fingerprint`), so
@@ -970,6 +994,14 @@ impl Engine {
                     && self.doc.tracks.iter().any(|t| t.clips().iter().any(|c| c.follow_chords.is_some()))
                 {
                     chord_follow::follow(Arc::make_mut(&mut self.doc));
+                }
+                // Gildings follow the words they were made from, in the same undo step.
+                if !Arc::ptr_eq(&before, &self.doc)
+                    && self.loads == loads
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && crate::gild::needs_follow(&self.doc)
+                {
+                    crate::gild::follow(Arc::make_mut(&mut self.doc));
                 }
                 // Shared MIDI clips take a note edit made in one of them, in the same undo step.
                 if !Arc::ptr_eq(&before, &self.doc) && self.loads == loads && !matches!(id, "edit.undo" | "edit.redo") && midi_shared::any(&self.doc)
@@ -1162,6 +1194,44 @@ impl Engine {
     /// End a gesture started with `execute_merged`.
     pub fn end_merge(&mut self) {
         self.merge_key = None;
+        self.gesture_lease = None;
+    }
+
+    /// How long a remote gesture stays one undo step after its last move without an explicit end
+    /// (a dropped link releases it this way).
+    pub const GESTURE_LEASE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+    /// A remote controller's continuous gesture (a fader dragged on another PC): as
+    /// [`Engine::execute_merged`] under `remote:<key>`, and the step stays open across frames
+    /// with no pointer down here until `end_merge` (the remote's release) or
+    /// [`Engine::GESTURE_LEASE`] after its last move.
+    pub fn execute_gesture(&mut self, id: &str, params: &Value, key: &str) -> Result<Value> {
+        let r = self.execute_merged(id, params, &format!("remote:{key}"));
+        self.gesture_lease = Some(std::time::Instant::now() + Self::GESTURE_LEASE);
+        r
+    }
+
+    /// A remote let go of the control it dragged with `key` (`engine.end_gesture {gesture}`):
+    /// its undo step ends, and only its own: a drag of something else under way here (or by
+    /// another remote) goes on as one step.
+    pub fn end_gesture(&mut self, key: &str) {
+        if self.merge_key.as_deref().is_some_and(|k| k.strip_prefix("remote:") == Some(key)) {
+            self.end_merge();
+        }
+    }
+
+    /// Whether a remote's gesture with `key` holds the open undo step now.
+    pub fn gesture_open(&self, key: &str) -> bool {
+        self.merge_key.as_deref().is_some_and(|k| k.strip_prefix("remote:") == Some(key))
+    }
+
+    /// The UI's end of every frame with no pointer down: ends the gesture unless a remote's is
+    /// still within its lease.
+    pub fn end_idle_merge(&mut self) {
+        if self.gesture_lease.is_some_and(|t| std::time::Instant::now() < t) {
+            return;
+        }
+        self.end_merge();
     }
 
     /// Convenience: execute with `{}` params.

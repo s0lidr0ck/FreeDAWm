@@ -788,6 +788,22 @@ impl AraHost {
         self.docs.get(plugin).and_then(|d| d.editor.as_ref()).is_some_and(|e| e.editor.is_open())
     }
 
+    /// How many ARA editor windows are open now.
+    pub fn open_editor_count(&self) -> usize {
+        self.docs.values().filter(|d| d.editor.as_ref().is_some_and(|e| e.editor.is_open())).count()
+    }
+
+    /// Closes every open ARA editor window (Window › Layout › Close Plug-in Windows). Only the
+    /// window closes: the editor view instance stays bound to its document, with its state, so
+    /// opening it again shows it as it was.
+    pub fn close_editors(&mut self) {
+        for d in self.docs.values_mut() {
+            if let Some(ev) = d.editor.as_mut().filter(|e| e.editor.is_open()) {
+                ev.editor.close();
+            }
+        }
+    }
+
     /// Keeps open editor windows serviced and told the Edit window's selection when it changes:
     /// the selected clips given to the plug-in (playback regions), the selected tracks holding its
     /// clips (region sequences), the selected time range, and the tracks hidden in the Edit window.

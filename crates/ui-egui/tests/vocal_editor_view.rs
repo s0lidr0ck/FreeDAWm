@@ -459,6 +459,27 @@ fn stretched_clips_are_left_out_of_twins_and_whole_track_apply() {
 }
 
 #[test]
+fn a_clip_played_through_an_ara_plugin_shows_why_instead_of_notes_to_drag() {
+    let Setup { ctx, mut app, track, clips } = setup();
+    let ns = notes(&app, track);
+    settle(&ctx, &mut app);
+    let at = bar(&ctx, ns[0]).center();
+    app.engine.session_mut().find_clip_mut(clips[0]).unwrap().ara =
+        Some(soundcraft_model::ClipAra { plugin: "vst3:0123".into(), name: "Pitch Tool".into(), ..Default::default() });
+    settle(&ctx, &mut app);
+    let why = text(&ctx, "untunable").unwrap_or_default();
+    assert!(why.contains("Pitch Tool") && why.contains("bypass"), "{why}");
+    assert!(shapes(&ctx).iter().all(|s| s.r.clip != clips[0]), "no note bars to drag");
+    app.vocal.selected.clear();
+    click(&ctx, &mut app, at);
+    assert!(app.vocal.selected.is_empty(), "nothing to select there");
+    // Bypassed: the notes are back.
+    app.run("clip.ara_bypass", json!({"clips": [clips[0].0], "on": true})).unwrap();
+    settle(&ctx, &mut app);
+    assert!(shapes(&ctx).iter().any(|s| s.r == ns[0]));
+}
+
+#[test]
 fn tuned_curves_draw_over_the_note_bars() {
     let Setup { ctx, mut app, track, .. } = setup();
     let ns = notes(&app, track);

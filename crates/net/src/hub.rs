@@ -12,7 +12,7 @@
 //! touches the audio thread: the booth's take clock is read through a [`TakeClock`] (atomics).
 
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -21,9 +21,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::config::{NetConfig, PairedDevice};
+use crate::config::{NetConfig, PairedDevice, SavedInvite};
 use crate::pairing::exchange::{self, Confirmed, Exchange, LinkKeys, Side};
-use crate::pairing::{Confirm, PAIRING_VERSION, Pairing, PendingPair};
+use crate::pairing::{Confirm, PAIRING_VERSION, PIN_OFF_AFTER, PIN_STREAK, Pairing, PendingPair, PinEvent, PinGuard};
 use crate::proto::{BoothTransport, FollowerReport, RemoteAction, RemoteStatus, RigStatus, SketchNote, TransportState};
 use crate::take::{BoothAnchor, TakeEnvelope, remote_port_name};
 
@@ -182,6 +182,9 @@ struct Link {
     streaming: bool,
     /// The link it came in by.
     kind: LinkKind,
+    /// A listening PC (`hello {role: "listener"}`): hears the mix and reads the status, never
+    /// records or sends takes; the booth never waits for it and forgets it when it goes.
+    listener: bool,
 }
 
 /// The live sketch of one remote port (booth timeline seconds).
@@ -228,15 +231,17 @@ struct Inner {
     /// The remote mix stream: the player's tap and the session rate, the links hearing it, and
     /// whether its thread runs.
     tap: Mutex<Option<(Arc<soundcraft_playback::stream::MixTap>, u32)>>,
-    stream_subs: Mutex<Vec<(u64, Arc<Mutex<TcpStream>>)>>,
+    stream_subs: Mutex<Vec<StreamSub>>,
     streaming: AtomicBool,
     listening: Mutex<Option<Listening>>,
     /// The loopback listener the internet bridge connects to (only pairing by invite there).
     internet: Mutex<Option<Listening>>,
     /// The loopback listener the encrypted local link's bridge connects to.
     secure: Mutex<Option<Listening>>,
-    /// Invites made (their one-time secret and when they expire, hub seconds).
-    invites: Mutex<Vec<(String, f64)>>,
+    /// One-time invites made (an id, their secret and when they expire, hub seconds).
+    invites: Mutex<Vec<(String, String, f64)>>,
+    /// When wrong invite secrets came lately (the limit on guessing).
+    bad_invites: Mutex<Vec<f64>>,
     open: AtomicUsize,
     next_id: AtomicU64,
     warning: Mutex<Option<String>>,
@@ -244,7 +249,127 @@ struct Inner {
     position: Mutex<f64>,
     /// Wakes the UI thread when a request comes in.
     waker: Mutex<Option<Waker>>,
+    /// What the booth's screen tells its owner until dismissed (a device paired with the booth
+    /// PIN, PIN pairing paused or turned off): an id and the text.
+    notices: Mutex<Vec<(u64, String)>>,
+    /// The mixer feed (`mixer.subscribe`): the last picture, recent deltas, the latest meters;
+    /// `mixer_changed` wakes its pushers, `mixer_subs` counts them.
+    mixer: Mutex<MixerFeed>,
+    mixer_changed: Condvar,
+    mixer_subs: AtomicUsize,
+    /// Paired PCs connected now (after `hello`), whatever they do.
+    pcs: AtomicUsize,
+    /// Controls a remote's hand is on (`engine.execute {gesture}`), by gesture key: the first
+    /// touch holds the control until its release plus [`HOLD_GRACE`] (or [`HOLD_LEASE`] without
+    /// a move), and another remote's move of it is refused meanwhile.
+    holds: Mutex<HashMap<String, Hold>>,
+    /// The PCs' connections after `hello`: (connection, the device's token, its name, its line
+    /// out), so the booth can end them (Disconnect, Forget) or tell them the lock changed.
+    conns: Mutex<Vec<(u64, String, String, Arc<Mutex<TcpStream>>)>>,
+    /// Devices sent away by Disconnect (their tokens): refused until let back in or the app
+    /// restarts.
+    away: Mutex<Vec<String>>,
+    /// Remote mixing so far, by device name: when its last change came.
+    mixing: Mutex<HashMap<String, Instant>>,
 }
+
+/// Why a change from a remote is refused while remote mixing is locked.
+pub const LOCKED: &str = "remote mixing is locked on the studio (Setup › Network): you can watch and listen";
+
+/// The methods a paired PC may still call while remote mixing is locked: they read, or end a
+/// gesture (its undo step closes).
+const READ_ONLY: &[&str] =
+    &["session.inspect", "engine.commands", "engine.parity", "ui.inspect", "ui.menu.list", "ui.screenshot", "engine.end_gesture"];
+
+/// Whether `method` with `params` changes nothing on the studio (allowed while locked).
+fn reads_only(method: &str, params: &Value) -> bool {
+    if READ_ONLY.contains(&method) {
+        return true;
+    }
+    if method == "engine.execute" || method == "command" {
+        let id = params.get("command").or_else(|| params.get("id")).and_then(Value::as_str).unwrap_or("");
+        return params.get("gesture").is_none() && soundcraft_engine::cmd::find_command(id).is_some_and(|c| !c.journal && !c.undoable && !c.view);
+    }
+    false
+}
+
+/// A PC connected now, for Setup › Network's list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemotePc {
+    pub name: String,
+    pub token: String,
+    /// It changed the studio's mix since it connected; how long ago the last change was (s).
+    pub mixing: bool,
+    pub last_change: Option<f64>,
+}
+
+/// A remote's hand on a control (see `Inner::holds`).
+#[derive(Debug, Clone)]
+struct Hold {
+    /// The connection holding it, and the PC's name (the refusal says whose hand it is).
+    conn: u64,
+    name: String,
+    /// Still down (no `engine.end_gesture` yet), and the last move or the release.
+    open: bool,
+    last: Instant,
+}
+
+/// A control stays its holder's this long after the release.
+pub const HOLD_GRACE: Duration = Duration::from_millis(500);
+/// A hold with no move this long ends by itself (a remote that never let go): as the engine's
+/// gesture lease.
+pub const HOLD_LEASE: Duration = Duration::from_millis(1500);
+
+impl Hold {
+    fn alive(&self) -> bool {
+        let age = self.last.elapsed();
+        if self.open { age < HOLD_LEASE } else { age < HOLD_GRACE }
+    }
+}
+
+/// The mixer feed's shared state (see [`Hub::publish_mixer`]). Bounded: a pusher that falls
+/// further behind than [`MAX_MIXER_DELTAS`] gets a fresh snapshot instead.
+#[derive(Default)]
+struct MixerFeed {
+    seq: u64,
+    state: Option<Arc<Value>>,
+    /// `(seq, line)`: the newest last.
+    deltas: VecDeque<(u64, Arc<String>)>,
+    meter_seq: u64,
+    meters: Option<Arc<String>>,
+    last_meters: Option<Value>,
+}
+
+/// Mixer deltas kept for pushers catching up.
+const MAX_MIXER_DELTAS: usize = 64;
+/// Meters go to a subscriber at most this often (~20 Hz).
+const METERS_EVERY: Duration = Duration::from_millis(50);
+
+/// A link hearing the mix stream.
+#[derive(Clone)]
+struct StreamSub {
+    link: u64,
+    out: Arc<Mutex<TcpStream>>,
+    /// It takes the stream while the booth is stopped too (`stream.subscribe {live: true}`: a
+    /// newer FreeDAWm, whose decoder knows idle packets); else talkback only then, as before.
+    live: bool,
+}
+
+/// Where booth PIN pairing stands (Setup › Network says it).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PinState {
+    /// No booth PIN: a random code per request.
+    Unset,
+    /// Devices pair with the booth PIN.
+    On,
+    /// Paused after wrong PINs: seconds left, and where the last wrong one came from.
+    Paused { secs_left: f64, from: String },
+    /// Turned off after [`PIN_OFF_AFTER`] wrong PINs, until the owner turns it back on.
+    Off { from: String },
+}
+
+/// The most notices kept.
+const MAX_NOTICES: usize = 20;
 
 /// Wakes the app's UI thread (egui's `request_repaint`).
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
@@ -286,13 +411,34 @@ impl Hub {
                 internet: Mutex::new(None),
                 secure: Mutex::new(None),
                 invites: Mutex::new(Vec::new()),
+                bad_invites: Mutex::new(Vec::new()),
                 open: AtomicUsize::new(0),
                 next_id: AtomicU64::new(1),
                 warning: Mutex::new(None),
                 position: Mutex::new(0.0),
                 waker: Mutex::new(None),
+                notices: Mutex::new(Vec::new()),
+                mixer: Mutex::new(MixerFeed::default()),
+                mixer_changed: Condvar::new(),
+                mixer_subs: AtomicUsize::new(0),
+                pcs: AtomicUsize::new(0),
+                holds: Mutex::new(HashMap::new()),
+                conns: Mutex::new(Vec::new()),
+                away: Mutex::new(Vec::new()),
+                mixing: Mutex::new(HashMap::new()),
             }),
         }
+        .seeded()
+    }
+
+    /// The wrong-PIN count carried over from the saved settings.
+    fn seeded(self) -> Hub {
+        let (wrong, from) = {
+            let c = lock(&self.inner.cfg);
+            (c.pin_wrong, c.pin_last_from.clone())
+        };
+        lock(&self.inner.pairing).set_pin_guard(PinGuard { wrong, last_from: from, ..PinGuard::default() });
+        self
     }
 
     fn now_s(&self) -> f64 {
@@ -362,25 +508,269 @@ impl Hub {
         lock(&self.inner.pairing).deny(id);
     }
 
-    pub fn forget(&self, token: &str) {
-        self.update_config(|c| c.paired.retain(|d| d.token != token));
+    /// Lets a device waiting with the booth PIN pair (Allow, when the booth asks before each
+    /// device joins).
+    pub fn allow_pairing(&self, id: &str) {
+        lock(&self.inner.pairing).allow(id);
     }
 
-    fn pair_request(&self, name: &str, kind: &str) -> Result<Value, String> {
+    pub fn forget(&self, token: &str) {
+        self.update_config(|c| c.paired.retain(|d| d.token != token));
+        self.end_connections(|t| t == token);
+    }
+
+    /// Forgets every paired device (each must pair again).
+    pub fn forget_all(&self) {
+        self.update_config(|c| c.paired.clear());
+        self.end_connections(|_| true);
+    }
+
+    /// Ends the connections of the devices whose token `which` picks (they see the link drop).
+    fn end_connections(&self, which: impl Fn(&str) -> bool) {
+        for (_, token, _, out) in lock(&self.inner.conns).iter() {
+            if which(token) {
+                let _ = lock(out).shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+
+    /// Disconnect (Setup › Network): ends the device's connections and refuses it until
+    /// [`Hub::let_back`] (or the app restarts). It stays paired.
+    pub fn disconnect(&self, token: &str) {
+        {
+            let mut a = lock(&self.inner.away);
+            if !a.iter().any(|t| t == token) {
+                a.push(token.to_string());
+            }
+        }
+        self.end_connections(|t| t == token);
+    }
+
+    /// Lets a device sent away by [`Hub::disconnect`] connect again.
+    pub fn let_back(&self, token: &str) {
+        lock(&self.inner.away).retain(|t| t != token);
+    }
+
+    /// The devices sent away now: (name, token).
+    pub fn sent_away(&self) -> Vec<(String, String)> {
+        let away = lock(&self.inner.away).clone();
+        let cfg = lock(&self.inner.cfg);
+        away.into_iter().map(|t| (cfg.device(&t).map_or_else(|| "a PC".to_string(), |d| d.name.clone()), t)).collect()
+    }
+
+    /// Lock remote mixing: paired PCs watch and listen, every change from them is refused. Each
+    /// PC connected is told at once (on a thread: the UI never waits on a link).
+    pub fn set_remote_lock(&self, on: bool) {
+        self.update_config(|c| c.lock_remote_mixing = on);
+        let outs: Vec<Arc<Mutex<TcpStream>>> = lock(&self.inner.conns).iter().map(|c| Arc::clone(&c.3)).collect();
+        let _ = std::thread::Builder::new().name("freedawm-net-lock".into()).spawn(move || {
+            let line = json!({"event": "remote_lock", "params": {"on": on}});
+            for out in outs {
+                let _ = write_line(&out, &line);
+            }
+        });
+    }
+
+    pub fn remote_lock(&self) -> bool {
+        lock(&self.inner.cfg).lock_remote_mixing
+    }
+
+    /// The paired PCs connected now (each once), and whether each is mixing.
+    pub fn remote_pcs(&self) -> Vec<RemotePc> {
+        let mixing = lock(&self.inner.mixing).clone();
+        let mut out: Vec<RemotePc> = Vec::new();
+        for (_, token, name, _) in lock(&self.inner.conns).iter() {
+            if out.iter().any(|r| r.token == *token) {
+                continue;
+            }
+            let last = mixing.get(name).map(|t| t.elapsed().as_secs_f64());
+            out.push(RemotePc { name: name.clone(), token: token.clone(), mixing: last.is_some(), last_change: last });
+        }
+        out
+    }
+
+    /// A change from `name` reached the app: it is mixing (a notice the first time).
+    fn note_mixing(&self, name: &str) {
+        let first = lock(&self.inner.mixing).insert(name.to_string(), Instant::now()).is_none();
+        if first {
+            self.notice(format!("{name} started mixing remotely"));
+        }
+    }
+
+    /// Sets the booth PIN (spaces around it dropped; at least
+    /// [`crate::pairing::PIN_MIN_LEN`] characters, else why not in plain words). A new PIN starts
+    /// the wrong-PIN count again and turns PIN pairing back on. Devices already paired stay
+    /// paired: they hold their own tokens.
+    pub fn set_booth_pin(&self, pin: &str) -> Result<(), String> {
+        let pin = crate::pairing::check_pin(pin)?;
+        self.update_config(|c| {
+            c.booth_pin = pin;
+            c.pin_wrong = 0;
+            c.pin_last_from.clear();
+        });
+        self.reset_pin_guard();
+        Ok(())
+    }
+
+    /// No booth PIN: a random code per request, as before. Devices already paired stay paired.
+    pub fn clear_booth_pin(&self) {
+        self.update_config(|c| c.booth_pin.clear());
+        self.reset_pin_guard();
+    }
+
+    /// Ask before each device joins with the booth PIN.
+    pub fn set_pin_ask(&self, ask: bool) {
+        self.update_config(|c| c.pin_ask = ask);
+    }
+
+    /// The owner resumes a paused PIN pairing, or turns one turned off back on: the wrong-PIN
+    /// count starts again.
+    pub fn reset_pin_guard(&self) {
+        lock(&self.inner.pairing).set_pin_guard(PinGuard::default());
+        let saved = {
+            let c = lock(&self.inner.cfg);
+            c.pin_wrong != 0 || !c.pin_last_from.is_empty()
+        };
+        if saved {
+            self.update_config(|c| {
+                c.pin_wrong = 0;
+                c.pin_last_from.clear();
+            });
+        }
+    }
+
+    /// Where booth PIN pairing stands.
+    pub fn pin_state(&self) -> PinState {
+        if lock(&self.inner.cfg).booth_pin.is_empty() {
+            return PinState::Unset;
+        }
         let now = self.now_s();
-        let r = lock(&self.inner.pairing).request(name, kind, now, random_u64).ok_or("too many pairing requests; try again in a few minutes")?;
+        let p = lock(&self.inner.pairing);
+        let g = p.pin_guard();
+        if g.is_off() {
+            PinState::Off { from: g.last_from.clone() }
+        } else if let Some(secs_left) = g.paused(now) {
+            PinState::Paused { secs_left, from: g.last_from.clone() }
+        } else {
+            PinState::On
+        }
+    }
+
+    /// For tests: a pause of PIN pairing ends `secs` sooner.
+    pub fn age_pin_pause(&self, secs: f64) {
+        let mut p = lock(&self.inner.pairing);
+        let mut g = p.pin_guard().clone();
+        g.paused_until -= secs;
+        p.set_pin_guard(g);
+    }
+
+    /// What the booth's screen tells its owner until dismissed, oldest first.
+    pub fn notices(&self) -> Vec<(u64, String)> {
+        lock(&self.inner.notices).clone()
+    }
+
+    pub fn dismiss_notice(&self, id: u64) {
+        lock(&self.inner.notices).retain(|(i, _)| *i != id);
+    }
+
+    /// Tells the booth's owner `text` (on screen until dismissed).
+    pub fn notice(&self, text: String) {
+        log::info!("network: {text}");
+        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut n = lock(&self.inner.notices);
+            n.push((id, text));
+            if n.len() > MAX_NOTICES {
+                n.remove(0);
+            }
+        }
+        if let Some(w) = lock(&self.inner.waker).as_ref() {
+            w();
+        }
+    }
+
+    /// Hands the booth PIN as set now to the pairing state (none while unset).
+    fn sync_pin(&self) {
+        let (pin, ask) = {
+            let c = lock(&self.inner.cfg);
+            (zeroize::Zeroizing::new(c.booth_pin.clone()), c.pin_ask)
+        };
+        lock(&self.inner.pairing).set_pin(if pin.is_empty() { None } else { Some(pin.as_str()) }, ask);
+    }
+
+    /// After a pairing call: the booth PIN's notices, and its wrong count kept in the settings.
+    fn after_pin(&self) {
+        let (events, guard) = {
+            let mut p = lock(&self.inner.pairing);
+            (p.take_pin_events(), p.pin_guard().clone())
+        };
+        for e in events {
+            match e {
+                PinEvent::Paired { name, .. } => self.notice(format!("{name} paired with the booth PIN")),
+                PinEvent::Paused { from, secs } => {
+                    self.notice(format!("PIN pairing paused for {} minutes: {PIN_STREAK} wrong tries from {from}", (secs / 60.0).round()))
+                }
+                PinEvent::TurnedOff { from } => self.notice(format!(
+                    "PIN pairing turned off after {PIN_OFF_AFTER} wrong tries (the last from {from}): turn it back on in Setup › Network"
+                )),
+            }
+        }
+        let saved = {
+            let c = lock(&self.inner.cfg);
+            (c.pin_wrong, c.pin_last_from.clone())
+        };
+        if saved != (guard.wrong, guard.last_from.clone()) {
+            self.update_config(|c| {
+                c.pin_wrong = guard.wrong;
+                c.pin_last_from = guard.last_from;
+            });
+        }
+    }
+
+    /// Why a try on PIN request `id` is not made: it waits for Allow on the booth's screen.
+    fn pin_refusal(&self, id: &str) -> Option<String> {
+        let p = lock(&self.inner.pairing);
+        (p.is_pin_request(id) && p.waiting_for_allow(id))
+            .then(|| "the booth asks before each device joins: someone there must press Allow, then type the PIN again".to_string())
+    }
+
+    /// What a request that is gone is told: PIN pairing paused or off says so.
+    fn gone(&self) -> String {
+        match self.pin_state() {
+            PinState::Paused { .. } | PinState::Off { .. } => {
+                "PIN pairing is paused on the booth after wrong tries: ask again (the booth then shows a code on its screen), or try later".into()
+            }
+            _ => "that pairing request has expired; ask again".into(),
+        }
+    }
+
+    fn pair_request(&self, name: &str, kind: &str, from: &str) -> Result<Value, String> {
+        let now = self.now_s();
+        self.sync_pin();
+        let r = lock(&self.inner.pairing)
+            .request_from(name, kind, from, now, random_u64)
+            .ok_or("too many pairing requests; try again in a few minutes")?;
+        if r.pin {
+            log::info!("pairing requested by {} ({}): waiting for the booth PIN", r.name, r.kind);
+            return Ok(json!({"request": r.id, "pc": self.pc_name(), "pairing": PAIRING_VERSION, "pin": true, "ask": !r.allowed}));
+        }
         log::info!("pairing requested by {} ({}): code shown on screen", r.name, r.kind);
         Ok(json!({"request": r.id, "pc": self.pc_name(), "pairing": PAIRING_VERSION}))
     }
 
-    /// A browser typed the code (the phone's page; a PC's code is never sent).
+    /// A browser typed the code or the booth PIN (the phone's page; a PC's is never sent).
     fn pair_confirm(&self, id: &str, code: &str) -> Result<Value, (String, u8)> {
         let now = self.now_s();
+        self.sync_pin();
+        if let Some(e) = self.pin_refusal(id) {
+            return Err((e, crate::pairing::MAX_WRONG));
+        }
         let got = lock(&self.inner.pairing).confirm(id, code, now);
+        self.after_pin();
         match got {
             Confirm::Paired { name, kind } => Ok(self.paired(name, kind, None)),
-            Confirm::Wrong { left } => Err((format!("wrong code ({left} tries left)"), left)),
-            Confirm::Unknown => Err(("that pairing request has expired; ask again".into(), 0)),
+            Confirm::Wrong { left } => Err((format!("wrong code or PIN ({left} tries left)"), left)),
+            Confirm::Unknown => Err((self.gone(), 0)),
         }
     }
 
@@ -402,8 +792,16 @@ impl Hub {
     fn pair_exchange(&self, params: &Value, keys: Option<LinkKeys>) -> Result<(String, Confirmed, Value), String> {
         let keys = keys.ok_or("the encrypted link did not say which keys it proved")?;
         let id = params.get("request").and_then(Value::as_str).filter(|s| s.len() <= 64).ok_or("no pairing request named")?;
-        let code =
-            lock(&self.inner.pairing).begin_exchange(id, self.now_s()).ok_or("that pairing request has expired or has no tries left; ask again")?;
+        self.sync_pin();
+        if let Some(e) = self.pin_refusal(id) {
+            return Err(e);
+        }
+        let code = lock(&self.inner.pairing).begin_exchange(id, self.now_s());
+        self.after_pin();
+        let code = code.ok_or_else(|| match self.pin_state() {
+            PinState::Paused { .. } | PinState::Off { .. } => self.gone(),
+            _ => "that pairing request has expired or has no tries left; ask again".to_string(),
+        })?;
         let theirs = params
             .get("msg")
             .and_then(Value::as_str)
@@ -433,6 +831,7 @@ impl Hub {
         let tag = params.get("confirm").and_then(Value::as_str).filter(|s| s.len() <= 4 * exchange::TAG_LEN).and_then(crate::audio::b64_decode);
         let ok = tag.is_some_and(|t| c.check(&t));
         let got = lock(&self.inner.pairing).finish_exchange(id, ok, self.now_s());
+        self.after_pin();
         match got {
             Confirm::Paired { name, kind } => {
                 log::info!("network: {name} paired; its code proved both PCs' keys");
@@ -440,9 +839,9 @@ impl Hub {
             }
             Confirm::Wrong { left } => {
                 log::info!("network: a PC's pairing exchange failed (a wrong code, or another computer in between)");
-                Err(format!("wrong code, or another computer is in between ({left} tries left)"))
+                Err(format!("wrong code or PIN, or another computer is in between ({left} tries left)"))
             }
-            Confirm::Unknown => Err("that pairing request has expired; ask again".into()),
+            Confirm::Unknown => Err(self.gone()),
         }
     }
 
@@ -450,6 +849,7 @@ impl Hub {
     fn pair_exchange_failed(&self, id: &str) {
         let now = self.now_s();
         let _ = lock(&self.inner.pairing).finish_exchange(id, false, now);
+        self.after_pin();
     }
 
     fn device(&self, token: &str) -> Option<PairedDevice> {
@@ -517,6 +917,22 @@ impl Hub {
         let followers: Vec<String> = lock(&self.inner.cfg).paired.iter().filter(|d| d.follows).map(|d| d.name.clone()).collect();
         let mut out: Vec<RemoteStatus> = Vec::new();
         for l in &links {
+            if l.listener {
+                if l.connected {
+                    let mut parts: Vec<String> = Vec::new();
+                    let last = lock(&self.inner.mixing).get(&l.name).map(|t| t.elapsed().as_secs_f64());
+                    if let Some(s) = last {
+                        parts.push(format!("last change {}", ago(s)));
+                    }
+                    if l.streaming {
+                        parts.push("hears the mix".into());
+                    }
+                    parts.push(l.kind.text().into());
+                    let state = if last.is_some() { "mixing" } else { "listening" };
+                    out.push(RemoteStatus { name: l.name.clone(), state: state.into(), detail: parts.join(" · "), ..RemoteStatus::default() });
+                }
+                continue;
+            }
             let state = if !l.connected {
                 "not reachable".to_string()
             } else if l.landed && l.report.state != "recording" {
@@ -650,13 +1066,14 @@ impl Hub {
         lock(&self.inner.stream_subs).len()
     }
 
-    /// A link wants the mix (or not): the stream thread starts with the first.
-    fn subscribe(&self, link: u64, out: &Arc<Mutex<TcpStream>>, on: bool) {
+    /// A link wants the mix (or not; `live`: while the booth is stopped too): the stream thread
+    /// starts with the first.
+    fn subscribe(&self, link: u64, out: &Arc<Mutex<TcpStream>>, on: bool, live: bool) {
         {
             let mut subs = lock(&self.inner.stream_subs);
-            subs.retain(|(l, _)| *l != link);
+            subs.retain(|s| s.link != link);
             if on {
-                subs.push((link, Arc::clone(out)));
+                subs.push(StreamSub { link, out: Arc::clone(out), live });
             }
         }
         for l in lock(&self.inner.links).iter_mut().filter(|l| l.id == link) {
@@ -821,48 +1238,151 @@ impl Hub {
     }
 
     /// A one-time invite secret, valid for [`INVITE_MINUTES`]; see [`crate::internet::Invite`].
+    /// The secret is a pairing token's 128 random bits from the OS.
     pub fn new_invite_secret(&self) -> String {
         let secret = new_token();
         let until = self.now_s() + INVITE_MINUTES * 60.0;
         let mut inv = lock(&self.inner.invites);
         let now = self.now_s();
-        inv.retain(|(_, t)| *t > now);
-        inv.push((secret.clone(), until));
+        inv.retain(|(_, _, t)| *t > now);
+        inv.push((format!("{:08x}", random_u64() & 0xffff_ffff), secret.clone(), until));
+        secret
+    }
+
+    /// A reusable invite secret (as strong as a one-time one): good for `secs` and
+    /// `max_joins` devices (1 to [`MAX_INVITE_JOINS`]), kept in the settings as its SHA-256 only
+    /// so it outlives a restart. Devices it paired stay paired once it is revoked or ends.
+    pub fn new_reusable_invite(&self, secs: u64, max_joins: u32) -> String {
+        let secret = new_token();
+        let saved = SavedInvite {
+            id: format!("{:08x}", random_u64() & 0xffff_ffff),
+            hash: secret_hash(&secret),
+            until: unix_now().saturating_add(secs),
+            max_joins: max_joins.clamp(1, MAX_INVITE_JOINS),
+            joins: 0,
+        };
+        self.update_config(|c| {
+            let now = unix_now();
+            c.invites.retain(|i| i.until > now && i.joins < i.max_joins);
+            c.invites.push(saved);
+        });
         secret
     }
 
     /// Invites waiting (not used, not expired): seconds each has left.
     pub fn open_invites(&self) -> Vec<f64> {
+        self.invites().iter().map(|i| i.secs_left).collect()
+    }
+
+    /// Every invite still open, one-time ones first, for Setup › Network's list.
+    pub fn invites(&self) -> Vec<OpenInvite> {
         let now = self.now_s();
-        lock(&self.inner.invites).iter().filter(|(_, t)| *t > now).map(|(_, t)| t - now).collect()
+        let mut v: Vec<OpenInvite> = lock(&self.inner.invites)
+            .iter()
+            .filter(|(_, _, t)| *t > now)
+            .map(|(id, _, t)| OpenInvite { id: id.clone(), reusable: false, secs_left: t - now, joins: 0, max_joins: 1 })
+            .collect();
+        let unix = unix_now();
+        v.extend(lock(&self.inner.cfg).invites.iter().filter(|i| i.until > unix && i.joins < i.max_joins).map(|i| OpenInvite {
+            id: i.id.clone(),
+            reusable: true,
+            secs_left: (i.until - unix) as f64,
+            joins: i.joins,
+            max_joins: i.max_joins,
+        }));
+        v
+    }
+
+    /// Ends the invite `id` now (devices it paired stay paired).
+    pub fn revoke_invite(&self, id: &str) {
+        lock(&self.inner.invites).retain(|(i, _, _)| i != id);
+        if lock(&self.inner.cfg).invites.iter().any(|i| i.id == id) {
+            self.update_config(|c| c.invites.retain(|i| i.id != id));
+        }
     }
 
     /// For tests: invites expire `secs` from now.
     pub fn age_invites(&self, secs: f64) {
-        for (_, t) in lock(&self.inner.invites).iter_mut() {
+        for (_, _, t) in lock(&self.inner.invites).iter_mut() {
             *t -= secs;
         }
+        let s = secs.max(0.0) as u64;
+        self.update_config(|c| {
+            for i in &mut c.invites {
+                i.until = i.until.saturating_sub(s);
+            }
+        });
     }
 
-    /// `pair.invite {secret, name}`: an invite's secret, once, before it expires, pairs `name`.
-    fn pair_invite(&self, secret: &str, name: &str) -> Result<Value, String> {
+    /// For tests: wrong invite secrets are forgotten.
+    pub fn forget_bad_invites(&self) {
+        lock(&self.inner.bad_invites).clear();
+    }
+
+    /// `pair.invite {secret, name, token?}`: a one-time invite's secret, once, before it expires,
+    /// pairs `name`; a reusable one's, until it ends or its joins are used. `token`: the device's
+    /// own from an earlier join of this booth, recognised (its pairing kept, no join used) while
+    /// the invite is still good. Wrong secrets are limited across the listener.
+    fn pair_invite(&self, secret: &str, name: &str, token: Option<&str>) -> Result<Value, String> {
+        const REFUSED: &str = "that invite has expired or was already used: ask for a new one";
         let now = self.now_s();
-        let ok = {
-            let mut inv = lock(&self.inner.invites);
-            let found = inv.iter().position(|(s, t)| !secret.is_empty() && s == secret && *t > now);
-            if let Some(i) = found {
-                inv.remove(i);
+        {
+            let mut bad = lock(&self.inner.bad_invites);
+            bad.retain(|t| now - t < BAD_INVITE_WINDOW_S);
+            if bad.len() >= MAX_BAD_INVITES {
+                return Err("too many wrong invites lately: try again in a few minutes".into());
             }
-            found.is_some()
+        }
+        let hash = secret_hash(secret);
+        let unix = unix_now();
+        // Which invite: a one-time one (index) or a reusable one (id).
+        let one_time = lock(&self.inner.invites).iter().position(|(_, s, t)| !secret.is_empty() && same_secret(s, secret) && *t > now);
+        let reusable = if one_time.is_some() || secret.is_empty() {
+            None
+        } else {
+            lock(&self.inner.cfg)
+                .invites
+                .iter()
+                .find(|i| same_secret(&i.hash, &hash) && i.until > unix && i.joins < i.max_joins)
+                .map(|i| i.id.clone())
         };
-        if !ok {
-            return Err("that invite has expired or was already used: ask for a new one".into());
+        if one_time.is_none() && reusable.is_none() {
+            lock(&self.inner.bad_invites).push(now);
+            return Err(REFUSED.into());
+        }
+        // A device that joined before (its token, from an invite): recognised, nothing used.
+        if let Some(dev) = token.and_then(|t| self.device(t)).filter(|d| d.kind == "pc" && d.key.is_empty()) {
+            log::info!("network: {} rejoined with an invite it had used", dev.name);
+            return Ok(json!({"token": dev.token, "name": dev.name, "pc": self.pc_name(), "again": true}));
+        }
+        if let Some(i) = one_time {
+            let mut inv = lock(&self.inner.invites);
+            if inv.get(i).is_some_and(|(_, s, _)| same_secret(s, secret)) {
+                inv.remove(i);
+            } else {
+                return Err(REFUSED.into());
+            }
         }
         let name = crate::pairing::clean_name(name);
         let token = new_token();
         let dev = PairedDevice { name: name.clone(), kind: "pc".into(), token: token.clone(), follows: false, key: String::new() };
-        self.update_config(|c| c.paired.push(dev));
-        log::info!("network: {name} paired over the internet with an invite");
+        let mut used = true;
+        self.update_config(|c| {
+            if let Some(id) = &reusable {
+                match c.invites.iter_mut().find(|i| &i.id == id && i.joins < i.max_joins) {
+                    Some(i) => i.joins = i.joins.saturating_add(1),
+                    None => {
+                        used = false;
+                        return;
+                    }
+                }
+            }
+            c.paired.push(dev);
+        });
+        if !used {
+            return Err(REFUSED.into());
+        }
+        self.notice(if reusable.is_some() { format!("{name} joined with the reusable invite") } else { format!("{name} joined with an invite") });
         Ok(json!({"token": token, "name": name, "pc": self.pc_name()}))
     }
 
@@ -922,13 +1442,13 @@ impl Hub {
         } else if kind != LinkKind::Plain {
             // The service remote page is on the plain listener only.
         } else {
-            self.serve_http(reader, stream, stop);
+            self.serve_http(reader, stream, addr, stop);
         }
     }
 
     // ---- HTTP: the service remote page ----
 
-    fn serve_http(&self, mut reader: BufReader<TcpStream>, mut out: TcpStream, stop: &Arc<AtomicBool>) {
+    fn serve_http(&self, mut reader: BufReader<TcpStream>, mut out: TcpStream, addr: SocketAddr, stop: &Arc<AtomicBool>) {
         let Some(req) = read_http(&mut reader) else {
             let _ = respond(&mut out, 400, "text/plain", b"bad request");
             return;
@@ -941,7 +1461,7 @@ impl Hub {
             ("GET", "/remote.css") => respond(&mut out, 200, "text/css; charset=utf-8", STYLE.as_bytes()),
             ("POST", "/api/pair/request") => {
                 let name = body.get("name").and_then(Value::as_str).unwrap_or("Browser");
-                match self.pair_request(name, "browser") {
+                match self.pair_request(name, "browser", &from_addr(addr)) {
                     Ok(v) => respond_json(&mut out, 200, &v),
                     Err(e) => respond_json(&mut out, 429, &json!({"error": e})),
                 }
@@ -986,6 +1506,37 @@ impl Hub {
     fn status_value(&self) -> Value {
         let s = lock(&self.inner.status);
         serde_json::from_str(&s.2).unwrap_or(json!({}))
+    }
+
+    /// Connection `conn` (PC `name`) moves the control of gesture `key`: taken, or refused with
+    /// the holder's name while another connection's hand is on it.
+    fn hold(&self, conn: u64, key: &str, name: &str) -> Result<(), String> {
+        let mut h = lock(&self.inner.holds);
+        h.retain(|_, x| x.alive());
+        if let Some(x) = h.get(key).filter(|x| x.conn != conn) {
+            return Err(x.name.clone());
+        }
+        h.insert(key.to_string(), Hold { conn, name: name.to_string(), open: true, last: Instant::now() });
+        Ok(())
+    }
+
+    /// Connection `conn` let go of `key`: still its own for [`HOLD_GRACE`].
+    fn release_hold(&self, conn: u64, key: &str) {
+        if let Some(x) = lock(&self.inner.holds).get_mut(key).filter(|x| x.conn == conn) {
+            x.open = false;
+            x.last = Instant::now();
+        }
+    }
+
+    fn drop_holds(&self, conn: u64) {
+        lock(&self.inner.holds).retain(|_, x| x.conn != conn);
+    }
+
+    /// The controls held by a remote's hand now: (gesture key, PC name).
+    pub fn holds(&self) -> Vec<(String, String)> {
+        let mut h = lock(&self.inner.holds);
+        h.retain(|_, x| x.alive());
+        h.iter().map(|(k, x)| (k.clone(), x.name.clone())).collect()
     }
 
     /// Runs a service remote action through the UI thread.
@@ -1061,6 +1612,15 @@ impl Hub {
         let mut who: Option<PairedDevice> = None;
         let mut link: Option<u64> = None;
         let mut pusher: Option<Arc<AtomicBool>> = None;
+        // This connection is a listening PC's (not a recorder's).
+        let mut listening = false;
+        // The status and mixer feeds pushed on this connection, while on.
+        let mut status_push: Option<Arc<AtomicBool>> = None;
+        let mut mixer_push: Option<Arc<AtomicBool>> = None;
+        let mut counted = false;
+        // This connection (its holds), and the gestures it has open now.
+        let conn = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut gestures: Vec<String> = Vec::new();
         loop {
             if self.stopped(stop) {
                 break;
@@ -1125,13 +1685,14 @@ impl Hub {
                 "pair.invite" => Some(answer(self.pair_invite(
                     params.get("secret").and_then(Value::as_str).unwrap_or(""),
                     params.get("name").and_then(Value::as_str).unwrap_or("PC"),
+                    params.get("token").and_then(Value::as_str),
                 ))),
                 // A PC with an older FreeDAWm says no version (it would send the code itself):
                 // told to update before any code is shown.
                 "pair.request" if params.get("pairing").and_then(Value::as_u64).is_none_or(|v| v < PAIRING_VERSION) => {
                     Some(json!({"ok": false, "error": UPDATE_PC, "pair": true, "update": true}))
                 }
-                "pair.request" => Some(answer(self.pair_request(params.get("name").and_then(Value::as_str).unwrap_or("PC"), "pc"))),
+                "pair.request" => Some(answer(self.pair_request(params.get("name").and_then(Value::as_str).unwrap_or("PC"), "pc", &from_addr(addr)))),
                 // The code in the clear (an older FreeDAWm): never compared, never accepted.
                 "pair.confirm" => Some(json!({"ok": false, "error": UPDATE_PC, "pair": true, "update": true})),
                 "pair.exchange" => {
@@ -1169,12 +1730,27 @@ impl Hub {
                         Some(dev) if !dev.key.is_empty() && (kind != LinkKind::Encrypted || peer.as_deref() != Some(dev.key.as_str())) => Some(
                             json!({"ok": false, "error": "this PC was paired over the encrypted local link: connect over it, with the same key", "pair": true}),
                         ),
+                        Some(dev) if lock(&self.inner.away).contains(&dev.token) => Some(
+                            json!({"ok": false, "error": "the studio disconnected this PC: it can let it back in from Setup › Network", "away": true}),
+                        ),
                         Some(dev) => {
-                            let follower = params.get("role").and_then(Value::as_str) == Some("follower");
-                            if follower {
-                                let report: FollowerReport =
-                                    params.get("report").cloned().and_then(|r| serde_json::from_value(r).ok()).unwrap_or_default();
-                                let l = self.open_link(&dev, report, kind);
+                            if who.is_none() {
+                                lock(&self.inner.conns).push((conn, dev.token.clone(), dev.name.clone(), Arc::clone(&out)));
+                            }
+                            let role = params.get("role").and_then(Value::as_str);
+                            let follower = role == Some("follower");
+                            listening = role == Some("listener") && link.is_none();
+                            if !counted {
+                                counted = true;
+                                self.inner.pcs.fetch_add(1, Ordering::SeqCst);
+                            }
+                            if follower || listening {
+                                let report: FollowerReport = if follower {
+                                    params.get("report").cloned().and_then(|r| serde_json::from_value(r).ok()).unwrap_or_default()
+                                } else {
+                                    FollowerReport::default()
+                                };
+                                let l = self.open_link(&dev, report, kind, listening);
                                 link = Some(l);
                                 let flag = Arc::new(AtomicBool::new(false));
                                 pusher = Some(Arc::clone(&flag));
@@ -1185,20 +1761,62 @@ impl Hub {
                                     .name("freedawm-net-push".into())
                                     .spawn(move || hub.push_transport(&out, &flag, &stop));
                             }
-                            log::info!("network: {} connected from {addr}{}", dev.name, if follower { " as a remote recorder" } else { "" });
-                            let r = json!({"ok": true, "result": {"pc": self.pc_name(), "name": dev.name, "transport": self.transport()}});
+                            let what = if follower {
+                                " as a remote recorder"
+                            } else if listening {
+                                " to listen"
+                            } else {
+                                ""
+                            };
+                            log::info!("network: {} connected from {addr}{what}", dev.name);
+                            let r = json!({"ok": true, "result": {"pc": self.pc_name(), "name": dev.name, "transport": self.transport(), "locked": self.remote_lock()}});
                             who = Some(dev);
                             Some(r)
                         }
                     }
                 }
                 _ if who.is_none() => Some(json!({"ok": false, "error": "not paired: send pair.request / pair.confirm, then hello", "pair": true})),
+                // A round trip that never reaches the app (the Remote Mix window's link quality).
+                "net.ping" => Some(json!({"ok": true, "result": {}})),
                 "sync.ping" => {
                     let now = self.clock_now();
                     match (arrived, now) {
                         (Some(b1), Some(b2)) => Some(json!({"ok": true, "result": {"b1": b1, "b2": b2}})),
                         _ => Some(json!({"ok": false, "error": "the booth is stopped"})),
                     }
+                }
+                "follower.report" | "feed" | "feed.audio" | "take.offer" | "take.chunk" | "take.transfer" if listening => {
+                    Some(json!({"ok": false, "error": "a listening PC does not record: connect as a remote recorder to send takes"}))
+                }
+                "status.subscribe" => {
+                    let on = params.get("on").and_then(Value::as_bool).unwrap_or(true);
+                    if let Some(f) = status_push.take() {
+                        f.store(true, Ordering::SeqCst);
+                        self.inner.changed.notify_all();
+                    }
+                    if on {
+                        let flag = Arc::new(AtomicBool::new(false));
+                        status_push = Some(Arc::clone(&flag));
+                        let (hub, out, stop) = (self.clone(), Arc::clone(&out), Arc::clone(stop));
+                        let _ = std::thread::Builder::new().name("freedawm-net-status".into()).spawn(move || hub.push_status(&out, &flag, &stop));
+                    }
+                    Some(json!({"ok": true, "result": {"on": on}}))
+                }
+                "mixer.subscribe" => {
+                    let on = params.get("on").and_then(Value::as_bool).unwrap_or(true);
+                    let meters = params.get("meters").and_then(Value::as_bool).unwrap_or(true);
+                    if let Some(f) = mixer_push.take() {
+                        f.store(true, Ordering::SeqCst);
+                        self.inner.mixer_changed.notify_all();
+                    }
+                    if on {
+                        let flag = Arc::new(AtomicBool::new(false));
+                        mixer_push = Some(Arc::clone(&flag));
+                        let (hub, out, stop) = (self.clone(), Arc::clone(&out), Arc::clone(stop));
+                        let _ =
+                            std::thread::Builder::new().name("freedawm-net-mixer".into()).spawn(move || hub.push_mixer(&out, &flag, &stop, meters));
+                    }
+                    Some(json!({"ok": true, "result": {"on": on, "meters": meters}}))
                 }
                 "follower.report" => {
                     if let (Some(l), Ok(r)) = (link, serde_json::from_value::<FollowerReport>(params)) {
@@ -1220,12 +1838,13 @@ impl Hub {
                 }
                 "stream.subscribe" => {
                     let on = params.get("on").and_then(Value::as_bool).unwrap_or(true);
+                    let live = params.get("live").and_then(Value::as_bool).unwrap_or(false);
                     match link {
                         Some(l) => {
-                            self.subscribe(l, &out, on);
-                            Some(json!({"ok": true, "result": {"on": on}}))
+                            self.subscribe(l, &out, on, live);
+                            Some(json!({"ok": true, "result": {"on": on, "live": live}}))
                         }
-                        None => Some(json!({"ok": false, "error": "only a remote recorder hears the mix"})),
+                        None => Some(json!({"ok": false, "error": "only a remote recorder or a listening PC hears the mix"})),
                     }
                 }
                 "take.offer" => Some(answer(who.as_ref().map_or(Err("not paired".into()), |d| self.take_offer(&d.name, &params)))),
@@ -1234,12 +1853,36 @@ impl Hub {
                     Ok(t) => Some(answer(self.receive_take(t))),
                     Err(e) => Some(json!({"ok": false, "error": format!("bad take: {e}")})),
                 },
+                _ if self.remote_lock() && !reads_only(&method, &params) => Some(json!({"ok": false, "error": LOCKED, "locked": true})),
                 _ => {
-                    let (tx, rx) = channel();
-                    if !self.send(HubRequest::Control { method, params, reply: tx }) {
-                        break;
+                    let gesture = params.get("gesture").and_then(Value::as_str).map(str::to_string);
+                    let name = who.as_ref().map_or_else(String::new, |d| d.name.clone());
+                    if !reads_only(&method, &params) && method != "engine.end_gesture" {
+                        self.note_mixing(&name);
                     }
-                    Some(rx.recv_timeout(Duration::from_secs(90)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"})))
+                    let held = match (&gesture, method.as_str()) {
+                        (Some(g), "engine.execute" | "command") => self.hold(conn, g, &name).err(),
+                        (Some(g), "engine.end_gesture") => {
+                            self.release_hold(conn, g);
+                            gestures.retain(|x| x != g);
+                            None
+                        }
+                        _ => None,
+                    };
+                    if let Some(holder) = held {
+                        Some(json!({"ok": false, "error": format!("{holder} is moving that control"), "held_by": holder}))
+                    } else {
+                        if let Some(g) = gesture.filter(|_| method == "engine.execute" || method == "command")
+                            && !gestures.contains(&g)
+                        {
+                            gestures.push(g);
+                        }
+                        let (tx, rx) = channel();
+                        if !self.send(HubRequest::Control { method, params, reply: tx }) {
+                            break;
+                        }
+                        Some(rx.recv_timeout(Duration::from_secs(90)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"})))
+                    }
                 }
             };
             if let (Some(mut r), Some(id)) = (reply, id) {
@@ -1257,12 +1900,42 @@ impl Hub {
         if let Some((id, _)) = exchange.take() {
             self.pair_exchange_failed(&id);
         }
+        // A remote gone mid-drag: its hands come off, and the studio closes each open undo step
+        // now (not when the lease runs out); the mix stays as last set.
+        for g in gestures {
+            self.release_hold(conn, &g);
+            let (tx, _) = channel();
+            self.send(HubRequest::Control { method: "engine.end_gesture".into(), params: json!({"gesture": g}), reply: tx });
+        }
+        self.drop_holds(conn);
+        {
+            let mut conns = lock(&self.inner.conns);
+            let name = conns.iter().find(|c| c.0 == conn).map(|c| c.2.clone());
+            conns.retain(|c| c.0 != conn);
+            // Mixing ends with its last connection.
+            if let Some(n) = name
+                && !conns.iter().any(|c| c.2 == n)
+            {
+                lock(&self.inner.mixing).remove(&n);
+            }
+        }
         if let Some(p) = pusher {
             p.store(true, Ordering::SeqCst);
             self.inner.transport_changed.notify_all();
         }
+        if let Some(p) = status_push {
+            p.store(true, Ordering::SeqCst);
+            self.inner.changed.notify_all();
+        }
+        if let Some(p) = mixer_push {
+            p.store(true, Ordering::SeqCst);
+            self.inner.mixer_changed.notify_all();
+        }
+        if counted {
+            self.inner.pcs.fetch_sub(1, Ordering::SeqCst);
+        }
         if let Some(l) = link {
-            self.subscribe(l, &out, false);
+            self.subscribe(l, &out, false, false);
             self.close_link(l);
         }
     }
@@ -1440,13 +2113,184 @@ impl Hub {
         }
     }
 
-    fn open_link(&self, dev: &PairedDevice, report: FollowerReport, kind: LinkKind) -> u64 {
+    /// Pushes the status to one paired PC (`status.subscribe`): on every change, at most every
+    /// 66 ms, and every 10 s when nothing changed, as `{"event": "status", "params": <status>}`.
+    fn push_status(&self, out: &Arc<Mutex<TcpStream>>, done: &AtomicBool, stop: &AtomicBool) {
+        let mut seen = u64::MAX;
+        let mut last_push = Instant::now() - STATUS_EVERY;
+        loop {
+            let seq = {
+                let s = lock(&self.inner.status);
+                let (s, _) = self
+                    .inner
+                    .changed
+                    .wait_timeout_while(s, Duration::from_secs(10), |s| s.0 == seen && !done.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst))
+                    .unwrap_or_else(PoisonError::into_inner);
+                s.0
+            };
+            if done.load(Ordering::SeqCst) || stop.load(Ordering::SeqCst) {
+                break;
+            }
+            if seq != seen {
+                let wait = STATUS_EVERY.saturating_sub(last_push.elapsed());
+                if !wait.is_zero() {
+                    std::thread::sleep(wait);
+                }
+            }
+            seen = lock(&self.inner.status).0;
+            last_push = Instant::now();
+            let latest = Arc::clone(&lock(&self.inner.status).2);
+            if !write_raw(out, &format!("{{\"event\":\"status\",\"params\":{latest}}}")) {
+                break;
+            }
+        }
+    }
+
+    /// The mixer as the UI sees it now ([`soundcraft_engine::surface::feed::mixer_state`]): the
+    /// first becomes the snapshot, each later one that differs a delta for the subscribers. Cheap
+    /// and never waits on a subscriber (the UI thread calls it).
+    pub fn publish_mixer(&self, state: Value) {
+        let mut m = lock(&self.inner.mixer);
+        let delta = match &m.state {
+            None => None,
+            Some(old) => match soundcraft_engine::surface::feed::mixer_delta(old, &state) {
+                Some(d) => Some(d),
+                None => return,
+            },
+        };
+        m.seq = m.seq.wrapping_add(1);
+        let seq = m.seq;
+        if let Some(mut d) = delta {
+            if let Some(o) = d.as_object_mut() {
+                o.insert("seq".into(), json!(seq));
+            }
+            let line = Arc::new(json!({"event": "mixer.delta", "params": d}).to_string());
+            m.deltas.push_back((seq, line));
+            while m.deltas.len() > MAX_MIXER_DELTAS {
+                m.deltas.pop_front();
+            }
+        } else {
+            m.deltas.clear();
+        }
+        m.state = Some(Arc::new(state));
+        drop(m);
+        self.inner.mixer_changed.notify_all();
+    }
+
+    /// The meters now ([`soundcraft_engine::surface::feed::meters_json`]'s `params`); only the
+    /// latest is kept.
+    pub fn publish_meters(&self, mut params: Value) {
+        let mut m = lock(&self.inner.mixer);
+        // Unchanged (stopped and quiet): nothing new to send.
+        if m.last_meters.as_ref() == Some(&params) {
+            return;
+        }
+        m.last_meters = Some(params.clone());
+        m.meter_seq = m.meter_seq.wrapping_add(1);
+        if let Some(o) = params.as_object_mut() {
+            o.insert("seq".into(), json!(m.meter_seq));
+        }
+        m.meters = Some(Arc::new(json!({"event": "mixer.meters", "params": params}).to_string()));
+        drop(m);
+        self.inner.mixer_changed.notify_all();
+    }
+
+    /// PCs subscribed to the mixer feed now (the UI builds it only while there are some).
+    pub fn mixer_subscribers(&self) -> usize {
+        self.inner.mixer_subs.load(Ordering::SeqCst)
+    }
+
+    /// Mixer deltas held for subscribers catching up (at most [`MAX_MIXER_DELTAS`]).
+    pub fn mixer_backlog(&self) -> usize {
+        lock(&self.inner.mixer).deltas.len()
+    }
+
+    /// Paired PCs connected now (recorders, listeners and controlling PCs alike).
+    pub fn connected_pcs(&self) -> usize {
+        self.inner.pcs.load(Ordering::SeqCst)
+    }
+
+    /// Pushes the mixer feed to one subscriber (`mixer.subscribe`): a snapshot, then each delta in
+    /// order (a fresh snapshot when it fell more than [`MAX_MIXER_DELTAS`] behind), and the latest
+    /// meters at most every [`METERS_EVERY`]. A subscriber that stops reading only stalls this
+    /// thread, until the link's write timeout ends it; nothing here waits on the UI.
+    fn push_mixer(&self, out: &Arc<Mutex<TcpStream>>, done: &AtomicBool, stop: &AtomicBool, meters: bool) {
+        self.inner.mixer_subs.fetch_add(1, Ordering::SeqCst);
+        // The UI builds the feed only while someone subscribes: wake it.
+        if let Some(w) = lock(&self.inner.waker).as_ref() {
+            w();
+        }
+        let mut cursor: Option<u64> = None;
+        let mut meters_seen = 0u64;
+        let mut last_meters = Instant::now() - METERS_EVERY;
+        let mut lines: Vec<Arc<String>> = Vec::new();
+        loop {
+            let quit = || done.load(Ordering::SeqCst) || stop.load(Ordering::SeqCst);
+            let snapshot = {
+                let g = lock(&self.inner.mixer);
+                let (g, _) = self
+                    .inner
+                    .mixer_changed
+                    .wait_timeout_while(g, Duration::from_secs(5), |m| {
+                        (m.state.is_none() || Some(m.seq) == cursor) && (!meters || m.meter_seq == meters_seen) && !quit()
+                    })
+                    .unwrap_or_else(PoisonError::into_inner);
+                if quit() {
+                    break;
+                }
+                lines.clear();
+                let mut snapshot = None;
+                if let Some(state) = &g.state
+                    && Some(g.seq) != cursor
+                {
+                    let caught_up = cursor.is_some_and(|c| g.deltas.front().is_some_and(|(first, _)| *first <= c.wrapping_add(1)));
+                    if caught_up {
+                        lines.extend(g.deltas.iter().filter(|(s, _)| cursor.is_some_and(|c| *s > c)).map(|(_, l)| Arc::clone(l)));
+                    } else {
+                        snapshot = Some((g.seq, Arc::clone(state)));
+                    }
+                    cursor = Some(g.seq);
+                }
+                if meters && g.meter_seq != meters_seen && last_meters.elapsed() >= METERS_EVERY {
+                    meters_seen = g.meter_seq;
+                    last_meters = Instant::now();
+                    if let Some(m) = &g.meters {
+                        lines.push(Arc::clone(m));
+                    }
+                }
+                snapshot
+            };
+            if let Some((seq, state)) = snapshot {
+                let line = json!({"event": "mixer.snapshot", "params": {"seq": seq, "state": &*state}}).to_string();
+                lines.insert(0, Arc::new(line));
+            }
+            let mut ok = true;
+            for l in &lines {
+                if !write_raw(out, l) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                // A stalled or gone subscriber: its link is ended, nothing waits for it.
+                let _ = lock(out).shutdown(std::net::Shutdown::Both);
+                break;
+            }
+            if lines.is_empty() && meters && meters_seen != lock(&self.inner.mixer).meter_seq {
+                // Meters waiting for their turn.
+                std::thread::sleep(METERS_EVERY.saturating_sub(last_meters.elapsed()).max(Duration::from_millis(1)));
+            }
+        }
+        self.inner.mixer_subs.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn open_link(&self, dev: &PairedDevice, report: FollowerReport, kind: LinkKind, listener: bool) -> u64 {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let ports: Vec<String> = report.ports.iter().map(|p| remote_port_name(&dev.name, p)).collect();
         let inputs: Vec<String> = report.inputs.iter().map(|p| remote_port_name(&dev.name, p)).collect();
         {
             let mut links = lock(&self.inner.links);
-            links.retain(|l| l.name != dev.name);
+            links.retain(|l| l.name != dev.name || l.listener != listener);
             links.push(Link {
                 id,
                 name: dev.name.clone(),
@@ -1456,7 +2300,12 @@ impl Hub {
                 landed: false,
                 streaming: false,
                 kind,
+                listener,
             });
+        }
+        if listener {
+            // Not a remote recorder: nothing to follow, no ports, nothing the booth waits for.
+            return id;
         }
         let name = dev.name.clone();
         self.update_config(|c| {
@@ -1515,10 +2364,13 @@ impl Hub {
     }
 
     fn close_link(&self, id: u64) {
-        for l in lock(&self.inner.links).iter_mut().filter(|l| l.id == id) {
+        let mut links = lock(&self.inner.links);
+        for l in links.iter_mut().filter(|l| l.id == id) {
             l.connected = false;
-            log::info!("network: remote recorder {} disconnected", l.name);
+            log::info!("network: {} {} disconnected", if l.listener { "listening PC" } else { "remote recorder" }, l.name);
         }
+        // A listener is not waited for: gone is gone.
+        links.retain(|l| !(l.id == id && l.listener));
     }
 
     /// Adds notes to the live sketch of `pc`'s `port` (as a feed batch does; for renders).
@@ -1556,6 +2408,12 @@ fn answer(r: Result<Value, String>) -> Value {
 fn write_line(out: &Arc<Mutex<TcpStream>>, v: &Value) -> bool {
     let mut s = lock(out);
     writeln!(s, "{v}").is_ok() && s.flush().is_ok()
+}
+
+/// [`write_line`] for a line already made.
+fn write_raw(out: &Arc<Mutex<TcpStream>>, line: &str) -> bool {
+    let mut s = lock(out);
+    writeln!(s, "{line}").is_ok() && s.flush().is_ok()
 }
 
 /// Reads one `\n`-terminated line of at most `max` bytes (newline stripped). `Ok(false)` at end
@@ -1655,13 +2513,16 @@ fn respond_json(out: &mut TcpStream, code: u16, v: &Value) -> std::io::Result<()
 }
 
 /// The remote mix stream's thread: reads the tap, encodes, sends to every link hearing it; the
-/// tap is on only while someone listens. Ends with the hub.
+/// tap is on only while someone listens. Two encoders: one streaming while the booth is stopped
+/// (`live` links), one sending only talkback then (older performers), each run only while a link
+/// wants it. Ends with the hub.
 fn stream_loop(weak: &std::sync::Weak<Inner>) {
-    let mut enc: Option<(u32, crate::stream::MixEncoder)> = None;
+    // [talkback-only, live]
+    let mut encs: [Option<(u32, crate::stream::MixEncoder)>; 2] = [None, None];
     let mut blocks = Vec::new();
     loop {
         let Some(inner) = weak.upgrade() else { return };
-        let subs: Vec<(u64, Arc<Mutex<TcpStream>>)> = lock(&inner.stream_subs).clone();
+        let subs: Vec<StreamSub> = lock(&inner.stream_subs).clone();
         let tap = lock(&inner.tap).clone();
         match (&tap, subs.is_empty()) {
             (Some((t, rate)), false) => {
@@ -1669,31 +2530,41 @@ fn stream_loop(weak: &std::sync::Weak<Inner>) {
                     t.clear();
                     t.set_on(true);
                 }
-                if enc.as_ref().is_none_or(|(r, _)| r != rate) {
-                    enc = Some((*rate, crate::stream::MixEncoder::new(*rate)));
-                }
                 blocks.clear();
                 t.read(&mut blocks);
-                if let Some((_, e)) = enc.as_mut() {
+                let mut dead = Vec::new();
+                for (k, enc) in encs.iter_mut().enumerate() {
+                    let live = k == 1;
+                    if !subs.iter().any(|s| s.live == live) {
+                        *enc = None;
+                        continue;
+                    }
+                    if enc.as_ref().is_none_or(|(r, _)| r != rate) {
+                        let e = if live { crate::stream::MixEncoder::live(*rate) } else { crate::stream::MixEncoder::new(*rate) };
+                        *enc = Some((*rate, e));
+                    }
+                    let Some((_, e)) = enc.as_mut() else { continue };
                     for p in e.feed(&blocks) {
                         let line = json!({"event": "stream", "params": p});
-                        let mut dead = Vec::new();
-                        for (id, out) in &subs {
-                            if !write_line(out, &line) {
-                                dead.push(*id);
+                        for s in subs.iter().filter(|s| s.live == live) {
+                            if dead.contains(&s.link) {
+                                continue;
+                            }
+                            if !write_line(&s.out, &line) {
+                                dead.push(s.link);
                             }
                         }
-                        if !dead.is_empty() {
-                            lock(&inner.stream_subs).retain(|(id, _)| !dead.contains(id));
-                        }
                     }
+                }
+                if !dead.is_empty() {
+                    lock(&inner.stream_subs).retain(|s| !dead.contains(&s.link));
                 }
             }
             _ => {
                 if let Some((t, _)) = &tap {
                     t.set_on(false);
                 }
-                enc = None;
+                encs = [None, None];
             }
         }
         drop(inner);
@@ -1701,8 +2572,59 @@ fn stream_loop(weak: &std::sync::Weak<Inner>) {
     }
 }
 
+/// A caller's address for the booth's notices: empty when it is this PC's own (a bridge from
+/// the encrypted link).
+fn from_addr(addr: SocketAddr) -> String {
+    if addr.ip().is_loopback() { String::new() } else { addr.ip().to_string() }
+}
+
 /// How long an invite is good for (minutes).
 pub const INVITE_MINUTES: f64 = 30.0;
+
+/// The most joins a reusable invite allows.
+pub const MAX_INVITE_JOINS: u32 = 50;
+/// Wrong invite secrets allowed per [`BAD_INVITE_WINDOW_S`] before every invite is refused for a
+/// while (a secret is 128 random bits: this only keeps the listener from being hammered).
+pub const MAX_BAD_INVITES: usize = 20;
+pub const BAD_INVITE_WINDOW_S: f64 = 600.0;
+
+/// An invite still open, as Setup › Network lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenInvite {
+    pub id: String,
+    /// Several devices may join with it (else one, within 30 minutes).
+    pub reusable: bool,
+    pub secs_left: f64,
+    pub joins: u32,
+    pub max_joins: u32,
+}
+
+/// An invite secret's SHA-256 (hex), as the settings keep a reusable one.
+fn secret_hash(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(secret.trim().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Whether two secrets (or hashes) are the same, compared in full.
+fn same_secret(a: &str, b: &str) -> bool {
+    crate::pairing::same_pin(a, b)
+}
+
+/// Seconds since 1970.
+/// "just now", "12 s ago", "3 min ago".
+pub fn ago(secs: f64) -> String {
+    if secs < 2.0 {
+        "just now".into()
+    } else if secs < 120.0 {
+        format!("{secs:.0} s ago")
+    } else {
+        format!("{:.0} min ago", secs / 60.0)
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
 
 /// The largest audio take accepted (24 h of 8 channels at 96 kHz, 24-bit).
 const MAX_TAKE_BYTES: u64 = 200 << 30;

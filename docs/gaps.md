@@ -1,6 +1,6 @@
 # Where FreeDAWm falls short of a complete studio workflow
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-06 · **Change:** trivial (G-20: the Juke drum machine design; previously minor: G-21 closed: MP3 and Opus export; AAC/M4A export not planned; previously minor: G-02 shrunk: hardware MIDI input built, output and clock left; previously trivial: G-24: stem separation quality; previously trivial: G-19: Shale's MIDI Out feeds instrument tracks, module MIDI inputs; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously minor: G-13: Tune Vocal complete, follow-ups listed; previously minor: G-13: the Vocal Editor; previously minor: G-13: built-in vocal tuning on clips; previously minor: G-19: slim editors for all 18 FireStation plugins; previously minor: G-19: slim Comp editor; previously minor: G-23 added: the Band's round 2; previously minor: G-01 closed pending the owner's hardware pass; G-06 shrunk to streaming sources; previously minor: G-19 VST-faithful FireStation editors) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-21 · **Change:** minor (G-06 shrunk to waveform overviews: sources stream from disk; previously trivial: G-20: the Juke drum machine design; previously minor: G-21 closed: MP3 and Opus export; AAC/M4A export not planned; previously minor: G-02 shrunk: hardware MIDI input built, output and clock left; previously trivial: G-24: stem separation quality; previously trivial: G-19: Shale's MIDI Out feeds instrument tracks, module MIDI inputs; previously trivial: renamed to FreeDAWm, sessions saved as .fdawm; previously minor: G-13: Tune Vocal complete, follow-ups listed; previously minor: G-13: the Vocal Editor; previously minor: G-13: built-in vocal tuning on clips; previously minor: G-19: slim editors for all 18 FireStation plugins; previously minor: G-19: slim Comp editor; previously minor: G-23 added: the Band's round 2; previously minor: G-01 closed pending the owner's hardware pass; G-06 shrunk to streaming sources; previously minor: G-19 VST-faithful FireStation editors) · **Compared with:** Avid Pro Tools Ultimate 2026.4.1
 
 > Pro Tools, AudioSuite and Avid are trademarks of Avid Technology, Inc. They are named here only to
 > compare features (a workflow many users already know); FreeDAWm is not affiliated with or endorsed
@@ -24,7 +24,7 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 | G-03 | **Alpha blocker.** Cannot exchange sessions with Pro Tools (no AAF/OMF, no `.ptx`) | File formats | [file-format-parity.md](file-format-parity.md) | 50–90 |
 | G-04 | Open correctness bugs in features counted as done (~25 issues) | Stability | this file | 25–40 |
 | G-05 | (Entitlement part: alpha blocker for the mix row) Third-party VST3s blocked in the signed macOS build; AU editors missing | Ecosystem | [plugin-parity.md](plugin-parity.md) | 15–25 |
-| G-06 | Sources decoded whole into RAM (takes already record to disk) | Performance | [hardware-parity.md](hardware-parity.md) | 10–20 |
+| G-06 | Compressed files decoded whole once; one file handle per streamed file (sources and overviews stream from disk; takes record to disk) | Performance | [hardware-parity.md](hardware-parity.md) | 3–6 |
 | G-07 | Nothing is compared against Pro Tools' output (no fidelity harness) | Features | this file | 20–30 |
 | G-08 | Built-in plugin catalogue thin and unverified | Features | [plugin-parity.md](plugin-parity.md) | 80–120 |
 | G-09 | English only, no string catalog, no CJK/RTL rendering | Localization | [localization-parity.md](localization-parity.md) | 70–110 |
@@ -82,8 +82,23 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 
 ### G-03. Session interchange with Pro Tools
 
-- **Missing:** opening or saving `.ptx`/`.ptf`, AAF and OMF import and export (#40), Media
-  Composer–compatible sessions. Our session format is `.fdawm` JSON.
+- **Done (2026-11-21): AAF import** (File › Import › AAF..., `file.import_aaf`; reader crate
+  `crates/aaf`, written from the MS-CFB, AAF Object, Low-Level Container and Edit Protocol
+  specifications, no dependencies). The audio of a Pro Tools, Media Composer, Premiere or Resolve
+  AAF comes in as new tracks in one undo step: clips at their timecode positions (an empty session
+  takes the composition's start timecode and frame rate), fades and crossfades (curve shapes
+  linear, equal power, logarithmic), Pro Tools' rendered fade clips rebuilt as real fades,
+  static clip gain and clip-gain envelopes, track volume and pan (and their automation where the
+  file has it), mute, solo, muted clips, markers, mono/stereo/5.1/7.1 tracks (multi-mono media
+  combined), embedded WAV/AIFF/PCM audio copied into the session, external audio found where the
+  file says or beside it, missing audio offline under its name (relink later). A report goes in
+  the Notes tab and a summary in the status line. Checked against 65 real files from the four
+  applications: 62 match their known answer fully (`crates/aaf/tests/samples.rs`, run with
+  `FREEDAWM_AAF_SAMPLES`).
+- **Missing:** opening or saving `.ptx`/`.ptf`, AAF export, OMF import and export (#40),
+  Media Composer–compatible sessions; in AAF import: speed changes (Motion Control / time warp),
+  clip-level pan, MXF-wrapped media (Avid's own media files come in offline), plugin effects,
+  video. Our session format is `.fdawm` JSON.
 - **Impact:** the standard's main-format bar for beta. A Pro Tools user cannot bring a project in
   or hand one back; post-production (picture editors deliver AAF) is blocked.
 - **Estimate:** AAF/OMF import + export ≈ 50–90 h (FilmCraft already writes AAF/OMF; we can learn
@@ -128,11 +143,28 @@ launch #142; Linux #45, #107.
 ### G-06. Memory-bound media
 
 - **Done:** recording streams each take to its own WAV file, rewriting the header every second, so a
-  crash keeps what was written.
-- **Missing:** streaming sources from disk. Every source is decoded whole into the `SourcePool`.
-- **Impact:** hour-long multitrack sessions exhaust memory.
+  crash keeps what was written. Sources play from disk through one block cache (`model::disk`, a
+  quarter of RAM): playback reads ahead on a disk thread and never waits (a late block is a short
+  silence counted as "Disk too slow" in the status bar); bounce, freeze, Process and exports read
+  through the same cache, blocking, with no gaps. Only sources under 65536 samples (an engine
+  setting) and the samples of Lift and Juke stay in memory. Importing a WAV at the session rate
+  reads only its header; other formats and rates are decoded once into `Decoded/` and stream from
+  there; generated audio, sample edits and rate conversion are written to disk as made; saves and
+  exports write a block at a time. Waveform overviews of sources played from disk in a saved
+  project keep only their coarse levels in memory (about 1/256 of the whole: 2.7 MB instead of
+  691 MB for a 5.5 GB session, about 43 MB for 2 hours of 32 tracks at 96 kHz); the fine levels
+  are read from the `Waveforms/` cache for what is on screen into a 96 MiB page cache, the coarser
+  level drawn until they arrive (`engine::peak_pages`). That 5.5 GB session (16 tracks of 30
+  minutes) plays, bounces and is drawn through at five zooms in a 64 MiB audio cache and a 16 MiB
+  page cache with an engine process peak of 142 MB, was 815 MB (`engine/tests/disk_budget.rs`).
+- **Missing:** a compressed or other-rate file is decoded whole once (up to 2^30 samples) before
+  it streams. Each streamed file keeps a file handle open (macOS allows 256 by default).
+  Instruments that read samples whole (Lift, Juke) keep them in memory. Overviews stay whole in a
+  session never saved, and for a referenced (not copied) import until the session is reopened.
+- **Impact:** sessions far larger than RAM play, record, bounce, edit and draw; memory follows
+  what is on screen.
 - **Known cost:** FireStation LevelUp keeps its reference audio in RAM as `f32` (about twice the C++ plugin's memory, at most 8 min per slot); kept as is.
-- **Estimate:** ≈ 10–20 h.
+- **Estimate:** ≈ 3–6 h (a streaming decode for compressed files, a pool of file handles).
 
 ### G-07. Fidelity harness against Pro Tools
 
@@ -291,6 +323,8 @@ the rest, spec `2026-10-29-roformer-separation`). Left, from the 2026-10-30 meas
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | G-06 shrunk: waveform overviews read their fine levels from the `Waveforms/` cache on demand (coarse levels only in memory); left: compressed files decoded whole once, file handles; re-estimated at 3–6 h |
+| 2026-11-21 | minor | G-06 shrunk: sources stream from disk everywhere (import, open, edits, rate conversion, saves and exports) with a memory-budget test; what's left is the overviews' memory, re-estimated at 4–8 h |
 | 2026-10-30 | minor | G-02 shrunk: hardware MIDI input, monitoring, recording and Musical Typing built; MIDI output, clock, input filter, merge recording and MIDI learn left (≈ 10–20 h) |
 | 2026-10-30 | trivial | G-24 (new): stem separation quality, what the RoFormer measurement left: one-song proxies, best mode's -19 dB residual, two models' GPU time and memory, solo-piano isolation |
 | 2026-10-28 | trivial | G-19: Shale's MIDI Out pill works: a module's MIDI output is a track input (`Route::Modules`, one or several modules merged), rendered in order, recorded as MIDI clips; SC Listen stays inert |

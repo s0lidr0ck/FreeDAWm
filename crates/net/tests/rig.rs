@@ -846,7 +846,7 @@ fn a_pulled_cable_mid_take_still_lands_the_audio_after_the_reconnect() {
     rig.press(json!({"action": "stop", "held": true}));
     rig.run(Duration::from_millis(300));
     rig.cable.plug();
-    rig.run_until("the take lands after the reconnect", Duration::from_secs(30), |r| !r.landed_plucks().is_empty());
+    rig.run_until("the take lands after the reconnect", Duration::from_secs(30), |r| r.landed_plucks().len() >= 2);
     assert_plucks(&rig, &played);
     rig.follower.stop();
     rig.hub.stop();

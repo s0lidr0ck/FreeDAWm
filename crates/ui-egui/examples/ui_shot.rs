@@ -43,9 +43,12 @@
 //! Play / Source / Notes / Both row as after Analyse. `{"net_demo": true}` sets up Setup ›
 //! Network as at a service (`net_ui::demo`): listening, paired devices, a piano PC connected
 //! in-process and a booth track on its port with a live sketch (`{"net_demo": "audio"}`: a guitar
-//! PC recording audio, its live level and clips on the booth's track; `"internet"`: Setup › Network
+//! PC recording audio, its live level and clips on the booth's track; `"pin"`: with a booth PIN set
+//! and its notice; `"internet"`: Setup › Network
 //! with an invite made and a friend joined over a real local internet connection). `{"follower_demo": "recording"}`
 //! (or `waiting`, `sent`) shows this PC as a piano PC following a booth (`net_ui::follower_demo`).
+//! `{"remote_mix_demo": "connected"}` (or `reconnecting`, `dialog`) shows File › Connect to a Studio…
+//! and the Remote Mix window mixing a demo studio, without the network (`studio_ui::demo`).
 //! `{"models_demo": "progress"}` (or `"confirm"`) shows Setup › ML Models over a fake model folder
 //! and manifest with a download in progress (and the personal-use confirm; `ml_downloads::demo`),
 //! without the network.
@@ -454,11 +457,30 @@ fn main() {
                     soundcraft_ui_egui::net_ui::demo_audio(harness.state_mut())
                 } else if v["net_demo"] == "internet" {
                     soundcraft_ui_egui::net_ui::demo_internet(harness.state_mut())
+                } else if v["net_demo"] == "pin" {
+                    // The same, with a booth PIN set (shown masked) and a device joined with it.
+                    soundcraft_ui_egui::net_ui::demo(harness.state_mut()).and_then(|()| {
+                        let hub = harness.state().net.as_ref().map(|n| n.hub.clone()).ok_or("no network")?;
+                        hub.set_booth_pin("482113")?;
+                        hub.notice("Alto's phone paired with the booth PIN".into());
+                        Ok(())
+                    })
                 } else {
                     soundcraft_ui_egui::net_ui::demo(harness.state_mut())
                 };
                 if let Err(e) = made {
                     eprintln!("net_demo: {e}");
+                }
+                for _ in 0..3 {
+                    step(&mut harness);
+                }
+                continue;
+            }
+            if let Some(state) = v.get("remote_mix_demo").and_then(|x| x.as_str()) {
+                // File › Connect to a Studio… and the Remote Mix window (`studio_ui::demo`):
+                // connected, reconnecting or the dialog.
+                if let Err(e) = soundcraft_ui_egui::studio_ui::demo(harness.state_mut(), state) {
+                    eprintln!("remote_mix_demo: {e}");
                 }
                 for _ in 0..3 {
                     step(&mut harness);

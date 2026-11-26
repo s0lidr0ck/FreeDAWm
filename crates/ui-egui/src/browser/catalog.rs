@@ -330,7 +330,8 @@ pub fn build_catalog(
 }
 
 /// The indices into `items` the panel shows for `q`. A category override (by plugin id) replaces
-/// the plugin's own category for the category chip and the text search. With the Recent chip
+/// the plugin's own category for the category chip and the text search, which also reads a
+/// built-in's subtitle ("pitch correction" finds Plumb). With the Recent chip
 /// the order is `recent`'s (newest first); otherwise favourites come first, then by name.
 pub fn filter(
     items: &[BrowserItem],
@@ -355,7 +356,8 @@ pub fn filter(
                 && (text.is_empty()
                     || it.name.to_lowercase().contains(&text)
                     || it.vendor.to_lowercase().contains(&text)
-                    || category.label().to_lowercase().contains(&text))
+                    || category.label().to_lowercase().contains(&text)
+                    || crate::plugin_titles::subtitle(&it.id).to_lowercase().contains(&text))
         })
         .map(|(i, _)| i)
         .collect();

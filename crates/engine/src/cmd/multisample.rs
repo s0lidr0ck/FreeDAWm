@@ -250,7 +250,7 @@ impl CaptureJob {
         Ok(CaptureJob {
             id,
             params: p.clone(),
-            scratch: (*s).clone(),
+            scratch: capture_scratch(&s, t),
             track: t,
             track_name: tr.name.clone(),
             name,
@@ -499,6 +499,22 @@ impl CaptureJob {
         }
         Ok(self.out)
     }
+}
+
+/// The session a capture of `track` renders: `s`, with the track playing each note to its
+/// instrument exactly as written. The global transpose track and the track's MIDI Real-Time
+/// Properties (transpose, velocity, length, delay, quantize) are how the track plays its clips,
+/// not part of the instrument: the Pantry made follows the global transpose itself, so a note
+/// captured through it would be transposed twice, and a sample is labelled with the note and
+/// velocity it was asked for, so it must be played at them.
+fn capture_scratch(s: &soundcraft_model::Session, track: TrackId) -> soundcraft_model::Session {
+    let mut scratch = s.clone();
+    if let Some(tr) = scratch.track_mut(track) {
+        tr.transpose_independent = true;
+    }
+    let rtp = format!("rtp.{}.", track.0);
+    scratch.edit.values.retain(|k, _| !k.starts_with(&rtp));
+    scratch
 }
 
 fn capture(e: &mut Engine, p: &Value) -> Result<Value> {
@@ -1071,10 +1087,7 @@ fn add_sample(
     let rate = e.session().sample_rate.hz();
     let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("Sample").to_string();
     let too_long = || EngineError::Io(format!("{name}: too long for one note (two minutes at most)"));
-    if !packed
-        && let Some(f) = crate::io::streamable(file, rate)
-        && f.frames().saturating_mul(f.channels()) >= crate::spill::MIN_SAMPLES
-    {
+    if !packed && let Some(f) = crate::io::streamable(file, rate) {
         if f.frames().saturating_mul(f.channels()) > MAX_SAMPLE_VALUES {
             return Err(too_long());
         }
@@ -1400,15 +1413,12 @@ fn save(e: &mut Engine, p: &Value) -> Result<Value> {
         "// {stem}: a Pantry instrument saved by FreeDAWm. Each sample is as it was captured, so\n// velocity does not scale the layers again.\n{PARAMS_LINE}{}\n<control> default_path={stem}/\n<global> amp_veltrack=0 ampeg_release={release:.3}\n",
         serde_json::to_string(&params).unwrap_or_else(|_| "{}".into())
     );
-    let options =
-        soundcraft_audio_io::EncodeOptions { format: FileFormat::Wav, bit_depth: soundcraft_audio_io::BitDepth::Float32, ..Default::default() };
     let mut bytes = 0usize;
     for &(note, velocity, robin, src) in &held {
         let audio = s.pool.get(src).ok_or_else(|| EngineError::Io(format!("{}: a sample's audio is missing", note_name(note))))?;
         let file = format!("{note:03}_{}_v{velocity:03}_rr{robin}.wav", note_name(note).replace('#', "s"));
-        let wav = soundcraft_audio_io::encode(&audio.buffer(), &options).map_err(|err| EngineError::Io(format!("{file}: {err}")))?;
-        bytes = bytes.saturating_add(wav.len());
-        crate::io::write_file(&folder.join(&file).to_string_lossy(), &wav)?;
+        let wav = crate::io::write_source_file(&folder.join(&file), audio)?;
+        bytes = bytes.saturating_add(usize::try_from(wav).unwrap_or(usize::MAX));
         // The keys nearest the note, and the velocities from just above the layer below.
         let at = notes.iter().position(|n| *n == note).unwrap_or(0);
         let lokey = if at == 0 { 0 } else { notes.get(at - 1).map_or(0, |p| (u16::from(*p) + u16::from(note)) / 2 + 1) };
@@ -1435,9 +1445,8 @@ fn save(e: &mut Engine, p: &Value) -> Result<Value> {
             None => {
                 let audio = s.pool.get(*src).ok_or_else(|| EngineError::Io(format!("zone {}: its audio is missing", z.index)))?;
                 let file = format!("z{:04}_{}.wav", z.index, note_name(z.root).replace('#', "s"));
-                let wav = soundcraft_audio_io::encode(&audio.buffer(), &options).map_err(|err| EngineError::Io(format!("{file}: {err}")))?;
-                bytes = bytes.saturating_add(wav.len());
-                crate::io::write_file(&folder.join(&file).to_string_lossy(), &wav)?;
+                let wav = crate::io::write_source_file(&folder.join(&file), audio)?;
+                bytes = bytes.saturating_add(usize::try_from(wav).unwrap_or(usize::MAX));
                 written.insert(*src, file.clone());
                 file
             }
@@ -2244,3 +2253,7 @@ mod tests {
         assert_eq!((v["samples"].as_u64(), v["layers"].as_u64(), v["skipped"].as_u64()), (Some(24), Some(18), Some(0)));
     }
 }
+
+#[cfg(test)]
+#[path = "multisample_pitch_tests.rs"]
+mod pitch_tests;

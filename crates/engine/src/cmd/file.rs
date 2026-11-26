@@ -85,6 +85,20 @@ pub fn specs() -> Vec<CommandSpec> {
             |e, p| open_through_job(e, "file.import_dawproject", p)
         ),
         cmd!(
+            "file.import_aaf",
+            "AAF...",
+            ["File", "Import"],
+            None,
+            "{path, at?: where the composition starts (default: by its start timecode; an empty session takes that timecode), rendered_fades?: false (keep Pro Tools' rendered fade clips instead of real fades)} — the audio of an AAF file (Pro Tools, Media Composer, Premiere, Resolve) as new tracks: clips at their positions with fades, crossfades and clip gain, track volume, pan, mute and solo, markers; embedded audio comes into the session, external audio is found where the file says or beside it, else its clips come in offline under its name; returns {tracks, clips, markers, offline: [name: why], skipped: [what: why], summary, report_text} (the report is also saved in the Notes tab)",
+            always,
+            |e, p| {
+                const C: &str = "file.import_aaf";
+                let path = str_param(p, "path").ok_or_else(|| bad(C, "`path` required"))?.to_string();
+                let at = position_param(e, C, p, "at")?;
+                crate::aaf_import::import_path(e, &path, at, bool_or(p, "rendered_fades", false))
+            }
+        ),
+        cmd!(
             "file.import_video",
             "Video...",
             ["File", "Import"],
@@ -298,10 +312,7 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
     let target = import_audio_target(e, p)?;
     let mut out = Vec::new();
     for path in &paths {
-        let bytes = crate::io::read_file(path)?;
-        let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("Audio").to_string();
-        let r = crate::io::import_audio_bytes(e, &name, &bytes, Some(path.as_str()), target, at)?;
-        out.push(r);
+        out.push(crate::io::import_audio_file(e, path, target, at)?);
     }
     Ok(json!({"imported": out}))
 }

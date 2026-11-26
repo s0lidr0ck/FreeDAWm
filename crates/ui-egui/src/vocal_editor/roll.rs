@@ -41,8 +41,9 @@ pub struct ClipView {
     pub curves: Option<Arc<EditCurves>>,
     pub edits: BTreeMap<NoteId, NoteEdit>,
     pub scale: SessionScale,
-    /// Stretched clips can't be tuned: drawn with a message, no notes.
-    pub stretched: bool,
+    /// Why the clip can't be tuned here (stretched, or played through an ARA plug-in): drawn
+    /// with this message, no notes.
+    pub untunable: Option<String>,
 }
 
 /// Where each note id of one recording shows on the track: (analysis key, note id) → the clips
@@ -150,6 +151,20 @@ pub fn is_stretched(c: &Clip) -> bool {
     (c.stretch - 1.0).abs() > 1e-9
 }
 
+/// What the roll says over a clip whose notes can't be tuned here: a stretched one, or one that
+/// plays through an ARA plug-in (its audio is the plug-in's, so a move made here would not be
+/// heard); `None` for a clip it tunes.
+pub fn untunable(c: &Clip) -> Option<String> {
+    if is_stretched(c) {
+        return Some(STRETCHED_TEXT.to_string());
+    }
+    soundcraft_engine::vocal::plays_through_ara(c)
+        .map(|name| format!("Plays through {name} (ARA): bypass it in Clip \u{203a} ARA Plug-ins... to tune here"))
+}
+
+/// The roll's message over a stretched clip.
+pub const STRETCHED_TEXT: &str = "Tuning can't follow a stretched clip";
+
 impl Cache {
     /// Takes the keys afresh when the revision or the analysis map changed (and forgets clips and
     /// tracks that are gone); the derived data stays until its own key changes.
@@ -244,7 +259,7 @@ impl Cache {
         }
         let mut tw = Twins::default();
         if let Some(t) = s.track(track) {
-            for c in t.clips().iter().filter(|c| c.is_audio() && !is_stretched(c)) {
+            for c in t.clips().iter().filter(|c| c.is_audio() && untunable(c).is_none()) {
                 let Some(k) = AnalysisKey::of(s, c).map(|k| k.hash()) else { continue };
                 let Some((a, _)) = self.get(s, c) else { continue };
                 let fm = Frames::of(c, a.track.hop_samples);
@@ -406,7 +421,7 @@ pub fn clip_views(app: &mut SoundApp, track: TrackId, range: Option<(Samples, Sa
             curves,
             edits: c.tune_live().map(|t| t.edits.clone()).unwrap_or_default(),
             scale: soundcraft_engine::vocal::scale_at(&s, c),
-            stretched: is_stretched(c),
+            untunable: untunable(c),
         });
     }
     out
@@ -841,7 +856,7 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     let mut unvoiced = Vec::new();
     let uy = a.roll.top() + a.roll.height() * 2.0 / 3.0;
     let hatch_c = if is_dark { Color32::from_rgba_unmultiplied(170, 170, 187, 115) } else { Color32::from_rgba_unmultiplied(90, 90, 110, 140) };
-    for cv in clips.iter().filter(|c| !c.stretched) {
+    for cv in clips.iter().filter(|c| c.untunable.is_none()) {
         let fm = Frames::of(&cv.clip, cv.a.track.hop_samples);
         for u in &cv.a.unvoiced {
             let (t0, t1) = (fm.clamp(fm.time(u.start)), fm.clamp(fm.time(u.end)));
@@ -881,17 +896,11 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     // The notes outlined as off key (for the tests).
     let mut off_key_refs: Vec<NoteRef> = Vec::new();
     for cv in &clips {
-        if cv.stretched {
+        if let Some(why) = &cv.untunable {
             let (x0, x1) = (v.x(cv.clip.start.max(v.t0)), v.x(cv.clip.end().min(v.t1)));
             roll_p.rect_filled(Rect::from_min_max(pos2(x0, a.roll.top()), pos2(x1, a.roll.bottom())), 0.0, Color32::from_black_alpha(60));
-            roll_p.text(
-                pos2((x0 + x1) / 2.0, a.roll.center().y),
-                Align2::CENTER_CENTER,
-                "Tuning can't follow a stretched clip",
-                regular(12.0),
-                t.text_dim,
-            );
-            store(ui.ctx(), "stretched", "Tuning can't follow a stretched clip".to_string());
+            roll_p.text(pos2((x0 + x1) / 2.0, a.roll.center().y), Align2::CENTER_CENTER, why, regular(12.0), t.text_dim);
+            store(ui.ctx(), if why == STRETCHED_TEXT { "stretched" } else { "untunable" }, why.clone());
             continue;
         }
         let (cv_track, typical_db) = owner.get(&cv.clip.id).copied().unwrap_or((track, -21.0));
@@ -976,7 +985,7 @@ pub fn draw(app: &mut SoundApp, ui: &mut Ui, track: TrackId, a: &Areas, v: RollV
     let grey = if is_dark { Color32::from_rgba_unmultiplied(242, 242, 242, 140) } else { Color32::from_rgba_unmultiplied(60, 60, 60, 150) };
     let tuned_c = if is_dark { Color32::WHITE } else { Color32::from_rgb(20, 20, 20) };
     let all_mode = studio && app.vocal.studio.edit_all;
-    for cv in clips.iter().filter(|c| !c.stretched) {
+    for cv in clips.iter().filter(|c| c.untunable.is_none()) {
         // Edit All: each track's pitch line in its own colour, so stacked notes show where each
         // really sits.
         let own = all_mode.then(|| owner.get(&cv.clip.id).and_then(|(t, _)| colours.get(t)).copied()).flatten();

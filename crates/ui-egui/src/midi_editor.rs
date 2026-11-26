@@ -28,7 +28,7 @@ pub const MAX_PX_PER_TICK: f32 = 0.5;
 const STEP: f32 = 1.5;
 const VEL_H: f32 = 64.0;
 /// The horizontal scrollbar under the roll.
-const BAR_H: f32 = 8.0;
+pub(crate) const BAR_H: f32 = 8.0;
 
 /// One clip's zoom and scroll in the editor (kept for the session, not saved).
 #[derive(Debug, Clone, Copy, PartialEq)]

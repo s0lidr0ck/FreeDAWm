@@ -16,20 +16,23 @@ use std::collections::HashMap;
 /// `docs/pantry.md`), Track › Rename Selected Tracks… and Track › Pin, and Window › Separate Windows › New Mix Window… (2026-11-18),
 /// and in Event, MIDI editing: Give Notes Their Own Channels and Clear the Note's Expression
 /// (2026-11-18, before only in the MIDI Editor's Lanes menu), and Track › Import Wavetable…
-/// (2026-11-18, `docs/wavetable-import.md`), and Track › New Band (2026-11-19, `docs/band-checklist.md`).
+/// (2026-11-18, `docs/wavetable-import.md`), and Track › New Band (2026-11-19, `docs/band-checklist.md`), and File ›
+/// Connect to a Studio… (2026-11-23, `docs/remote-mixing.md`), and Window › Full Screen (2026-11-23, `window.fullscreen`), and AI ›
+/// Time Words to Vocal and Tap Words to Time… (2026-11-24, `docs/lyrics.md`), and AI › Gild Words (2026-11-25,
+/// `docs/gild.md`).
 const ROWS: [(&str, usize); 12] = [
-    ("File", 14),
+    ("File", 15),
     ("Edit", 29),
     ("View", 11),
     ("Track", 41),
     ("Clip", 30),
     ("Event", 31),
     ("Process", 18),
-    ("AI", 12),
+    ("AI", 15),
     ("Transport", 28),
     ("Options", 14),
     ("Setup", 12),
-    ("Window", 12),
+    ("Window", 13),
 ];
 
 /// The only greyed-out items: shown so they are not forgotten (label, hover text).
@@ -233,6 +236,9 @@ fn the_ai_menu_holds_every_ml_tool() {
             "Convert to MIDI…",
             "Detect Chords…",
             "Transcribe Lyrics…",
+            "Time Words to Vocal",
+            "Tap Words to Time…",
+            "Gild Words",
             "Find in Transcript…",
             "MIDI Cleanup…",
             "Generate MIDI from Text…",
@@ -256,6 +262,8 @@ fn the_ai_menu_holds_every_ml_tool() {
             "vocal.note_mode",
             "vocal.fit_to_lead",
             "ui.vocal_harmony",
+            "vocal.to_midi_track",
+            "vocal.export_midi",
             "vocal.commit",
             "vocal.remove"
         ]

@@ -113,12 +113,19 @@ that.
 
 - **Tune Vocal.** Note-based pitch and level correction on audio clips; no ML model needed. Vocal
   tracks are analysed in the background. You get Centre, Drift, Vibrato and loudness sliders, Snap
-  to key, macro presets, and you can drag any note (in cents, snapping at semitones). It's
-  non-destructive: switch Tuned/Original, and Commit when you're happy.
+  to key, macro presets, and you can drag any note (in cents, snapping at semitones). A moved note
+  keeps the singer's sound: every sung period keeps its waveform shape, the formants, vibrato and
+  drift stay as sung, a stereo vocal keeps its image, and the move blends into an unmoved
+  neighbour instead of jumping. It's non-destructive: switch Tuned/Original, and Commit when
+  you're happy.
 - **The Vocal Editor.** A piano roll of the singer's notes, coloured by how far off they are and
   drawn thick by loudness. It shows the original and tuned pitch curves, breaths, and scoops (Keep,
   Smooth or Shorten), with the chords and key above. Split and join notes, preview a note soloed,
   or open the editor in its own window.
+- **Gild.** Effects on chosen words: pick words in the lyric and give just them a delay or reverb
+  throw, a reverse swell rising into the word, a double, a shift, grit or harmony. Non-destructive,
+  follows your edits, mixed back into the vocal track with a Dry on/off switch
+  ([docs/gild.md](docs/gild.md)).
 - **See who's off at a glance.** The *waveform + pitch* track view draws each note over the
   waveform. Every vocal channel in the Mix window has a pitch box with the current note and its
   offset, and *Centre note* / *Flatten drift* buttons.
@@ -248,18 +255,39 @@ download.
 - **A phone as the remote.** Setup › Network › *Allow control from this network* (off by default)
   serves a web page on port 48100. On a phone or a stage PC you get Record, Play, Stop
   (press-and-hold while recording), Arm All, Add Marker, track meters, and the disk space left on
-  every PC. Devices pair with a 4-digit code shown on the main PC's screen.
+  every PC. Devices pair with a 4-digit code shown on the main PC's screen, or with a booth PIN
+  set once in Setup › Network so nobody has to be at the booth (at least 6 characters; wrong
+  guesses pause it and, after 20, turn it off; each device that joins is shown on the booth).
 - **Several PCs, one recording.** Another PC running FreeDAWm can *follow the booth*. It records,
   plays and stops with the main PC at the same timeline position, so a keyboard player's MIDI rig
   or a guitar PC records along. While it records, the main PC's track shows a live sketch of the
   MIDI or the audio level. At Stop, takes arrive note for note, or as FLAC in the project's
   format, with clock drift corrected. In tests MIDI lands within 0.15 ms and audio within a few
   samples. Takes wait on disk and are sent again if the link drops.
-- **Remote performers over the internet.** Send a one-time invite, valid for 30 minutes. The
+- **Remote performers over the internet.** Send a one-time invite, valid for 30 minutes, or one
+  reusable invite for several people (1 hour to 7 days, up to 50 joins, revocable). Once joined,
+  a performer reconnects on later days without a new invite. The
   connection is direct and encrypted ([iroh](https://iroh.computer)) and falls back to a relay
   when routers block it; you can run your own relay. The performer hears your live mix (Opus),
   and their take lands where they played against it. They also get a level window with a big
   meter, a clip light, plain advice and a 10-second level check.
+- **Groundwork for mixing from home.** The live mix now streams while the transport is stopped
+  (a live event monitors inputs without rolling). A paired PC can connect just to listen: it
+  hears the mix and reads the status, never records, and the studio lists it as "listening". A
+  paired PC can also subscribe to a pushed mixer feed (every strip's fader, pan, mute, solo,
+  sends and inserts, then only what changes, plus meters about 20 times a second: about
+  7.5 to 9 KB/s for 32 strips). While remotes are connected or live inputs are monitored, the studio PC
+  is kept awake.
+- **Connect to a Studio: mix a live stream from home.** File › Connect to a Studio… opens a
+  studio's mixer on another PC (same network, booth PIN, or an internet invite): faders, pan,
+  mute, solo, sends, insert bypass, built-in effect editors, undo and mix snapshots, with the
+  studio's master in your speakers. A drag is one undo step on the studio; a dropped connection
+  changes nothing there. The studio can lock remote mixing at any time. See
+  [docs/remote-mixing.md](docs/remote-mixing.md).
+- **FreeDAWm Recorder (Windows).** A small window beside the DAW: Record and Stop for quick
+  ideas (a 24-bit WAV and a MIDI file named by date and time), recording into a booth on another
+  PC as a remote recorder does, and listening to the booth's mix. It never listens on the
+  network. See [docs/recorder.md](docs/recorder.md).
 
 <p align="center">
   <img alt="Setup › Network: paired devices (Phone, Stage PC, Piano PC as a remote recorder), Follow a booth, Hear the booth's mix, and Connect over the internet with invites and a relay" src="docs/images/network.png" width="60%">
@@ -336,6 +364,7 @@ what's installed and each model's licence. The AI tools are in the desktop app o
 - <kbd>Ctrl</kbd><kbd>=</kbd>: switch between Mix and Edit
 - <kbd>Enter</kbd>: new marker
 - <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd>: new tracks
+- <kbd>Shift</kbd><kbd>F11</kbd> (<kbd>Ctrl</kbd><kbd>Cmd</kbd><kbd>F</kbd> on macOS): full screen, and back (Window › Full Screen)
 
 Every shortcut is listed, and can be changed, in **Setup › Keyboard Shortcuts**. The layout
 follows the Edit/Mix workflow many engineers already know: edit modes, tools, playlists, memory

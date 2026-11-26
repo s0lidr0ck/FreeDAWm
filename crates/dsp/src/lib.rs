@@ -217,8 +217,9 @@ pub const HIDDEN_STOCK: &[Category] =
 /// FreeDAWm's own designs with an editor of their own, which no FireStation engine covers. One in
 /// a [`HIDDEN_STOCK`] category (Rez, Lull, Vault) is shown all the same. (Vault's editor is the
 /// drawer with its response picker, for now, and Mend's the drawer with its model's status.) Keel,
-/// the bass amp, is offered beside Amp, and Heft, the bass enhancer.
-pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend", "keel", "heft"];
+/// the bass amp, is offered beside Amp, and Heft, the bass enhancer; Plumb, the pitch corrector,
+/// beside Mend.
+pub const LISTED_STOCK: &[&str] = &["rez", "lull", "sprawl", "vault", "mend", "keel", "heft", "autopitch"];
 
 /// Stock plugins in a [`HIDDEN_STOCK`] category that the lists offer all the same, under
 /// Utilities (not with the engines): Lo-Fi, the only bit-depth and sample-rate reducer (Vint's
@@ -271,6 +272,23 @@ pub struct Transport {
     /// Start of the current bar, in quarter notes, and its number (0 for the first bar).
     pub bar_start: f64,
     pub bar: i64,
+}
+
+/// The most delay (ms) a module that says it is made to be heard live ([`Plugin::live_monitoring`])
+/// may add and still stay in under Low Latency Monitoring.
+pub const LIVE_MONITORING_MAX_MS: f64 = 15.0;
+
+/// Most key changes a plugin following the song's key is handed ([`Plugin::set_song_keys`]).
+pub const MAX_SONG_KEYS: usize = 256;
+
+/// One key of the song's Key ruler as an effect follows it: from timeline sample `start` (until
+/// the next one), the key's tonic (pitch class, 0 = C) and whether it is minor (natural minor)
+/// rather than major.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SongKey {
+    pub start: i64,
+    pub tonic: u8,
+    pub minor: bool,
 }
 
 /// Most events a module's MIDI output holds per block ([`MidiOut`]).
@@ -396,6 +414,13 @@ pub trait Plugin: Send {
     fn latency(&self) -> usize {
         0
     }
+    /// Whether the plugin is made to be heard live at its current latency (Plumb's Live
+    /// mode): Low Latency Monitoring then keeps it in on an armed or monitored track, where it
+    /// takes out every other insert that reports a delay, as long as that delay is at most
+    /// [`LIVE_MONITORING_MAX_MS`]. False by default. Must not allocate.
+    fn live_monitoring(&self) -> bool {
+        false
+    }
     /// How long the output keeps ringing after the input stops, in samples.
     fn tail_samples(&self) -> usize {
         0
@@ -419,6 +444,16 @@ pub trait Plugin: Send {
     }
     /// The transport for the next block, given before `process`.
     fn set_transport(&mut self, _transport: &Transport) {}
+    /// Whether the plugin reads the song's key (the Key ruler, with its key changes): the host
+    /// then hands it [`Plugin::set_song_keys`] whenever it syncs the session. False by default.
+    fn follows_song_key(&self) -> bool {
+        false
+    }
+    /// The song's keys by timeline position, in time order (at most [`MAX_SONG_KEYS`]; the first
+    /// usually starts at `i64::MIN`: the key at bar 1 holds from the start), worked out off the
+    /// audio thread. The plugin copies them into storage of its own: never allocates, blocks or
+    /// panics. Called off the audio thread, between blocks. The default ignores them.
+    fn set_song_keys(&mut self, _keys: &[SongKey]) {}
     /// The loop range for the next block, in quarter notes (`None`: not looping), given with
     /// [`Plugin::set_transport`]. Hosted VST3 plug-ins pass it on as the process context's cycle
     /// (ARA playback renderers follow it). Must not allocate.

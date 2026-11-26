@@ -256,7 +256,7 @@ pub fn add_scoop(app: &mut SoundApp, r: NoteRef, frames: u32) {
 }
 
 /// The path of the split whose second side holds the Vocal Editor.
-fn vocal_split(node: &craft_ui::docking::Node<soundcraft_ui_egui::docking::Panel>, path: &mut Vec<bool>) -> bool {
+pub fn vocal_split(node: &craft_ui::docking::Node<soundcraft_ui_egui::docking::Panel>, path: &mut Vec<bool>) -> bool {
     use craft_ui::docking::Node;
     let Node::Split { first, second, .. } = node else { return false };
     if matches!(&**second, Node::Tabs { panels, .. } if panels.contains(&soundcraft_ui_egui::docking::Panel::Vocal)) {

@@ -12,6 +12,10 @@ use serde_json::json;
 use soundcraft_model::{MidiIn, Route, TrackId};
 use std::time::Duration;
 
+/// Said in the window when the audio engine has not taken the ports' messages for a while.
+pub const ENGINE_IDLE: &str =
+    "The audio engine is not taking MIDI in: nothing played reaches the tracks. Check Setup > Playback Engine (Reconnect audio device).";
+
 /// How long a port's light stays lit after a message.
 const LIGHT: Duration = Duration::from_millis(150);
 
@@ -1100,6 +1104,25 @@ fn transform_menu(app: &mut SoundApp, ui: &mut egui::Ui, id: TrackId, t: &soundc
     });
 }
 
+/// An open input's diagnostics in a line: "Nothing received yet", or "152 received, 150 passed
+/// on; last: Note on C3 vel 80, ch 1, 2 s ago" (passed on: taken by the audio engine towards the
+/// tracks, after the input filter), with how late the driver stamped it when that is more than a
+/// little.
+pub fn diag_line(d: &soundcraft_playback::midi_in::PortDiag) -> String {
+    let alive = d.keepalive && d.heard.is_some_and(|h| h < Duration::from_secs(2));
+    let Some(last) = &d.last else {
+        return if alive { "Nothing played yet (the device is connected: its keep-alive comes)".into() } else { "Nothing received yet".into() };
+    };
+    let mut s = format!("{} received, {} passed on; last: {last}", d.received, d.taken);
+    if let Some(since) = d.since {
+        s.push_str(&if since.as_secs() >= 1 { format!(", {} s ago", since.as_secs()) } else { ", just now".into() });
+    }
+    if let Some(lag) = d.lag.filter(|l| *l >= Duration::from_millis(20)) {
+        s.push_str(&format!(" (the driver dated it {} ms before it came)", lag.as_millis()));
+    }
+    s
+}
+
 pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_midi_inputs;
     if !open {
@@ -1147,7 +1170,31 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     (None, true, true) => "Open".into(),
                     (None, true, false) => "Disabled".into(),
                 };
-                ui.label(egui::RichText::new(state).small().color(t.text_dim));
+                let diag = app.midi_inputs.as_ref().and_then(|m| m.diag(&p.name));
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(state).small().color(t.text_dim));
+                    // What the system handed over, counted before any filter: 0 while playing
+                    // means nothing reaches FreeDAWm from this port.
+                    if p.open
+                        && let Some(d) = &diag
+                    {
+                        ui.label(egui::RichText::new(diag_line(d)).small().color(t.text_dim)).on_hover_text(
+                            "Messages this port's driver handed to FreeDAWm, counted before the input filter. \
+                             If it stays at 0 while you play, the computer is not passing the device's MIDI on: press Rescan, \
+                             switch the device off and on, or close other music programs.",
+                        );
+                    }
+                    if p.revived > 0 {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "It stopped sending and was reopened ({}×). If it stays silent, switch it off and on.",
+                                p.revived
+                            ))
+                            .small()
+                            .color(t.rec),
+                        );
+                    }
+                });
                 // What it is called in the track input menus, and how late its messages arrive.
                 let mut name = app.ui.midi_aliases.get(&p.name).cloned().unwrap_or_default();
                 if ui.add(egui::TextEdit::singleline(&mut name).hint_text("Alias").desired_width(110.0)).changed() {
@@ -1255,13 +1302,21 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         ui.checkbox(&mut app.ui.midi_thru, "MIDI Thru")
             .on_hover_text("Record-enabled instrument and MIDI tracks play what comes in (input-monitored tracks always do)");
         ui.horizontal(|ui| {
-            if ui.button("Rescan").clicked() {
+            if ui.button("Rescan").on_hover_text("Look for ports again, and close and reopen the open inputs").clicked() {
                 if let Some(m) = &mut app.midi_inputs {
-                    m.rescan();
+                    m.reopen();
                 }
                 if let Some(m) = &mut app.midi_outputs {
                     m.rescan();
                 }
+            }
+            // The audio engine takes what the ports send to the tracks; while it does not, nothing
+            // played is heard or recorded.
+            if app.player.is_some()
+                && ports.iter().any(|p| p.open)
+                && app.midi_hub.as_ref().is_some_and(|h| h.since_drain().is_none_or(|d| d > Duration::from_secs(2)))
+            {
+                ui.label(egui::RichText::new(ENGINE_IDLE).small().color(t.rec));
             }
             let dropped = app.midi_hub.as_ref().map_or(0, |h| h.dropped());
             if dropped > 0 {
@@ -1396,6 +1451,67 @@ pub(crate) mod tests {
         };
         assert_eq!((pitch(keys), pitch(typed)), (Some(60), Some(72)));
         assert!(app.midi_rec.is_empty());
+    }
+
+    #[test]
+    fn changing_a_tracks_input_leaves_the_port_open_and_what_is_played_is_recorded() {
+        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+        let fake = with_fake(&mut app, &["XPIANOGT", "StudioRack", "SG Device I/O"]);
+        let hub = app.midi_hub.clone().unwrap();
+        let inst = app.engine.execute("track.new", &json!({"kind": "instrument"})).unwrap()["tracks"][0].as_u64().unwrap();
+        let midi = app.engine.execute("track.new", &json!({"kind": "midi"})).unwrap()["tracks"][0].as_u64().unwrap();
+        app.ui.midi_thru = true;
+        tick(&mut app);
+        assert_eq!(fake.opens("XPIANOGT"), 1);
+        // Inputs changed back and forth, armed and disarmed, frames between: no port is touched.
+        for input in ["midi:all", "midi:StudioRack", "midi:XPIANOGT", "midi:Musical Typing", "midi:XPIANOGT"] {
+            app.run("track.input", json!({"track": inst, "input": input})).unwrap();
+            app.run("track.input", json!({"track": midi, "input": input, "channel": 1})).unwrap();
+            app.run("mix.record_arm", json!({"tracks": [inst, midi], "value": true})).unwrap();
+            tick(&mut app);
+            app.run("mix.record_arm", json!({"tracks": [inst, midi], "value": false})).unwrap();
+            tick(&mut app);
+        }
+        for p in ["XPIANOGT", "StudioRack", "SG Device I/O"] {
+            assert_eq!(fake.opens(p), 1, "{p} opened once, never closed");
+            assert!(fake.is_open(p));
+        }
+        app.run("mix.record_arm", json!({"tracks": [inst, midi], "value": true})).unwrap();
+        start_take(&mut app);
+        // The piano plays; the audio thread drains the port's ring and keeps it for the take.
+        assert!(fake.send("XPIANOGT", &[0x90, 60, 80]));
+        assert!(fake.send("XPIANOGT", &[0x80, 60, 0]));
+        let d = app.midi_inputs.as_ref().and_then(|m| m.diag("XPIANOGT")).unwrap();
+        assert_eq!(d.received, 2);
+        assert_eq!(diag_line(&d), "2 received, 0 passed on; last: Note off C3, ch 1, just now");
+        assert!(app.midi_inputs.as_ref().and_then(|m| m.since_activity("XPIANOGT")).is_some(), "the light is lit");
+        let mut live = soundcraft_mix::LiveMidi::new();
+        let now = hub.now_us();
+        hub.drain_into(&mut live, now, 480, 48_000.0);
+        assert_eq!(live.events().len(), 2);
+        assert_eq!(app.midi_inputs.as_ref().and_then(|m| m.diag("XPIANOGT")).map(|d| d.taken), Some(2));
+        assert!(hub.since_drain().is_some());
+        hub.record_block(&live, 24_000, now, 48_000.0, 0, 0);
+        collect(&mut app);
+        assert_eq!(app.midi_rec.len(), 2);
+        let plan = soundcraft_engine::io::Recording {
+            start: 0,
+            pass: None,
+            punch: None,
+            rate: 0,
+            takes: Vec::new(),
+            latency: 0,
+            loop_from: None,
+            punches: Vec::new(),
+            pre: 0,
+        };
+        let ids = finish_take(&mut app, &plan, 48_000);
+        assert_eq!(ids.len(), 2, "a clip on each armed track");
+        for t in [inst, midi] {
+            let tr = app.engine.session().track(soundcraft_model::TrackId(t)).unwrap();
+            let notes = tr.clips().first().and_then(|c| c.midi_playing()).map(|m| m.notes.len());
+            assert_eq!(notes, Some(1), "track {t}");
+        }
     }
 
     #[test]

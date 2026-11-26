@@ -44,7 +44,7 @@ Errors: `{"id": 1, "ok": false, "error": "bad parameters for `mix.volume`: no tr
 | `engine.commands` | `{filter?}` | Every command: id, label, menu path, shortcut (the one in effect: the user's override, else the registry's), params doc, enabled + reason. Includes UI-layer commands (`window.*`). |
 | `engine.parity` | `{}` | Parity report against the incumbent's menu catalog. |
 | `session.inspect` | `{detail?: "summary"|"full"}` | The document: tracks, clips (with times), inserts (+params when full), sends, routing, automation, markers, groups, busses, sources (`loaded` true when decoded audio is in the pool), selection, zoom (`samples_per_px`, `scroll`), transport, undo label. |
-| `ui.inspect` | `{}` | UI state (`window`, panels, dialogs), window size, playing/position, audio device, and `edit_layout` (timeline rect and every track row's rect, for clicking). |
+| `ui.inspect` | `{}` | UI state (`window`, panels, dialogs), window size, `fullscreen` (Window › Full Screen) and `fullscreen_hint` (its hint showing), playing/position, audio device, and `edit_layout` (timeline rect and every track row's rect, for clicking). |
 | `ui.set` | any `UiState` fields | e.g. `{"window": "Mix", "narrow_mix": true}`. |
 | `ui.shortcuts.get` | `{}` | The user's keyboard-shortcut overrides (`ui.json` `shortcuts`): `{"shortcuts": {command id: "Cmd+Alt+K" \| ""}}`; `""` means no shortcut, a missing id keeps the registry's. |
 | `ui.shortcuts.set` | `{command, shortcut: string \| null, take?: false}` | Gives a command a shortcut in the registry's form (`Cmd+Shift+K`; Cmd is Ctrl on Windows/Linux); `null` or `""` removes it. A shortcut another command has is refused with its name unless `take: true` (which removes it there); a fixed context key (Space, Enter, F1–F10, Tab…) and commands with fixed keys are always refused. Returns the override map. |
@@ -356,6 +356,8 @@ source}], notes: [where it ran, fallbacks], seconds}`. One undo step.
 | `vocal.clashes` | `{track, against?: track}` | Query: the Vocal Studio's clash markers on `track`'s notes (each note judged by the semitone it sounds on after tuning). A note clashes with a note of `against` (default: the session's lead: a listed track named Lead…, else the first listed vocal track; `against` = `track` compares with nothing) sounding with it (overlapping by 60 ms or half the shorter note) when they are a minor 2nd, major 7th or tritone apart, octaves folded; else with the band chord at its middle when it is not a chord tone and is a minor 2nd or tritone from one; else, with a key set, when it is in neither the key's scale nor the chord. The studio draws a red "!" right of each such note, its hover the `text`, and the track list's chip reads "N clash". Returns `{track, against, clashes: [{clip, note, kind: minor_second \| major_seventh \| tritone \| out_of_key, with: track \| null, text: "minor 2nd against Lead Vox (G#4)" \| "minor 2nd against the chord's G#" \| "out of key (E major)"}]}`. |
 | `vocal.fit_to_lead` | `{track?, against?: track, notes?: [{clip, note}], fit_pitch?: true, align_timing?: false, strength?: 0..100, max_shift_ms?: 1..500}` | AI › Tune Vocal › Fit to Lead and the studio bar's Fit to lead (`fit_pitch`) and Align timing (`align_timing`, `fit_pitch: false`). `fit_pitch`: each note of `track` (default: the first selected track; `notes`: only those, the studio sends the selection) that clashes as `vocal.clashes` says is moved by whole semitones (its edit's offset, as a drag) to the nearest tone within a fourth that clashes with no note of `against` sounding with it nor with the chord and is in the key: a chord tone first, then the smaller move, then down. Notes that fit already, or have nowhere to go, stay. `align_timing`: each note is paired with the note of `against` it overlaps most (each lead note once) and its start and end move `strength` % (default 100) of the way to the lead's, at most `max_shift_ms` (default 100); edges where the voice starts out of or stops into silence are read from the audio. Each clip with notes to move is rendered again with a pitch-keeping stretch between those points, its edges staying (warp markers kept: Remove Warp restores the original audio), and its tuning carried onto the new audio and re-analysed before the command returns. Refused while either track is analysing or a clip of `track` is edit-locked. One undo step (Fit to Lead). Returns `{track, against, moved: [{clip, note, semitones}], aligned?: [{clip, note, start_ms, end_ms}], warning?}`: `warning` says why nothing moved (the track has no tuned notes yet, or every note fits already); from the menu it is the status line. |
 | `vocal.harmony` | `{source?: track, interval?: "3rd" \| "5th" \| "6th" \| "octave", direction?: "up" \| "down", stay_in_key?: true, follow_chords?: true, range?: [low, high], into?: track, name?, formant?: semitones}` | Make harmony (AI › Tune Vocal › Make Harmony…, the studio's form): a harmony part from the source's own voice (default source: the session's lead, as `vocal.clashes` picks it). Each source note (its tuned semitone) gets a harmony note: `interval` (default 3rd) `direction` (default up) counted along the key's scale when `stay_in_key` and a key is set (a diatonic 3rd: E→G#, F#→A in E major), else in fixed semitones (major 3rd, perfect 5th, major 6th); with `follow_chords` and the lead on a tone of the band chord at the note's middle, the chord tone (not the lead's own) nearest that note within the interval's reach instead (3rd up from the root is the chord's 3rd, from its 3rd its 5th, from its 5th the root above); then folded by octaves into `range` (MIDI numbers or names like `"B3"`; a note no octave of which fits keeps the nearest). Each source audio clip is copied (same audio and place) onto the destination: a new audio track `name` (default "Harmony 3rd ↑", "Harmony 5th ↓"…) right under the source with its format, input and output, marked vocal, or the existing audio track `into` (whatever the copies cover there is replaced; not the source itself). Each copy gets its own tuning: the source's edits with every note's offset moved by its harmony interval (so the lead's own inflection and corrections carry over), the clip formant `formant` (±12, default 0: the lead's voice; a few semitones sounds like another singer), rendered offline like any tuning (formant-preserving). Edit it like any part. One undo step (Make Harmony). Refused while the source is analysing, without audio clips, or for bad values. Returns `{track, name, clips, notes}`. |
+| `vocal.to_midi_track` | `{clip? \| clips? \| track?, notes?: [{clip, note}]}` | AI › Tune Vocal › Notes to MIDI Track and the Vocal Editor's MIDI menu: the Vocal Editor's notes (`notes`: only those; else every note of the targeted audio clips: the selected clips, else the selected tracks' audio clips; `track`: all its audio clips) as MIDI on a new instrument track `<track> MIDI` directly under each vocal track (the subtractive synth, the vocal's colour and output), one MIDI clip per vocal clip at its position and length. One note per vocal note: its tuned pitch rounded to the nearest semitone (target with Snap to key and the key in force, plus the whole semitones it was dragged, plus the clip's transpose), start and end from the note cut to the clip's window, through its offset and varispeed onto the tempo map (so the notes stay with the audio across tempo changes), velocity from its level as heard (sung level plus its level edit) against the median of the track's notes: 90 at the median, 4 per dB, 40–120; 96 without a level. Same-pitch notes that touch or overlap: the earlier ends a tick before the next starts, or the two merge when too close to separate (a sliver under 10 ms joins its same-pitch neighbour); every note at least 10 ms. Clips not analysed yet, or stretched in a way tuning can't follow (warp markers, reverse, loop), are skipped and listed; refused when no notes are left. One undo step. Returns `{tracks: [{from, track, clips, notes}], notes, skipped: [{clip, why}]}`. |
+| `vocal.export_midi` | `{path, clip? \| clips? \| track?, notes?}` | AI › Tune Vocal › Export Notes as MIDI File... and the Vocal Editor's MIDI menu: the same notes `vocal.to_midi_track` makes, written as a format-1 Standard MIDI File (one track per vocal track, named `<track> MIDI`; the session's tempo map, time signatures and markers, as File › Export › MIDI... writes them) at their song position (the file's start is the session's start). The session is not changed. Returns `{path, bytes, notes, skipped}`. |
 | `vocal.harmony_preview` | as `vocal.harmony` (`into`, `name`, `formant` ignored) | Query: what `vocal.harmony` would make, changing nothing: `{source, name, notes: [{clip, note, start, end, from, to (MIDI), pitch (cents where the harmony sings)}]}`. The studio draws these as dashed green outlines (Preview). |
 | `vocal.tolerance` | `{cents?: 5..25, fix_to?: "centre" \| "edge"}` | The Vocal Studio's Tune all settings, saved with the session (`studio_tuning`, omitted while default): notes already within ±`cents` (default 10) of their target are left alone by Tune all, and unison notes further apart than it get the ≠ marker; `fix_to` centre (default) pulls corrected notes to 0 c, edge only to ±`cents` on their own side. Undoable (Tune All Tolerance). Returns `{tolerance, fix_to}`. |
 | `vocal.tune_all` | `{tracks?: [track], tolerance_cents?: 5..25, fix_to?: "centre" \| "edge", drift?: 0..100, vibrato?: -100..100}` | Tune all (the studio bar; the UI sends the shown tracks and the Tuning panel macro's drift and vibrato): every note of the tracks (default: every Vocal Studio track) further than the tolerance (default the session's) from its target gets the edit that puts its held pitch on the target, or at ±tolerance with `edge`: its Centre amount (its own movement kept), else Centre 100 % and the manual offset's part under a semitone; `drift`/`vibrato` are set on the notes it corrects. Notes inside the tolerance are not touched (no edit is added). Refused while a track is being analysed (the UI waits and runs it when the analysis lands). One undo step (Tune All) however many tracks. Returns `{tracks, tolerance, fix_to, tuned: [{track, clip, note, before, after (cents from the target)}], left_alone}`. |
@@ -363,6 +365,7 @@ source}], notes: [where it ran, fallbacks], seconds}`. One undo step.
 | `vocal.match` | `{notes: [{clip, note}], to: {clip, note} \| "centre"}` | Lines up stacked unison notes (the pick list's Match <other> to <lead> and Both to centre): each note's held pitch moves onto `to`'s (its manual offset changed by the difference; `to` stays), or with `"centre"` each onto its own target (0 c). One undo step (Match Unison) across tracks. Returns `{notes: [{track, clip, note, before, after}]}`. |
 | `vocal.studio` | `{editing?: track, against?: track}` | Query: the Vocal Studio's tracks (audio tracks marked vocal or holding a live tuning, top to bottom), each `{track, name, color, notes, analysing, avg_offset, status}`: `avg_offset` is the mean distance of its notes (after tuning) from the targets they are judged by, in cents (null without notes), and `status` the Mix pitch box's thresholds on it: `in tune` (≤ 10 c), `drifting` (11–17 c), `off` (> 17 c), else `analysing`, `can't analyse` or `no notes`. `lead`: the track the others are compared with when `editing` is edited (a track named Lead…, else the first other one). With `against?: track`: each track also carries `clashes` (its clash count, `vocal.clashes` against `against`, else the session's lead; the lead itself against the chord and key only) and the reply `against` (the compared track). Also returns `tolerance` (cents) and `fix_to` (`centre` \| `edge`): Tune all's settings (`vocal.tolerance`). |
 | `ui.vocal_editor` | `{clip?, track?, at?: position}` | AI › Tune Vocal › Open… and the clip menu's Tune Vocal…: opens the Vocal Editor. With a clip or track it shows that track, scrolls the Edit view so `at` (default: the clip's start, else the playhead) sits a third in, and clears the note selection. Returns `{track, at}` (or `{}` without a target). |
+| `window.fullscreen` | `{value?: bool}` | Window › Full Screen (Shift+F11 on Windows and Linux, Ctrl+Cmd+F on macOS; re-bindable in Setup › Keyboard Shortcuts): the main window fills its screen with no title bar or taskbar (eframe's standard full screen; native full screen on macOS). The menu bar and toolbars stay. Toggles without `value`. Esc does not leave it (Esc already cancels drags and closes dialogs); a hint "Press … to leave full screen" shows for 2.5 s on entering and in the status line. Not saved: the app always opens windowed, and the saved window size is not overwritten while full screen. Plain F11 is not the default because it is the talkback key in a session with a control room. Separate windows (Mix, plug-in, Remote Mix, Vocal/MIDI Editor, Teleprompter) are their own system windows; in-window dialogs draw inside it. `ui.inspect` reports `fullscreen` and `fullscreen_hint`. Returns `{value}`. |
 | `window.vocal_editor` | `{value?: bool}` | Window › Editors › Vocal Editor: shows or hides the Vocal Editor tab in the lower dock (beside the MIDI Editor). Returns `{value}`. |
 | `window.sync_selection` | `{value?: bool}` | Window › Sync › Sync Selection (on by default, saved in ui.json): selecting a track or strip in either window selects it in both. Off, the Mix window keeps its own selection (seeded from the shared one), and its strip menus and shortcuts act on it. Toggles without `value`. Returns `{value}`. |
 | `window.sync_scroll` | `{value?: bool}` | Window › Sync › Scroll to Selected Track (on by default): a track that alone joins the selection in one window scrolls into view in the other, without taking focus. Returns `{value}`. |
@@ -412,6 +415,26 @@ source}], notes: [where it ran, fallbacks], seconds}`. One undo step.
 | `lyrics.export_sheet_text` / `lyrics.export_sheet_chords` / `lyrics.export_chordpro` | `{path}` | The sheet as text without chords; as text with each line's chords on a monospaced line above its words; as ChordPro (`{title:}` from the session name, headings as `{start_of_verse: Verse 1}` … `{end_of_verse}` sections, chords inline). |
 | `lyrics.import_sheet` | `{path}` or `{text}` | Replaces the sheet with a text or ChordPro file (at most 1 MB): ChordPro sections and labels become headings, metadata and `#` comments are dropped, old `[Verse 1]` headings become curly, chords written above the words go inline; lines the sheet has keep their ids. One undo step. |
 | `lyrics.select_line` | `{line? \| number?}` | Line to time: the placed line's range becomes the edit selection (to loop, punch or comp it). Returns `takes`: the take layers the comp of the vocal track (the first selected comping track, else the transcribed one, else the first) plays over that range; the ruler marker shows them too. |
+| `lyrics.words` | `{track?}` | Timed words (docs/lyrics.md, "Timing the words"): the track's words in time order, each `{clip, line, word}` (its ref: indices into the clip's lyrics; they change when words are added, removed or re-sorted, so every edit returns the new ref), `start`, `end` (timeline samples; `end` is where the voice stops), `seconds`, `text`, `timing` (`heard`: a transcriber's; `guess`: placed by `lyrics.time_words`, unchecked; `confirmed`: tapped or edited by hand) and `sheet_line`; plus the counts `guessed`, `confirmed`, `heard`. Track default (all the timing commands): `track`, else the first selected audio track, else the first vocal track, else the first track with words. |
+| `lyrics.time_words` | `{track?, lines?: [ids] \| number?, force?: bool}` | Time Words to Vocal (AI menu, the Lyrics tab's Timing menu, the word lane's menu): each lyric line placed on the Lyrics ruler has its typed words spread over the notes the track sings in its range, with no speech model. The track is analysed first if needed (as the Vocal Editor does). Notes come from the analysis in Musical mode, cut again where the level dips like a syllable (5 dB: a dip; 3.5 dB: a soft one), each knowing what comes before it: a gap (a consonant or breath; a pitch-tracker dropout that keeps the level is not one), a dip, or only a pitch change. Each word's syllables come from the dictionary (else spelling rules). A dynamic program then places the words in order over half-notes: a word starts cheapest after a gap, then after a dip, a soft dip, a pitch change, and dearest inside a note (two words sharing a note; cheaper on a note of 400 ms or more); fewer notes than syllables and more notes than syllables (a melisma, absorbed by the word's last syllable up to the next word's onset) cost per note; a breath inside a word costs a lot. A word starts at its first note, or at the consonant just before it (unvoiced sound above the room's level, at most 150 ms; longer is a breath, never part of a word); it ends where its last note's voice stops. A line owns the notes starting from 120 ms before its marker up to the next line's marker. Lines not on the ruler are first placed from transcribed words when the track has some (`placed_from_transcript`); otherwise place or tap them first. A line with a confirmed word in its range, or tapped before, is left alone unless `force`. Earlier words of the same line, and unconfirmed words in its range, are replaced. One undo step. Returns `lines: [{line, words, notes, shared, skipped?}]`, `words`, `guessed`, `confirmed`, `unplaced`. |
+| `lyrics.word_set` | `{clip, line, word, start?, end?, text?, alone?: bool, snap?: bool \| ms}` | Moves a word's start and/or end (timeline samples) or retypes it (one word). A neighbour whose edge touches the moved edge (within 5 ms) follows it; with `alone` only this edge moves; otherwise edges stop at the neighbours (words never overlap), at the clip's window, and keep a word at least 20 ms. `snap` (true: 60 ms, or a window in ms) first moves a start to the nearest word start the notes allow (a consonant before a note, a note's start, a breath's end) and an end to the nearest note end or breath start. The word becomes `confirmed`. One undo step; returns the word's new ref and times. |
+| `lyrics.word_move` | `{clip, line, word, by \| by_ms, alone?}` | Moves a whole word (drag, Alt+←/→ nudge); touching neighbours' edges follow unless `alone`; stops at the far edges of the neighbours and the clip. Confirmed. |
+| `lyrics.word_split` / `lyrics.word_merge` | `{clip, line, word, at?, texts?: [a, b]}` / `{clip, line, word}` | Splits a word at `at` (default its middle) into two confirmed words (default text by syllable: "Amen" → "A-", "men"; a word too short keeps its text and the second part is "-"); joins a word with the next word of its line ("A-" + "men" → "Amen", else joined by a space). |
+| `lyrics.word_delete` / `lyrics.word_insert` | `{clip, line, word}` or `{words: [refs]}` / `{text, track?, at? (default the playhead), end?}` | Removes words (a line left empty goes); inserts a confirmed word on the clip playing at `at`, 300 ms by default, up to the next word (refused inside a word). |
+| `lyrics.words_confirm` | `{words: [refs]}` or `{track?, all: true}` | Marks words checked (`confirmed`) without moving them. |
+| `lyrics.tap_words` | `{line (id) \| number, taps: [[down, up?], …], track?, latency_ms?: 0, snap_ms?: 60}` | Tap to time: the line's words at the taps (timeline samples, `latency_ms` taken off each), confirmed. Each start snaps to the nearest note start (or the consonant before it) within `snap_ms` (0: raw taps); each end is the key-up when given (snapped to a note end), else where the voice stops before the next word's start. Fewer taps than words: the first words only. The line's earlier words, and any word in the tapped span, are replaced. One undo step per line. |
+| `lyrics.tap_lines` | `{taps: [{line \| number, at}], track?, latency_ms?, snap_ms?}` | Tap line starts: each line placed on the Lyrics ruler from its tap (snapped) to the next tap (the last: to where its singing stops), then timed as `lyrics.time_words` (guesses). One undo step. |
+| `lyrics.select_words` | `{track?, which?: all \| first_of_line \| last_of_line \| guessed \| same_word \| find, text?, words?: [refs], play?: bool}` | Selection helpers for the word lanes: the first or last word of every line (lines as the words are grouped on their clips), every occurrence of a word (`same_word`: case and punctuation aside), every run of `find`'s words in order, the guessed words, or the given `words`. Their span becomes the edit selection, the track the selected track, the playhead goes to the first; `play` plays just that span (Audition). Not an undo step. Returns `words`, `start`, `end`. `ml.lyrics` refuses to replace typed or hand-timed words in its range unless `replace_typed: true` (the Transcribe Lyrics dialog's "Replace words typed or timed by hand"). |
+| `gild.list` | `{track?}` | Gild (docs/gild.md): the track's gildings in time order, each `{clip, id}` (its ref) with `start`, `end` (timeline samples, the part heard in the clip's window), `seconds`, `text` (the words it was made from), `words` (their word ids), `held` (its handles were moved by hand: it keeps its own times when its words move), `fade_in_ms`, `fade_out_ms`, `kinds` (the effects on, in the order heard: shift, grit, double, harmony, delay, reverb, swell), `fx` (each effect's settings, below), `render` (`none`: nothing made ahead; `ready`; `making`; `failed: why`) and `heard`; the track's `dry` and `level_db`; `words` (how many timed words the track has: 0 means time the words first). |
+| `gild.add` | `{words: [refs] \| track? + start + end, fx?: {kind: true \| {settings}}, preset?}` | Gild Words: each run of adjacent chosen words on one clip becomes one gilding over their span (fades 8 ms in, 20 ms out); separate words become separate gildings with the same settings. A gilding lives on its clip in the clip's own audio time (it moves, trims, splits, copies and comps with the clip, and is saved) and follows its words when they are retimed. `true` turns an effect on from the settings last used for it (else its defaults); no `fx` takes the last effects used (else a delay throw); `preset` a built-in preset (`gild.presets`). `start`/`end` without words gild a plain range (held). Refused: words already gilded (use `gild.set`), a track with no timed words ("time the words first"), Shift/Grit/Double/Harmony on a clip played through an ARA plug-in (they are made from the recorded audio), Shift in place and Grit on a stretched, reversed, looped or transposed clip. One undo step. Returns `gildings: [{clip, id}]`. Settings (ranges; defaults): **shift** `{semitones: -12..12 (-12), formant: -6..6 (0), layer: bool (true: added beside the word; false: in its place), level_db: -24..6 (-6)}`; **grit** `{drive: 0..1 (0.55), flavour: warm \| bright \| hard, blend: 0..1 (0.6), level_db: -12..6 (0)}`; **double** `{cents: 2..30 (9), ms: 5..60 (22), level_db: -24..0 (-6)}`; **harmony** `{voices: [{steps: -7..7 scale steps in the song's key (2: a third above), level_db: -24..6, pan: -1..1}] (at most 3)}`; **delay** `{sync: bool (true), note: 1/16 \| 1/8t \| 1/8 \| 1/8d \| 1/4t \| 1/4 \| 1/4d \| 1/2 \| 1/1 (1/4), ms: 30..1500 (free time, 360), repeats: 0..0.9 (0.4), low_cut: 40..1000 Hz (220), high_cut: 1500..18000 Hz (5200), bounce: bool (ping-pong on a stereo track), level_db: -36..6 (-5)}`; **reverb** `{space: room \| hall \| plate \| cloud (hall), size: 0..1 (0.65), decay_s: 0.4..12 (2.8), pre_ms: 0..200 (35), width: 0..1.5 (1), level_db: -36..6 (-6)}`; **swell** `{length_s: 0.3..4 (1.6), offset_ms: -400..100 (0: it ends where the word starts), space, level_db: -24..6 (-4)}`. |
+| `gild.set` | `{gildings: [{clip, id}] \| clip + id, fx?: {kind: true \| false \| null \| {settings}}, start?, end?, held?: false, fade_in_ms?, fade_out_ms?}` | Change Gild: every named gilding alike (settings merge into each effect's own; `false`/`null` turns an effect off; leaving none on is refused: use `gild.remove`). `start`/`end` (timeline) move a handle (at least 20 ms, inside the clip): the gilding then keeps its own times; `held: false` makes it follow its words again. One undo step (the panel's drags are one step each). Returns the gildings as `gild.list` gives them. |
+| `gild.remove` | `{gildings: [refs] \| clip + id \| words: [word refs]}` | Removes the named gildings, or those on the words. |
+| `gild.clear_track` | `{track?}` | Remove All Gild on This Track (every playlist); the panel asks first. Greyed when nothing is gilded. |
+| `gild.copy` / `gild.paste` | `{clip, id}` / `{gildings: [refs] \| words: [word refs]}` | Copy Gild keeps a gilding's effects and fades (not an undo step); Paste Gild puts them on the gildings, or makes gildings on the words (words already gilded take them too). One undo step. |
+| `gild.track` | `{track?, dry?: bool, level_db?: -24..12}` | The track's Gild controls: **Dry** off makes the track give only what Gild adds (for a duplicate track that carries only the effects); `level_db` trims everything Gild adds on the track. Returns `dry`, `level_db`. Signal path: Shift (in place) and Grit replace the word in the clip's audio before the track's inserts (crossfaded over the fades); Double, Shift (layered) and Harmony are added beside it; the Delay and Reverb throws are fed the track's signal after its inserts, gated to the span (each added effect hears the word and what the effects before it added); everything Gild adds returns into the same track after its pre-fader inserts and before its fader, sends and pan; Dry off drops the track's own signal there. The track's latency does not change; gildings with identical throw settings share one delay and one reverb. |
+| `gild.audition` | `{clip, id, tail?: s}` | Plays the gilding's span (from its swell's start) and its tail (default: how long its throws ring, at most 8 s). Not an undo step. |
+| `gild.render` | `{}` | Makes every made-ahead render still missing now (normally made in the background; a bounce, stems export, freeze and commit make them first). Returns `made`. |
+| `gild.presets` | `{}` | The built-in presets: `{name, kind (an effect, or gilding: a whole set), fx}`. |
 | `ml.text_midi` | `{prompt, seconds?: 30, start?, continue_from?, instrument?, seed?, temperature?: 1, top_p?: 0.98, max_tokens?: 2046, device?, models_dir?}` | Generate MIDI from Text (MIDI-LLM, Llama 3.2 1B with the Anticipatory Music Transformer's MIDI tokens; 8-bit weights on ONNX Runtime, CPU by default). No source: `prompt` (required) says what to compose (style, instruments, key, meter, tempo, mood). The model writes notes as (onset, duration, instrument × pitch) in 10 ms steps, velocity 72, temperature + top-p over the MIDI tokens, each position limited to the token kind it must be; it stops at `max_tokens` (3 per note, at most 4095) or at the first onset past `seconds` (1–100). One new instrument track per General MIDI instrument in the piece, at the end of the session, named after the instrument (`Drums` for the drums): the Drum Synth on channel 10, else Burley, the subtractive synth (pianos voiced as keys) with a program change at the clip start; each instrument gets its own channel (1–9, 11–16 in turn) so `file.export_midi` writes a file a General MIDI player plays right. One MIDI clip each at `start` (default the edit cursor), `seconds` long, notes on the session's tempo map. `continue_from` (a MIDI clip id) starts the piece with that clip's first 170 notes, from its start, as one instrument (`instrument`: 0–127 or `"drums"`; default drums when every note is on channel 10, else the clip's first program change, else drums for a track named drum/kit/perc/beat, else piano); the model carries on from them and only what it adds is written, from the clip's start (the default `start` then). The dialog offers it for a selected MIDI clip ("Continue from the clip", on by default). `seed` (a whole number, or its text) repeats a piece with the same prompt and settings on the same device; without it a new seed is chosen and returned. About 19 tokens/s on a 4-core CPU (a full 682-note piece in about two minutes). One undo step. Result `made: [{track, name, clip, program (null for drums), drums, channel, notes}]`, `seed` (text), `prompt`, `notes` (device, counts). |
 | `ml.song` | `{engine?: "yue2" \| "acestep", server?, device?, style, lyrics?, instrumental?, score?, plan?: "full" \| "melody" \| "off", seconds?: 60, seed?, bpm?, key?, planner?: true, start?}` | Generate Song: a whole song (vocals and accompaniment, 48 kHz stereo) from YuE2 or ACE-Step 1.5, run by FreeDAWm itself: each engine installs from Setup › ML Models like a model (`yue2`, `acestep`: the MIT server built for this platform, yue2.cpp's `yue-server` or acestep.cpp's `ace-server`, plus its Q8_0 GGUF models fetched from Hugging Face, about 4.4 GB each; see the release playbook, Song engines). With no `server`, the job starts that engine's server on a free port of 127.0.0.1 the first time a song needs it ("Starting …" in the progress window; `device` `cpu` adds the engine's CPU flag, else it picks the best GPU: Vulkan on Windows and Linux, Metal on macOS, the CPU when there is none), waits for it, and reuses it for later songs; it stops after 10 idle minutes, when FreeDAWm quits, or if it crashes (that song fails, FreeDAWm doesn't). A missing engine is refused with where to download it. `server` (an http address) sends the song to a yue2.cpp or acestep.cpp server the person runs instead, on another computer with a bigger GPU for example; both servers speak the same job protocol (`POST` a request, poll `/job?id=N`, fetch `&result=1`, cancel with `&cancel=1`), which is all FreeDAWm uses. Cancel in the progress window cancels the server's job. `style`: YuE2's style tags or ACE-Step's caption; `lyrics` with `[Verse]`/`[Chorus]` tags (empty: YuE2 sings none, ACE-Step's planner writes some unless `instrumental`); `seconds` 10–600 (the model may end sooner); `seed` repeats a song (YuE2 uses it for both its token and noise seeds). YuE2: `plan` is its score planning (melody and chords, melody, none) and `score` an ABC score to sing instead of planning one. ACE-Step: `bpm` (30–300), `key`, and `planner` (the 5 Hz LM plans metadata, lyrics and audio codes first, `/lm`, then `/synth` renders that plan; off renders from the caption alone). The song lands on a new audio track `<engine> Song` at `start` (default the edit cursor). With YuE2, the score it sang (ABC, returned in `score.abc`) also lands as MIDI under it: one instrument track per voice (`YuE2 Score Vocal`, `YuE2 Score Ins`) and `YuE2 Score Chords` (the chord symbols voiced around middle C with the bass below), timed from the score's own tempo and placed on the session's tempo map so they sit under the singing as written (the model's timing drifts from the score; the notes are not fitted to the audio). One undo step. Result `made: [{track, name, clip, source, seconds}, {track, name, clip, notes, voice \| chords}…]`, `seed`, `score: {abc, bpm, meter}`, `song: {bpm, key, lyrics}` (ACE-Step's plan), `request` (what reproduces the song on that server). The audio comes back as 24-bit WAV, normalised by the server. Tested end to end with both servers built for the CPU (4 cores, no GPU) on the same 30 s request: ACE-Step (0.6B planner, turbo DiT, Q8_0) in about 4 minutes; YuE2 (Q8_0, `--max-seq 8192`) in about 38 minutes (its score in under a minute, 750 semantic codes, then 32 flow-matching steps at about a minute each); a GPU is the intended home for both. The weights' licences are the servers' business: YuE2's are CC BY-NC 4.0 with a creator permission (musicians may monetise their songs; companies need a licence), ACE-Step's MIT. |
 | `ml.models` | `{models_dir?}` | The model folder and each model: `id`, `name`, `job`, `status` (`installed`, `built in`, `not installed`, `broken`), `problem`, `bytes`, `license` (the card's note), `licence_status` (short: `MIT`, `Apache-2.0`, `CC BY-NC-SA 4.0 — non-commercial, personal use`, `Licence not stated by the author — personal use`; from the card's `license` field once installed), `source`. The Models window and each ML dialog show the same status. |
@@ -553,6 +576,17 @@ the document is untouched), waiting up to 2 s for the clip's tuned render, and t
 edit selection come back afterwards; a new gesture restarts it; nothing while the transport
 plays or records on its own; Tuned/Original is respected.
 
+The header's MIDI menu (also AI › Tune Vocal › Notes to MIDI Track and Export Notes as MIDI
+File..., which act on the selected clips, else the selected tracks): **Notes to MIDI Track**
+(`vocal.to_midi_track`) and **Export Notes as MIDI File...** (`vocal.export_midi`, a path prompt
+named "<track> notes.mid") on the editor's track, the selected notes only when some are selected.
+Greyed out ("No detected notes on this track yet…") until the track has analysed notes. The notes
+are the editor's own (its splits and joins), each at the semitone it is tuned to (its target with
+Snap to key and the key in force, plus the whole semitones it was dragged, plus the clip's
+transpose; MIDI numbers are true pitch: 440 Hz is 69, which the app's note names show as A3, middle
+C, 60, being C3), velocity from its level as heard against the track's median level (median 90,
+4 per dB, 40–120; 96 without a level).
+
 The Tuning panel (the header's Tuning button, `ui.vocal_panel`): Tuned / Original (`vocal.toggle` on
 the tuned clips holding a selected note, else all the track's tuned clips), the selection summary
 (and "moved +200c" with a × that clears it, `vocal.edit {offset: 0}`, when a selected note was
@@ -635,6 +669,8 @@ is off). UI-only commands (use them through `engine.execute`):
 | `ui.mix.width.slim`, `ui.mix.width.wide`, `ui.mix.width.auto` | `{tracks?}` → `mix.strip_size`'s result | Channel width for the Mix window's selected channels (or `tracks`), one undo step; refused with nothing selected. Also the Channel width bar at the top of the Mix view, a channel's (or the Tracks list's) right-click menu and View › Channel Width. |
 | `ui.mix.width.slim_all`, `ui.mix.width.wide_all`, `ui.mix.width.auto_all` | `{}` → `mix.strip_size`'s result | The same for every channel. The bar's "for Selected / All" choice is `ui.set {"mix_width_all": bool}`. |
 | `view.mix_slim` | none | Toggles slim strips for every strip set to `auto` (the same toggle as `ui.set {"narrow_mix": true}`). |
+| `window.close_plugin_windows` | `{}` → `{closed, plugin_windows, full_editors, drawers, hosted, clip_hosted, ara, remote}` | Closes every open plug-in and effect editor window at once, each through its own close path, and says what was open by kind: built-in modules' and instruments' plugin windows (docked or detached, pinned ones too), full editor windows, the editor drawers beside Mix strips, hosted CLAP/VST3/AU editors (in this process or the plug-in process), hosted Clip Effects editors (their state kept on the clip first), ARA editors and the Remote Mix window's insert editor. The Mix, Edit, MIDI and Vocal Editors, dialogs and other windows stay open; a window's Detach, Pin and Follow choices are kept. Not an edit (no undo step). Also Window › Layout › Close Plug-in Windows (Cmd+Alt+W, Ctrl+Alt+W off macOS) and the Close Plug-ins button beside the Mix window's Channel width bar, greyed with nothing open and saying how many it closes. |
+| `ui.set {"mix_strip_tint": 0..1}` | → `{ui}` | Colour strips: how strongly Mix window strips (and the Remote Mix window's) take on their track's colour: background, section boxes and fader well. `0` Off (the default: strips drawn as before), `0.35` Subtle, `0.65` Medium, `1` Strong (the Mix window's Colour buttons beside its Channel width bar; any value between from Setup › Preferences or Window › Color Palette). Each colour is darkened (dark theme) or lightened (light theme) as far as the labels need: text on a tinted strip keeps at least 4.5:1 contrast. Grey tracks stay neutral. Kept with the UI preferences, not the session. |
 
 ## Scout
 
@@ -973,13 +1009,36 @@ A browser sends the code (`POST /api/pair/confirm`); a PC never does: the code i
 a key exchange that proves both PCs' keys (`pair.exchange`, `pair.finish` below), each exchange
 spending one of the 3 tries.
 
+**Booth PIN** (Setup › Network › Booth PIN; off by default). When the booth has one
+(`network.json`: `booth_pin`, at least 6 characters of any kind, kept as the tokens are), a request
+waits for that PIN instead of a code on the screen: nobody at the booth reads anything out. The
+device types it where it would type the code; nothing else changes on the wire: a PC's PIN is the
+password of the same `pair.exchange` (never sent), the page sends it in `POST /api/pair/confirm`
+`code` as it sends a code (compared through SHA-256 hashes, in full). The request's answer says
+which it waits for with two optional fields, `pin: true` and `ask: true` (absent for a code, so an
+older device just shows its code prompt; either is typed in the same field). The per-request limits
+stay, and wrong PINs are also counted across requests: 5 in a row pause PIN pairing for 5 minutes,
+each next pause twice as long up to an hour; 20 since the last PIN pairing turn it off until the
+owner turns it back on (`pin_wrong` and `pin_last_from` in `network.json`, so a restart keeps it
+off). A PC's exchange counts when it begins (the booth's answer tells it whether its guess was
+right); a correct PIN pairing, a new PIN or the owner's *Resume* / *Turn back on* starts the count
+again. While paused or off, a request gets a random code shown on the screen as without a PIN
+(no `pin` in the answer), and a waiting PIN request is told "PIN pairing is paused on the booth…".
+*Ask me before each device joins* (`pin_ask`) shows the request with Allow / Deny: until Allow the
+PIN is not tried (and no try is spent), the device is told "…someone there must press Allow, then
+type the PIN again". Every PIN pairing, pause and turning off shows a notice on the booth until
+dismissed, and the device is listed in Paired devices with Forget (and *Forget all…*). Changing or
+clearing the PIN leaves paired devices paired (their tokens). Over the internet the PIN does
+nothing: that listener refuses `pair.request` and the exchange, so only an invite pairs there.
+Neither the mDNS TXT record nor the status feed carries the PIN or anything made from it.
+
 HTTP (one request per connection; JSON bodies; the token in `X-Token` or `?token=`):
 
 | Request | Body | Result |
 |---|---|---|
 | `GET /`, `/remote.js`, `/remote.css` | | The page (embedded in the app). |
-| `POST /api/pair/request` | `{name}` | `{request, pc}`; this PC shows the code. 429 when rate-limited. |
-| `POST /api/pair/confirm` | `{request, code}` | `{token, name, pc}`, or 403 `{error, left}`. |
+| `POST /api/pair/request` | `{name}` | `{request, pc}`; this PC shows the code. With a booth PIN: `{request, pc, pin: true, ask?: true}`, the PIN is typed instead. 429 when rate-limited. |
+| `POST /api/pair/confirm` | `{request, code}` | `{token, name, pc}`, or 403 `{error, left}`. `code`: the code, or the booth PIN for a PIN request. |
 | `GET /api/events?token=` | | The status feed as server-sent events: `data: <status JSON>` on every change (at most ~15 a second) and every 10 s. 401 `{pair: true}` when unpaired. |
 | `GET /api/status` | | The status once. |
 | `POST /api/action` | `{action: "record"}`, `{action: "play"}`, `{action: "stop", held?}`, `{action: "arm_all", value}`, `{action: "arm", track, value}`, `{action: "marker", name?}`, `{action: "rename_marker", id, name}` | `{ok, result}`; 409 `{ok: false, error}` when refused. While recording, `stop` needs `held: true` (the page sends it after a 1 s press-and-hold): a tap is refused. Nothing deletes; any other action is refused. A marker is named `Marker h:mm:ss` unless named. |
@@ -997,11 +1056,11 @@ lines without an `id` get no reply):
 
 | Method | Params | Result |
 |---|---|---|
-| `pair.request` | `{name, pairing: 2}` | `{request, pc, pairing: 2}` (kind `pc`). Without `pairing` (or below 2: a FreeDAWm that would send the code itself) refused with "update FreeDAWm on this computer…" and `update: true`, before any code is shown. A PC refuses a booth whose answer has no `pairing` 2 ("update FreeDAWm on the booth…"), before any code is typed. |
+| `pair.request` | `{name, pairing: 2}` | `{request, pc, pairing: 2}` (kind `pc`), plus `pin: true` (and `ask: true`) when the booth waits for its booth PIN, the exchange's password then. Without `pairing` (or below 2: a FreeDAWm that would send the code itself) refused with "update FreeDAWm on this computer…" and `update: true`, before any code is shown. A PC refuses a booth whose answer has no `pairing` 2 ("update FreeDAWm on the booth…"), before any code is typed. |
 | `pair.exchange` | `{request, msg}` | `{msg, confirm}`. The first pairing's key exchange: `msg` the PC's SPAKE2 message (33 bytes, base64; side A, identities `freedawm-pc` and `freedawm-booth`, password the code on the booth's screen), answered by the booth's message and its confirmation, `HMAC-SHA256(HKDF-SHA256(k, info "freedawm pairing confirm"), role ‖ booth key ‖ PC key)` (role the sender's identity; each field after a byte giving its length; the keys are the encrypted link's two public keys as the TLS session proved them, none on the plain link). Spends one of the request's 3 tries whatever follows; a damaged message or a request without tries ends the connection. The code itself is never sent. |
 | `pair.finish` | `{confirm}` | `{token, name, pc}`: the PC's own confirmation, sent only after its check of the booth's, compared in constant time; it must be the next line on the same connection. A mismatch (a wrong code, or a machine in the middle holding another key towards each side) answers "wrong code, or another computer is in between (N tries left)" and ends the connection. Over the encrypted link the PC is then bound to its key, as before. |
 | `pair.confirm` | `{request, code}` | Refused ("update FreeDAWm on this computer…"): the code in the clear is never compared on this channel. The phone's page keeps `POST /api/pair/confirm`, for browser requests only. |
-| `hello` | `{token, name, role?: "follower", report?}` | `{pc, name, transport}`. Unpaired: `{ok: false, pair: true}`. After it, **every control-protocol method** (`engine.execute`, `session.inspect`, `ui.*`…) runs as on the `--control` channel. |
+| `hello` | `{token, name, role?: "follower" or "listener", report?}` | `{pc, name, transport}` (a listening PC: see "Listening PCs" below). Unpaired: `{ok: false, pair: true}`. After it, **every control-protocol method** (`engine.execute`, `session.inspect`, `ui.*`…) runs as on the `--control` channel. |
 | `sync.ping` | `{t0}` | `{b1, b2}`: the booth's take clock (s) when the ping arrived and when it answered. Refused while the booth is stopped. |
 | `follower.report` | `{state, notes, disk_free?, queued, ports, inputs, clips, sending?}` | (notification, about once a second; `inputs`: armed audio inputs, `clips` in the take recording, `sending` 0..1 while an audio take uploads) |
 | `feed` | `{port, notes: [{at, pitch, vel}]}` | (notification, every 250 ms while recording: the live sketch, booth timeline seconds, best effort) |
@@ -1056,7 +1115,17 @@ mute/solo/plugins/locates included) and a network thread reads it every 10 ms, c
 `{"event": "stream", "params": {seq, epoch, rolled, pos, data}}`: `rolled` and `pos` are the
 booth's take clock and timeline (s) at the frame's first input sample; `epoch` changes when the
 booth's take clock jumps (Stop, Play, a locate), and the follower drops what it queued at once.
-Nothing is sent while the booth is stopped. The follower's decoder keeps a jitter buffer (starts
+**While the booth is stopped** the stream goes on for a link that asked with
+`stream.subscribe {on, live: true}` (FreeDAWm from this version: remote recorders and listening
+PCs): a live event mixes live inputs with the transport stopped. Those packets carry `idle: true`;
+their `rolled` is not the booth's take clock but the stream's own clock since the stop (from 0),
+and a performer maps nothing from them, so a take's alignment is exactly as before. A roll after a
+stop is a new epoch the performer drops its queue for at once; a stop after a roll is a new
+(idle) epoch that does not drop anything: what he had not heard of the roll yet plays out first,
+still mapped (the end of a take is heard and placed as before). Sequence numbers run on through
+it all, epochs only grow. A link that asks without `live` (an older FreeDAWm) gets only
+talkback while stopped, as before (the booth runs a second encoder for it only while such a link
+listens). The stream is always the main mix as this PC hears it. The follower's decoder keeps a jitter buffer (starts
 at 150 ms; +30 ms each time it runs dry, up to 500; −10 ms after 20 s without; lost packets
 concealed; a queue 100 ms over target drops a frame for clock drift), converts to its session rate
 and queues it for its audio thread, which adds it to its main mix at the *Mix volume* (the
@@ -1092,7 +1161,22 @@ makes a one-time secret valid 30 minutes (`Hub::new_invite_secret`) and shows th
 name}>` with Copy; the performer pastes it in *Join with an invite*, his PC connects and sends
 `pair.invite {secret, name}` → `{token, name, pc}` (the same per-device token as the LAN, kept in
 both settings; a used or expired invite is refused), then follows that host (`follow.internet`:
-the host's address, JSON) and hears its mix. Both sides show the link: "Direct, 38 ms round trip"
+the host's address, JSON) and hears its mix. **Reusable invites**: *Invite…* offers *One person*
+(the above) or *Reusable*, for 1 hour, 1 day (default) or 7 days and 1 to 50 joins (default 10)
+(`Hub::new_reusable_invite`): the same code and secret strength (128 random bits), so the joining
+side needs nothing new. The booth keeps a reusable invite in `network.json` (`invites`: id, the
+SHA-256 of the secret, never the secret, its end as seconds since 1970, joins allowed and made),
+so it outlives a restart; one-time invites live only while the app runs. Setup › Network lists
+every open invite (kind, time left, joins used) with *Revoke*, which ends it at once; devices that
+joined stay paired. Each join shows a notice on the booth ("<PC> joined with the reusable invite")
+and lists the PC in Paired devices. A PC that joined this booth before sends its token with the
+invite and is recognised (no join used). **Coming back**: an invite is only for the first join.
+The token it gave is kept on both sides, *Let a performer join this PC over the internet* is kept
+and started when the app starts, and the performer's *Follow this booth* and *Start following when
+FreeDAWm starts* are on after joining; his PC dials the booth by its key (made once, kept), which
+n0's address lookup resolves however the booth's address or network changed. So after either app
+restarts, the booth moves, or another session is open, the performer reconnects with no new
+invite and no click on either side. Both sides show the link: "Direct, 38 ms round trip"
 or "Through a relay, …", loss, and a warning when it is too weak for the stream (over 400 ms,
 over 5 % lost, or under 400 kb/s estimated). Tested on one machine (relay-less, the whole rig and
 the stream take over it: 0 samples off) and, `#[ignore]`d, through n0's public relays from Windows
@@ -1100,8 +1184,131 @@ the stream take over it: 0 samples off) and, `#[ignore]`d, through n0's public r
 
 | Method | Params | Result |
 |---|---|---|
-| `pair.invite` | `{secret, name}` | `{token, name, pc}`; refused once used or after 30 minutes. |
-| `stream.subscribe` | `{on}` | `{on}`: this follower's link hears the mix (or stops). |
+| `pair.invite` | `{secret, name, token?}` | `{token, name, pc}`; a one-time invite is refused once used or after 30 minutes, a reusable one once its time or joins run out, or when revoked. `token`: the PC's own from an earlier join of this booth (sent only to the booth whose key it joined): while the invite is still good it is recognised, answered with the same token and `again: true`, and no join is used. Wrong secrets: after 20 in 10 minutes on the booth, every invite is refused for the rest of that window. |
+| `stream.subscribe` | `{on, live?}` | `{on, live}`: this link (a remote recorder's or a listening PC's) hears the mix (or stops); `live: true` takes it while the booth is stopped too (`idle` packets). |
+
+**Listening PCs** (for mixing from another PC, with no recording). `hello {token, name, role:
+"listener"}` opens a listen-only link: it can `stream.subscribe` and `status.subscribe`, and it
+gets the `transport` events, but it never arms or records, is never made a follower (no
+`follows`, no remote ports), and `follower.report`, `feed`, `feed.audio`, `take.offer`,
+`take.chunk` and `take.transfer` are refused on it. The booth lists it in Setup › Network (and in
+the status's `remotes`) as `state: "listening"` (detail "hears the mix · <link>", never a
+warning), and forgets it the moment it goes: nothing waits for it, nothing in the mix changes.
+It works over the plain link, the encrypted local link and the internet invite link alike. An
+older booth answers `hello` as for a controlling PC (the role is unknown there) and refuses
+`stream.subscribe` ("only a remote recorder…"): a client then falls back to following. A paired PC
+keeps full control on this link too (the owner's choice: no roles).
+
+| Method | Params | Result |
+|---|---|---|
+| `status.subscribe` | `{on?}` (default true) | `{on}`; then `{"event": "status", "params": <the status>}` on every change (at most ~15 a second) and every 10 s: the same status the phone's page gets. Any paired PC. |
+| `mixer.subscribe` | `{on?, meters?}` (both default true) | `{on, meters}`; then the mixer feed below. Any paired PC. |
+| `engine.execute` | `{command, params, gesture?}` | With `gesture: "<key>"`: consecutive calls with the same key are one undo step (as dragging the fader here), until `engine.end_gesture` or 1.5 s without a move (a dropped link ends it so). |
+| `engine.end_gesture` | `{}` | `{}`: the gesture's undo step is closed (the remote let go). |
+
+**Mixer feed** (`soundcraft_engine::surface::feed`, published by the UI thread through
+`Hub::publish_mixer` / `Hub::publish_meters` only while a PC subscribes). Events on the link:
+
+- `{"event": "mixer.snapshot", "params": {seq, state}}` first (and again if the PC fell more than
+  64 changes behind). `state`: `session`, `pre_fader_metering` (the meters are pre-fader),
+  `solo_mode`, `order` (strip ids in mixer order), `strips`, `busses` (`id, name, format`),
+  `groups` (`id, name, letter, members, active, color`), `transport` (`state`
+  `stopped|playing|recording`, `loop`). Each strip (every track but video ones, the master, aux
+  and VCA tracks included): `id, name, kind, color ("#rrggbb"), format, volume_db, pan (per
+  channel, -1..1), mute, solo, record_arm, input_monitor (Auto|On|Off), input, output (routes as
+  in `session.inspect`), automation_mode, vca (the VCA's id or null), groups (ids), inactive,
+  hidden, sends (slot, target, level_db, pan, mute, pre_fader), inserts (slot, module, plugin,
+  name, bypass, hosted)`. A built-in module's insert carries `params` (`{id: value}` in plain
+  units, what `mix.module_param` takes); a third-party plug-in only its name and bypass. Fader and
+  pan show their automation while the track reads it (as a control surface does); values are
+  rounded to 0.01.
+- `{"event": "mixer.delta", "params": {seq, strips?, removed?, …}}` whenever anything changed,
+  from any source (this PC's screen, another remote, automation playback, a snapshot recall,
+  undo), at most every 50 ms: `strips` holds each changed strip's `id` and only its changed
+  fields (a new strip whole), `removed` the ids of strips gone, and any other top-level field that
+  changed comes whole. `seq` counts up by one; a PC that sees a gap subscribes again for a
+  snapshot. Applying deltas in order to the snapshot gives the booth's state
+  (`feed::apply_delta`).
+- `{"event": "mixer.meters", "params": {seq, pos, ids, lv}}` about 20 times a second while they
+  change: `pos` the playhead (s), `ids` the strips in order, `lv` base64 of five bytes per strip
+  in that order: peak L, peak R, RMS L, RMS R (dB = byte / 2 - 100; 0 is -100 dB or silence; what
+  the Mix window's meters show, with their ballistics) and the first dynamics insert's gain
+  reduction (quarter dB).
+
+Bounded: the booth keeps the last picture, the last 64 deltas and the latest meters; each
+subscriber has its own thread that sends what is new. A PC that stops reading stalls only that
+thread until the link's write timeout (5 s) ends its link; the UI never waits on it and memory
+does not grow. Measured on loopback (`crates/net/tests/remote_mix.rs`): 32 strips, a snapshot of
+about 10 KB; with the meters moving and no control touched about 7.5 KB/s (60 kb/s); with a fader moving at 20 Hz on top about
+9.1 KB/s. Stopped and silent, unchanged meters are not sent again (nothing but deltas).
+
+**A remote fader is one undo step.** A remote mixer sends `engine.execute {command: "mix.volume",
+params: {track, db}, gesture: "fader:<track>"}` on every move and `engine.end_gesture` on release:
+as the Mix window's fader and a control surface's touch to release, one undo step. The step
+stays open while no pointer is down on the booth (the booth's own per-frame end of gestures waits
+for it) until the release, or 1.5 s after the last move if the release never comes. A later
+"network surface" holds automation while touched as the Mackie layer does
+(`Engine::automation_hold` on touch, off on release; Trim mode through `automation_trim`).
+
+**Keeping the studio awake.** While *Allow control from this network* (or *Let a performer join
+this PC over the internet*) is on and either a paired PC is connected (a remote recorder, a
+listening PC, a controlling PC) or a track hears its live input (Input Monitoring On, or armed on
+Auto), FreeDAWm keeps the PC from sleeping, and Setup › Network says "Keeping this PC awake while
+remotes are connected…". It lets go as soon as neither holds. Windows: `SetThreadExecutionState`
+(system required; the screen may still turn off) from the UI thread; macOS: `caffeinate -i -w
+<pid>`; Linux: `systemd-inhibit --what=idle:sleep` (where systemd runs); elsewhere nothing, and
+the window says it could not.
+
+**Connect to a Studio** (File › Connect to a Studio…, `window.connect_studio`; `soundcraft_net::studio`,
+`crates/ui-egui/src/studio_ui.rs`, user page `docs/remote-mixing.md`). The mixing PC only dials:
+it pairs as above (code, booth PIN, or `pair.invite` over the internet bridge) and keeps each
+studio in `network.json` `studios` (`name, addr, token, key, lan, internet, last_used`), apart
+from `follow` (a studio mixed and a booth followed can be the same PC, each with its own pairing;
+the dialog also offers the followed booth's pairing). Its link: `hello {role: "listener"}`, then
+`mixer.subscribe` and, while it listens, `stream.subscribe {on, live: true}`; a gap in `seq`
+subscribes again for a snapshot; `net.ping` every second (answered by the hub itself, never the
+app: the banner's round trip; no answer for 4 s ends the link and it reconnects every 2 s). A
+change queued when the link goes, or made while it is down, is dropped and counted, never sent
+later. Moves are `engine.execute` with these gesture keys: `fader:<track>`, `pan:<track>:<i>`,
+`send:<track>:<slot>`, `editor:<track>:<module>` (a built-in editor's drag), closed by
+`engine.end_gesture {gesture}`.
+
+| Method | Params | Result |
+|---|---|---|
+| `net.ping` | `{}` | `{}` at once, from the hub (any paired PC). |
+| `engine.end_gesture` | `{gesture?}` | `{}`: with `gesture`, only that gesture's undo step ends (a drag of something else on the studio goes on as one step); without, as before. |
+
+The mixer feed's state also carries `undo` and `redo` (the studio's next Undo and Redo labels, or
+null) and `snapshots` (`[{index, name}]`, the session's mix snapshots: recall with
+`mix.snapshot_recall {snapshot: index}`, store with `mix.snapshot_store {name}`).
+
+**First touch holds.** On the studio's hub, the first connection to move a gesture key holds that
+control until its `engine.end_gesture` plus 0.5 s (`HOLD_GRACE`), or 1.5 s without a move
+(`HOLD_LEASE`, as the engine's gesture lease). Another connection's `engine.execute` with the same
+key meanwhile is refused `{ok: false, error: "<PC> is moving that control", held_by: "<PC>"}`.
+The studio's own screen is not held: between it and a remote the last move wins, and the remote
+shows the feed once its hand is off. A connection that goes mid-drag has its holds released and
+each open gesture ended at once (`engine.end_gesture` sent to the app for it): its undo step
+closes, the mix stays as last set.
+
+**Lock remote mixing** (Setup › Network › Remote mixing; `network.json` `lock_remote_mixing`).
+While on, every forwarded method from a paired PC is refused `{ok: false, error, locked: true}`,
+except those that only read: `session.inspect`, `engine.commands`, `engine.parity`,
+`ui.inspect`, `ui.menu.list`, `ui.screenshot`, `engine.end_gesture`, and `engine.execute` of a
+query command without a gesture. The feeds and the stream go on. `hello`'s answer carries
+`locked`, and each connected PC gets `{"event": "remote_lock", "params": {on}}` when it changes.
+The same section lists the PCs connected (`Hub::remote_pcs`), "mixing · last change …" once one
+changed something (`remotes()` then says `state: "mixing"`; a notice "<PC> started mixing
+remotely" the first time), with **Disconnect** (`Hub::disconnect`: its connections end and its
+`hello` is refused `{away: true}` until *Let back in* or a restart) and **Forget** (which now also
+ends its connections).
+
+**Next (design notes, not built).** *Low-latency stream mode*: today's stream is tuned for the internet (20 ms Opus
+frames, a 150 ms jitter buffer growing to 500 ms: about 0.2–0.6 s behind). On a wired LAN a mode
+with 10 ms (or 5 ms) frames, Opus's restricted low-delay application, a 20–40 ms starting
+buffer that grows only on dropouts, and the same epoch/idle rules would bring it to about
+50–100 ms; it would be asked for per link (`stream.subscribe {mode: "low_latency"}`) and fall back
+to the normal mode over the internet or after repeated dropouts.
 
 **Clipping guard rails** (`soundcraft_net::guard`, `net_ui::performer_panel`): on a PC following a
 booth with an audio track armed, a "Your level" window shows one big input meter (green up to
@@ -1131,6 +1338,7 @@ and mix delay. The network runs on its own threads; nothing touches the audio th
 | Command | Params | Result |
 |---|---|---|
 | `window.network` | `{value?: bool}` | Setup › Network…: shows or hides the window. |
+| `window.connect_studio` | `{value?: bool}` | File › Connect to a Studio…: shows or hides the dialog. |
 
 Preview the page without a booth: `cargo run -p soundcraft-net --example remote_demo [port]`.
 

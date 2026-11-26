@@ -20,6 +20,7 @@ File > New from Template... = @ui.new_from_template
 File > Open > Session...
 File > Open > Open Recent = !recent
 File > Close Session
+File > Connect to a Studio... = @window.connect_studio
 File > ---
 File > ## Save
 File > Save Session
@@ -38,6 +39,7 @@ File > Import > MusicXML...
 File > Import > Video...
 File > Import > Clip Groups...
 File > Import > DAWproject...
+File > Import > AAF...
 File > Import > Reference... = @ui.scout.import_reference
 File > Import > FireStation User Presets = File > Import > FireStation User Presets
 File > Export > MIDI...
@@ -553,6 +555,8 @@ AI > Tune Vocal > Tuned / Original = @vocal.toggle
 AI > Tune Vocal > Notes Classic / Musical = @vocal.note_mode
 AI > Tune Vocal > Fit to Lead = @vocal.fit_to_lead
 AI > Tune Vocal > Make Harmony… = @ui.vocal_harmony
+AI > Tune Vocal > Notes to MIDI Track = @vocal.to_midi_track
+AI > Tune Vocal > Export Notes as MIDI File... = @vocal.export_midi
 AI > Tune Vocal > Commit = @vocal.commit
 AI > Tune Vocal > Remove Tuning = @vocal.remove
 AI > ---
@@ -560,6 +564,10 @@ AI > ## Transcribe
 AI > Convert to MIDI…
 AI > Detect Chords…
 AI > Transcribe Lyrics…
+AI > Time Words to Vocal = @lyrics.time_words
+AI > Tap Words to Time… = @ui.lyrics_tap
+AI > Gild Words > Open… = @ui.gild
+AI > Gild Words > Remove All Gild on Track… = @ui.gild_clear
 AI > Find in Transcript… = @lyrics.find
 AI > MIDI Cleanup…
 AI > ---
@@ -687,6 +695,7 @@ Setup > ML Models…
 Window > ## Main windows
 Window > Mix
 Window > Edit
+Window > Full Screen = @window.fullscreen
 Window > ---
 Window > Scout
 Window > ---
@@ -743,4 +752,5 @@ Window > Layout > Configurations > Auto-Update Active Configuration = Window > C
 Window > Layout > Tile = Window > Arrange > Tile
 Window > Layout > Reset Panel Layout = Window > Reset Panel Layout
 Window > Layout > Close Floating Windows = Window > Close Window
+Window > Layout > Close Plug-in Windows = @window.close_plugin_windows
 Window > Layout > Close All Workspaces = Window > Workspaces > Close All Workspaces

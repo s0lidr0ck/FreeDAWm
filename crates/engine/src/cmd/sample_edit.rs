@@ -9,7 +9,8 @@ use crate::TransportRequest;
 use crate::cmd;
 use serde_json::json;
 use soundcraft_audio_io::{AudioBuffer, FileFormat};
-use soundcraft_model::{Clip, ClipContent, ClipId};
+use soundcraft_model::{Clip, ClipContent, ClipId, SourceAudio};
+use std::sync::Arc;
 
 /// Most samples one pencil stroke writes (ten seconds at 48 kHz: a stroke is drawn at sample zoom).
 pub const MAX_DRAWN: usize = 480_000;
@@ -84,23 +85,91 @@ fn channel(p: &Value, channels: usize, id: &str) -> Result<Option<usize>> {
     }
 }
 
-/// Write `buf` (the clip's whole file, changed) as a new file, and point clip `c` at it.
-fn replace_file(e: &mut Engine, c: &Clip, buf: Vec<Vec<f32>>, what: &str) {
-    let s = e.session_mut();
+/// A change to a clip's file: the new file is `old[..a]`, then `m` frames the edit makes, then
+/// `old[b..]`.
+struct Splice {
+    a: usize,
+    b: usize,
+    m: usize,
+}
+
+/// What an edit makes of the middle of a [`Splice`]: `mid(ch, k, out)` fills `out` with its
+/// frames from `k` on.
+type Middle<'a> = dyn Fn(usize, usize, &mut [f32]) + 'a;
+
+/// Frames `[start, start + out.len())` of channel `ch` of `audio` changed by `sp`.
+fn read_spliced(audio: &SourceAudio, sp: &Splice, mid: &Middle<'_>, ch: usize, start: usize, out: &mut [f32]) {
+    let mut i = 0usize;
+    while i < out.len() {
+        let x = start.saturating_add(i);
+        let Some(rest) = out.get_mut(i..) else { return };
+        let mid_end = sp.a.saturating_add(sp.m);
+        let n = if x < sp.a {
+            (sp.a - x).min(rest.len())
+        } else if x < mid_end {
+            (mid_end - x).min(rest.len())
+        } else {
+            rest.len()
+        };
+        let Some(dst) = rest.get_mut(..n) else { return };
+        if x < sp.a {
+            audio.read(ch, x, dst);
+        } else if x < mid_end {
+            mid(ch, x - sp.a, dst);
+        } else {
+            audio.read(ch, (x - mid_end).saturating_add(sp.b), dst);
+        }
+        i += n.max(1);
+    }
+}
+
+/// Writes the clip's file changed by `sp` as a new file and points clip `c` at it: straight to
+/// disk a block at a time where the session has a folder for generated audio (a long file is
+/// never copied into memory), else in memory as before.
+fn replace_file(e: &mut Engine, c: &Clip, sp: &Splice, mid: &Middle<'_>, what: &str) -> Result<()> {
+    let audio = c.source().and_then(|x| e.session().pool.get(x)).cloned().ok_or_else(|| bad("clip.sample_edit", "the clip's file is missing"))?;
+    let channels = audio.num_channels();
+    let frames = audio.frames().saturating_sub(sp.b.saturating_sub(sp.a)).saturating_add(sp.m);
+    let s = e.session();
     let rate = s.sample_rate.hz();
     let base = c.source().and_then(|x| s.source(x)).map_or_else(|| c.name.clone(), |x| x.name.clone());
     let name = format!("{base}-{what}");
-    let src = crate::io::add_source(s, &name, AudioBuffer { sample_rate: rate, channels: buf }, None, FileFormat::Wav);
-    if let Some(cl) = s.find_clip_mut(c.id)
+    let mut read = |at: usize, planar: &mut [Vec<f32>], n: usize| {
+        for (ch, buf) in planar.iter_mut().enumerate() {
+            if let Some(dst) = buf.get_mut(..n) {
+                read_spliced(&audio, sp, mid, ch, at, dst);
+            }
+        }
+    };
+    let src = match crate::spill::write_generated(e, "Sample Edit", &name, (channels, frames), &mut read) {
+        Some(src) => src,
+        None => {
+            let buf: Vec<Vec<f32>> = (0..channels)
+                .map(|ch| {
+                    let mut v = vec![0.0; frames];
+                    read_spliced(&audio, sp, mid, ch, 0, &mut v);
+                    v
+                })
+                .collect();
+            crate::io::add_source(e.session_mut(), &name, AudioBuffer { sample_rate: rate, channels: buf }, None, FileFormat::Wav)
+        }
+    };
+    if let Some(cl) = e.session_mut().find_clip_mut(c.id)
         && let ClipContent::Audio { source, .. } = &mut cl.content
     {
         *source = src;
     }
+    Ok(())
 }
 
-/// The clip's file, whole, one buffer per channel.
-fn whole_file(e: &Engine, c: &Clip) -> Vec<Vec<f32>> {
-    c.source().and_then(|x| e.session().pool.get(x)).map(|a| a.buffer().into_owned().channels).unwrap_or_default()
+/// The channel count and frames of the clip's file.
+fn file_size(e: &Engine, c: &Clip) -> (usize, usize) {
+    c.source().and_then(|x| e.session().pool.get(x)).map_or((0, 0), |a| (a.num_channels(), a.frames()))
+}
+
+/// The clip's file, read as it is (for an edit's middle).
+fn old_audio(e: &Engine, c: &Clip) -> Option<Arc<SourceAudio>> {
+    c.source().and_then(|x| e.session().pool.get(x)).cloned()
 }
 
 /// File frame of timeline position `at` in clip `c` (plain: no stretch).
@@ -131,25 +200,29 @@ fn draw(e: &mut Engine, p: &Value) -> Result<Value> {
     if to <= from {
         return Err(bad(C, "the stroke is outside the clip"));
     }
-    let mut buf = whole_file(e, &c);
-    let ch = channel(p, buf.len(), C)?;
+    let (channels, frames) = file_size(e, &c);
+    let ch = channel(p, channels, C)?;
     let skip = usize::try_from(from - at).unwrap_or(0);
     let count = usize::try_from(to - from).unwrap_or(0);
-    let first = usize::try_from(file_frame(&c, from)).unwrap_or(0);
+    let first = usize::try_from(file_frame(&c, from)).unwrap_or(0).min(frames);
+    let span = count.min(frames - first);
     let blend = BLEND.min(count / 4);
-    for (k, chan) in buf.iter_mut().enumerate() {
+    let old = old_audio(e, &c).ok_or_else(|| bad(C, "the clip's file is missing"))?;
+    let mid = |k: usize, i0: usize, out: &mut [f32]| {
+        old.read(k, first + i0, out);
         if ch.is_some_and(|x| x != k) {
-            continue;
+            return;
         }
-        for i in 0..count {
-            let (Some(o), Some(v)) = (chan.get_mut(first + i), values.get(skip + i)) else { continue };
+        for (j, o) in out.iter_mut().enumerate() {
+            let i = i0 + j;
+            let Some(v) = values.get(skip + i) else { continue };
             // Blend in over the first samples and out over the last.
             let edge = i.min(count - 1 - i);
             let w = if blend == 0 || edge >= blend { 1.0 } else { (edge as f32 + 1.0) / (blend as f32 + 1.0) };
             *o = *o * (1.0 - w) + v * w;
         }
-    }
-    replace_file(e, &c, buf, "pencil");
+    };
+    replace_file(e, &c, &Splice { a: first, b: first + span, m: span }, &mid, "pencil")?;
     Ok(json!({"clip": c.id.0, "drawn": count}))
 }
 
@@ -199,22 +272,34 @@ fn sample_edit(e: &mut Engine, p: &Value) -> Result<Value> {
         return cut_paste(e, &c, op, a, b);
     }
     let gain = 10f32.powf(f64_or(p, "db", 0.0).clamp(-96.0, 24.0) as f32 / 20.0);
-    let mut buf = whole_file(e, &c);
-    let ch = channel(p, buf.len(), C)?;
-    for (k, chan) in buf.iter_mut().enumerate() {
+    let (channels, frames) = file_size(e, &c);
+    let ch = channel(p, channels, C)?;
+    let (a2, b2) = (a.min(frames), b.min(frames));
+    let old = old_audio(e, &c).ok_or_else(|| bad(C, "the clip's file is missing"))?;
+    let mid = |k: usize, i0: usize, out: &mut [f32]| {
         if ch.is_some_and(|x| x != k) {
-            continue;
+            old.read(k, a2 + i0, out);
+            return;
         }
-        let end = b.min(chan.len());
-        let Some(span) = chan.get_mut(a..end) else { continue };
         match op {
-            "silence" => span.iter_mut().for_each(|x| *x = 0.0),
-            "reverse" => span.reverse(),
-            "invert" => span.iter_mut().for_each(|x| *x = -*x),
-            _ => span.iter_mut().for_each(|x| *x = (*x * gain).clamp(-8.0, 8.0)),
+            "silence" => out.fill(0.0),
+            "reverse" => {
+                // Frame `i` of the span is frame `b - 1 - i` of the file.
+                let end = b2.saturating_sub(i0);
+                old.read(k, end.saturating_sub(out.len()), out);
+                out.reverse();
+            }
+            "invert" => {
+                old.read(k, a2 + i0, out);
+                out.iter_mut().for_each(|x| *x = -*x);
+            }
+            _ => {
+                old.read(k, a2 + i0, out);
+                out.iter_mut().for_each(|x| *x = (*x * gain).clamp(-8.0, 8.0));
+            }
         }
-    }
-    replace_file(e, &c, buf, op);
+    };
+    replace_file(e, &c, &Splice { a: a2, b: b2, m: b2 - a2 }, &mid, op)?;
     Ok(json!({"clip": c.id.0, "frames": b - a}))
 }
 
@@ -223,32 +308,39 @@ fn sample_edit(e: &mut Engine, p: &Value) -> Result<Value> {
 /// changed inside it, never past the next clip on its track.
 fn cut_paste(e: &mut Engine, c: &Clip, op: &str, a: usize, b: usize) -> Result<Value> {
     const C: &str = "clip.sample_edit";
-    let mut buf = whole_file(e, c);
-    let mut cut: Vec<Vec<f32>> = Vec::with_capacity(buf.len());
-    for chan in &mut buf {
-        let end = b.min(chan.len());
-        cut.push(chan.drain(a.min(end)..end).collect());
-    }
+    let (channels, frames) = file_size(e, c);
+    let old = old_audio(e, c).ok_or_else(|| bad(C, "the clip's file is missing"))?;
+    let (a2, b2) = (a.min(frames), b.min(frames));
+    // What is cut goes to the sample clipboard (only then is it read).
+    let cut: Vec<Vec<f32>> = if op == "cut" {
+        (0..channels)
+            .map(|ch| {
+                let mut v = vec![0.0; b2 - a2];
+                old.read(ch, a2, &mut v);
+                v
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let clip = if op == "paste" { e.sample_clipboard.clone() } else { Vec::new() };
     let ins = if op == "paste" {
-        let clip = &e.sample_clipboard;
         if clip.is_empty() || clip.iter().all(Vec::is_empty) {
             return Err(bad(C, "nothing copied: copy or cut samples first"));
         }
-        let n = clip.iter().map(Vec::len).max().unwrap_or(0);
-        for (k, chan) in buf.iter_mut().enumerate() {
-            let Some(from) = clip.get(k % clip.len()) else { continue };
-            let mut piece = from.clone();
-            piece.resize(n, 0.0);
-            let at = a.min(chan.len());
-            chan.splice(at..at, piece);
-        }
-        n
+        clip.iter().map(Vec::len).max().unwrap_or(0)
     } else {
         0
     };
-    if buf.iter().all(Vec::is_empty) {
+    if channels == 0 || frames.saturating_sub(b2 - a2).saturating_add(ins) == 0 {
         return Err(bad(C, "that would leave the file empty"));
     }
+    let mid = |k: usize, i0: usize, out: &mut [f32]| {
+        let from = clip.get(k % clip.len().max(1));
+        for (j, o) in out.iter_mut().enumerate() {
+            *o = from.and_then(|f| f.get(i0 + j)).copied().unwrap_or(0.0);
+        }
+    };
     let (at, cutn, insn) = (i64::try_from(a).unwrap_or(0), i64::try_from(b - a).unwrap_or(0), i64::try_from(ins).unwrap_or(0));
     let off = c.source_offset();
     let new_off = remap(off, at, cutn, insn, false);
@@ -264,7 +356,7 @@ fn cut_paste(e: &mut Engine, c: &Clip, op: &str, a: usize, b: usize) -> Result<V
         .and_then(|t| t.clips().iter().filter(|x| x.id != c.id && x.start > c.start).map(|x| x.start).min())
         .map_or(Samples::MAX, |next| next - c.start);
     let len = (new_end - new_off).min(room.max(1));
-    replace_file(e, c, buf, op);
+    replace_file(e, c, &Splice { a: a2, b: b2, m: ins }, &mid, op)?;
     if let Some(cl) = e.session_mut().find_clip_mut(c.id) {
         if let ClipContent::Audio { offset, .. } = &mut cl.content {
             *offset = new_off;

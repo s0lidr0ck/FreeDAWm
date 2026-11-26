@@ -52,7 +52,7 @@ fn session(mix: f32) -> (Engine, TrackId, ClipId, SourceId) {
     let mut clip = Clip::audio(id, "Vox", o, OFFSET, START, LEN);
     clip.gain_db = -6.0;
     clip.fade_in.len = 500;
-    clip.lyrics = vec![LyricLine { start: 3_000, end: 3_400, words: vec![LyricWord { start: 3_000, end: 3_400, text: "face".into() }] }];
+    clip.lyrics = vec![LyricLine { start: 3_000, end: 3_400, words: vec![LyricWord::new(3_000, 3_400, "face")], sheet_line: None }];
     clip.clean = Some(CleanAlt { source: c, original: o, origin: OFFSET, mix, bypass: false });
     soundcraft_engine::edit::place_clip(&mut s, t, clip);
     (Engine::new(s), t, id, o)
@@ -279,8 +279,7 @@ fn commit_renders_the_clip_window_with_handles_and_keeps_it_sounding_the_same() 
     let id = s.new_clip_id();
     let mut clip = Clip::audio(id, "Vox", o, off, 10_000, len);
     clip.fade_out.len = 2_000;
-    clip.lyrics =
-        vec![LyricLine { start: off + 500, end: off + 900, words: vec![LyricWord { start: off + 500, end: off + 900, text: "show".into() }] }];
+    clip.lyrics = vec![LyricLine { start: off + 500, end: off + 900, words: vec![LyricWord::new(off + 500, off + 900, "show")], sheet_line: None }];
     clip.clean = Some(CleanAlt { source: c, original: o, origin: off, mix: 0.7, bypass: false });
     soundcraft_engine::edit::place_clip(&mut s, t, clip);
     let mut e = Engine::new(s);

@@ -224,6 +224,11 @@ fn display(app: &mut SoundApp, ui: &mut Ui) {
         ui.add(egui::Slider::new(&mut app.ui.track_tint, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)))
             .on_hover_text("How strongly tracks take on their colour (0: only the colour strip)");
         ui.end_row();
+        ui.label("Track colour in the Mix window");
+        ui.add(egui::Slider::new(&mut app.ui.mix_strip_tint, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0} %", v * 100.0))).on_hover_text(
+            "How strongly channel strips take on their track's colour (0: off; the Mix window's Colour Off / Subtle / Medium / Strong)",
+        );
+        ui.end_row();
     });
     crate::widgets::checkbox(ui, &mut app.extra.reduce_motion, "Reduce motion");
     crate::widgets::checkbox(ui, &mut app.ui.show_splash, "Show splash screen at launch")

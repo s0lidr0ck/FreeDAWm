@@ -1,0 +1,49 @@
+[package]
+name = "soundcraft-recorder"
+description = "FreeDAWm Recorder: quick ideas to WAV and MIDI files, recording into a FreeDAWm booth on another PC, and listening to its mix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+# The package keeps a `soundcraft-*` name; the program is `freedawm-recorder`.
+[[bin]]
+name = "freedawm-recorder"
+path = "src/main.rs"
+
+[lib]
+name = "soundcraft_recorder"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+soundcraft-time.workspace = true
+soundcraft-audio-io.workspace = true
+soundcraft-model.workspace = true
+soundcraft-engine.workspace = true
+soundcraft-playback.workspace = true
+soundcraft-net.workspace = true
+# The computer's time zone offset, so takes are named in local time (already in the tree through
+# soundcraft-model; its one isolated unsafe module makes the OS call).
+soundcraft-sysmem.workspace = true
+egui.workspace = true
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+rfd.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+
+[build-dependencies]
+# Icon + VERSIONINFO for freedawm-recorder.exe (the app's own, see apps/soundcraft/build.rs);
+# build.rs only uses it when the target is Windows.
+winresource = "0.1"
+
+[dev-dependencies]
+# Reading back the MIDI files the takes write.
+soundcraft-midi.workspace = true
+# The window's states rendered offscreen (tests query the widgets; `examples/shot.rs` renders PNGs).
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

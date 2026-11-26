@@ -26,7 +26,9 @@
 //! `centre·(target − centre) + offset` as a whole, glides included, removes Drift and scales
 //! Vibrato over its core only, and in the glide between two touching notes blends from one move
 //! to the other by how far the sung pitch has travelled between them: the slide keeps its shape
-//! and lands on both tuned notes, with no step inside it. A note's Transition shapes the glide
+//! and lands on both tuned notes, with no step inside it. Where two cores touch (no glide between
+//! them) and the notes move by different amounts, the same blend runs over 30 ms either side of
+//! their boundary, so the pitch never jumps by the difference. A note's Transition shapes the glide
 //! into it (Smooth: a straight line between the tuned notes; Shorten: the sung glide at double
 //! speed).
 
@@ -88,6 +90,9 @@ const CORE_SMOOTH_HALF: usize = 4;
 const WEIGHT_SLOPE: f64 = 2.0;
 /// Glides between touching notes whose ends are closer than this (cents) blend by time, not pitch.
 const PITCH_BLEND_MIN_CENTS: f64 = 40.0;
+/// Frames either side of the boundary between two touching cores over which their moves blend
+/// (30 ms each way).
+const TOUCH_FRAMES: usize = 6;
 /// Hann smoothing length (frames) of the Musical shift curve, inside each voiced run.
 const SMOOTH_TAPS: usize = 5;
 /// Frames read at each core edge for the pitch a glide leaves from or arrives at.
@@ -564,6 +569,8 @@ pub(crate) fn build_curves_musical(a: &VocalAnalysis, edits: &BTreeMap<NoteId, N
     let mut raw = vec![0.0f64; n];
     // Frames whose shift skips the smoothing (Smooth and Shorten glides: already shaped).
     let mut exempt = vec![false; n];
+    // Frames of a blend across two touching cores (an unedited core's edge may move there).
+    let mut blended = vec![false; n];
     let mut offset_room = vec![0.0f64; n];
 
     let mut moves: Vec<NoteMove> = Vec::with_capacity(a.notes.len());
@@ -625,9 +632,24 @@ pub(crate) fn build_curves_musical(a: &VocalAnalysis, edits: &BTreeMap<NoteId, N
         let tr = b.edit.as_ref().filter(|_| b.pitched).map_or(Transition::Keep, |e| e.transition);
         match prev {
             Some(p) if p.pitched || b.pitched => {
-                let (r0, r1) = (p.c1, b.c0);
+                let (mut r0, mut r1) = (p.c1, b.c0);
                 if r1 <= r0 {
-                    continue;
+                    // The cores touch: no sung glide between them. When the two notes move by
+                    // different amounts, blend across their boundary all the same, over
+                    // TOUCH_FRAMES either side, or the pitch would jump by the difference in one
+                    // frame (a hiccup in the middle of a held vowel).
+                    if p.delta == b.delta {
+                        continue;
+                    }
+                    let edge = b.start.clamp(p.c0, b.c1);
+                    r0 = edge.saturating_sub(TOUCH_FRAMES).max(p.c0);
+                    r1 = (edge + TOUCH_FRAMES).min(b.c1);
+                    if r1 <= r0 + 1 {
+                        continue;
+                    }
+                    for g in blended.iter_mut().take(r1).skip(r0) {
+                        *g = true;
+                    }
                 }
                 let at = |i: usize| sung.get(i).copied().unwrap_or(0.0);
                 let mean = |s: usize, e: usize| {
@@ -745,9 +767,10 @@ pub(crate) fn build_curves_musical(a: &VocalAnalysis, edits: &BTreeMap<NoteId, N
             if vo && v.is_finite() { v.clamp(-lim, lim) as f32 } else { 0.0 }
         })
         .collect();
-    // An unedited note's core stays exactly as sung (only the glides next to an edited note move).
+    // An unedited note's core stays exactly as sung (only the glides next to an edited note move,
+    // and the blend into an edited note whose core it touches).
     for m in moves.iter().filter(|m| !m.pitched) {
-        for v in out.iter_mut().take(m.c1).skip(m.c0) {
+        for (v, _) in out.iter_mut().zip(&blended).take(m.c1).skip(m.c0).filter(|(_, b)| !**b) {
             *v = 0.0;
         }
     }

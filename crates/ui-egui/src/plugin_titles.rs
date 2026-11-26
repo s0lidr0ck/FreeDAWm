@@ -33,6 +33,7 @@ pub fn subtitle(id: &str) -> &'static str {
         "sprawl" => "Stereo Imager",
         "keel" => "Bass Amp",
         "heft" => "Bass Enhancer",
+        "autopitch" => "Pitch Correction",
         "vault" => "Convolution Reverb",
         "hw_insert" => "Outboard Gear in the Chain",
         "mend" => "Vocal Cleaner",

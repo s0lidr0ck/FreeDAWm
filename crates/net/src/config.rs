@@ -139,6 +139,90 @@ pub struct NetConfig {
     /// remote page and nothing else. On by default; a value already saved is kept.
     #[serde(default = "yes")]
     pub encrypted_only: bool,
+    /// The booth PIN (Setup › Network; empty: none, a random code per request as before). Kept
+    /// here as the pairing tokens are, never in a session, never announced or sent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub booth_pin: String,
+    /// Ask before each device joins with the booth PIN (Allow / Deny on the booth's screen).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pin_ask: bool,
+    /// Wrong booth PINs since the last PIN pairing (at [`crate::pairing::PIN_OFF_AFTER`] PIN
+    /// pairing is off until the owner turns it back on), and where the last came from.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pin_wrong: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pin_last_from: String,
+    /// Reusable internet invites still open (one-time ones live only while the app runs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invites: Vec<SavedInvite>,
+    /// Studios this PC mixes remotely (File › Connect to a Studio…), apart from the booth it
+    /// follows (the same studio may be both: each keeps its own pairing).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub studios: Vec<KnownStudio>,
+    /// Lock remote mixing (Setup › Network): paired PCs may watch the mixer and hear the mix,
+    /// but every command that would change something is refused. For the whole session, all
+    /// remotes alike.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lock_remote_mixing: bool,
+}
+
+/// A studio this PC has paired with to mix remotely: enough to reconnect with one click.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KnownStudio {
+    /// Its name as it announces itself.
+    pub name: String,
+    /// Its plain address (`host:port`), the last one it was found at.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub addr: String,
+    /// The token it gave this PC.
+    pub token: String,
+    /// Its encrypted local link: its key (hex, pinned at pairing) and address (`ip:udp port`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lan: String,
+    /// Over the internet: its address from the invite (JSON).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub internet: String,
+    /// When it was last connected (seconds since 1970).
+    #[serde(default)]
+    pub last_used: u64,
+}
+
+impl KnownStudio {
+    /// The link it is reached by, in words.
+    pub fn link(&self) -> &'static str {
+        if !self.internet.is_empty() {
+            "over the internet"
+        } else if !self.key.is_empty() && !self.lan.is_empty() {
+            "encrypted local link"
+        } else {
+            "local network (not encrypted)"
+        }
+    }
+}
+
+/// A reusable internet invite as the booth keeps it: the SHA-256 of its secret (hex), never the
+/// secret itself, so reading this file does not hand out a live invite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedInvite {
+    /// Names it in Setup › Network (Revoke).
+    pub id: String,
+    pub hash: String,
+    /// Good until (seconds since 1970).
+    pub until: u64,
+    /// Joins allowed, and made so far.
+    pub max_joins: u32,
+    #[serde(default)]
+    pub joins: u32,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Default for NetConfig {
@@ -158,6 +242,13 @@ impl Default for NetConfig {
             relay_url: String::new(),
             encrypted_link: true,
             encrypted_only: true,
+            booth_pin: String::new(),
+            pin_ask: false,
+            pin_wrong: 0,
+            pin_last_from: String::new(),
+            invites: Vec::new(),
+            studios: Vec::new(),
+            lock_remote_mixing: false,
         }
     }
 }
