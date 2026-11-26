@@ -99,11 +99,13 @@ pub struct Sidecar {
     /// By layer number; a layer not here plays at its own level.
     pub layers: BTreeMap<u32, LayerMix>,
     pub pending: Option<Pending>,
+    /// The tempo and beats a bar it was recorded to, when the click was on.
+    pub tempo: Option<crate::rig::Click>,
 }
 
 impl Default for Sidecar {
     fn default() -> Self {
-        Sidecar { version: 1, looped: false, layers: BTreeMap::new(), pending: None }
+        Sidecar { version: 1, looped: false, layers: BTreeMap::new(), pending: None, tempo: None }
     }
 }
 
@@ -226,6 +228,8 @@ pub struct LayerRaw {
     /// was played than heard.
     pub events: Vec<RecordedEvent>,
     pub midi_latency: i64,
+    /// The click it was recorded with (its MIDI is written at that tempo).
+    pub click: Option<crate::rig::Click>,
 }
 
 /// What a layer take became.
@@ -288,7 +292,8 @@ pub fn finish(raw: &LayerRaw) -> LayerResult {
         let loud = sound.as_ref().is_some_and(|s| s.iter().flatten().any(|x| x.is_finite() && x.abs() >= SILENT));
         let events = midi.get(&p).cloned().unwrap_or_default();
         let take = MidiTake { start: 0, end: n, looped: None, punch: None, latency: 0 };
-        let notes = if events.iter().any(|e| e.msg[0] & 0xF0 == 0x90 && e.msg[2] > 0) { midi_file(raw.rate, &take, &events) } else { None };
+        let notes =
+            if events.iter().any(|e| e.msg[0] & 0xF0 == 0x90 && e.msg[2] > 0) { midi_file(raw.rate, &take, &events, raw.click) } else { None };
         if !loud && notes.is_none() {
             res.empty += 1;
             continue;
@@ -336,6 +341,39 @@ pub fn finish(raw: &LayerRaw) -> LayerResult {
     res
 }
 
+/// Makes a new idea's WAV a whole number of bars long (`bar` frames each; at least one): the
+/// nearest, filled out with silence or cut, the last 10 ms faded out when cut. Returns the bars.
+/// Written beside and renamed over, so a crash leaves the old file or the new one.
+pub fn round_to_bars(wav: &Path, bar: f64) -> Result<u32, String> {
+    let bytes = std::fs::read(wav).map_err(|e| e.to_string())?;
+    let (_, mut buf) = soundcraft_audio_io::decode(&bytes, Some("wav")).map_err(|e| e.to_string())?;
+    let frames = buf.channels.first().map_or(0, Vec::len);
+    if !(bar.is_finite() && bar >= 1.0) || frames == 0 {
+        return Err("nothing to round".into());
+    }
+    let bars = ((frames as f64 / bar).round() as u32).max(1);
+    let target = (f64::from(bars) * bar).round() as usize;
+    if target < frames {
+        let fade = (f64::from(buf.sample_rate) * 0.01) as usize;
+        for c in &mut buf.channels {
+            c.truncate(target);
+            let n = c.len();
+            for (k, x) in c.iter_mut().skip(n.saturating_sub(fade)).enumerate() {
+                *x *= 1.0 - (k as f32 + 1.0) / fade.max(1) as f32;
+            }
+        }
+    } else {
+        for c in &mut buf.channels {
+            c.resize(target, 0.0);
+        }
+    }
+    let out = soundcraft_audio_io::encode(&buf, &soundcraft_audio_io::EncodeOptions::default()).map_err(|e| e.to_string())?;
+    let part = wav.with_extension("wav.part");
+    std::fs::write(&part, out).map_err(|e| e.to_string())?;
+    std::fs::rename(&part, wav).map_err(|e| e.to_string())?;
+    Ok(bars)
+}
+
 /// Finishes layer takes a crash left behind in `dir` (their sidecars still say one was
 /// recording): each is cut into its layers as Stop would have (its MIDI, kept in memory, is
 /// lost). `skip`: the idea recording now.
@@ -360,6 +398,7 @@ pub fn recover(dir: &Path, skip: Option<&str>) -> Vec<(String, LayerResult)> {
             rate: p.rate,
             events: Vec::new(),
             midi_latency: 0,
+            click: side.tempo,
         };
         let res = finish(&raw);
         if res.problem.is_none() {

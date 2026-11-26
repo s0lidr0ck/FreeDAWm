@@ -132,6 +132,26 @@ the time sound takes to go out of the speakers and back in (as FreeDAWm places i
 MIDI played over the loop is placed by the output's latency as a take's is (it is heard late by
 that much). A note held across the loop's end is cut there.
 
+### The click (metronome)
+
+Off unless turned on: the Recorder stays "press Record and play". In the settings, **CLICK**:
+
+- **Play a click while recording**. When on: the tempo (type it, **−** / **+**, or **Tap** along
+  a few times: the gap between the last taps, up to five, sets it; a pause of over 2 seconds starts
+  again), **Beats in a bar** (3, 4 or 6; the bar is x/4), the click's volume, and **Make a new
+  idea whole bars, so it loops in time** (on).
+- The click is FreeDAWm's own metronome sound (accented on the bar's first beat). It plays while a
+  take or a layer records, only to the speakers or headphones: it is never in any file (use
+  headphones so the microphone doesn't hear it).
+- Before a take, or a layer, one bar of it counts in: the screen shows the beat ("Get ready: a bar
+  of click at 96 BPM, then it records") and the take starts after it. This replaces the 3-2-1
+  before a layer.
+- An idea recorded to the click knows its tempo: its MIDI file is written at that tempo and time
+  signature (rather than 120 bpm in 4/4), its `.fdidea` keeps the tempo, its layers click at it,
+  and with **whole bars** on its WAV is made the nearest whole number of bars when it stops (filled
+  out with silence, or cut with a 10 ms fade), and the screen says "Looped as 4 bars".
+- Without the click everything is as before.
+
 ### 4. Record with a studio
 
 On the studio (the FreeDAWm PC that keeps the session): **Setup › Network › Allow control from
@@ -267,4 +287,9 @@ overwrites another file.
   quick ideas only, not while recording with a studio.
 - One input (a channel or a stereo pair) at a time; no input monitoring (the input is never
   heard through this PC's output).
-- MIDI files are always at 120 bpm (the studio's own tempo map applies to takes sent there).
+- MIDI files are at 120 bpm, or at the click's tempo when it is on (the studio's own tempo map
+  applies to takes sent there). **Open in FreeDAWm** takes an idea's tempo from its MIDI file
+  (FreeDAWm sets the session's tempo map from it); an idea with no MIDI file opens at FreeDAWm's
+  own tempo, so its audio is not yet on FreeDAWm's grid.
+- No built-in instrument yet: a keyboard is recorded to a MIDI file and is not heard in the
+  Recorder.

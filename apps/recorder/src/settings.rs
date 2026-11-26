@@ -47,6 +47,24 @@ pub struct Prefs {
     pub layer_measured: Option<Measured>,
     /// The headphones hint was shown (it shows once).
     pub layer_hint_seen: bool,
+    /// The click (metronome): on (off unless turned on), its tempo, beats a bar and volume.
+    pub click_on: bool,
+    pub click_bpm: f64,
+    pub click_beats: u32,
+    pub click_volume_db: f64,
+    /// With the click on, a new idea is made a whole number of bars long.
+    pub click_round_bars: bool,
+}
+
+impl Prefs {
+    /// The click as set (`None`: off).
+    pub fn click(&self) -> Option<crate::rig::Click> {
+        self.click_on.then(|| crate::rig::Click {
+            bpm: self.click_bpm.clamp(crate::rig::Click::MIN_BPM, crate::rig::Click::MAX_BPM),
+            beats: self.click_beats.clamp(1, 16),
+            volume_db: self.click_volume_db.clamp(-60.0, 12.0),
+        })
+    }
 }
 
 /// A loopback round trip measured by **Line up**.
@@ -77,6 +95,11 @@ impl Default for Prefs {
             layer_nudge_ms: 0.0,
             layer_measured: None,
             layer_hint_seen: false,
+            click_on: false,
+            click_bpm: 120.0,
+            click_beats: 4,
+            click_volume_db: -6.0,
+            click_round_bars: true,
         }
     }
 }

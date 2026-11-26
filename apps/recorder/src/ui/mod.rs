@@ -149,6 +149,10 @@ pub struct RecorderApp {
     pub measuring: bool,
     /// What **Line up** last said, and whether it is a problem.
     pub line_up_note: Option<(String, bool)>,
+    /// The last taps of **Tap** (egui time, seconds).
+    taps: Vec<f64>,
+    /// The tempo box while it is being typed in.
+    click_typing: Option<String>,
 }
 
 /// FreeDAWm's program beside `exe` (the Recorder's own), when it is there.
@@ -247,6 +251,8 @@ impl RecorderApp {
             layer_hint: false,
             measuring: false,
             line_up_note: None,
+            taps: Vec::new(),
+            click_typing: None,
         }
     }
 
@@ -407,6 +413,8 @@ impl RecorderApp {
         rig.nudge = (f64::from(self.prefs.layer_nudge_ms) * f64::from(rig.rate()) / 1000.0).round() as i64;
         let key = rig.latency_key();
         rig.measured = self.prefs.layer_measured.as_ref().filter(|m| m.key == key).map(|m| (m.frames, m.feed));
+        // (No change while a take records.)
+        rig.set_click(self.prefs.click());
     }
 
     /// **Line up**: plays a click out of the output and listens for it on the input (a cable, or
@@ -535,6 +543,22 @@ impl RecorderApp {
             return;
         };
         let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        // Recorded to the click: the idea knows its tempo, and is a whole number of bars long
+        // (so it loops in time) unless that is turned off.
+        let mut looped_as = None;
+        if let Some((c, rate)) = self.rig.as_ref().and_then(|r| r.click().map(|c| (c, r.rate()))) {
+            if self.prefs.click_round_bars
+                && let Some(w) = &s.wav
+            {
+                looped_as = layers::round_to_bars(w, c.bar_frames(rate)).ok();
+            }
+            let side = Sidecar { tempo: Some(c), ..Sidecar::default() };
+            let at = path.with_file_name(format!("{stem}.{}", layers::SIDECAR_EXT));
+            if let Err(e) = side.save(&at) {
+                log::warn!("recorder: {}: {e}", at.display());
+            }
+            self.rescan();
+        }
         let take = self
             .takes
             .iter()
@@ -549,8 +573,32 @@ impl RecorderApp {
             let full = soundcraft_net::sys::disk_free(&self.prefs.ideas()).is_some_and(|b| b < 64 << 20);
             idea.problem = Some((Cause::Disk, if full { "full".into() } else { "slow".into() }));
         }
+        if let Some(bars) = looped_as {
+            idea.note = Some((if bars == 1 { "Looped as 1 bar".to_string() } else { format!("Looped as {bars} bars") }, false));
+        }
         self.idea = Some(idea);
         self.screen = Screen::Idea;
+    }
+
+    /// **Tap**: the click's tempo from the last few taps (`now`: egui's clock, seconds). A tap
+    /// more than 2 seconds after the last starts again.
+    pub fn tap(&mut self, now: f64) {
+        if self.taps.last().is_some_and(|t| now - t > 2.0 || now < *t) {
+            self.taps.clear();
+        }
+        self.taps.push(now);
+        let n = self.taps.len();
+        if n > 5 {
+            self.taps.drain(..n - 5);
+        }
+        if let (Some(first), Some(last)) = (self.taps.first(), self.taps.last())
+            && self.taps.len() >= 2
+        {
+            let each = (last - first) / (self.taps.len() - 1) as f64;
+            if each > 0.0 {
+                self.prefs.click_bpm = (60.0 / each).round().clamp(crate::rig::Click::MIN_BPM, crate::rig::Click::MAX_BPM);
+            }
+        }
     }
 
     /// A layer take stopped: it is cut into its layers ([`layers::finish`]) and screen 3 shows
@@ -606,7 +654,8 @@ impl RecorderApp {
         }
         let _ = rig.play_file(None);
         self.playing = None;
-        if self.prefs.count_in {
+        // With the click on, its bar counts in instead of the 3-2-1.
+        if self.prefs.count_in && self.prefs.click().is_none() {
             self.counting = Some(Instant::now());
         } else {
             self.begin_layer();
@@ -635,6 +684,9 @@ impl RecorderApp {
         if let Err(e) = side.save(&side_path) {
             return fail(i, format!("This idea's folder can't be written to: {e}"));
         }
+        // The click at the idea's own tempo when it has one.
+        let click = self.prefs.click().map(|c| i.side.tempo.map_or(c, |t| crate::rig::Click { volume_db: c.volume_db, ..t }));
+        rig.set_click(click);
         match rig.start_layer(&folder, &i.take.stem, first, mix.channels, n) {
             Ok(()) => {
                 i.side = side;

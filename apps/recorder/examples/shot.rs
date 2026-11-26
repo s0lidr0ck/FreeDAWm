@@ -301,6 +301,16 @@ fn main() {
     h.state_mut().go(Screen::Settings);
     h.state_mut().line_up_note = Some(("Lined up. Sound takes 12 ms to go out and come back in on this computer.".into(), false));
     shots.save(&mut h, "settings-full");
+    // The click: its settings, the bar before a take.
+    let (a, _o) = app(true, &ideas, |p| (p.click_on, p.click_bpm, p.click_beats) = (true, 96.0, 4));
+    let mut h = shots.tall(a, 1700.0);
+    h.state_mut().go(Screen::Settings);
+    shots.save(&mut h, "settings-click");
+    let (a, mut o) = app(true, &ideas, |p| (p.click_on, p.click_bpm) = (true, 96.0));
+    let mut h = shots.harness(a);
+    h.state_mut().toggle_record();
+    run(&mut h, &mut o, 1.0, 0.0);
+    shots.save(&mut h, "2-click-count-in");
 
     let _ = std::fs::remove_dir_all(&root);
     println!("shots in {}", out.display());

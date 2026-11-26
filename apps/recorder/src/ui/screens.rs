@@ -277,6 +277,10 @@ impl RecorderApp {
         let layer = self.layer_status();
         let heading = match &layer {
             _ if for_studio => format!("Recording with {}", self.link.booth_name()),
+            _ if self.rig.as_ref().is_some_and(|r| r.counting_off().is_some()) => {
+                let bpm = self.rig.as_ref().and_then(Rig::click).map_or(0.0, |c| c.bpm);
+                format!("Get ready: a bar of click at {bpm:.0} BPM, then it records")
+            }
             Some((idea, ..)) => format!("Adding a layer to {}", words::display_name(idea)),
             None => "Recording".to_string(),
         };
@@ -285,7 +289,13 @@ impl RecorderApp {
         paint::read_as(ui, r, &heading);
         ui.add_space(22.0);
 
-        if let Some((_, first, at, _)) = &layer {
+        if let Some((beat, of)) = self.rig.as_ref().and_then(Rig::counting_off) {
+            // The click's bar before the take: the beat sounding.
+            let (area, _) = ui.allocate_exact_size(vec2(w, 88.0), Sense::hover());
+            let r = text_at(ui, area.center(), Align2::CENTER_CENTER, &beat.to_string(), 88.0, Weight::Bold, TEXT);
+            paint::read_as(ui, r, &format!("Count-in: {beat} of {of}"));
+            ui.add_space(22.0);
+        } else if let Some((_, first, at, _)) = &layer {
             // The layer's number, and where the idea is in its loop.
             let (area, _) = ui.allocate_exact_size(vec2(w, 88.0), Sense::hover());
             let name = super::layer_name(*first);
@@ -817,6 +827,9 @@ impl RecorderApp {
             label(ui, "Not joined to a studio. Nothing is sent on the network until you open “Record with a studio”.", 13.0, Weight::Regular, DIM);
         }
         ui.add_space(GAP);
+        self.click_settings(ui, w, recording);
+        ui.add_space(GAP);
+
         caps(ui, "LAYERS");
         let mut v = self.prefs.count_in;
         if paint::tick(ui, &mut v, "Count 3-2-1 before a layer starts", 15.0, w).changed() {
@@ -885,6 +898,86 @@ impl RecorderApp {
         if button(ui, vec2(w, 48.0), "Done", Style::filled(TEXT, look::BG, 16.0, Weight::Bold, 12.0), true).clicked() {
             self.go(Screen::Main);
         }
+    }
+
+    /// The click (metronome): on or off; when on, its tempo (typed, − / +, or Tap), beats a bar,
+    /// volume, and whether a new idea is made whole bars.
+    fn click_settings(&mut self, ui: &mut Ui, w: f32, recording: bool) {
+        caps(ui, "CLICK");
+        let mut on = self.prefs.click_on;
+        if paint::tick(ui, &mut on, "Play a click while recording", 15.0, w).changed() && !recording {
+            self.prefs.click_on = on;
+        }
+        if !self.prefs.click_on {
+            paragraph(ui, "Off: press Record and play, in your own time.", 13.0, Weight::Regular, DIM, 18.0);
+            return;
+        }
+        ui.add_space(6.0);
+        // The tempo: − [120] + BPM, Tap.
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let bpm = self.prefs.click_bpm.round();
+        let minus = Rect::from_min_size(row.min, vec2(look::TOUCH, look::TOUCH));
+        if button_named(ui, minus, "−", "Slower", Style::outlined(18.0, Weight::Semi, 10.0), !recording && bpm > crate::rig::Click::MIN_BPM).clicked()
+        {
+            self.prefs.click_bpm = (bpm - 1.0).max(crate::rig::Click::MIN_BPM);
+        }
+        let field = Rect::from_min_size(pos2(minus.right() + 8.0, row.top()), vec2(72.0, look::TOUCH));
+        let mut text = if self.click_typing.is_some() { self.click_typing.clone().unwrap_or_default() } else { format!("{bpm:.0}") };
+        let r = paint::text_box(ui, field, &mut text, "BPM", "click-bpm", 16.0, 10.0);
+        if r.changed() {
+            if let Ok(v) = text.trim().parse::<f64>()
+                && (crate::rig::Click::MIN_BPM..=crate::rig::Click::MAX_BPM).contains(&v)
+            {
+                self.prefs.click_bpm = v.round();
+            }
+            self.click_typing = Some(text);
+        }
+        if r.lost_focus() {
+            self.click_typing = None;
+        }
+        let plus = Rect::from_min_size(pos2(field.right() + 8.0, row.top()), vec2(look::TOUCH, look::TOUCH));
+        if button_named(ui, plus, "+", "Faster", Style::outlined(18.0, Weight::Semi, 10.0), !recording && bpm < crate::rig::Click::MAX_BPM).clicked()
+        {
+            self.prefs.click_bpm = (bpm + 1.0).min(crate::rig::Click::MAX_BPM);
+        }
+        let tr = text_at(ui, pos2(plus.right() + 10.0, row.center().y), Align2::LEFT_CENTER, "BPM", 14.0, Weight::Semi, DIM);
+        paint::read_as(ui, tr, &format!("Tempo {bpm:.0} BPM"));
+        let tw = paint::text_width(ui, "Tap", 15.0, Weight::Semi) + 40.0;
+        let tap = Rect::from_min_size(pos2(row.right() - tw, row.top()), vec2(tw, look::TOUCH));
+        let rt = button_named(ui, tap, "Tap", "Tap the tempo", Style::filled(look::ROUND, TEXT, 15.0, Weight::Semi, 10.0), !recording)
+            .on_hover_text("Tap along four times: the click takes your tempo.");
+        if rt.clicked() {
+            let now = self.now;
+            self.tap(now);
+        }
+        ui.add_space(8.0);
+        // Beats a bar.
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let tr = text_at(ui, row.left_center(), Align2::LEFT_CENTER, "Beats in a bar", 14.0, Weight::Regular, TEXT);
+        paint::read_as(ui, tr, "Beats in a bar");
+        for (k, beats) in [3u32, 4, 6].into_iter().enumerate() {
+            let chip = Rect::from_min_size(pos2(row.right() - (3 - k) as f32 * 56.0 + 8.0, row.top()), vec2(48.0, look::TOUCH));
+            let on = self.prefs.click_beats == beats;
+            let style = if on { Style::filled(TEXT, look::BG, 15.0, Weight::Bold, 10.0) } else { Style::outlined(15.0, Weight::Medium, 10.0) };
+            if button_named(ui, chip, &beats.to_string(), &format!("{beats} beats in a bar"), style, !recording).clicked() {
+                self.prefs.click_beats = beats;
+            }
+        }
+        ui.add_space(4.0);
+        // Volume.
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        text_at(ui, row.left_center(), Align2::LEFT_CENTER, "Click volume", 14.0, Weight::Regular, TEXT);
+        // −40..+6 dB across the slider.
+        let mut v = ((self.prefs.click_volume_db + 40.0) / 46.0).clamp(0.0, 1.0) as f32;
+        let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.right() - 200.0, row.top()), row.max)));
+        if paint::slider(&mut child, &mut v, 200.0, "Click volume").changed() {
+            self.prefs.click_volume_db = (f64::from(v) * 46.0 - 40.0).round();
+        }
+        let mut round = self.prefs.click_round_bars;
+        if paint::tick(ui, &mut round, "Make a new idea whole bars, so it loops in time", 15.0, w).changed() {
+            self.prefs.click_round_bars = round;
+        }
+        paragraph(ui, "The click is only heard, never recorded. Use headphones so the microphone doesn't hear it.", 13.0, Weight::Regular, DIM, 18.0);
     }
 
     /// Screen 4: record with a studio.

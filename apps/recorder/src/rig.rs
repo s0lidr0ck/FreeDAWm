@@ -138,6 +138,48 @@ pub struct Rig {
     /// through), and the manual nudge (frames; more places layers earlier).
     pub measured: Option<(i64, u32)>,
     pub nudge: i64,
+    /// The click (see [`Rig::set_click`]).
+    click: Option<Click>,
+}
+
+/// The click (metronome): its tempo, beats a bar and volume.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Click {
+    pub bpm: f64,
+    pub beats: u32,
+    #[serde(default)]
+    pub volume_db: f64,
+}
+
+impl Click {
+    /// Tempos the click takes.
+    pub const MIN_BPM: f64 = 30.0;
+    pub const MAX_BPM: f64 = 300.0;
+
+    /// A bar of it, at `rate`: the count-in before a take.
+    pub fn countoff(&self, rate: u32) -> Option<soundcraft_playback::CountOff> {
+        let beat = f64::from(rate) * 60.0 / self.bpm.clamp(Self::MIN_BPM, Self::MAX_BPM);
+        let c = soundcraft_playback::CountOff { bars: 1, beats_per_bar: self.beats.clamp(1, 16), beat };
+        (!c.is_empty()).then_some(c)
+    }
+
+    /// A bar's length in frames at `rate`.
+    pub fn bar_frames(&self, rate: u32) -> f64 {
+        f64::from(rate) * 60.0 / self.bpm.clamp(Self::MIN_BPM, Self::MAX_BPM) * f64::from(self.beats.clamp(1, 16))
+    }
+}
+
+/// The rig's session clicks as `click` says: the DAW's own metronome at that tempo and meter
+/// (x/4), at its volume; off without one.
+fn apply_click(e: &mut Engine, click: Option<Click>) {
+    let s = e.session_mut();
+    s.edit.click = click.is_some();
+    if let Some(c) = click {
+        if let Ok(t) = soundcraft_time::TempoMap::new(c.bpm.clamp(Click::MIN_BPM, Click::MAX_BPM), c.beats.clamp(1, 16), 4) {
+            s.tempo = t;
+        }
+        s.edit.values.insert("click.volume_db".into(), c.volume_db.clamp(-60.0, 12.0));
+    }
 }
 
 /// The session the rig runs: one audio track on `choice`'s input and one MIDI track on all
@@ -219,6 +261,7 @@ impl Rig {
             last_from: 0,
             measured: None,
             nudge: 0,
+            click: None,
         }
     }
 
@@ -264,9 +307,33 @@ impl Rig {
             return;
         }
         self.choice = choice;
-        let (e, a, m) = session_for(self.rate(), choice);
+        let (mut e, a, m) = session_for(self.rate(), choice);
+        apply_click(&mut e, self.click);
         (self.engine, self.audio_track, self.midi_track) = (e, a, m);
         self.player.update_session(self.engine.session_arc());
+    }
+
+    /// The click (metronome) from the next take on (`None`: off): it plays while a take or a
+    /// layer records, only to the output (never into a file), with a bar of it before.
+    pub fn set_click(&mut self, click: Option<Click>) {
+        if click == self.click || self.recording() {
+            return;
+        }
+        self.click = click;
+        apply_click(&mut self.engine, click);
+        self.player.update_session(self.engine.session_arc());
+    }
+
+    /// The click on now.
+    pub fn click(&self) -> Option<Click> {
+        self.click
+    }
+
+    /// While the bar before a take clicks: the beat sounding (from 1) and the beats in it.
+    pub fn counting_off(&self) -> Option<(u32, u32)> {
+        let c = self.click?.countoff(self.rate())?;
+        let elapsed = self.player.countoff_elapsed()?;
+        Some((c.bar_beat(elapsed).1, c.beats_per_bar))
     }
 
     /// The MIDI ports present now and whether each records.
@@ -402,13 +469,17 @@ impl Rig {
         self.hub.take_recorded(&mut old);
         self.player.set_recording(true);
         let looped = layer.as_ref().map(|l| soundcraft_time::Range { start: 0, end: l.loop_frames });
-        self.player.play(from, None, looped);
+        // With the click on, a bar of it first (never for a studio's take): the take starts
+        // after it.
+        let countoff = self.click.filter(|_| !for_booth).and_then(|c| c.countoff(self.rate()));
+        self.player.play_counted(from, None, looped, countoff);
+        let lead = countoff.map_or(0.0, |c| c.len() as f64 / f64::from(self.rate().max(1)));
         self.last_from = from;
         self.take = Some(Take {
             stem: stem.to_string(),
             folder: folder.to_path_buf(),
             wav,
-            began: Instant::now(),
+            began: Instant::now() + std::time::Duration::from_secs_f64(lead),
             from,
             for_booth,
             input: self.choice.name(),
@@ -554,7 +625,7 @@ impl Rig {
         self.heard.clear();
         let midi_take = MidiTake { start: take.from, end: end.max(take.from), looped: None, punch: None, latency: self.midi_latency() };
         let mut saved = Saved { wav: wav.clone(), seconds: take.began.elapsed().as_secs_f64(), problem, ..Saved::default() };
-        if let Some((bytes, notes)) = midi_file(rate, &midi_take, &events) {
+        if let Some((bytes, notes)) = midi_file(rate, &midi_take, &events, self.click) {
             let path = take.folder.join(format!("{}.mid", take.stem));
             match std::fs::write(&path, bytes) {
                 Ok(()) => (saved.mid, saved.notes) = (Some(path), notes),
@@ -594,6 +665,7 @@ impl Rig {
             rate: self.rate(),
             events,
             midi_latency: self.midi_latency(),
+            click: self.click,
         };
         Saved { wav, seconds: take.began.elapsed().as_secs_f64(), problem, layer: Some(raw), ..Saved::default() }
     }
@@ -636,15 +708,16 @@ fn named(names: &[(usize, String)], r: &RecordedMidi) -> RecordedEvent {
     RecordedEvent { at: r.at, port, msg: r.msg, pass: r.pass, sysex: r.sysex.as_deref().map(<[u8]>::to_vec).unwrap_or_default() }
 }
 
-/// The take's MIDI as a Standard MIDI File at 120 bpm (each note at the real time it was played,
-/// from the take's start), made the way the DAW records and exports MIDI; and its note count.
-/// `None` when no note or controller came.
-pub fn midi_file(rate: u32, take: &MidiTake, events: &[RecordedEvent]) -> Option<(Vec<u8>, usize)> {
+/// The take's MIDI as a Standard MIDI File at 120 bpm in 4/4, or at the click's tempo and beats a
+/// bar (`click`), each note at the real time it was played from the take's start, made the way the
+/// DAW records and exports MIDI; and its note count. `None` when no note or controller came.
+pub fn midi_file(rate: u32, take: &MidiTake, events: &[RecordedEvent], click: Option<Click>) -> Option<(Vec<u8>, usize)> {
     if events.is_empty() {
         return None;
     }
     let (mut e, _, midi) = session_for(rate, InputChoice { on: false, channel: 0, stereo: false });
-    if let Ok(t) = soundcraft_time::TempoMap::new(120.0, 4, 4) {
+    let (bpm, beats) = click.map_or((120.0, 4), |c| (c.bpm, c.beats));
+    if let Ok(t) = soundcraft_time::TempoMap::new(bpm, beats, 4) {
         e.session_mut().tempo = t;
     }
     // The take starts the file: the transport rolled from the timeline's start.
