@@ -16,6 +16,8 @@
 //! when any MIDI came, `<stem>.mid` (120 bpm, notes at the real time they were played), made by
 //! the DAW's own MIDI recording and MIDI file export.
 
+use crate::keys::KeySound;
+use crate::layers::LayerRaw;
 use serde_json::json;
 use soundcraft_engine::Engine;
 use soundcraft_engine::midi_record::{MidiTake, RecordedEvent, record_live_midi};
@@ -63,6 +65,16 @@ struct Take {
     /// Recorded for the booth (its glue started it).
     for_booth: bool,
     input: String,
+    /// A layer over an idea looping this many frames (see [`crate::layers`]).
+    layer: Option<LayerJob>,
+}
+
+/// A layer take: the idea it is over, the layer number its file has while it records, the loop.
+#[derive(Debug, Clone)]
+struct LayerJob {
+    idea: String,
+    first: u32,
+    loop_frames: i64,
 }
 
 /// What a take left on disk.
@@ -77,6 +89,10 @@ pub struct Saved {
     pub problem: Option<String>,
     /// What kind of thing went wrong (with `problem`).
     pub cause: Option<Cause>,
+    /// A layer take: what [`crate::layers::finish`] cuts into layers (its files are not final yet).
+    pub layer: Option<LayerRaw>,
+    /// The keyboard's sound it was played with (when it has MIDI).
+    pub keys: Option<KeySound>,
 }
 
 /// Why a take stopped early or lost part of itself.
@@ -121,11 +137,64 @@ pub struct Rig {
     /// The output device went away (said once).
     pub output_problem: Option<String>,
     last_from: Samples,
+    /// Layers: a loopback round trip measured with **Line up** (and the feed latency it went
+    /// through), and the manual nudge (frames; more places layers earlier).
+    pub measured: Option<(i64, u32)>,
+    pub nudge: i64,
+    /// The click (see [`Rig::set_click`]).
+    click: Option<Click>,
+    /// The keyboard's sound (see [`Rig::set_keys`]).
+    keys: Option<KeySound>,
+}
+
+/// The click (metronome): its tempo, beats a bar and volume.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Click {
+    pub bpm: f64,
+    pub beats: u32,
+    #[serde(default)]
+    pub volume_db: f64,
+}
+
+impl Click {
+    /// Tempos the click takes.
+    pub const MIN_BPM: f64 = 30.0;
+    pub const MAX_BPM: f64 = 300.0;
+
+    /// A bar of it, at `rate`: the count-in before a take.
+    pub fn countoff(&self, rate: u32) -> Option<soundcraft_playback::CountOff> {
+        let beat = f64::from(rate) * 60.0 / self.bpm.clamp(Self::MIN_BPM, Self::MAX_BPM);
+        let c = soundcraft_playback::CountOff { bars: 1, beats_per_bar: self.beats.clamp(1, 16), beat };
+        (!c.is_empty()).then_some(c)
+    }
+
+    /// A bar's length in frames at `rate`.
+    pub fn bar_frames(&self, rate: u32) -> f64 {
+        f64::from(rate) * 60.0 / self.bpm.clamp(Self::MIN_BPM, Self::MAX_BPM) * f64::from(self.beats.clamp(1, 16))
+    }
+}
+
+/// The rig's session clicks as `click` says: the DAW's own metronome at that tempo and meter
+/// (x/4), at its volume; off without one.
+fn apply_click(e: &mut Engine, click: Option<Click>) {
+    let s = e.session_mut();
+    s.edit.click = click.is_some();
+    if let Some(c) = click {
+        if let Ok(t) = soundcraft_time::TempoMap::new(c.bpm.clamp(Click::MIN_BPM, Click::MAX_BPM), c.beats.clamp(1, 16), 4) {
+            s.tempo = t;
+        }
+        s.edit.values.insert("click.volume_db".into(), c.volume_db.clamp(-60.0, 12.0));
+    }
 }
 
 /// The session the rig runs: one audio track on `choice`'s input and one MIDI track on all
 /// MIDI inputs, both armed, at `rate`. Returns it and the two tracks.
 fn session_for(rate: u32, choice: InputChoice) -> (Engine, TrackId, TrackId) {
+    session_with(rate, choice, None)
+}
+
+/// [`session_for`], the MIDI track an instrument track playing `keys` when there is a sound.
+fn session_with(rate: u32, choice: InputChoice, keys: Option<&KeySound>) -> (Engine, TrackId, TrackId) {
     let mut e = Engine::default();
     if let Ok(r) = SampleRate::new(rate) {
         e.session_mut().sample_rate = r;
@@ -136,7 +205,13 @@ fn session_for(rate: u32, choice: InputChoice) -> (Engine, TrackId, TrackId) {
     let id = |v: Result<serde_json::Value, soundcraft_engine::EngineError>| v.ok().and_then(|v| v["tracks"][0].as_u64()).map(TrackId);
     let format = if choice.stereo { "stereo" } else { "mono" };
     let audio = id(e.execute("track.new", &json!({"kind": "audio", "name": "Audio", "format": format}))).unwrap_or(TrackId(0));
-    let midi = id(e.execute("track.new", &json!({"kind": "midi", "name": "MIDI"}))).unwrap_or(TrackId(0));
+    let kind = if keys.is_some() { "instrument" } else { "midi" };
+    let midi = id(e.execute("track.new", &json!({"kind": kind, "name": "MIDI"}))).unwrap_or(TrackId(0));
+    if let Some(k) = keys
+        && let Err(err) = k.apply(&mut e, midi.0)
+    {
+        log::warn!("recorder: the keyboard sound could not be set: {err}");
+    }
     let _ = e.execute("track.input", &json!({"tracks": [audio.0], "input": choice.name()}));
     let _ = e.execute("track.input", &json!({"tracks": [midi.0], "input": "midi:all"}));
     let _ = e.execute("mix.volume", &json!({"tracks": [audio.0], "db": -144.0}));
@@ -200,6 +275,10 @@ impl Rig {
             booth_take: None,
             output_problem: None,
             last_from: 0,
+            measured: None,
+            nudge: 0,
+            click: None,
+            keys: None,
         }
     }
 
@@ -221,6 +300,14 @@ impl Rig {
         self.player.session_rate()
     }
 
+    /// What a measured round trip belongs to: the audio system, the output and input devices,
+    /// the buffer and the rate (as the DAW keys its record offsets).
+    pub fn latency_key(&self) -> String {
+        let p = &self.player;
+        let device = format!("{} + {}", p.device_name, self.input_name().unwrap_or_default());
+        soundcraft_playback::devices::latency_key(&p.system, &device, p.device_buffer, p.device_rate)
+    }
+
     /// The input's channel count (0 without an input).
     pub fn input_channels(&self) -> usize {
         self.input.as_ref().map_or(0, |r| r.channels)
@@ -237,9 +324,81 @@ impl Rig {
             return;
         }
         self.choice = choice;
-        let (e, a, m) = session_for(self.rate(), choice);
+        let (mut e, a, m) = session_with(self.rate(), choice, self.keys.as_ref());
+        apply_click(&mut e, self.click);
         (self.engine, self.audio_track, self.midi_track) = (e, a, m);
         self.player.update_session(self.engine.session_arc());
+    }
+
+    /// The click (metronome) from the next take on (`None`: off): it plays while a take or a
+    /// layer records, only to the output (never into a file), with a bar of it before.
+    pub fn set_click(&mut self, click: Option<Click>) {
+        if click == self.click || self.recording() {
+            return;
+        }
+        self.click = click;
+        apply_click(&mut self.engine, click);
+        self.player.update_session(self.engine.session_arc());
+    }
+
+    /// The keyboard's sound from now on (`None`: silent, as a MIDI track). A change of preset or
+    /// instrument makes a new session; turning a knob of the same preset sets that parameter.
+    /// Not while a take records.
+    pub fn set_keys(&mut self, keys: Option<KeySound>) {
+        if keys == self.keys || self.recording() {
+            return;
+        }
+        let same = matches!((&self.keys, &keys), (Some(a), Some(b)) if a.plugin == b.plugin && a.preset == b.preset && a.modulation == b.modulation);
+        if let (true, Some(new), Some(old)) = (same, &keys, &self.keys) {
+            let t = self.midi_track.0;
+            for (id, v) in &new.params {
+                if old.params.get(id) != Some(v) {
+                    let _ = self.engine.execute("mix.instrument_param", &json!({"tracks": [t], "param": id, "value": f64::from(*v)}));
+                }
+            }
+            if old.volume_db != new.volume_db || old.octave != new.octave {
+                let _ = self.engine.execute("mix.volume", &json!({"tracks": [t], "db": f64::from(new.volume_db.clamp(-60.0, 12.0))}));
+                let _ =
+                    self.engine.execute("track.midi_input_transform", &json!({"tracks": [t], "transpose": i64::from(new.octave.clamp(-3, 3)) * 12}));
+            }
+            self.keys = keys;
+        } else {
+            self.keys = keys;
+            let (mut e, a, m) = session_with(self.rate(), self.choice, self.keys.as_ref());
+            apply_click(&mut e, self.click);
+            (self.engine, self.audio_track, self.midi_track) = (e, a, m);
+        }
+        self.player.update_session(self.engine.session_arc());
+    }
+
+    /// Semitones the keyboard plays up (the sound's octave), as the MIDI files keep the notes.
+    fn transpose(&self) -> i32 {
+        self.keys.as_ref().map_or(0, |k| i32::from(k.octave.clamp(-3, 3)) * 12)
+    }
+
+    /// The keyboard's sound now.
+    pub fn keys(&self) -> Option<&KeySound> {
+        self.keys.as_ref()
+    }
+
+    /// How long a key takes to be heard (the output's latency and the buffer), in ms.
+    pub fn play_delay_ms(&self) -> f64 {
+        let l = self.player.reported_latency();
+        // The output's reported latency holds its buffer; without a report, the buffer at least.
+        let frames = f64::from(l.output.max(self.player.device_buffer.unwrap_or(0))) + f64::from(l.mix);
+        frames * 1000.0 / f64::from(self.rate().max(1))
+    }
+
+    /// The click on now.
+    pub fn click(&self) -> Option<Click> {
+        self.click
+    }
+
+    /// While the bar before a take clicks: the beat sounding (from 1) and the beats in it.
+    pub fn counting_off(&self) -> Option<(u32, u32)> {
+        let c = self.click?.countoff(self.rate())?;
+        let elapsed = self.player.countoff_elapsed()?;
+        Some((c.bar_beat(elapsed).1, c.beats_per_bar))
     }
 
     /// The MIDI ports present now and whether each records.
@@ -328,6 +487,26 @@ impl Rig {
     /// `from` (a booth's position; 0 for an idea). `for_booth`: the booth glue started it (its
     /// files are handed to the glue at Stop).
     pub fn start(&mut self, folder: &Path, stem: &str, for_booth: bool, from: Samples) -> Result<(), String> {
+        self.start_take(folder, stem, for_booth, from, None)
+    }
+
+    /// Starts layer `first` over idea `idea` (in `folder`): `mix` (the idea's unmuted layers,
+    /// stereo at the session rate, `loop_frames` long) plays round and round from its start
+    /// while the input and the keyboards record into `<idea> (layer first)`. Stop hands back the
+    /// take to cut into layers ([`Saved::layer`]).
+    pub fn start_layer(&mut self, folder: &Path, idea: &str, first: u32, mix: Vec<Vec<f32>>, loop_frames: i64) -> Result<(), String> {
+        if loop_frames < 1 {
+            return Err("This idea has nothing in it to play".into());
+        }
+        let stem = crate::layers::layer_stem(idea, first);
+        let job = LayerJob { idea: idea.to_string(), first, loop_frames };
+        self.start_take(folder, &stem, false, 0, Some(job))?;
+        let sync = soundcraft_playback::PreviewSync { origin: 0, period: loop_frames };
+        self.player.preview_synced(mix, self.rate(), 0, Some(sync));
+        Ok(())
+    }
+
+    fn start_take(&mut self, folder: &Path, stem: &str, for_booth: bool, from: Samples, layer: Option<LayerJob>) -> Result<(), String> {
         if self.take.is_some() {
             return Err("already recording".into());
         }
@@ -354,16 +533,22 @@ impl Rig {
         let mut old = Vec::new();
         self.hub.take_recorded(&mut old);
         self.player.set_recording(true);
-        self.player.play(from, None, None);
+        let looped = layer.as_ref().map(|l| soundcraft_time::Range { start: 0, end: l.loop_frames });
+        // With the click on, a bar of it first (never for a studio's take): the take starts
+        // after it.
+        let countoff = self.click.filter(|_| !for_booth).and_then(|c| c.countoff(self.rate()));
+        self.player.play_counted(from, None, looped, countoff);
+        let lead = countoff.map_or(0.0, |c| c.len() as f64 / f64::from(self.rate().max(1)));
         self.last_from = from;
         self.take = Some(Take {
             stem: stem.to_string(),
             folder: folder.to_path_buf(),
             wav,
-            began: Instant::now(),
+            began: Instant::now() + std::time::Duration::from_secs_f64(lead),
             from,
             for_booth,
             input: self.choice.name(),
+            layer,
         });
         Ok(())
     }
@@ -449,6 +634,30 @@ impl Rig {
         soundcraft_playback::measure::record_latency(None, 0, l)
     }
 
+    /// The record offset of a layer take: as [`Rig::record_offset`], the round trip **Line up**
+    /// measured replacing the reported one, plus the nudge.
+    pub fn layer_offset(&self) -> Samples {
+        let mut l = self.player.reported_latency();
+        if let Some(r) = &self.input {
+            l.feed = r.start_feed_latency().unwrap_or(l.feed);
+            l.mix = r.start_mix_latency().unwrap_or(l.mix);
+        }
+        soundcraft_playback::measure::record_latency(self.measured, self.nudge, l)
+    }
+
+    /// A layer recording: the idea it is over and the layer number its file has.
+    pub fn layering(&self) -> Option<(&str, u32)> {
+        self.take.as_ref().and_then(|t| t.layer.as_ref()).map(|l| (l.idea.as_str(), l.first))
+    }
+
+    /// While a layer records or a mix plays round: how far round the loop it is (0..1) and which
+    /// time round (0 for the first).
+    pub fn loop_at(&self, loop_frames: i64) -> (f32, u32) {
+        let n = loop_frames.max(1);
+        let pos = self.player.position().rem_euclid(n);
+        ((pos as f64 / n as f64) as f32, u32::from(self.player.loop_pass()))
+    }
+
     /// How much earlier MIDI was played than it was heard (the output's and mix's latency).
     pub fn midi_latency(&self) -> Samples {
         let l = self.player.reported_latency();
@@ -461,6 +670,11 @@ impl Rig {
         self.player.stop();
         self.player.set_recording(false);
         let Some(take) = self.take.take() else { return Saved::default() };
+        if let Some(job) = take.layer.clone() {
+            // The loop stops with the take.
+            self.player.preview(Vec::new(), self.rate());
+            return self.stop_layer(&take, job);
+        }
         self.collect();
         let (mut files, mut problem, start) = (Vec::new(), None, take.from);
         let start = match &mut self.input {
@@ -476,10 +690,10 @@ impl Rig {
         self.heard.clear();
         let midi_take = MidiTake { start: take.from, end: end.max(take.from), looped: None, punch: None, latency: self.midi_latency() };
         let mut saved = Saved { wav: wav.clone(), seconds: take.began.elapsed().as_secs_f64(), problem, ..Saved::default() };
-        if let Some((bytes, notes)) = midi_file(rate, &midi_take, &events) {
+        if let Some((bytes, notes)) = midi_file(rate, &midi_take, &events, self.click, self.transpose()) {
             let path = take.folder.join(format!("{}.mid", take.stem));
             match std::fs::write(&path, bytes) {
-                Ok(()) => (saved.mid, saved.notes) = (Some(path), notes),
+                Ok(()) => (saved.mid, saved.notes, saved.keys) = (Some(path), notes, self.keys.clone()),
                 Err(e) => saved.problem = saved.problem.or(Some(format!("The MIDI file could not be written: {e}"))),
             }
         }
@@ -490,10 +704,59 @@ impl Rig {
         saved
     }
 
-    /// Plays a take's WAV through the output now (empty: stops it).
+    /// A layer take stopped: its WAV finished, handed back with its MIDI to be cut into layers.
+    fn stop_layer(&mut self, take: &Take, job: LayerJob) -> Saved {
+        self.collect();
+        let (mut wav, mut problem, mut start) = (None, None, 0);
+        if let Some(r) = &mut self.input
+            && take.wav.is_some()
+        {
+            let files;
+            (files, problem) = r.finish();
+            wav = files.into_iter().map(|(_, p)| p).next();
+            start = r.start_pos().unwrap_or(0);
+        }
+        let offset = self.layer_offset();
+        let events: Vec<RecordedEvent> = std::mem::take(&mut self.live);
+        self.heard.clear();
+        let raw = LayerRaw {
+            idea: job.idea,
+            first: job.first,
+            folder: take.folder.clone(),
+            wav: wav.clone().or_else(|| take.wav.clone()),
+            start,
+            offset,
+            loop_frames: job.loop_frames,
+            rate: self.rate(),
+            events,
+            midi_latency: self.midi_latency(),
+            click: self.click,
+            keys: self.keys.clone(),
+            transpose: self.transpose(),
+            keys_wav: false,
+        };
+        Saved { wav, seconds: take.began.elapsed().as_secs_f64(), problem, layer: Some(raw), ..Saved::default() }
+    }
+
+    /// Plays an idea's mix (stereo at the session rate) through the output now: round and round
+    /// from its start (the transport looping `loop_frames`) when given, else once.
+    pub fn play_mix(&self, mix: Vec<Vec<f32>>, loop_frames: Option<i64>) {
+        match loop_frames.filter(|n| *n > 0) {
+            Some(n) if !self.recording() => {
+                self.player.play(0, None, Some(soundcraft_time::Range { start: 0, end: n }));
+                self.player.preview_synced(mix, self.rate(), 0, Some(soundcraft_playback::PreviewSync { origin: 0, period: n }));
+            }
+            _ => self.player.preview(mix, self.rate()),
+        }
+    }
+
+    /// Plays a take's WAV through the output now (empty: stops it, and a mix playing round).
     pub fn play_file(&self, path: Option<&Path>) -> Result<(), String> {
         let Some(path) = path else {
             self.player.preview(Vec::new(), self.rate());
+            if !self.recording() && self.player.is_playing() {
+                self.player.stop();
+            }
             return Ok(());
         };
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -513,15 +776,21 @@ fn named(names: &[(usize, String)], r: &RecordedMidi) -> RecordedEvent {
     RecordedEvent { at: r.at, port, msg: r.msg, pass: r.pass, sysex: r.sysex.as_deref().map(<[u8]>::to_vec).unwrap_or_default() }
 }
 
-/// The take's MIDI as a Standard MIDI File at 120 bpm (each note at the real time it was played,
-/// from the take's start), made the way the DAW records and exports MIDI; and its note count.
-/// `None` when no note or controller came.
-pub fn midi_file(rate: u32, take: &MidiTake, events: &[RecordedEvent]) -> Option<(Vec<u8>, usize)> {
+/// The take's MIDI as a Standard MIDI File at 120 bpm in 4/4, or at the click's tempo and beats a
+/// bar (`click`), each note at the real time it was played from the take's start, made the way the
+/// DAW records and exports MIDI; and its note count. `None` when no note or controller came.
+/// `transpose`: semitones the keys sounded up (the keyboard sound's octave), so the file holds
+/// the notes as they were heard.
+pub fn midi_file(rate: u32, take: &MidiTake, events: &[RecordedEvent], click: Option<Click>, transpose: i32) -> Option<(Vec<u8>, usize)> {
     if events.is_empty() {
         return None;
     }
     let (mut e, _, midi) = session_for(rate, InputChoice { on: false, channel: 0, stereo: false });
-    if let Ok(t) = soundcraft_time::TempoMap::new(120.0, 4, 4) {
+    if transpose != 0 {
+        let _ = e.execute("track.midi_input_transform", &json!({"tracks": [midi.0], "transpose": transpose.clamp(-48, 48)}));
+    }
+    let (bpm, beats) = click.map_or((120.0, 4), |c| (c.bpm, c.beats));
+    if let Ok(t) = soundcraft_time::TempoMap::new(bpm, beats, 4) {
         e.session_mut().tempo = t;
     }
     // The take starts the file: the transport rolled from the timeline's start.
@@ -529,6 +798,11 @@ pub fn midi_file(rate: u32, take: &MidiTake, events: &[RecordedEvent]) -> Option
     let clips = record_live_midi(&mut e, &take, events);
     if clips.is_empty() {
         return None;
+    }
+    // The file's track has no name of its own: a program opening it names it after the file
+    // (which the Recorder renames with the idea).
+    if let Some(t) = e.session_mut().track_mut(midi) {
+        t.name.clear();
     }
     let notes = e.session().track(midi).map(|t| t.clips().iter().filter_map(|c| c.midi_playing()).map(|m| m.notes.len()).sum::<usize>()).unwrap_or(0);
     let bytes = soundcraft_engine::io::export_midi(&e, Some(&[midi])).ok()?;

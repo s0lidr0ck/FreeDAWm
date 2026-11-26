@@ -18,7 +18,7 @@ impl RecorderApp {
     /// in a centred column with the design's padding.
     pub(super) fn draw(&mut self, ui: &mut Ui) {
         let area = ui.ctx().content_rect();
-        let recording = self.recording();
+        let recording = self.recording() || self.counting.is_some();
         let bg = if recording { look::BG_REC } else { look::BG };
         ui.painter().with_clip_rect(area).rect_filled(area, CornerRadius::ZERO, bg);
         let width = area.width().min(look::WIDTH);
@@ -31,11 +31,13 @@ impl RecorderApp {
                     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                     ui.set_width(width - 2.0 * look::PAD_X);
                     match screen {
+                        None if self.counting.is_some() => self.count_screen(ui, inner_h),
                         None => self.recording_screen(ui, inner_h),
                         Some(Screen::Main) => self.main_screen(ui, inner_h),
                         Some(Screen::Idea) => self.idea_screen(ui, inner_h),
                         Some(Screen::Settings) => self.settings_screen(ui),
                         Some(Screen::Studio) => self.studio_screen(ui, inner_h),
+                        Some(Screen::Keys) => self.keys_screen(ui),
                     }
                 });
             });
@@ -177,6 +179,9 @@ impl RecorderApp {
         let mic_missing = self.rig.as_ref().is_some_and(|r| self.prefs.audio_on && r.input_channels() == 0) && !no_input;
         let mut change = false;
         let mut retry = false;
+        let mut open_keys = false;
+        let keyboard = self.rig.as_ref().is_some_and(|r| r.midi_ports().iter().any(|(_, on)| *on));
+        let sound = key_sound_words(self.prefs.key_sound().as_ref());
         egui::Frame::NONE.fill(CARD).corner_radius(12).inner_margin(Margin::symmetric(16, 12)).show(ui, |ui| {
             ui.set_width(w - 32.0);
             let iw = ui.available_width();
@@ -209,6 +214,22 @@ impl RecorderApp {
             };
             let (bar, _) = ui.allocate_exact_size(vec2(iw, 10.0), Sense::hover());
             level_bar(ui, bar, level);
+            // A keyboard plugged in: what it sounds like, and the way to change it.
+            if keyboard {
+                ui.add_space(6.0);
+                let (row, _) = ui.allocate_exact_size(vec2(iw, look::TOUCH), Sense::hover());
+                let r = hit(ui, row, "Keyboard sound", true);
+                if r.hovered() {
+                    ui.painter().rect_filled(row, CornerRadius::same(8), egui::Color32::from_white_alpha(6));
+                }
+                let tr = text_at(ui, pos2(row.left(), row.center().y), Align2::LEFT_CENTER, "Keyboard sound", 13.0, Weight::Regular, DIM);
+                let shown = paint::fit(ui, &sound, 15.0, Weight::Semi, row.right() - tr.right() - 40.0);
+                text_at(ui, pos2(tr.right() + 10.0, row.center().y), Align2::LEFT_CENTER, &shown, 15.0, Weight::Semi, TEXT);
+                paint::chevron_icon(ui.painter(), pos2(row.right() - 10.0, row.center().y), 16.0, DIM);
+                paint::read_as(ui, row, &format!("Keyboard sound: {sound}"));
+                focus_ring(ui, &r, 8.0);
+                open_keys = r.clicked();
+            }
             if no_input {
                 ui.add_space(10.0);
                 paragraph(ui, "Plug in a microphone, a headset or a keyboard, then press Try again.", 13.0, Weight::Regular, DIM, 18.0);
@@ -219,6 +240,9 @@ impl RecorderApp {
         });
         if change {
             self.go(Screen::Settings);
+        }
+        if open_keys {
+            self.go(Screen::Keys);
         }
         if retry {
             self.reopen();
@@ -273,26 +297,56 @@ impl RecorderApp {
         let for_studio = self.rig.as_ref().is_some_and(Rig::recording_for_booth);
         let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
         ui.painter().circle_filled(pos2(row.left() + 5.0, row.center().y), 5.0, look::RED_LIVE);
-        let heading = if for_studio { format!("Recording with {}", self.link.booth_name()) } else { "Recording".to_string() };
-        let r = text_at(ui, pos2(row.left() + 18.0, row.center().y), Align2::LEFT_CENTER, &heading, 14.0, Weight::Semi, look::RED_SOFT);
+        let layer = self.layer_status();
+        let heading = match &layer {
+            _ if for_studio => format!("Recording with {}", self.link.booth_name()),
+            _ if self.rig.as_ref().is_some_and(|r| r.counting_off().is_some()) => {
+                let bpm = self.rig.as_ref().and_then(Rig::click).map_or(0.0, |c| c.bpm);
+                format!("Get ready: a bar of click at {bpm:.0} BPM, then it records")
+            }
+            Some((idea, ..)) => format!("Adding a layer to {}", words::display_name(idea)),
+            None => "Recording".to_string(),
+        };
+        let shown = paint::fit(ui, &heading, 14.0, Weight::Semi, w - 18.0);
+        let r = text_at(ui, pos2(row.left() + 18.0, row.center().y), Align2::LEFT_CENTER, &shown, 14.0, Weight::Semi, look::RED_SOFT);
         paint::read_as(ui, r, &heading);
         ui.add_space(22.0);
 
-        // The clock: each digit in a cell of its own, so it does not jiggle.
-        let secs = self.rig.as_ref().map_or(0.0, Rig::elapsed);
-        let t = words::clock(secs);
-        let (area, _) = ui.allocate_exact_size(vec2(w, 88.0), Sense::hover());
-        let digit = paint::text_width(ui, "0", 88.0, Weight::Bold) - 1.5;
-        let colon = paint::text_width(ui, ":", 88.0, Weight::Bold) - 1.5;
-        let total: f32 = t.chars().map(|c| if c == ':' { colon } else { digit }).sum();
-        let mut x = area.center().x - total / 2.0;
-        for ch in t.chars() {
-            let cw = if ch == ':' { colon } else { digit };
-            text_at(ui, pos2(x + cw / 2.0, area.center().y), Align2::CENTER_CENTER, &ch.to_string(), 88.0, Weight::Bold, TEXT);
-            x += cw;
+        if let Some((beat, of)) = self.rig.as_ref().and_then(Rig::counting_off) {
+            // The click's bar before the take: the beat sounding.
+            let (area, _) = ui.allocate_exact_size(vec2(w, 88.0), Sense::hover());
+            let r = text_at(ui, area.center(), Align2::CENTER_CENTER, &beat.to_string(), 88.0, Weight::Bold, TEXT);
+            paint::read_as(ui, r, &format!("Count-in: {beat} of {of}"));
+            ui.add_space(22.0);
+        } else if let Some((_, first, at, _)) = &layer {
+            // The layer's number, and where the idea is in its loop.
+            let (area, _) = ui.allocate_exact_size(vec2(w, 88.0), Sense::hover());
+            let name = super::layer_name(*first);
+            let r = text_at(ui, pos2(area.center().x, area.top() + 26.0), Align2::CENTER_CENTER, &name, 52.0, Weight::Bold, TEXT);
+            paint::read_as(ui, r, &format!("Recording {name}"));
+            let bar = Rect::from_min_size(pos2(area.left(), area.bottom() - 12.0), vec2(w, 12.0));
+            ui.painter().rect_filled(bar, CornerRadius::same(6), look::STOP_RING);
+            let lit = Rect::from_min_size(bar.min, vec2(bar.width() * at.clamp(0.0, 1.0), bar.height()));
+            ui.painter().rect_filled(lit, CornerRadius::same(6), look::RED_LIVE);
+            paint::read_as(ui, bar, &format!("{:.0}% of the way round the idea", at * 100.0));
+            ui.add_space(22.0);
+        } else {
+            // The clock: each digit in a cell of its own, so it does not jiggle.
+            let secs = self.rig.as_ref().map_or(0.0, Rig::elapsed);
+            let t = words::clock(secs);
+            let (area, _) = ui.allocate_exact_size(vec2(w, 88.0), Sense::hover());
+            let digit = paint::text_width(ui, "0", 88.0, Weight::Bold) - 1.5;
+            let colon = paint::text_width(ui, ":", 88.0, Weight::Bold) - 1.5;
+            let total: f32 = t.chars().map(|c| if c == ':' { colon } else { digit }).sum();
+            let mut x = area.center().x - total / 2.0;
+            for ch in t.chars() {
+                let cw = if ch == ':' { colon } else { digit };
+                text_at(ui, pos2(x + cw / 2.0, area.center().y), Align2::CENTER_CENTER, &ch.to_string(), 88.0, Weight::Bold, TEXT);
+                x += cw;
+            }
+            paint::read_as(ui, area, &format!("Recorded {t}"));
+            ui.add_space(22.0);
         }
-        paint::read_as(ui, area, &format!("Recorded {t}"));
-        ui.add_space(22.0);
 
         // The moving bars, from the input.
         let (area, _) = ui.allocate_exact_size(vec2(w, 96.0), Sense::hover());
@@ -330,19 +384,52 @@ impl RecorderApp {
             self.toggle_record();
         }
 
-        // At the bottom: what it records from, the notes so far.
-        let bottom = 18.0 + 6.0 + 16.0;
+        // At the bottom: what it records from, the notes so far (a layer: which time round).
+        let hint = self.layer_hint && layer.is_some();
+        let bottom = 18.0 + 6.0 + 16.0 + if hint { 8.0 + 18.0 } else { 0.0 };
         let left = top + h - ui.cursor().top() - bottom;
         ui.add_space(left.max(22.0));
         centred(ui, &self.source_words().unwrap_or_default(), 15.0, Weight::Semi, TEXT);
         ui.add_space(6.0);
         let keys = self.rig.as_ref().is_some_and(|r| r.midi_ports().iter().any(|(_, on)| *on));
-        let line = match (keys, self.notes.0) {
-            (false, _) => "Saved as you go".to_string(),
-            (true, 1) => "1 piano note so far · saved as you go".to_string(),
-            (true, n) => format!("{n} piano notes so far · saved as you go"),
+        let line = match (&layer, keys, self.notes.0) {
+            (Some((.., 1)), ..) => "Round 1 · each time round is kept as its own layer".to_string(),
+            (Some((.., pass)), ..) => format!("Round {pass} · each time round is kept as its own layer"),
+            (None, false, _) => "Saved as you go".to_string(),
+            (None, true, 1) => "1 piano note so far · saved as you go".to_string(),
+            (None, true, n) => format!("{n} piano notes so far · saved as you go"),
         };
         centred(ui, &line, 13.0, Weight::Regular, look::DIM_REC);
+        if hint {
+            ui.add_space(8.0);
+            centred(ui, "Use headphones so the first part isn't recorded again", 13.0, Weight::Regular, look::AMBER);
+        }
+    }
+
+    /// The 3-2-1 before a layer: the number, what is about to happen, Cancel.
+    fn count_screen(&mut self, ui: &mut Ui, h: f32) {
+        let top = ui.cursor().top();
+        let w = ui.available_width();
+        let idea = self.idea.as_ref().map(|i| words::display_name(&i.take.stem)).unwrap_or_default();
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let heading = format!("Get ready to add a layer to {idea}");
+        let shown = paint::fit(ui, &heading, 14.0, Weight::Semi, w);
+        let r = text_at(ui, row.left_center(), Align2::LEFT_CENTER, &shown, 14.0, Weight::Semi, look::RED_SOFT);
+        paint::read_as(ui, r, &heading);
+        ui.add_space(22.0);
+        let n = self.count_shown().unwrap_or(1);
+        let (area, _) = ui.allocate_exact_size(vec2(w, 160.0), Sense::hover());
+        let r = text_at(ui, area.center(), Align2::CENTER_CENTER, &n.to_string(), 150.0, Weight::Bold, TEXT);
+        paint::read_as(ui, r, &format!("Starting in {n}"));
+        ui.add_space(12.0);
+        centred(ui, "The idea plays from its start, round and round.", 15.0, Weight::Semi, TEXT);
+        ui.add_space(6.0);
+        centred(ui, "Play along. Press Stop when you're done.", 13.0, Weight::Regular, look::DIM_REC);
+        let left = top + h - ui.cursor().top() - 64.0;
+        ui.add_space(left.max(22.0));
+        if button(ui, vec2(w, 64.0), "Cancel", Style::outlined(18.0, Weight::Semi, 14.0), true).clicked() {
+            self.counting = None;
+        }
     }
 
     /// Screen 3: the idea just saved (or opened from the list).
@@ -353,10 +440,19 @@ impl RecorderApp {
         };
         let top = ui.cursor().top();
         let w = ui.available_width();
+        // With its layers listed the screen is fuller: the gaps close up a little.
+        let gap = if idea.take.layer_count() > 1 { 12.0 } else { GAP };
         let length = idea.take.seconds.map(words::clock);
         // The header.
         let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
-        let heading = if idea.just_saved {
+        let heading = if idea.just_saved && !idea.made.is_empty() {
+            match idea.made.as_slice() {
+                [one] => format!("{} saved", super::layer_name(*one)),
+                [a, b] => format!("Layers {a} and {b} saved"),
+                [a, .., z] => format!("Layers {a} to {z} saved"),
+                [] => "Saved".to_string(),
+            }
+        } else if idea.just_saved {
             match &length {
                 Some(l) => format!("Saved · {l}"),
                 None => "Saved".to_string(),
@@ -389,13 +485,14 @@ impl RecorderApp {
             ui.add_space(4.0);
             paragraph(ui, text, 13.0, Weight::Regular, look::AMBER, 18.0);
         }
-        ui.add_space(GAP);
+        ui.add_space(gap);
 
         // The card: name, play, shape.
         let mut typed = false;
         let mut enter = false;
         let mut lost = false;
         let mut play = false;
+        let mut actions: Vec<LayerAction> = Vec::new();
         egui::Frame::NONE.fill(CARD).corner_radius(14).inner_margin(Margin::same(18)).show(ui, |ui| {
             ui.set_width(w - 36.0);
             let iw = ui.available_width();
@@ -456,11 +553,49 @@ impl RecorderApp {
                     ui.painter().rect_filled(b, CornerRadius::same(2), look::LINE);
                 }
             }
-            paint::read_as(ui, Rect::from_min_max(pos2(x0, row.top()), row.max), "The recording's shape");
+            paint::read_as(ui, Rect::from_min_max(pos2(x0, row.top()), pos2(x0 + 154.0, row.bottom())), "The recording's shape");
+            // Loop: round and round, or once.
+            let lw = paint::text_width(ui, "Loop", 14.0, Weight::Semi) + 46.0;
+            let chip = Rect::from_min_size(pos2(row.right() - lw, row.center().y - look::TOUCH / 2.0), vec2(lw, look::TOUCH));
+            let on = idea.side.looped;
+            let rl = hit(ui, chip, if on { "Loop is on" } else { "Loop is off" }, true);
+            let p = ui.painter();
+            p.rect_filled(chip, CornerRadius::same(22), if on { look::ROUND } else { CARD });
+            p.rect_stroke(chip, CornerRadius::same(22), Stroke::new(1.0, if on { look::GREEN } else { look::LINE }), StrokeKind::Inside);
+            paint::loop_icon(p, pos2(chip.left() + 19.0, chip.center().y), if on { look::GREEN } else { DIM });
+            text_at(ui, pos2(chip.left() + 33.0, chip.center().y), Align2::LEFT_CENTER, "Loop", 14.0, Weight::Semi, if on { TEXT } else { DIM });
+            focus_ring(ui, &rl, 22.0);
+            if rl.clicked() {
+                actions.push(LayerAction::Loop(!on));
+            }
             ui.add_space(16.0);
-            let caption = words::saved_caption(idea.take.wav.is_some(), idea.take.mid.is_some(), idea.notes);
+            let count = idea.take.layer_count();
+            let caption = if count > 1 {
+                format!("{count} layers, playing together")
+            } else {
+                words::saved_caption(idea.take.wav.is_some(), idea.take.mid.is_some(), idea.notes)
+            };
             label(ui, &caption, 13.0, Weight::Regular, DIM).on_hover_text(super::MIDI_TIP);
+            if count > 1 {
+                ui.add_space(8.0);
+                for l in idea.take.all_layers() {
+                    ui.push_id(("layer", l.n), |ui| layer_row(ui, &idea, &l, &mut actions));
+                }
+            }
         });
+        for a in actions {
+            match a {
+                LayerAction::Loop(on) => self.set_looped(on),
+                LayerAction::Mute(n, m) => self.set_muted(n, m),
+                LayerAction::Level(n, v, done) => self.set_level(n, v, done),
+                LayerAction::Ask(n) => {
+                    if let Some(i) = &mut self.idea {
+                        i.confirm_layer = n;
+                    }
+                }
+                LayerAction::Throw(n) => self.throw_away_layer(n),
+            }
+        }
         if typed {
             self.name_typed();
         }
@@ -473,20 +608,24 @@ impl RecorderApp {
                 self.play(&t);
             }
         }
-        ui.add_space(GAP);
+        ui.add_space(gap);
 
-        // Record another, then FreeDAWm and the file.
-        let r = button(
-            ui,
-            vec2(w, 64.0),
-            "Record another",
-            Style::filled(look::RED, egui::Color32::WHITE, 20.0, Weight::Bold, 14.0),
-            self.rig.as_ref().is_none_or(Rig::can_record),
-        );
-        if r.clicked() {
+        // Record another and Add a layer, then FreeDAWm and the file.
+        let can = self.rig.as_ref().is_none_or(Rig::can_record);
+        let (row, _) = ui.allocate_exact_size(vec2(w, 64.0), Sense::hover());
+        let half = (w - 12.0) / 2.0;
+        let left = Rect::from_min_size(row.min, vec2(half, 64.0));
+        let right = Rect::from_min_size(pos2(row.right() - half, row.top()), vec2(half, 64.0));
+        if button_in(ui, left, "Record another", Style::filled(look::RED, egui::Color32::WHITE, 18.0, Weight::Bold, 14.0), can).clicked() {
             self.toggle_record();
         }
-        ui.add_space(GAP);
+        let layerable = can && self.rig.is_some() && idea.take.layer_count() > 0;
+        let r = button_named(ui, right, "+ Add a layer", "Add a layer", Style::filled(TEXT, look::BG, 18.0, Weight::Bold, 14.0), layerable)
+            .on_hover_text("Plays this idea round and round from its start and records another part over it. Each layer is kept as its own file.");
+        if r.clicked() {
+            self.add_layer();
+        }
+        ui.add_space(gap);
         let (row, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());
         let half = (w - 12.0) / 2.0;
         let left = Rect::from_min_size(row.min, vec2(half, 48.0));
@@ -510,11 +649,17 @@ impl RecorderApp {
         let confirm = idea.confirm_throw;
         let bottom = 16.0 + 12.0 + look::TOUCH + if confirm { 26.0 } else { 0.0 };
         let left_room = top + h - ui.cursor().top() - bottom;
-        ui.add_space(left_room.max(GAP));
+        ui.add_space(left_room.max(gap));
         label(ui, &format!("Kept in {}", words::folder_words(&self.prefs.ideas())), 13.0, Weight::Regular, DIM);
         ui.add_space(12.0);
         if confirm {
-            label(ui, "Throw this idea away? It can't be undone.", 13.0, Weight::Regular, look::AMBER);
+            let n = idea.take.layer_count();
+            let ask = if n > 1 {
+                format!("Throw this idea away, all {n} layers? It can't be undone.")
+            } else {
+                "Throw this idea away? It can't be undone.".into()
+            };
+            label(ui, &ask, 13.0, Weight::Regular, look::AMBER);
             ui.add_space(8.0);
         }
         let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
@@ -703,6 +848,338 @@ impl RecorderApp {
             label(ui, &format!("The studio sees this computer as {}", self.link.my_name()), 13.0, Weight::Regular, DIM);
         } else {
             label(ui, "Not joined to a studio. Nothing is sent on the network until you open “Record with a studio”.", 13.0, Weight::Regular, DIM);
+        }
+        ui.add_space(GAP);
+        // The keyboard's sound, and the buffer that sets how soon a key is heard.
+        caps(ui, "KEYBOARD SOUND");
+        ui.add_space(8.0);
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let bw = paint::text_width(ui, "Change…", 14.0, Weight::Medium) + 32.0;
+        let sound = key_sound_words(self.prefs.key_sound().as_ref());
+        let shown = paint::fit(ui, &sound, 15.0, Weight::Regular, w - bw - 12.0);
+        let tr = text_at(ui, row.left_center(), Align2::LEFT_CENTER, &shown, 15.0, Weight::Regular, TEXT);
+        paint::read_as(ui, tr, &format!("The keyboard plays: {sound}"));
+        let b = Rect::from_min_size(pos2(row.right() - bw, row.top()), vec2(bw, look::TOUCH));
+        if button_named(ui, b, "Change…", "Change the keyboard sound", Style::outlined(14.0, Weight::Medium, 10.0), true).clicked() {
+            self.go(Screen::Keys);
+        }
+        ui.add_space(8.0);
+        let rate = self.rig.as_ref().map_or(48_000, Rig::rate);
+        let ms = |b: u32| f64::from(b) * 1000.0 / f64::from(rate.max(1));
+        let current = match self.prefs.audio.buffer_size {
+            None => "Buffer: the device's own".to_string(),
+            Some(b) => format!("Buffer: {b} samples ({:.1} ms)", ms(b)),
+        };
+        let mut options: Vec<(String, Option<u32>)> = vec![("Buffer: the device's own".into(), None)];
+        options.extend([64u32, 128, 256, 512, 1024].map(|b| (format!("Buffer: {b} samples ({:.1} ms)", ms(b)), Some(b))));
+        if let Some(b) = combo(ui, "buffer", &current, w, &options, !recording) {
+            self.prefs.audio.buffer_size = b;
+            self.reopen();
+        }
+        ui.add_space(4.0);
+        paragraph(ui, "Smaller: the keys answer sooner, but a slow computer may crackle.", 13.0, Weight::Regular, DIM, 18.0);
+        ui.add_space(GAP);
+
+        self.click_settings(ui, w, recording);
+        ui.add_space(GAP);
+
+        caps(ui, "LAYERS");
+        let mut v = self.prefs.count_in;
+        if paint::tick(ui, &mut v, "Count 3-2-1 before a layer starts", 15.0, w).changed() {
+            self.prefs.count_in = v;
+        }
+        ui.add_space(8.0);
+        paragraph(ui, "Does a new layer sound late or early against the rest? Move it:", 13.0, Weight::Regular, DIM, 18.0);
+        ui.add_space(6.0);
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let ms = self.prefs.layer_nudge_ms.round() as i64;
+        let earlier = Rect::from_min_size(row.min, vec2(124.0, look::TOUCH));
+        let later = Rect::from_min_size(pos2(row.right() - 124.0, row.top()), vec2(124.0, look::TOUCH));
+        if button_named(ui, earlier, "Earlier", "Move layers 5 ms earlier", Style::outlined(14.0, Weight::Medium, 10.0), !recording && ms < 500)
+            .clicked()
+        {
+            self.prefs.layer_nudge_ms = (ms + 5) as f32;
+        }
+        if button_named(ui, later, "Later", "Move layers 5 ms later", Style::outlined(14.0, Weight::Medium, 10.0), !recording && ms > -500).clicked()
+        {
+            self.prefs.layer_nudge_ms = (ms - 5) as f32;
+        }
+        let said = match ms {
+            0 => "Not moved".to_string(),
+            m if m > 0 => format!("{m} ms earlier"),
+            m => format!("{} ms later", -m),
+        };
+        let tr = text_at(ui, row.center(), Align2::CENTER_CENTER, &said, 15.0, Weight::Semi, TEXT);
+        paint::read_as(ui, tr, &format!("Layers: {said}"));
+        ui.add_space(10.0);
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let bw = paint::text_width(ui, "Line up", 14.0, Weight::Medium) + 32.0;
+        let b = Rect::from_min_size(row.min, vec2(bw, look::TOUCH));
+        let can_measure = !recording && !self.measuring && self.rig.as_ref().is_some_and(|r| r.input_channels() > 0);
+        if button_named(
+            ui,
+            b,
+            if self.measuring { "Listening…" } else { "Line up" },
+            "Line up",
+            Style::outlined(14.0, Weight::Medium, 10.0),
+            can_measure,
+        )
+        .clicked()
+        {
+            self.line_up();
+        }
+        let lined = self.rig.as_ref().is_some_and(|r| r.measured.is_some());
+        let state = if lined { "Lined up for these devices" } else { "Not lined up yet: layers use what the devices report" };
+        let shown = paint::fit(ui, state, 13.0, Weight::Regular, w - bw - 12.0);
+        let tr = text_at(ui, pos2(b.right() + 12.0, row.center().y), Align2::LEFT_CENTER, &shown, 13.0, Weight::Regular, DIM);
+        paint::read_as(ui, tr, state);
+        ui.add_space(6.0);
+        paragraph(
+            ui,
+            "Line up plays a click and listens for it. Hold the microphone near the speaker, or connect the output to the input with a cable.",
+            13.0,
+            Weight::Regular,
+            DIM,
+            18.0,
+        );
+        if let Some((n, bad)) = self.line_up_note.clone() {
+            ui.add_space(6.0);
+            paragraph(ui, &n, 13.0, Weight::Regular, if bad { look::AMBER } else { look::GREEN }, 18.0);
+        }
+        ui.add_space(GAP);
+
+        if button(ui, vec2(w, 48.0), "Done", Style::filled(TEXT, look::BG, 16.0, Weight::Bold, 12.0), true).clicked() {
+            self.go(Screen::Main);
+        }
+    }
+
+    /// The click (metronome): on or off; when on, its tempo (typed, − / +, or Tap), beats a bar,
+    /// volume, and whether a new idea is made whole bars.
+    fn click_settings(&mut self, ui: &mut Ui, w: f32, recording: bool) {
+        caps(ui, "CLICK");
+        let mut on = self.prefs.click_on;
+        if paint::tick(ui, &mut on, "Play a click while recording", 15.0, w).changed() && !recording {
+            self.prefs.click_on = on;
+        }
+        if !self.prefs.click_on {
+            paragraph(ui, "Off: press Record and play, in your own time.", 13.0, Weight::Regular, DIM, 18.0);
+            return;
+        }
+        ui.add_space(6.0);
+        // The tempo: − [120] + BPM, Tap.
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let bpm = self.prefs.click_bpm.round();
+        let minus = Rect::from_min_size(row.min, vec2(look::TOUCH, look::TOUCH));
+        if button_named(ui, minus, "−", "Slower", Style::outlined(18.0, Weight::Semi, 10.0), !recording && bpm > crate::rig::Click::MIN_BPM).clicked()
+        {
+            self.prefs.click_bpm = (bpm - 1.0).max(crate::rig::Click::MIN_BPM);
+        }
+        let field = Rect::from_min_size(pos2(minus.right() + 8.0, row.top()), vec2(72.0, look::TOUCH));
+        let mut text = if self.click_typing.is_some() { self.click_typing.clone().unwrap_or_default() } else { format!("{bpm:.0}") };
+        let r = paint::text_box(ui, field, &mut text, "BPM", "click-bpm", 16.0, 10.0);
+        if r.changed() {
+            if let Ok(v) = text.trim().parse::<f64>()
+                && (crate::rig::Click::MIN_BPM..=crate::rig::Click::MAX_BPM).contains(&v)
+            {
+                self.prefs.click_bpm = v.round();
+            }
+            self.click_typing = Some(text);
+        }
+        if r.lost_focus() {
+            self.click_typing = None;
+        }
+        let plus = Rect::from_min_size(pos2(field.right() + 8.0, row.top()), vec2(look::TOUCH, look::TOUCH));
+        if button_named(ui, plus, "+", "Faster", Style::outlined(18.0, Weight::Semi, 10.0), !recording && bpm < crate::rig::Click::MAX_BPM).clicked()
+        {
+            self.prefs.click_bpm = (bpm + 1.0).min(crate::rig::Click::MAX_BPM);
+        }
+        let tr = text_at(ui, pos2(plus.right() + 10.0, row.center().y), Align2::LEFT_CENTER, "BPM", 14.0, Weight::Semi, DIM);
+        paint::read_as(ui, tr, &format!("Tempo {bpm:.0} BPM"));
+        let tw = paint::text_width(ui, "Tap", 15.0, Weight::Semi) + 40.0;
+        let tap = Rect::from_min_size(pos2(row.right() - tw, row.top()), vec2(tw, look::TOUCH));
+        let rt = button_named(ui, tap, "Tap", "Tap the tempo", Style::filled(look::ROUND, TEXT, 15.0, Weight::Semi, 10.0), !recording)
+            .on_hover_text("Tap along four times: the click takes your tempo.");
+        if rt.clicked() {
+            let now = self.now;
+            self.tap(now);
+        }
+        ui.add_space(8.0);
+        // Beats a bar.
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let tr = text_at(ui, row.left_center(), Align2::LEFT_CENTER, "Beats in a bar", 14.0, Weight::Regular, TEXT);
+        paint::read_as(ui, tr, "Beats in a bar");
+        for (k, beats) in [3u32, 4, 6].into_iter().enumerate() {
+            let chip = Rect::from_min_size(pos2(row.right() - (3 - k) as f32 * 56.0 + 8.0, row.top()), vec2(48.0, look::TOUCH));
+            let on = self.prefs.click_beats == beats;
+            let style = if on { Style::filled(TEXT, look::BG, 15.0, Weight::Bold, 10.0) } else { Style::outlined(15.0, Weight::Medium, 10.0) };
+            if button_named(ui, chip, &beats.to_string(), &format!("{beats} beats in a bar"), style, !recording).clicked() {
+                self.prefs.click_beats = beats;
+            }
+        }
+        ui.add_space(4.0);
+        // Volume.
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        text_at(ui, row.left_center(), Align2::LEFT_CENTER, "Click volume", 14.0, Weight::Regular, TEXT);
+        // −40..+6 dB across the slider.
+        let mut v = ((self.prefs.click_volume_db + 40.0) / 46.0).clamp(0.0, 1.0) as f32;
+        let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.right() - 200.0, row.top()), row.max)));
+        if paint::slider(&mut child, &mut v, 200.0, "Click volume").changed() {
+            self.prefs.click_volume_db = (f64::from(v) * 46.0 - 40.0).round();
+        }
+        let mut round = self.prefs.click_round_bars;
+        if paint::tick(ui, &mut round, "Make a new idea whole bars, so it loops in time", 15.0, w).changed() {
+            self.prefs.click_round_bars = round;
+        }
+        paragraph(ui, "The click is only heard, never recorded. Use headphones so the microphone doesn't hear it.", 13.0, Weight::Regular, DIM, 18.0);
+    }
+
+    /// The keyboard's sound: on or off, the preset (a list by kind, previous and next), its
+    /// volume, its octave, the preset's named knobs, every parameter under More, the keys WAV,
+    /// and how long a key takes to be heard.
+    fn keys_screen(&mut self, ui: &mut Ui) {
+        let w = ui.available_width();
+        let recording = self.recording();
+        self.back(ui, "Back");
+        ui.add_space(14.0);
+        label(ui, "Keyboard sound", 24.0, Weight::Bold, TEXT);
+        ui.add_space(6.0);
+        paragraph(ui, "What you hear when you play the keyboard. The notes are saved as a MIDI file either way.", 14.0, Weight::Regular, DIM, 20.0);
+        ui.add_space(12.0);
+        let mut on = self.prefs.keys_on;
+        if paint::tick(ui, &mut on, "Play the keyboard through a sound", 15.0, w).changed() && !recording {
+            self.prefs.keys_on = on;
+        }
+        let Some(sound) = self.prefs.key_sound() else {
+            ui.add_space(4.0);
+            paragraph(ui, "Off: the keyboard is silent here.", 13.0, Weight::Regular, DIM, 18.0);
+            ui.add_space(GAP);
+            if button(ui, vec2(w, 48.0), "Done", Style::filled(TEXT, look::BG, 16.0, Weight::Bold, 12.0), true).clicked() {
+                self.go(Screen::Main);
+            }
+            return;
+        };
+        ui.add_space(GAP);
+
+        // The preset: the list, then previous and next.
+        caps(ui, "SOUND");
+        ui.add_space(8.0);
+        let current = sound.choice().map_or_else(|| sound.preset.clone(), |c| c.label());
+        let options: Vec<(String, crate::keys::Choice)> = self.key_choices().iter().map(|c| (c.label(), c.clone())).collect();
+        if let Some(c) = combo(ui, "keys-preset", &current, w, &options, !recording) {
+            self.pick_key_sound(&c);
+        }
+        ui.add_space(8.0);
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        let half = (w - 12.0) / 2.0;
+        if button_named(
+            ui,
+            Rect::from_min_size(row.min, vec2(half, look::TOUCH)),
+            "‹ Previous",
+            "Previous sound",
+            Style::outlined(14.0, Weight::Medium, 10.0),
+            !recording,
+        )
+        .clicked()
+        {
+            self.step_key_sound(-1);
+        }
+        let next = Rect::from_min_size(pos2(row.right() - half, row.top()), vec2(half, look::TOUCH));
+        if button_named(ui, next, "Next ›", "Next sound", Style::outlined(14.0, Weight::Medium, 10.0), !recording).clicked() {
+            self.step_key_sound(1);
+        }
+        ui.add_space(6.0);
+        label(ui, &format!("On FreeDAWm's {} synth", sound.instrument_name()), 13.0, Weight::Regular, DIM);
+        ui.add_space(GAP);
+
+        // Volume and octave.
+        caps(ui, "VOLUME AND OCTAVE");
+        ui.add_space(4.0);
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        text_at(ui, row.left_center(), Align2::LEFT_CENTER, "Volume", 14.0, Weight::Regular, TEXT);
+        let mut v = ((sound.volume_db + 40.0) / 52.0).clamp(0.0, 1.0);
+        let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.right() - 240.0, row.top()), row.max)));
+        if paint::slider(&mut child, &mut v, 240.0, "Keyboard volume").changed() {
+            self.edit_key_sound(|k| k.volume_db = (v * 52.0 - 40.0).round());
+        }
+        let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+        text_at(ui, row.left_center(), Align2::LEFT_CENTER, "Octave", 14.0, Weight::Regular, TEXT);
+        let oct = sound.octave;
+        let plus = Rect::from_min_size(pos2(row.right() - look::TOUCH, row.top()), vec2(look::TOUCH, look::TOUCH));
+        let shown = Rect::from_min_size(pos2(plus.left() - 80.0, row.top()), vec2(80.0, look::TOUCH));
+        let minus = Rect::from_min_size(pos2(shown.left() - look::TOUCH, row.top()), vec2(look::TOUCH, look::TOUCH));
+        if button_named(ui, minus, "−", "Octave down", Style::outlined(18.0, Weight::Semi, 10.0), !recording && oct > -3).clicked() {
+            self.edit_key_sound(|k| k.octave = (k.octave - 1).max(-3));
+        }
+        if button_named(ui, plus, "+", "Octave up", Style::outlined(18.0, Weight::Semi, 10.0), !recording && oct < 3).clicked() {
+            self.edit_key_sound(|k| k.octave = (k.octave + 1).min(3));
+        }
+        let words = match oct {
+            0 => "As played".to_string(),
+            o if o > 0 => format!("{o} up"),
+            o => format!("{} down", -o),
+        };
+        let tr = text_at(ui, shown.center(), Align2::CENTER_CENTER, &words, 14.0, Weight::Semi, TEXT);
+        paint::read_as(ui, tr, &format!("Octave: {words}"));
+        ui.add_space(GAP);
+
+        // The preset's own knobs (its named macros).
+        let macros = sound.macros();
+        let info = soundcraft_dsp::plugin_info(&sound.plugin);
+        if !macros.is_empty() {
+            caps(ui, "THIS SOUND'S KNOBS");
+            ui.add_space(4.0);
+            for (id, name) in &macros {
+                let Some(pi) = info.and_then(|i| i.params.iter().find(|p| p.id == id)) else { continue };
+                let value = sound.params.get(id).copied().unwrap_or(pi.default);
+                let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+                text_at(ui, row.left_center(), Align2::LEFT_CENTER, name, 14.0, Weight::Regular, TEXT);
+                let mut t = pi.to_normalized(value);
+                let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.right() - 240.0, row.top()), row.max)));
+                if paint::slider(&mut child, &mut t, 240.0, name).changed() && !recording {
+                    let v = pi.from_normalized(t);
+                    let id = id.clone();
+                    self.edit_key_sound(|k| k.set_param(&id, v));
+                }
+            }
+            ui.add_space(GAP);
+        }
+
+        // Saving, and the delay.
+        let mut wav = self.prefs.keys_wav;
+        if paint::tick(ui, &mut wav, "Also save what I heard as a WAV", 15.0, w).changed() {
+            self.prefs.keys_wav = wav;
+        }
+        let delay = self.rig.as_ref().map_or(0.0, Rig::play_delay_ms);
+        let said = if delay >= 1.0 {
+            format!("A key is heard about {delay:.0} ms after you press it. A smaller buffer (Settings › Keyboard sound) makes that shorter.")
+        } else {
+            "A smaller buffer (Settings › Keyboard sound) makes the keys answer sooner.".to_string()
+        };
+        paragraph(ui, &said, 13.0, Weight::Regular, DIM, 18.0);
+        ui.add_space(GAP);
+
+        // Every parameter, by name, under More.
+        let more = if self.keys_more { "Fewer settings" } else { "More settings" };
+        if button_fit(ui, look::TOUCH, 14.0, more, Style::outlined(14.0, Weight::Medium, 10.0), true).clicked() {
+            self.keys_more = !self.keys_more;
+        }
+        if self.keys_more
+            && let Some(info) = info
+        {
+            ui.add_space(8.0);
+            for pi in info.params.iter().filter(|p| !p.id.starts_with("macro")) {
+                let value = sound.params.get(pi.id).copied().unwrap_or(pi.default);
+                let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+                let name = paint::fit(ui, pi.name, 13.0, Weight::Regular, w - 250.0);
+                text_at(ui, pos2(row.left(), row.center().y - 1.0), Align2::LEFT_BOTTOM, &name, 13.0, Weight::Regular, TEXT);
+                text_at(ui, pos2(row.left(), row.center().y + 1.0), Align2::LEFT_TOP, &pi.format(value), 12.0, Weight::Regular, DIM);
+                let mut t = pi.to_normalized(value);
+                let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(row.right() - 200.0, row.top()), row.max)));
+                if paint::slider(&mut child, &mut t, 200.0, pi.name).changed() && !recording {
+                    let v = pi.from_normalized(t);
+                    self.edit_key_sound(|k| k.set_param(pi.id, v));
+                }
+            }
         }
         ui.add_space(GAP);
         if button(ui, vec2(w, 48.0), "Done", Style::filled(TEXT, look::BG, 16.0, Weight::Bold, 12.0), true).clicked() {
@@ -930,6 +1407,108 @@ impl RecorderApp {
             let t = if lost == 0 { "The mix is coming through.".to_string() } else { format!("The mix is coming through ({lost} small dropouts).") };
             label(ui, &t, 13.0, Weight::Regular, DIM);
         }
+    }
+}
+
+/// What a layer row asked for (done after the card is drawn).
+enum LayerAction {
+    Loop(bool),
+    Mute(u32, bool),
+    /// A level (0..2), and whether the slider was let go.
+    Level(u32, f32, bool),
+    /// Throw a layer away: ask (`None`: Keep it).
+    Ask(Option<u32>),
+    Throw(u32),
+}
+
+/// One layer in the idea's card: Mute, its name and what is in it, its level, throw it away
+/// (which asks first, in the row).
+fn layer_row(ui: &mut Ui, idea: &super::Idea, l: &crate::files::LayerFiles, actions: &mut Vec<LayerAction>) {
+    let w = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(vec2(w, look::TOUCH), Sense::hover());
+    let name = super::layer_name(l.n);
+    if idea.confirm_layer == Some(l.n) {
+        let ask = format!("Throw {} away?", name.to_lowercase().replace("first take", "the first take"));
+        let tr = text_at(ui, row.left_center(), Align2::LEFT_CENTER, &ask, 14.0, Weight::Semi, look::AMBER);
+        paint::read_as(ui, tr, &ask);
+        let tw = paint::text_width(ui, "Throw away", 14.0, Weight::Semi) + 24.0;
+        let throw = Rect::from_min_size(pos2(row.right() - tw, row.top()), vec2(tw, look::TOUCH));
+        if button_named(
+            ui,
+            throw,
+            "Throw away",
+            &format!("Yes, throw {name} away"),
+            Style::filled(look::RED, egui::Color32::WHITE, 14.0, Weight::Semi, 10.0),
+            true,
+        )
+        .clicked()
+        {
+            actions.push(LayerAction::Throw(l.n));
+        }
+        let kw = paint::text_width(ui, "Keep", 14.0, Weight::Medium) + 24.0;
+        let keep = Rect::from_min_size(pos2(throw.left() - 8.0 - kw, row.top()), vec2(kw, look::TOUCH));
+        if button_named(ui, keep, "Keep", &format!("Keep {name}"), Style::outlined(14.0, Weight::Medium, 10.0), true).clicked() {
+            actions.push(LayerAction::Ask(None));
+        }
+        return;
+    }
+    let m = idea.side.mix(l.n);
+    // Mute.
+    let mw = 74.0;
+    let chip = Rect::from_min_size(row.min, vec2(mw, look::TOUCH)).shrink2(vec2(0.0, 6.0));
+    let label_mute = if m.muted { format!("Unmute {name}") } else { format!("Mute {name}") };
+    let r = hit(ui, chip, &label_mute, true);
+    let p = ui.painter();
+    if m.muted {
+        p.rect_filled(chip, CornerRadius::same(16), look::AMBER);
+    } else {
+        p.rect_stroke(chip, CornerRadius::same(16), Stroke::new(1.0, look::LINE_FIELD), StrokeKind::Inside);
+    }
+    text_at(
+        ui,
+        chip.center(),
+        Align2::CENTER_CENTER,
+        if m.muted { "Muted" } else { "Mute" },
+        13.0,
+        Weight::Semi,
+        if m.muted { look::BG } else { DIM },
+    );
+    focus_ring(ui, &r, 16.0);
+    if r.clicked() {
+        actions.push(LayerAction::Mute(l.n, !m.muted));
+    }
+    // Throw away, at the end.
+    let x = Rect::from_min_size(pos2(row.right() - look::TOUCH, row.top()), vec2(look::TOUCH, look::TOUCH));
+    let rx = hit(ui, x, &format!("Throw {name} away"), true);
+    let ink = if rx.hovered() { look::RED_TEXT } else { DIM };
+    paint::cross_icon(ui.painter(), x.center(), 12.0, ink);
+    focus_ring(ui, &rx, 10.0);
+    if rx.clicked() {
+        actions.push(LayerAction::Ask(Some(l.n)));
+    }
+    // The level.
+    let sw = 96.0;
+    let mut v = (m.level.max(0.0) / 2.0).sqrt().clamp(0.0, 1.0);
+    let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_size(pos2(x.left() - 4.0 - sw, row.top()), vec2(sw, look::TOUCH))));
+    let rs = paint::slider(&mut child, &mut v, sw, &format!("{name} level"));
+    if rs.changed() || rs.drag_stopped() {
+        actions.push(LayerAction::Level(l.n, 2.0 * v * v, !rs.dragged()));
+    }
+    // The name and what is in it.
+    let tx = chip.right() + 12.0;
+    let tw = (x.left() - 8.0 - sw) - tx;
+    let what = words::kinds(l.wav.is_some(), l.mid.is_some()).replace("piano notes", "notes");
+    let text = paint::fit(ui, &format!("{name} · {what}"), 14.0, Weight::Regular, tw);
+    let tr = text_at(ui, pos2(tx, row.center().y), Align2::LEFT_CENTER, &text, 14.0, Weight::Regular, if m.muted { DIM } else { TEXT });
+    paint::read_as(ui, tr, &format!("{name}: {what}"));
+}
+
+/// The keyboard's sound in a word or two: its preset, or Off.
+fn key_sound_words(k: Option<&crate::keys::KeySound>) -> String {
+    match k {
+        None => "Off (silent)".into(),
+        Some(k) if k.octave != 0 => format!("{} ({:+} oct)", k.preset, k.octave),
+        Some(k) => k.preset.clone(),
     }
 }
 

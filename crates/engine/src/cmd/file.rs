@@ -56,6 +56,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let at = position_param(e, "file.import_midi", p, "at")?.unwrap_or(0);
             let bytes = crate::io::read_file(&path)?;
             let tracks = crate::io::import_midi_bytes(e, &bytes, at, bool_or(p, "tempo_map", true))?;
+            name_after_file(e, &tracks, &bytes, &path);
+            // A FreeDAWm Recorder idea's layer played on keys: the instrument it was heard through.
+            crate::idea::apply_to_midi(e, &tracks, std::path::Path::new(&path));
             Ok(json!({"tracks": tracks}))
         }),
         cmd!(
@@ -250,6 +253,20 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// Writing a session over an existing file needs `replace: true` (see `io::replaces`).
+/// A MIDI file whose one track has no name (the Recorder writes them so): the track is named
+/// after the file (`Chorus idea (layer 2)`) rather than `MIDI 1`, as an audio file's track is.
+fn name_after_file(e: &mut Engine, tracks: &[TrackId], bytes: &[u8], path: &str) {
+    let unnamed = soundcraft_midi::read_smf(bytes)
+        .is_ok_and(|s| s.tracks.iter().filter(|t| !t.sequence.notes.is_empty() || !t.sequence.ctrls.is_empty()).all(|t| t.name.trim().is_empty()));
+    let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("").trim().to_string();
+    let ([id], true, false) = (tracks, unnamed, stem.is_empty()) else { return };
+    let mut name = stem;
+    soundcraft_model::truncate_chars(&mut name, soundcraft_model::MAX_NAME_CHARS);
+    if let Some(t) = e.session_mut().track_mut(*id) {
+        t.name = name;
+    }
+}
+
 fn refuse_replacing(e: &Engine, id: &str, file: &std::path::Path, p: &Value) -> Result<()> {
     // First, so a path outside the write root is refused as such and never reported as existing.
     crate::file_access::check_write(file).map_err(EngineError::Io)?;
@@ -312,6 +329,8 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
     let target = import_audio_target(e, p)?;
     let mut out = Vec::new();
     for path in &paths {
+        // A FreeDAWm Recorder idea recorded to its click, into an empty session: its tempo.
+        crate::idea::apply_tempo(e, std::path::Path::new(path));
         out.push(crate::io::import_audio_file(e, path, target, at)?);
     }
     Ok(json!({"imported": out}))

@@ -16,6 +16,7 @@ mod screens;
 
 use crate::booth::Link;
 use crate::files::{self, TakeFiles};
+use crate::layers::{self, Sidecar};
 use crate::rig::{Cause, InputChoice, Rig, Saved};
 use crate::settings::{Paths, Prefs, file_safe, now_stamp, unique_stem};
 use crate::words;
@@ -53,6 +54,8 @@ pub enum Screen {
     Settings,
     /// 4: record with a studio.
     Studio,
+    /// The keyboard's sound: its preset, volume, octave, knobs.
+    Keys,
 }
 
 /// The take screen 3 shows.
@@ -80,6 +83,12 @@ pub struct Idea {
     pub confirm_throw: bool,
     /// The last thing a button here said ("Opening FreeDAWm…"), and whether it is a problem.
     pub note: Option<(String, bool)>,
+    /// How its layers play together (its sidecar's, or the defaults).
+    pub side: Sidecar,
+    /// The layers a layer take just made (the header says so).
+    pub made: Vec<u32>,
+    /// Throwing one layer away asks first: which.
+    pub confirm_layer: Option<u32>,
 }
 
 /// A take playing.
@@ -88,7 +97,12 @@ struct Playing {
     stem: String,
     since: Instant,
     seconds: f64,
+    /// Round and round (it plays until stopped).
+    looped: bool,
 }
+
+/// Each number of the 3-2-1 before a layer shows this long (seconds).
+pub const COUNT_STEP: f64 = 0.8;
 
 pub struct RecorderApp {
     /// The devices (`None` until they open, on the second frame).
@@ -127,6 +141,24 @@ pub struct RecorderApp {
     now: f64,
     /// The window's place and size, kept at exit.
     pub window: Option<([f32; 2], [f32; 2])>,
+    /// Add a layer was pressed: the 3-2-1 counts from then (the layer starts at its end).
+    pub counting: Option<Instant>,
+    /// The loop a layer records over (frames), while it does.
+    layer_loop: i64,
+    /// Show the headphones hint while this layer records.
+    pub layer_hint: bool,
+    /// **Line up** is measuring.
+    pub measuring: bool,
+    /// What **Line up** last said, and whether it is a problem.
+    pub line_up_note: Option<(String, bool)>,
+    /// The last taps of **Tap** (egui time, seconds).
+    taps: Vec<f64>,
+    /// The tempo box while it is being typed in.
+    click_typing: Option<String>,
+    /// The keyboard sounds offered (read once, when first shown).
+    key_choices: Vec<crate::keys::Choice>,
+    /// The keyboard sound's screen shows every parameter.
+    pub keys_more: bool,
 }
 
 /// FreeDAWm's program beside `exe` (the Recorder's own), when it is there.
@@ -138,8 +170,39 @@ pub fn daw_beside(exe: &Path) -> Option<PathBuf> {
 /// What FreeDAWm is started with to open a take: its WAV and its MIDI file (the DAW imports the
 /// audio and MIDI files named on its command line into a new, untitled session, each at the
 /// start: the WAV on an audio track, the MIDI file on an instrument track).
+///
+/// Every layer goes, in order (each WAV, then its MIDI file): each lands on a track of its own,
+/// named after its file (`Chorus idea (layer 2)`), all at the start, so they line up.
+/// A layer played on keys goes as its MIDI file (FreeDAWm gives its track the instrument and
+/// settings it was heard through, from the idea's `.fdidea`), not as its `(keys)` render too.
 pub fn daw_args(take: &TakeFiles) -> Vec<OsString> {
-    take.wav.iter().chain(take.mid.iter()).map(|p| p.as_os_str().to_os_string()).collect()
+    take.all_layers()
+        .into_iter()
+        .flat_map(|l| {
+            let keys = l.keys.filter(|_| l.mid.is_none());
+            l.wav.into_iter().chain(l.mid).chain(keys)
+        })
+        .map(|p| p.into_os_string())
+        .collect()
+}
+
+/// A layer as the window names it.
+pub fn layer_name(n: u32) -> String {
+    if n <= 1 { "First take".into() } else { format!("Layer {n}") }
+}
+
+/// Why Line up did not work, in plain words.
+fn line_up_problem(e: &str) -> String {
+    let lower = e.to_lowercase();
+    if lower.contains("no click came back") {
+        "No click came back. Hold the microphone near the speaker and turn it up a little (or connect the output to the input with a cable), then press Line up again.".into()
+    } else if lower.contains("no audio input") || lower.contains("not on the device") {
+        "Line up needs a microphone or input to listen with.".into()
+    } else if lower.contains("same rate") {
+        "Line up can't run with these devices (they run at different rates).".into()
+    } else {
+        format!("Line up didn't work: {e}")
+    }
 }
 
 fn choice_of(p: &Prefs) -> InputChoice {
@@ -171,7 +234,11 @@ impl RecorderApp {
         RecorderApp::new(None, prefs, None)
     }
 
-    fn new(rig: Option<Rig>, prefs: Prefs, paths: Option<Paths>) -> RecorderApp {
+    fn new(rig: Option<Rig>, mut prefs: Prefs, paths: Option<Paths>) -> RecorderApp {
+        // The keyboard's sound a new Recorder starts with, made once.
+        if prefs.keys.is_none() {
+            prefs.keys = crate::keys::KeySound::default_piano();
+        }
         let link = Link::new(paths.as_ref().map(|p| p.network.clone()), paths.as_ref().map(|p| p.outbox.clone()));
         RecorderApp {
             rig,
@@ -198,6 +265,15 @@ impl RecorderApp {
             daw: None,
             now: 0.0,
             window: None,
+            counting: None,
+            layer_loop: 0,
+            layer_hint: false,
+            measuring: false,
+            line_up_note: None,
+            taps: Vec::new(),
+            click_typing: None,
+            key_choices: Vec::new(),
+            keys_more: false,
         }
     }
 
@@ -282,6 +358,12 @@ impl RecorderApp {
         if let Some(s) = saved {
             self.on_saved(s);
         }
+        self.tune_rig();
+        if self.counting.is_some_and(|t| t.elapsed().as_secs_f64() >= 3.0 * COUNT_STEP) {
+            self.counting = None;
+            self.begin_layer();
+        }
+        self.poll_line_up();
         if self.record_when_ready && self.rig.is_some() {
             self.record_when_ready = false;
             if !self.recording() {
@@ -315,7 +397,7 @@ impl RecorderApp {
                 self.devices_job = None;
             }
         }
-        if self.playing.as_ref().is_some_and(|p| p.since.elapsed().as_secs_f64() > p.seconds + 0.3) {
+        if self.playing.as_ref().is_some_and(|p| !p.looped && p.since.elapsed().as_secs_f64() > p.seconds + 0.3) {
             self.playing = None;
         }
         if self.idea.as_ref().and_then(|i| i.edited_at).is_some_and(|t| now - t >= RENAME_AFTER) {
@@ -333,8 +415,68 @@ impl RecorderApp {
     }
 
     pub fn rescan(&mut self) {
-        self.takes = files::recent(&self.prefs.ideas(), 200);
+        let dir = self.prefs.ideas();
+        // A layer a crash left half done is finished first (never the one recording now).
+        if self.takes.iter().any(|t| t.sidecar.is_some()) || self.scanned.is_none() {
+            let busy = self.rig.as_ref().and_then(Rig::layering).map(|(i, _)| i.to_string());
+            for (idea, r) in layers::recover(&dir, busy.as_deref()) {
+                log::info!("recorder: finished a layer of “{idea}” left by a crash: {r:?}");
+            }
+        }
+        self.takes = files::recent(&dir, 200);
         self.scanned = Some(Instant::now());
+    }
+
+    /// The rig's layer offset from the settings: the nudge, and the round trip **Line up**
+    /// measured on these very devices.
+    fn tune_rig(&mut self) {
+        let Some(rig) = self.rig.as_mut() else { return };
+        rig.nudge = (f64::from(self.prefs.layer_nudge_ms) * f64::from(rig.rate()) / 1000.0).round() as i64;
+        let key = rig.latency_key();
+        rig.measured = self.prefs.layer_measured.as_ref().filter(|m| m.key == key).map(|m| (m.frames, m.feed));
+        // (No change while a take records.)
+        rig.set_click(self.prefs.click());
+        rig.set_keys(self.prefs.key_sound());
+    }
+
+    /// **Line up**: plays a click out of the output and listens for it on the input (a cable, or
+    /// the microphone near the speaker); the round trip found places layers from then on.
+    pub fn line_up(&mut self) {
+        let Some(rig) = self.rig.as_ref() else { return };
+        if self.recording() || self.measuring {
+            return;
+        }
+        if let Some(r) = &self.rig {
+            let _ = r.play_file(None);
+        }
+        self.playing = None;
+        match rig.player.measure_latency(0, self.prefs.channel) {
+            Ok(()) => {
+                self.measuring = true;
+                self.line_up_note = Some(("Listening for the click…".into(), false));
+            }
+            Err(e) => self.line_up_note = Some((line_up_problem(&e), true)),
+        }
+    }
+
+    fn poll_line_up(&mut self) {
+        if !self.measuring {
+            return;
+        }
+        let Some(rig) = self.rig.as_ref() else {
+            self.measuring = false;
+            return;
+        };
+        let Some(r) = rig.player.measure_result() else { return };
+        self.measuring = false;
+        match r {
+            Ok(frames) => {
+                let ms = frames as f64 * 1000.0 / f64::from(rig.rate().max(1));
+                self.prefs.layer_measured = Some(crate::settings::Measured { key: rig.latency_key(), frames, feed: rig.player.measure_feed() });
+                self.line_up_note = Some((format!("Lined up. Sound takes {ms:.0} ms to go out and come back in on this computer."), false));
+            }
+            Err(e) => self.line_up_note = Some((line_up_problem(&e), true)),
+        }
     }
 
     /// The ideas listed (not the one recording now).
@@ -361,6 +503,10 @@ impl RecorderApp {
 
     /// Record (or Stop), as the big button and Space do.
     pub fn toggle_record(&mut self) {
+        if self.counting.take().is_some() {
+            // Stop during the 3-2-1: no layer.
+            return;
+        }
         if self.recording() {
             self.stop();
         } else {
@@ -408,6 +554,10 @@ impl RecorderApp {
 
     /// A take stopped: screen 3 shows it.
     fn on_saved(&mut self, s: Saved) {
+        if let Some(raw) = s.layer.clone() {
+            self.on_layer_saved(&raw, s);
+            return;
+        }
         self.rescan();
         let Some(path) = s.wav.as_ref().or(s.mid.as_ref()) else {
             self.message = Some((s.problem.unwrap_or_else(|| "Nothing was recorded: no sound and no piano notes came in.".into()), true));
@@ -415,13 +565,48 @@ impl RecorderApp {
             return;
         };
         let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-        let take = self.takes.iter().find(|t| t.stem == stem).cloned().unwrap_or(TakeFiles {
-            stem: stem.clone(),
-            wav: s.wav.clone(),
-            mid: s.mid.clone(),
-            modified: None,
-            seconds: Some(s.seconds),
-        });
+        // Recorded to the click: the idea knows its tempo, and is a whole number of bars long
+        // (so it loops in time) unless that is turned off.
+        let mut looped_as = None;
+        let rate = self.rig.as_ref().map_or(48_000, Rig::rate);
+        let click = self.rig.as_ref().and_then(Rig::click);
+        let mut side = Sidecar { tempo: click, ..Sidecar::default() };
+        if let Some(c) = click
+            && self.prefs.click_round_bars
+            && let Some(w) = &s.wav
+        {
+            looped_as = layers::round_to_bars(w, c.bar_frames(rate)).ok();
+        }
+        // Played on keys through a sound: the sound is kept with it, and (unless turned off)
+        // what it sounded like, as its own WAV the idea's length.
+        if let (Some(k), Some(mid)) = (&s.keys, &s.mid) {
+            side.keys.insert(1, k.clone());
+            if self.prefs.keys_wav {
+                let secs = s.wav.as_deref().and_then(files::wav_seconds).or_else(|| layers::midi_seconds(mid).map(|m| m + 1.0)).unwrap_or(s.seconds);
+                let mut frames = (secs * f64::from(rate)).round().max(1.0);
+                if let (Some(c), None) = (click.filter(|_| self.prefs.click_round_bars), &s.wav) {
+                    let bar = c.bar_frames(rate);
+                    frames = (frames / bar).ceil().max(1.0) * bar;
+                }
+                let to = mid.with_file_name(format!("{}.wav", crate::keys::keys_stem(&stem)));
+                if let Err(e) = crate::keys::render_wav(k, mid, rate, frames as usize, &to) {
+                    log::warn!("recorder: {}: {e}", to.display());
+                }
+            }
+        }
+        if side != Sidecar::default() {
+            let at = path.with_file_name(format!("{stem}.{}", layers::SIDECAR_EXT));
+            if let Err(e) = side.save(&at) {
+                log::warn!("recorder: {}: {e}", at.display());
+            }
+            self.rescan();
+        }
+        let take = self
+            .takes
+            .iter()
+            .find(|t| t.stem == stem)
+            .cloned()
+            .unwrap_or_else(|| TakeFiles::single(&stem, s.wav.clone(), s.mid.clone(), Some(s.seconds)));
         let mut idea = self.idea_for(take);
         idea.just_saved = true;
         idea.notes = s.mid.as_ref().map(|_| s.notes);
@@ -430,14 +615,288 @@ impl RecorderApp {
             let full = soundcraft_net::sys::disk_free(&self.prefs.ideas()).is_some_and(|b| b < 64 << 20);
             idea.problem = Some((Cause::Disk, if full { "full".into() } else { "slow".into() }));
         }
+        if let Some(bars) = looped_as {
+            idea.note = Some((if bars == 1 { "Looped as 1 bar".to_string() } else { format!("Looped as {bars} bars") }, false));
+        }
         self.idea = Some(idea);
         self.screen = Screen::Idea;
     }
 
+    /// The keyboard sounds offered, grouped by kind (read the first time).
+    pub fn key_choices(&mut self) -> &[crate::keys::Choice] {
+        if self.key_choices.is_empty() {
+            self.key_choices = crate::keys::choices();
+        }
+        &self.key_choices
+    }
+
+    /// The keyboard plays through `choice`'s preset from now on (its knobs as the preset has
+    /// them; the volume and octave kept).
+    pub fn pick_key_sound(&mut self, choice: &crate::keys::Choice) {
+        let Some(mut k) = crate::keys::KeySound::from_preset(choice.plugin, &choice.preset) else { return };
+        if let Some(old) = &self.prefs.keys {
+            (k.volume_db, k.octave) = (old.volume_db, old.octave);
+        }
+        self.prefs.keys = Some(k);
+        self.prefs.keys_on = true;
+    }
+
+    /// The preset before (`-1`) or after (`1`) the one playing, in the list's order.
+    pub fn step_key_sound(&mut self, by: i32) {
+        let current = self.prefs.key_sound().and_then(|k| k.choice());
+        let list = self.key_choices().to_vec();
+        if list.is_empty() {
+            return;
+        }
+        let at = current.and_then(|c| list.iter().position(|x| *x == c)).map_or(0, |i| i as i64);
+        let n = list.len() as i64;
+        let next = (at + i64::from(by)).rem_euclid(n) as usize;
+        if let Some(c) = list.get(next) {
+            self.pick_key_sound(c);
+        }
+    }
+
+    /// Changes the keyboard's sound (a knob, the volume, the octave).
+    pub fn edit_key_sound(&mut self, f: impl FnOnce(&mut crate::keys::KeySound)) {
+        let Some(mut k) = self.prefs.key_sound() else { return };
+        f(&mut k);
+        self.prefs.keys = Some(k);
+    }
+
+    /// **Tap**: the click's tempo from the last few taps (`now`: egui's clock, seconds). A tap
+    /// more than 2 seconds after the last starts again.
+    pub fn tap(&mut self, now: f64) {
+        if self.taps.last().is_some_and(|t| now - t > 2.0 || now < *t) {
+            self.taps.clear();
+        }
+        self.taps.push(now);
+        let n = self.taps.len();
+        if n > 5 {
+            self.taps.drain(..n - 5);
+        }
+        if let (Some(first), Some(last)) = (self.taps.first(), self.taps.last())
+            && self.taps.len() >= 2
+        {
+            let each = (last - first) / (self.taps.len() - 1) as f64;
+            if each > 0.0 {
+                self.prefs.click_bpm = (60.0 / each).round().clamp(crate::rig::Click::MIN_BPM, crate::rig::Click::MAX_BPM);
+            }
+        }
+    }
+
+    /// A layer take stopped: it is cut into its layers ([`layers::finish`]) and screen 3 shows
+    /// the idea with them.
+    fn on_layer_saved(&mut self, raw: &layers::LayerRaw, s: Saved) {
+        self.layer_hint = false;
+        let res = layers::finish(&layers::LayerRaw { keys_wav: self.prefs.keys_wav, ..raw.clone() });
+        let side_path = raw.folder.join(format!("{}.{}", raw.idea, layers::SIDECAR_EXT));
+        let mut side = Sidecar::load(&side_path);
+        side.pending = None;
+        if !res.made.is_empty() {
+            side.looped = true;
+        }
+        // Each layer played on keys keeps the sound it was played with.
+        if let Some(k) = &raw.keys {
+            for n in &res.keyed {
+                side.keys.insert(*n, k.clone());
+            }
+        }
+        if let Err(e) = side.save(&side_path) {
+            log::warn!("recorder: {}: {e}", side_path.display());
+        }
+        self.rescan();
+        let take = self.takes.iter().find(|t| t.stem == raw.idea).cloned();
+        let Some(take) = take else {
+            self.message = Some((res.problem.unwrap_or_else(|| "Nothing was played, so no layer was added.".into()), true));
+            self.screen = Screen::Main;
+            return;
+        };
+        let mut idea = self.idea_for(take);
+        // The name typed before stays (the idea was renamed already).
+        idea.just_saved = !res.made.is_empty();
+        idea.made = res.made.clone();
+        let problem = s.problem.map(|p| (s.cause.unwrap_or(Cause::Other), p));
+        idea.problem = problem.or_else(|| res.problem.clone().map(|p| (Cause::Other, p)));
+        if res.made.is_empty() && idea.problem.is_none() {
+            idea.note = Some(("Nothing was played, so no layer was added.".into(), false));
+        } else if res.empty > 0 {
+            let n = res.empty;
+            idea.note = Some((
+                format!("{n} time{} round with nothing played {} not kept.", if n == 1 { "" } else { "s" }, if n == 1 { "was" } else { "were" }),
+                false,
+            ));
+        }
+        self.idea = Some(idea);
+        self.screen = Screen::Idea;
+    }
+
+    /// **Add a layer** on screen 3: after the 3-2-1 (when the setting asks for it) the idea plays
+    /// round and round from its start and a new layer records over it.
+    pub fn add_layer(&mut self) {
+        self.apply_name();
+        if self.recording() || self.counting.is_some() || self.idea.is_none() {
+            return;
+        }
+        let Some(rig) = &self.rig else { return };
+        if !rig.can_record() {
+            return;
+        }
+        let _ = rig.play_file(None);
+        self.playing = None;
+        // With the click on, its bar counts in instead of the 3-2-1.
+        if self.prefs.count_in && self.prefs.click().is_none() {
+            self.counting = Some(Instant::now());
+        } else {
+            self.begin_layer();
+        }
+    }
+
+    /// The layer starts now (the count is over).
+    fn begin_layer(&mut self) {
+        let Some(i) = &mut self.idea else { return };
+        let Some(rig) = self.rig.as_mut() else { return };
+        i.confirm_throw = false;
+        i.confirm_layer = None;
+        i.made.clear();
+        let fail = |i: &mut Idea, e: String| i.note = Some((e, true));
+        let mix = match layers::mix(&i.take, &i.side, rig.rate()) {
+            Ok(m) => m,
+            Err(e) => return fail(i, e),
+        };
+        let Some(folder) = i.take.folder() else { return fail(i, "This idea's files are gone.".into()) };
+        let first = i.take.next_layer();
+        let n = i64::try_from(mix.frames).unwrap_or(i64::MAX);
+        // Noted beside the idea while it records: a crash leaves a take that is finished later.
+        let side_path = folder.join(format!("{}.{}", i.take.stem, layers::SIDECAR_EXT));
+        let mut side = i.side.clone();
+        side.pending = Some(layers::Pending { layer: first, loop_frames: n, rate: rig.rate(), offset: rig.layer_offset() });
+        if let Err(e) = side.save(&side_path) {
+            return fail(i, format!("This idea's folder can't be written to: {e}"));
+        }
+        // The click at the idea's own tempo when it has one.
+        let click = self.prefs.click().map(|c| i.side.tempo.map_or(c, |t| crate::rig::Click { volume_db: c.volume_db, ..t }));
+        rig.set_click(click);
+        match rig.start_layer(&folder, &i.take.stem, first, mix.channels, n) {
+            Ok(()) => {
+                i.side = side;
+                self.layer_loop = n;
+                self.notes = (0, 0);
+                // Once: what to do so the idea isn't recorded again from the speakers.
+                self.layer_hint = !self.prefs.layer_hint_seen && self.prefs.audio_on && rig.input_channels() > 0;
+                self.prefs.layer_hint_seen |= self.layer_hint;
+            }
+            Err(e) => {
+                side.pending = None;
+                let _ = side.save(&side_path);
+                fail(i, start_problem(&e, &folder));
+            }
+        }
+    }
+
+    /// While a layer records: the idea, the layer number, how far round the loop (0..1) and
+    /// which time round (1 for the first).
+    pub fn layer_status(&self) -> Option<(String, u32, f32, u32)> {
+        let rig = self.rig.as_ref()?;
+        let (idea, first) = rig.layering()?;
+        let (at, pass) = rig.loop_at(self.layer_loop);
+        Some((idea.to_string(), first, at, pass.saturating_add(1)))
+    }
+
+    /// The 3-2-1 showing now (3, 2 or 1), while it counts.
+    pub fn count_shown(&self) -> Option<u32> {
+        let t = self.counting?.elapsed().as_secs_f64();
+        Some((3 - (t / COUNT_STEP).floor().clamp(0.0, 2.0) as u32).max(1))
+    }
+
+    /// Mutes or unmutes a layer of the idea on screen 3 (remembered in its sidecar).
+    pub fn set_muted(&mut self, n: u32, muted: bool) {
+        self.edit_mix(n, |m| m.muted = muted, true);
+    }
+
+    /// A layer's level (0..2, 1 as recorded); `done`: the slider was let go (the mix playing
+    /// picks it up then).
+    pub fn set_level(&mut self, n: u32, level: f32, done: bool) {
+        self.edit_mix(n, |m| m.level = level.clamp(0.0, 2.0), done);
+    }
+
+    /// Loop on screen 3 (remembered in the idea's sidecar).
+    pub fn set_looped(&mut self, on: bool) {
+        let Some(i) = &mut self.idea else { return };
+        i.side.looped = on;
+        self.save_side(true);
+    }
+
+    fn edit_mix(&mut self, n: u32, f: impl FnOnce(&mut layers::LayerMix), done: bool) {
+        let Some(i) = &mut self.idea else { return };
+        let mut m = i.side.mix(n);
+        f(&mut m);
+        i.side.layers.insert(n, m);
+        self.save_side(done);
+    }
+
+    /// Writes the idea's sidecar; `replay`: a mix playing restarts with the change.
+    fn save_side(&mut self, replay: bool) {
+        let Some(i) = &mut self.idea else { return };
+        if let Some(p) = i.take.sidecar_path() {
+            match i.side.save(&p) {
+                Ok(()) => i.take.sidecar = Some(p),
+                Err(e) => i.note = Some((format!("Couldn't remember that: {e}"), true)),
+            }
+        }
+        self.scanned = None;
+        if replay && self.playing.as_ref().is_some_and(|p| p.stem == i.take.stem) {
+            let take = i.take.clone();
+            self.playing = None;
+            self.play(&take);
+        }
+    }
+
+    /// Throws one layer of the idea on screen 3 away (after it asked); the others stay.
+    pub fn throw_away_layer(&mut self, n: u32) {
+        self.stop_playing();
+        let Some(i) = &mut self.idea else { return };
+        i.confirm_layer = None;
+        match files::delete_layer(&i.take, n) {
+            Ok(t) => {
+                i.take = t;
+                i.side.layers.remove(&n);
+                i.made.retain(|m| *m != n);
+                i.shape = i.take.all_layers().into_iter().find_map(|l| l.wav).and_then(|w| files::shape(&w, SHAPE_BARS)).unwrap_or_default();
+                i.note = Some((format!("{} thrown away.", layer_name(n)), false));
+            }
+            Err(e) => i.note = Some((format!("It could not be thrown away: {e}"), true)),
+        }
+        let gone = self.idea.as_ref().is_some_and(|i| i.take.layer_count() == 0);
+        if gone {
+            // The last layer: the idea is gone (its sidecar with it).
+            if let Some(s) = self.idea.as_ref().and_then(|i| i.take.sidecar.clone()) {
+                let _ = std::fs::remove_file(s);
+            }
+            self.idea = None;
+            self.message = Some(("Thrown away.".into(), false));
+            self.screen = Screen::Main;
+        } else {
+            self.save_side(false);
+        }
+        self.rescan();
+    }
+
+    fn stop_playing(&mut self) {
+        if self.playing.take().is_some()
+            && let Some(r) = &self.rig
+        {
+            let _ = r.play_file(None);
+        }
+    }
+
     fn idea_for(&self, take: TakeFiles) -> Idea {
-        let shape = take.wav.as_deref().and_then(|w| files::shape(w, SHAPE_BARS)).unwrap_or_default();
+        let shape = take.all_layers().into_iter().find_map(|l| l.wav).and_then(|w| files::shape(&w, SHAPE_BARS)).unwrap_or_default();
         let name = words::display_name(&take.stem);
+        let side = Sidecar::of(&take);
         Idea {
+            side,
+            made: Vec::new(),
+            confirm_layer: None,
             orig_stem: take.stem.clone(),
             default_name: name.clone(),
             name,
@@ -502,15 +961,39 @@ impl RecorderApp {
             let _ = rig.play_file(None);
             return;
         }
-        match rig.play_file(take.wav.as_deref()) {
-            Ok(()) => self.playing = Some(Playing { stem: take.stem.clone(), since: Instant::now(), seconds: take.seconds.unwrap_or(0.0) }),
+        // One take alone, as recorded; an idea with layers (or one opened on screen 3, which may
+        // loop) as its mix.
+        let on_screen = self.screen == Screen::Idea && self.idea.as_ref().is_some_and(|i| i.take.stem == take.stem);
+        let side = if on_screen { self.idea.as_ref().map(|i| i.side.clone()).unwrap_or_default() } else { Sidecar::of(take) };
+        let looped = on_screen && side.looped;
+        if take.layer_count() <= 1 && !looped && side.layers.get(&1).is_none_or(|m| *m == layers::LayerMix::default()) {
+            match rig.play_file(take.wav.as_deref()) {
+                Ok(()) => {
+                    self.playing = Some(Playing { stem: take.stem.clone(), since: Instant::now(), seconds: take.seconds.unwrap_or(0.0), looped })
+                }
+                Err(e) => self.message = Some((format!("Cannot play it: {e}"), true)),
+            }
+            return;
+        }
+        match layers::mix(take, &side, rig.rate()) {
+            Ok(m) => {
+                let seconds = m.frames as f64 / f64::from(m.rate.max(1));
+                let n = i64::try_from(m.frames).unwrap_or(i64::MAX);
+                rig.play_mix(m.channels, looped.then_some(n));
+                self.playing = Some(Playing { stem: take.stem.clone(), since: Instant::now(), seconds, looped });
+            }
             Err(e) => self.message = Some((format!("Cannot play it: {e}"), true)),
         }
     }
 
-    /// The take playing now, and how far (0..1).
+    /// The take playing now, and how far (0..1; round and round when it loops).
     pub fn playing(&self) -> Option<(&str, f32)> {
-        self.playing.as_ref().map(|p| (p.stem.as_str(), (p.since.elapsed().as_secs_f64() / p.seconds.max(0.01)).clamp(0.0, 1.0) as f32))
+        self.playing.as_ref().map(|p| {
+            let t = p.since.elapsed().as_secs_f64();
+            let secs = p.seconds.max(0.01);
+            let at = if p.looped { t.rem_euclid(secs) / secs } else { t / secs };
+            (p.stem.as_str(), at.clamp(0.0, 1.0) as f32)
+        })
     }
 
     /// Throws the idea on screen 3 away (after it asked), back to the list.
@@ -562,6 +1045,10 @@ impl RecorderApp {
         }
         if self.screen == Screen::Idea {
             self.apply_name();
+            // A mix playing round stops with its screen.
+            if self.playing.as_ref().is_some_and(|p| p.looped) {
+                self.stop_playing();
+            }
         }
         if self.screen == Screen::Studio {
             self.link.stop_finding();
@@ -575,7 +1062,7 @@ impl RecorderApp {
                 }
             }
             Screen::Settings => self.read_devices(),
-            Screen::Main | Screen::Idea => {}
+            Screen::Main | Screen::Idea | Screen::Keys => {}
         }
         if screen == Screen::Main {
             self.message = self.message.take().filter(|(_, bad)| *bad);
@@ -664,8 +1151,10 @@ impl RecorderApp {
         if on_record_screen && !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
             self.toggle_record();
         }
-        if !self.recording()
-            && matches!(self.screen, Screen::Studio | Screen::Settings | Screen::Idea)
+        if self.counting.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.counting = None;
+        } else if !self.recording()
+            && matches!(self.screen, Screen::Studio | Screen::Settings | Screen::Idea | Screen::Keys)
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
         {
             self.go(Screen::Main);
@@ -681,7 +1170,7 @@ impl RecorderApp {
             self.window = Some(([r.min.x, r.min.y], [r.width(), r.height()]));
         }
         self.draw(ui);
-        let busy = self.recording() || self.playing.is_some() || self.rig.is_none() || self.link.busy();
+        let busy = self.recording() || self.playing.is_some() || self.rig.is_none() || self.link.busy() || self.counting.is_some() || self.measuring;
         ui.ctx().request_repaint_after(Duration::from_millis(if busy { 33 } else { 100 }));
     }
 }

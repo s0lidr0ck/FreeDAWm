@@ -1,20 +1,94 @@
-//! The takes in the ideas folder: a WAV and a MIDI file with the same stem are one take.
+//! The ideas in the ideas folder. A WAV and a MIDI file with the same stem are one take; an
+//! idea's other layers are `<idea> (layer 2).wav` / `.mid` and so on beside it (see
+//! [`crate::layers`]), and its sidecar `<idea>.fdidea` remembers how they play together. Files
+//! named that way by hand are picked up as layers too.
 
+use crate::layers::{SIDECAR_EXT, layer_stem, split_layer};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// One take on disk.
+/// One layer of an idea on disk (layer 1 is the idea's own WAV and MIDI file).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerFiles {
+    /// 1 for the idea's first take, 2 for `<idea> (layer 2)`…
+    pub n: u32,
+    pub wav: Option<PathBuf>,
+    pub mid: Option<PathBuf>,
+    /// What the keys sounded like (`<layer> (keys).wav`), when it was saved.
+    pub keys: Option<PathBuf>,
+    /// The WAV's length (seconds), read from its header.
+    pub seconds: Option<f64>,
+}
+
+/// One idea on disk: its first take (`wav`, `mid`) and its other layers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TakeFiles {
     pub stem: String,
     pub wav: Option<PathBuf>,
     pub mid: Option<PathBuf>,
+    /// What the keys sounded like (`<layer> (keys).wav`), when it was saved.
+    pub keys: Option<PathBuf>,
     pub modified: Option<SystemTime>,
     /// The WAV's length (seconds), read from its header.
     pub seconds: Option<f64>,
+    /// Layers 2, 3… (in order; numbers can have gaps where one was thrown away).
+    pub layers: Vec<LayerFiles>,
+    /// `<idea>.fdidea`, when there is one.
+    pub sidecar: Option<PathBuf>,
 }
 
-/// The newest `max` takes in `dir`, newest first.
+impl TakeFiles {
+    /// A take of one layer.
+    pub fn single(stem: &str, wav: Option<PathBuf>, mid: Option<PathBuf>, seconds: Option<f64>) -> TakeFiles {
+        TakeFiles { stem: stem.to_string(), wav, mid, keys: None, modified: None, seconds, layers: Vec::new(), sidecar: None }
+    }
+
+    /// Every layer, the first take included (when it still has a file), in order.
+    pub fn all_layers(&self) -> Vec<LayerFiles> {
+        let first = (self.wav.is_some() || self.mid.is_some() || self.keys.is_some()).then(|| LayerFiles {
+            n: 1,
+            wav: self.wav.clone(),
+            mid: self.mid.clone(),
+            keys: self.keys.clone(),
+            seconds: self.seconds,
+        });
+        first.into_iter().chain(self.layers.iter().cloned()).collect()
+    }
+
+    /// How many layers it has.
+    pub fn layer_count(&self) -> usize {
+        self.all_layers().len()
+    }
+
+    /// The next free layer number.
+    pub fn next_layer(&self) -> u32 {
+        self.all_layers().iter().map(|l| l.n).max().unwrap_or(1).saturating_add(1).max(2)
+    }
+
+    /// Its length: the first take's, else the longest layer's.
+    pub fn length(&self) -> Option<f64> {
+        self.seconds.or_else(|| self.layers.iter().filter_map(|l| l.seconds).reduce(f64::max))
+    }
+
+    /// Every file it has (layers and sidecar).
+    pub fn files(&self) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = self.all_layers().into_iter().flat_map(|l| l.wav.into_iter().chain(l.mid).chain(l.keys)).collect();
+        v.extend(self.sidecar.clone());
+        v
+    }
+
+    /// The folder it is in.
+    pub fn folder(&self) -> Option<PathBuf> {
+        self.files().first().and_then(|p| p.parent().map(Path::to_path_buf))
+    }
+
+    /// The sidecar's path (whether or not it exists yet), beside its files.
+    pub fn sidecar_path(&self) -> Option<PathBuf> {
+        self.folder().map(|d| d.join(format!("{}.{SIDECAR_EXT}", self.stem)))
+    }
+}
+
+/// The newest `max` ideas in `dir`, newest first; an idea with layers is one idea.
 pub fn recent(dir: &Path, max: usize) -> Vec<TakeFiles> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut takes: Vec<TakeFiles> = Vec::new();
@@ -22,21 +96,50 @@ pub fn recent(dir: &Path, max: usize) -> Vec<TakeFiles> {
         let path = e.path();
         let ext = path.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase);
         let (Some(ext), Some(stem)) = (ext, path.file_stem().and_then(|s| s.to_str()).map(str::to_string)) else { continue };
-        if ext != "wav" && ext != "mid" {
+        if ext != "wav" && ext != "mid" && ext != SIDECAR_EXT {
             continue;
         }
+        let heard = stem.strip_suffix(" (keys)").filter(|_| ext == "wav");
+        let (idea, n) = if ext == SIDECAR_EXT { (stem.clone(), 0) } else { split_layer(heard.unwrap_or(&stem)) };
         let modified = e.metadata().ok().and_then(|m| m.modified().ok());
-        if !takes.iter().any(|t| t.stem == stem) {
-            takes.push(TakeFiles { stem: stem.clone(), wav: None, mid: None, modified: None, seconds: None });
+        if !takes.iter().any(|t| t.stem == idea) {
+            takes.push(TakeFiles::single(&idea, None, None, None));
         }
-        let Some(t) = takes.iter_mut().find(|t| t.stem == stem) else { continue };
+        let Some(t) = takes.iter_mut().find(|t| t.stem == idea) else { continue };
+        if ext == SIDECAR_EXT {
+            t.sidecar = Some(path);
+            continue;
+        }
         t.modified = t.modified.max(modified);
-        if ext == "wav" {
-            t.seconds = wav_seconds(&path);
-            t.wav = Some(path);
-        } else {
-            t.mid = Some(path);
+        if n <= 1 {
+            if heard.is_some() {
+                t.keys = Some(path);
+            } else if ext == "wav" {
+                t.seconds = wav_seconds(&path);
+                t.wav = Some(path);
+            } else {
+                t.mid = Some(path);
+            }
+            continue;
         }
+        if !t.layers.iter().any(|l| l.n == n) {
+            t.layers.push(LayerFiles { n, wav: None, mid: None, keys: None, seconds: None });
+        }
+        if let Some(l) = t.layers.iter_mut().find(|l| l.n == n) {
+            if heard.is_some() {
+                l.keys = Some(path);
+            } else if ext == "wav" {
+                l.seconds = wav_seconds(&path);
+                l.wav = Some(path);
+            } else {
+                l.mid = Some(path);
+            }
+        }
+    }
+    // A sidecar alone is not an idea.
+    takes.retain(|t| t.layer_count() > 0);
+    for t in &mut takes {
+        t.layers.sort_by_key(|l| l.n);
     }
     takes.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.stem.cmp(&a.stem)));
     takes.truncate(max);
@@ -140,7 +243,8 @@ pub fn shape(path: &Path, bars: usize) -> Option<Vec<f32>> {
     Some(out)
 }
 
-/// Renames a take's files to `new` (both, or neither: a name taken by another take is refused).
+/// Renames an idea's files (every layer's and its sidecar) to `new`: all, or none (a name taken
+/// by another idea is refused).
 pub fn rename(take: &TakeFiles, new: &str) -> Result<TakeFiles, String> {
     let new = crate::settings::file_safe(new);
     if new.is_empty() {
@@ -149,34 +253,70 @@ pub fn rename(take: &TakeFiles, new: &str) -> Result<TakeFiles, String> {
     if new == take.stem {
         return Ok(take.clone());
     }
-    let moved =
-        |p: &Option<PathBuf>| p.as_ref().map(|p| p.with_file_name(format!("{new}.{}", p.extension().and_then(|x| x.to_str()).unwrap_or("wav"))));
-    let (wav, mid) = (moved(&take.wav), moved(&take.mid));
-    if wav.iter().chain(mid.iter()).any(|p| p.exists()) {
+    let moved = |p: &PathBuf, n: u32| {
+        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("wav").to_string();
+        p.with_file_name(format!("{}.{ext}", layer_stem(&new, n)))
+    };
+    let mut plan: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut out = TakeFiles { stem: new.clone(), layers: Vec::new(), ..take.clone() };
+    for l in take.all_layers() {
+        let (wav, mid) = (l.wav.as_ref().map(|p| moved(p, l.n)), l.mid.as_ref().map(|p| moved(p, l.n)));
+        plan.extend(l.wav.iter().cloned().zip(wav.clone()));
+        plan.extend(l.mid.iter().cloned().zip(mid.clone()));
+        let keys = l.keys.as_ref().map(|p| p.with_file_name(format!("{}.wav", crate::keys::keys_stem(&layer_stem(&new, l.n)))));
+        plan.extend(l.keys.iter().cloned().zip(keys.clone()));
+        if l.n == 1 {
+            (out.wav, out.mid, out.keys) = (wav, mid, keys);
+        } else {
+            out.layers.push(LayerFiles { wav, mid, keys, ..l });
+        }
+    }
+    if let Some(s) = &take.sidecar {
+        let to = s.with_file_name(format!("{new}.{SIDECAR_EXT}"));
+        plan.push((s.clone(), to.clone()));
+        out.sidecar = Some(to);
+    }
+    // The new names must all be free (any file of another idea with that name counts).
+    let taken = plan.iter().any(|(_, to)| to.exists()) || take.folder().is_some_and(|dir| recent(&dir, usize::MAX).iter().any(|t| t.stem == new));
+    if taken {
         return Err(format!("Another take is already called “{new}”"));
     }
-    if let (Some(from), Some(to)) = (&take.wav, &wav) {
-        std::fs::rename(from, to).map_err(|e| format!("Cannot rename: {e}"))?;
-    }
-    if let (Some(from), Some(to)) = (&take.mid, &mid)
-        && let Err(e) = std::fs::rename(from, to)
-    {
-        // Put the WAV back: the pair keeps one name.
-        if let (Some(from), Some(to)) = (&take.wav, &wav) {
-            let _ = std::fs::rename(to, from);
+    let mut done: Vec<&(PathBuf, PathBuf)> = Vec::new();
+    for step in &plan {
+        if let Err(e) = std::fs::rename(&step.0, &step.1) {
+            // Put back what moved: the idea keeps one name.
+            for (from, to) in done.iter().rev() {
+                let _ = std::fs::rename(to, from);
+            }
+            return Err(format!("Cannot rename: {e}"));
         }
-        return Err(format!("Cannot rename: {e}"));
+        done.push(step);
     }
-    Ok(TakeFiles { stem: new, wav, mid, ..take.clone() })
+    Ok(out)
 }
 
-/// Deletes a take's files for good (the recorder has no recycle bin of its own; the window asks
-/// first).
+/// Deletes an idea's files for good, every layer and its sidecar (the recorder has no recycle
+/// bin of its own; the window asks first).
 pub fn delete(take: &TakeFiles) -> Result<(), String> {
-    for p in take.wav.iter().chain(take.mid.iter()) {
-        std::fs::remove_file(p).map_err(|e| format!("Cannot delete {}: {e}", p.display()))?;
+    for p in take.files() {
+        std::fs::remove_file(&p).map_err(|e| format!("Cannot delete {}: {e}", p.display()))?;
     }
     Ok(())
+}
+
+/// Deletes one layer's files for good (layer 1 is the idea's own WAV and MIDI file); the
+/// idea's other layers stay as they are.
+pub fn delete_layer(take: &TakeFiles, n: u32) -> Result<TakeFiles, String> {
+    let Some(l) = take.all_layers().into_iter().find(|l| l.n == n) else { return Err(format!("There is no layer {n}")) };
+    for p in l.wav.iter().chain(l.mid.iter()).chain(l.keys.iter()) {
+        std::fs::remove_file(p).map_err(|e| format!("Cannot delete {}: {e}", p.display()))?;
+    }
+    let mut out = take.clone();
+    if n == 1 {
+        (out.wav, out.mid, out.keys, out.seconds) = (None, None, None, None);
+    }
+    out.layers.retain(|l| l.n != n);
+    Ok(out)
 }
 
 /// Shows `path` in the system's file manager (selected, where the system can).

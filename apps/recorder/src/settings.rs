@@ -39,6 +39,56 @@ pub struct Prefs {
     pub window_pos: Option<[f32; 2]>,
     /// The window's last size (points).
     pub window_size: Option<[f32; 2]>,
+    /// Layers: count 3-2-1 on the screen before a layer starts (else it starts at once).
+    pub count_in: bool,
+    /// Layers: the manual nudge, in milliseconds (more: layers are placed earlier).
+    pub layer_nudge_ms: f32,
+    /// Layers: the round trip **Line up** measured, with the devices it was measured on.
+    pub layer_measured: Option<Measured>,
+    /// The headphones hint was shown (it shows once).
+    pub layer_hint_seen: bool,
+    /// The click (metronome): on (off unless turned on), its tempo, beats a bar and volume.
+    pub click_on: bool,
+    pub click_bpm: f64,
+    pub click_beats: u32,
+    pub click_volume_db: f64,
+    /// With the click on, a new idea is made a whole number of bars long.
+    pub click_round_bars: bool,
+    /// The keyboard plays through a sound (off: silent, only the MIDI file is kept).
+    pub keys_on: bool,
+    /// That sound (`None`: the piano a new Recorder starts with).
+    pub keys: Option<crate::keys::KeySound>,
+    /// Also keep what the keys sounded like as `<idea> (keys).wav`.
+    pub keys_wav: bool,
+}
+
+impl Prefs {
+    /// The keyboard's sound as set (`None`: off).
+    pub fn key_sound(&self) -> Option<crate::keys::KeySound> {
+        if !self.keys_on {
+            return None;
+        }
+        self.keys.clone().or_else(crate::keys::KeySound::default_piano)
+    }
+
+    /// The click as set (`None`: off).
+    pub fn click(&self) -> Option<crate::rig::Click> {
+        self.click_on.then(|| crate::rig::Click {
+            bpm: self.click_bpm.clamp(crate::rig::Click::MIN_BPM, crate::rig::Click::MAX_BPM),
+            beats: self.click_beats.clamp(1, 16),
+            volume_db: self.click_volume_db.clamp(-60.0, 12.0),
+        })
+    }
+}
+
+/// A loopback round trip measured by **Line up**.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Measured {
+    /// The devices, buffer and rate it holds for (`Rig::latency_key`).
+    pub key: String,
+    pub frames: i64,
+    /// The input feed's latency it went through.
+    pub feed: u32,
 }
 
 impl Default for Prefs {
@@ -55,6 +105,18 @@ impl Default for Prefs {
             record_on_open: false,
             window_pos: None,
             window_size: None,
+            count_in: true,
+            layer_nudge_ms: 0.0,
+            layer_measured: None,
+            layer_hint_seen: false,
+            click_on: false,
+            click_bpm: 120.0,
+            click_beats: 4,
+            click_volume_db: -6.0,
+            click_round_bars: true,
+            keys_on: true,
+            keys: None,
+            keys_wav: true,
         }
     }
 }

@@ -25,6 +25,7 @@ pub mod edit;
 pub mod file_access;
 pub mod gild;
 pub mod gild_presets;
+pub mod idea;
 pub mod inspect;
 pub mod io;
 pub mod juke_kits;

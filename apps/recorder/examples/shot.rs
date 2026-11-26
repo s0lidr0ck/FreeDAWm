@@ -22,7 +22,7 @@ use soundcraft_net::hub::Hub;
 use soundcraft_recorder::booth::BoothView;
 use soundcraft_recorder::rig::InputChoice;
 use soundcraft_recorder::settings::Prefs;
-use soundcraft_recorder::ui::{RecorderApp, Screen, look};
+use soundcraft_recorder::ui::{COUNT_STEP, RecorderApp, Screen, look};
 use std::time::{Duration, Instant};
 
 const MONO: InputChoice = InputChoice { on: true, channel: 0, stereo: false };
@@ -53,6 +53,17 @@ impl Shots {
     fn harness(&self, app: RecorderApp) -> Harness {
         let h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(look::WIDTH, look::HEIGHT))
+            .with_pixels_per_point(self.scale)
+            .wgpu()
+            .build_ui_state(|ui, app: &mut RecorderApp| app.ui(ui), app);
+        look::apply(&h.ctx);
+        h
+    }
+
+    /// The window `height` points tall (the whole settings screen at once).
+    fn tall(&self, app: RecorderApp, height: f32) -> Harness {
+        let h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(look::WIDTH, height))
             .with_pixels_per_point(self.scale)
             .wgpu()
             .build_ui_state(|ui, app: &mut RecorderApp| app.ui(ui), app);
@@ -264,6 +275,60 @@ fn main() {
             shots.save(&mut h, "1-ready-joined");
         }
     }
+
+    // Layers: Add a layer, the 3-2-1, recording a layer, the layers saved, one asking to go,
+    // the list, their settings.
+    let (a, mut o) = app(true, &ideas, |_| {});
+    let mut h = shots.harness(a);
+    h.state_mut().open_idea("Chorus idea");
+    shots.save(&mut h, "5-idea-add-a-layer");
+    h.state_mut().add_layer();
+    shots.save(&mut h, "5-layer-count-in");
+    run(&mut h, &mut o, 3.0 * COUNT_STEP + 0.1, 0.5);
+    run(&mut h, &mut o, 1.6, 0.5);
+    shots.save(&mut h, "5-layer-recording");
+    h.state_mut().toggle_record();
+    shots.save(&mut h, "5-layers-saved");
+    h.state_mut().set_muted(2, true);
+    if let Some(i) = &mut h.state_mut().idea {
+        i.confirm_layer = Some(3);
+    }
+    shots.save(&mut h, "5-layer-throw-asks");
+    h.state_mut().go(Screen::Main);
+    shots.save(&mut h, "5-list-with-layers");
+    let (a, _o) = app(true, &ideas, |p| p.layer_nudge_ms = 5.0);
+    let mut h = shots.tall(a, 1500.0);
+    h.state_mut().go(Screen::Settings);
+    h.state_mut().line_up_note = Some(("Lined up. Sound takes 12 ms to go out and come back in on this computer.".into(), false));
+    shots.save(&mut h, "settings-full");
+    // The keyboard's sound: the card on the ready screen, its screen (a preset with named knobs),
+    // all of it, and off.
+    let (a, mut o) = app(true, &ideas, |p| p.keys = soundcraft_recorder::keys::KeySound::from_preset("subtractive_synth", "Breathing Pad"));
+    let mut h = shots.harness(a);
+    run(&mut h, &mut o, 0.2, 0.3);
+    shots.save(&mut h, "1-ready-keyboard-sound");
+    h.state_mut().go(Screen::Keys);
+    shots.save(&mut h, "6-keyboard-sound");
+    let (a, _o) = app(true, &ideas, |p| p.keys = soundcraft_recorder::keys::KeySound::from_preset("subtractive_synth", "Breathing Pad"));
+    let mut h = shots.tall(a, 1500.0);
+    h.state_mut().go(Screen::Keys);
+    shots.save(&mut h, "6-keyboard-sound-full");
+    let (a, _o) = app(true, &ideas, |p| p.keys_on = false);
+    let mut h = shots.harness(a);
+    h.state_mut().go(Screen::Keys);
+    shots.save(&mut h, "6-keyboard-sound-off");
+
+    // The click: its settings, the bar before a take.
+    let (a, _o) = app(true, &ideas, |p| (p.click_on, p.click_bpm, p.click_beats) = (true, 96.0, 4));
+    let mut h = shots.tall(a, 1700.0);
+    h.state_mut().go(Screen::Settings);
+    shots.save(&mut h, "settings-click");
+    let (a, mut o) = app(true, &ideas, |p| (p.click_on, p.click_bpm) = (true, 96.0));
+    let mut h = shots.harness(a);
+    h.state_mut().toggle_record();
+    run(&mut h, &mut o, 1.0, 0.0);
+    shots.save(&mut h, "2-click-count-in");
+
     let _ = std::fs::remove_dir_all(&root);
     println!("shots in {}", out.display());
 }

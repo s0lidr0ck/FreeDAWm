@@ -72,10 +72,16 @@ pub fn when_line(t: &TakeFiles, now: Stamp) -> String {
         let day = day_word(now, at);
         parts.push(if named { day } else { format!("{day} {}", time_of_day(at)) });
     }
-    if let Some(s) = t.seconds {
+    let layers = t.layer_count();
+    if layers > 1 {
+        parts.push(format!("{layers} layers"));
+    }
+    if let Some(s) = t.length() {
         parts.push(clock(s));
     }
-    parts.push(kinds(t.wav.is_some(), t.mid.is_some()).to_string());
+    if layers <= 1 {
+        parts.push(kinds(t.wav.is_some(), t.mid.is_some()).to_string());
+    }
     parts.join(" · ")
 }
 
@@ -211,8 +217,11 @@ mod tests {
         assert_eq!(day_word(now, (2026, 11, 19, 9, 0, 0)), "Thursday");
         assert_eq!(day_word(now, (2026, 11, 2, 9, 0, 0)), "Nov 2");
         assert_eq!(day_word(now, (2025, 12, 31, 9, 0, 0)), "Dec 31, 2025");
-        let t = TakeFiles { stem: "Idea 2026-11-22 21-41-00".into(), wav: Some("x.wav".into()), mid: None, modified: None, seconds: Some(75.0) };
+        let mut t = TakeFiles::single("Idea 2026-11-22 21-41-00", Some("x.wav".into()), None, Some(75.0));
         assert_eq!(when_line(&t, now), "Yesterday · 1:15 · voice");
+        t.layers.push(crate::files::LayerFiles { n: 2, wav: Some("x (layer 2).wav".into()), mid: None, keys: None, seconds: Some(75.0) });
+        t.layers.push(crate::files::LayerFiles { n: 3, wav: None, mid: Some("x (layer 3).mid".into()), keys: None, seconds: None });
+        assert_eq!(when_line(&t, now), "Yesterday · 3 layers · 1:15", "an idea with layers is one row");
     }
 
     #[test]
