@@ -54,7 +54,9 @@ impl Offline {
         if self.next > now {
             std::thread::sleep(self.next - now);
         }
-        self.next = self.next.max(now) + Duration::from_secs_f64(BLOCK as f64 / f64::from(RATE));
+        // A sound card's clock does not slow down when the computer is busy: after a late block
+        // the next ones run back to back until the device is on time again.
+        self.next += Duration::from_secs_f64(BLOCK as f64 / f64::from(RATE));
         if let Some(i) = &self.input {
             let ch = self.rig.input_channels().max(1);
             let mut v = Vec::with_capacity(BLOCK * ch);
