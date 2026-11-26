@@ -13,6 +13,7 @@
 
 pub mod booth;
 pub mod files;
+pub mod layers;
 pub mod rig;
 pub mod settings;
 pub mod ui;

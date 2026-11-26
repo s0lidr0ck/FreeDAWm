@@ -261,6 +261,34 @@ pub fn check_icon(p: &egui::Painter, c: Pos2, size: f32, colour: Color32, width:
     p.line(vec![at(5.0, 12.5), at(9.5, 17.0), at(19.0, 7.5)], Stroke::new(width * k, colour));
 }
 
+/// The loop icon (two arrows chasing round), 18 points, at `c`.
+pub fn loop_icon(p: &egui::Painter, c: Pos2, colour: Color32) {
+    let stroke = Stroke::new(1.8, colour);
+    let r = 6.5;
+    let arc = |from: f32, to: f32| -> Vec<Pos2> {
+        (0..=10).map(|i| from + (to - from) * i as f32 / 10.0).map(|a| pos2(c.x + r * a.cos(), c.y + r * a.sin())).collect()
+    };
+    use std::f32::consts::PI;
+    p.line(arc(PI * 1.15, PI * 1.95), stroke);
+    p.line(arc(PI * 0.15, PI * 0.95), stroke);
+    // Arrow heads at the arcs' ends.
+    for a in [PI * 1.95, PI * 0.95] {
+        let tip = pos2(c.x + r * a.cos(), c.y + r * a.sin());
+        let along = vec2(-a.sin(), a.cos());
+        let out = vec2(a.cos(), a.sin());
+        let back = tip - along * 3.5;
+        p.add(egui::Shape::convex_polygon(vec![tip + along * 1.5, back + out * 3.0, back - out * 3.0], colour, Stroke::NONE));
+    }
+}
+
+/// A cross (×), `size` wide, at `c`.
+pub fn cross_icon(p: &egui::Painter, c: Pos2, size: f32, colour: Color32) {
+    let h = size / 2.0;
+    let s = Stroke::new(2.0, colour);
+    p.line_segment([c + vec2(-h, -h), c + vec2(h, h)], s);
+    p.line_segment([c + vec2(-h, h), c + vec2(h, -h)], s);
+}
+
 /// A back chevron, `size` wide, at `c`.
 pub fn back_icon(p: &egui::Painter, c: Pos2, size: f32, colour: Color32) {
     let k = size / 24.0;

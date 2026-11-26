@@ -39,6 +39,24 @@ pub struct Prefs {
     pub window_pos: Option<[f32; 2]>,
     /// The window's last size (points).
     pub window_size: Option<[f32; 2]>,
+    /// Layers: count 3-2-1 on the screen before a layer starts (else it starts at once).
+    pub count_in: bool,
+    /// Layers: the manual nudge, in milliseconds (more: layers are placed earlier).
+    pub layer_nudge_ms: f32,
+    /// Layers: the round trip **Line up** measured, with the devices it was measured on.
+    pub layer_measured: Option<Measured>,
+    /// The headphones hint was shown (it shows once).
+    pub layer_hint_seen: bool,
+}
+
+/// A loopback round trip measured by **Line up**.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Measured {
+    /// The devices, buffer and rate it holds for (`Rig::latency_key`).
+    pub key: String,
+    pub frames: i64,
+    /// The input feed's latency it went through.
+    pub feed: u32,
 }
 
 impl Default for Prefs {
@@ -55,6 +73,10 @@ impl Default for Prefs {
             record_on_open: false,
             window_pos: None,
             window_size: None,
+            count_in: true,
+            layer_nudge_ms: 0.0,
+            layer_measured: None,
+            layer_hint_seen: false,
         }
     }
 }

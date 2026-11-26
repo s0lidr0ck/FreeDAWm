@@ -27,6 +27,8 @@ soundcraft-model.workspace = true
 soundcraft-engine.workspace = true
 soundcraft-playback.workspace = true
 soundcraft-net.workspace = true
+# Reading an idea's MIDI layers back (their length) for layering.
+soundcraft-midi.workspace = true
 # The computer's time zone offset, so takes are named in local time (already in the tree through
 # soundcraft-model; its one isolated unsafe module makes the OS call).
 soundcraft-sysmem.workspace = true
@@ -43,7 +45,5 @@ log.workspace = true
 winresource = "0.1"
 
 [dev-dependencies]
-# Reading back the MIDI files the takes write.
-soundcraft-midi.workspace = true
 # The window's states rendered offscreen (tests query the widgets; `examples/shot.rs` renders PNGs).
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
