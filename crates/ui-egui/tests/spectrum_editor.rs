@@ -10,7 +10,7 @@ use soundcraft_engine::cmd::spectrum::{self as cmd, Curve};
 use soundcraft_mix::spectrum_tap::{SpectrumTaps, track_key};
 use soundcraft_model::{ChannelFormat, Session, TrackId, TrackKind};
 use soundcraft_ui_egui::docking::Panel;
-use soundcraft_ui_egui::spectrum_view::{self, FFTS_PER_FRAME, POINTS};
+use soundcraft_ui_egui::spectrum_view::{self, FFTS_PER_FRAME};
 use soundcraft_ui_egui::{Services, SoundApp};
 
 const RATE: f32 = 48_000.0;
@@ -84,13 +84,9 @@ fn play(h: &mut Harness<SoundApp>, tones: &[(TrackId, f32)], frames: usize) {
     }
 }
 
-/// The grid point nearest `hz`.
-fn point(hz: f32) -> usize {
-    (0..POINTS).min_by(|a, b| (spectrum_view::point_hz(*a) / hz).ln().abs().total_cmp(&(spectrum_view::point_hz(*b) / hz).ln().abs())).unwrap()
-}
-
+/// What the graph shows for `c` at `hz` (dBFS).
 fn level(h: &Harness<SoundApp>, c: Curve, hz: f32) -> Option<f32> {
-    h.state().spectrum.level(c, point(hz))
+    h.state().spectrum.level(c, hz)
 }
 
 /// The list's switch for `name`.
@@ -168,7 +164,7 @@ fn hiding_a_track_removes_its_curve_and_its_tap() {
     checkbox!(h, "Bass").click();
     play(&mut h, &tones, 3);
     assert!(!h.state().spectrum.drawn.contains(&Curve::Track(bass)));
-    assert!(h.state().spectrum.level(Curve::Track(bass), 0).is_none(), "no curve kept for it");
+    assert!(h.state().spectrum.level(Curve::Track(bass), 110.0).is_none(), "no curve kept for it");
     assert!(h.state().spectrum.taps.slot_of(track_key(bass)).is_none(), "its tap is given back: no audio work, no analysis");
     assert!(!cmd::visible(h.state().engine.session(), Curve::Track(bass)));
     // And back.
@@ -290,7 +286,7 @@ fn forty_four_tracks_stay_within_the_analysis_budget() {
 }
 
 #[test]
-fn same_coloured_tracks_are_drawn_apart() {
+fn same_coloured_tracks_are_drawn_in_shades_of_their_colour() {
     let mut s = Session::default();
     let ids: Vec<TrackId> =
         ["Gtr L", "Gtr R", "Gtr Lead", "Bass"].iter().map(|n| s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(n))).collect();
@@ -300,28 +296,77 @@ fn same_coloured_tracks_are_drawn_apart() {
     }
     // Near-identical counts as the same.
     s.track_mut(ids[2]).unwrap().color = [204, 58, 63];
-    s.track_mut(ids[3]).unwrap().color = [60, 60, 200];
+    s.track_mut(ids[3]).unwrap().color = [90, 150, 240];
     let mut h = harness(app_for(s));
     let tones: Vec<(TrackId, f32)> = ids.iter().map(|t| (*t, 500.0)).collect();
     play(&mut h, &tones, 10);
     let looks = h.state().spectrum.looks.clone();
     let look = |i: usize| looks[&Curve::Track(ids[i])];
-    use spectrum_view::LineStyle::*;
-    assert_eq!([look(0).style, look(1).style, look(2).style, look(3).style], [Solid, Dashed, Dotted, Solid]);
+    use spectrum_view::{LineStyle::Solid, MIN_CONTRAST, PLOT_BG_LIGHTEST, contrast};
+    // Shades, not dashes: three solid lines in three clearly different reds.
+    assert_eq!([look(0).style, look(1).style, look(2).style, look(3).style], [Solid; 4]);
+    for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+        assert!(contrast(look(i).color, look(j).color) >= 1.45, "{i} and {j} apart: {:?} {:?}", look(i).color, look(j).color);
+    }
+    for i in 0..4 {
+        assert!(contrast(look(i).color, PLOT_BG_LIGHTEST) >= MIN_CONTRAST - 0.05, "{i} stands out from the plot");
+        let c = look(i).color;
+        assert!(if i < 3 { c.r() > c.g() && c.r() > c.b() } else { c.b() > c.r() }, "{i} keeps its hue: {c:?}");
+    }
+    // The blue track has a colour to itself: drawn as it is.
+    assert_eq!(look(3).color, egui::Color32::from_rgb(90, 150, 240));
     // The user's colours stay as they were.
     assert_eq!(h.state().engine.session().track(ids[1]).unwrap().color, red);
-    assert_eq!(look(0).color, egui::Color32::from_rgb(200, 60, 60));
-    // A fourth of one colour is lighter as well as solid again.
-    let c = egui::Color32::RED;
-    let l = spectrum_view::looks(&(0..4u64).map(|i| (Curve::Track(TrackId(i)), c)).collect::<Vec<_>>());
-    assert_eq!(l[&Curve::Track(TrackId(3))].style, Solid);
-    assert_ne!(l[&Curve::Track(TrackId(3))].color, c);
     // Hover still names the one under the pointer.
     let plot = h.state().spectrum.plot.unwrap();
     let lv = level(&h, Curve::Track(ids[3]), 500.0).unwrap();
     h.event(egui::Event::PointerMoved(Pos2::new(spectrum_view::x_of(plot, 500.0), spectrum_view::y_of(plot, lv))));
-    play(&mut h, &tones[3..], 2);
+    play(&mut h, &tones, 2);
     assert!(h.state().spectrum.hovered.is_some());
+}
+
+#[test]
+fn buses_and_the_master_have_their_own_sections() {
+    let (s, ids) = session();
+    let verb = ids[4];
+    let mut h = harness(app_for(s));
+    play(&mut h, &[], 2);
+    // Each section has a header with its switch; buses and the master start hidden.
+    h.get_by_label("Hide all tracks");
+    h.get_by_label("Show all buses");
+    h.get_by_label("Show all master");
+    assert!(!h.state().spectrum.drawn.contains(&Curve::Track(verb)));
+    // One click shows the buses.
+    h.get_by_label("Show all buses").click();
+    h.run_steps(2);
+    assert!(h.state().spectrum.drawn.contains(&Curve::Track(verb)));
+    assert!(cmd::visible(h.state().engine.session(), Curve::Track(verb)));
+    h.get_by_label("Hide all buses");
+    // And the tracks go in one click too.
+    h.get_by_label("Hide all tracks").click();
+    h.run_steps(2);
+    assert_eq!(h.state().spectrum.drawn, vec![Curve::Track(verb)]);
+    h.get_by_label("Show all master").click();
+    h.run_steps(2);
+    assert_eq!(h.state().spectrum.drawn, vec![Curve::Track(verb), Curve::Master]);
+}
+
+#[test]
+fn names_on_the_graph_never_overlap() {
+    let mut s = Session::default();
+    // Twelve tracks all peaking at nearly the same place.
+    let ids: Vec<TrackId> = (0..12).map(|i| s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(&format!("Track {i}")))).collect();
+    let mut h = harness(app_for(s));
+    let tones: Vec<(TrackId, f32)> = ids.iter().enumerate().map(|(i, t)| (*t, 400.0 + i as f32 * 10.0)).collect();
+    play(&mut h, &tones, 12);
+    let labels = h.state().spectrum.labels.clone();
+    assert!(!labels.is_empty() && labels.len() <= 6, "the loudest few are named: {}", labels.len());
+    for (i, (_, a)) in labels.iter().enumerate() {
+        for (_, b) in labels.iter().skip(i + 1) {
+            assert!(!a.intersects(*b), "{a:?} overlaps {b:?}");
+        }
+        assert!(h.state().spectrum.plot.unwrap().expand(1.0).contains_rect(*a), "inside the plot");
+    }
 }
 
 fn proof_dir() -> Option<std::path::PathBuf> {
@@ -332,6 +377,14 @@ fn proof_dir() -> Option<std::path::PathBuf> {
 /// mix engine plays it into the taps. Otherwise only checks that it draws.
 #[test]
 fn proof_pictures_of_the_demo() {
+    // The dock at its usual height in a large window, and a short dock in a small window.
+    proof_at(vec2(1500.0, 1000.0), 400.0, "large");
+    proof_at(vec2(1050.0, 700.0), 250.0, "small");
+}
+
+/// The proof pictures at window `size` with the lower dock `dock` high, named
+/// `<SOUNDCRAFT_SPECTRUM_PROOF_TAG>-<name>-…` (tag "spectrum" when unset).
+fn proof_at(size: egui::Vec2, dock: f32, name: &str) {
     let engine = soundcraft_engine::demo::demo_engine();
     let s = engine.session().clone();
     let mut app = SoundApp::new(engine, None, Services::default());
@@ -339,13 +392,20 @@ fn proof_pictures_of_the_demo() {
     app.spectrum.taps = taps;
     app.ui.show_spectrum = true;
     app.run("spectrum.show", json!({"master": true, "shown": true})).unwrap();
-    let mut h = harness(app);
-    // A tall lower dock.
-    if let Some(root) = h.state().ui.docking.layout.root.as_ref()
-        && let craft_ui::docking::Node::Split { .. } = root
-    {
-        let _ = h.state_mut().run("ui.dock", json!({"operation": "resizeSplit", "path": [], "size": {"FixedSecond": 460.0}}));
+    let mut b = Harness::builder().with_size(size).with_step_dt(1.0 / 30.0);
+    if proof_dir().is_some() {
+        b = b.wgpu();
     }
+    let mut h = b.build_ui_state(
+        |ui, app: &mut SoundApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    let _ = h.state_mut().run("ui.dock", json!({"operation": "resizeSplit", "path": [], "size": {"FixedSecond": dock}}));
     let mut mix = soundcraft_mix::MixEngine::new(RATE, 512);
     mix.set_spectrum_taps(Some(taps));
     let mut out = vec![vec![0.0f32; 512]; 2];
@@ -362,34 +422,31 @@ fn proof_pictures_of_the_demo() {
     };
     run(&mut h, 40);
     assert!(!h.state().spectrum.drawn.is_empty());
-    let shot = |h: &mut Harness<SoundApp>, name: &str| {
+    let tag = std::env::var("SOUNDCRAFT_SPECTRUM_PROOF_TAG").unwrap_or_else(|_| "spectrum".into());
+    let shot = |h: &mut Harness<SoundApp>, what: &str| {
         if let Some(dir) = proof_dir() {
             std::fs::create_dir_all(&dir).unwrap();
-            h.render().unwrap().save(dir.join(format!("{name}.png"))).unwrap();
+            h.render().unwrap().save(dir.join(format!("{tag}-{name}-{what}.png"))).unwrap();
         }
     };
-    shot(&mut h, "spectrum-all");
-    // Hovering the Bass curve.
-    let bass = h.state().engine.session().tracks.iter().find(|t| t.name == "Bass").map(|t| t.id).unwrap();
-    if let (Some(plot), Some(l)) = (h.state().spectrum.plot, level(&h, Curve::Track(bass), 80.0)) {
-        h.event(egui::Event::PointerMoved(Pos2::new(spectrum_view::x_of(plot, 80.0), spectrum_view::y_of(plot, l))));
-    }
+    shot(&mut h, "all");
+    // Pointing at Bass in the list: its curve comes forward, named.
+    let row = checkbox!(h, "Bass").rect();
+    h.event(egui::Event::PointerMoved(row.center()));
     run(&mut h, 3);
-    shot(&mut h, "spectrum-hover-bass");
-    // Kick and Bass only: where they meet.
-    h.state_mut().run("spectrum.hide_all", json!({})).unwrap();
-    let kick = h.state().engine.session().tracks.iter().find(|t| t.name == "Kick").map(|t| t.id).unwrap();
-    h.state_mut().run("spectrum.show", json!({"tracks": [kick.0, bass.0], "shown": true})).unwrap();
+    let bass = h.state().engine.session().tracks.iter().find(|t| t.name == "Bass").map(|t| t.id).unwrap();
+    assert_eq!(h.state().spectrum.hovered, Some(Curve::Track(bass)));
+    shot(&mut h, "hover-bass");
     h.event(egui::Event::PointerGone);
-    run(&mut h, 30);
-    assert_eq!(h.state().spectrum.drawn, vec![Curve::Track(kick), Curve::Track(bass)]);
-    shot(&mut h, "spectrum-kick-bass");
-    // Everything again, with the stereo scope.
+    // Everything, with the stereo scope.
     h.state_mut().run("spectrum.show_all", json!({})).unwrap();
     h.state_mut().run("spectrum.scope", json!({"on": true})).unwrap();
     run(&mut h, 30);
-    assert!(h.state().spectrum.scope_rect.is_some() && !h.state().spectrum.scope.is_empty());
-    shot(&mut h, "spectrum-scope");
+    // In a small dock the scope waits for room (its button says so); the graph keeps the space.
+    let fits = name == "large";
+    assert_eq!(h.state().spectrum.scope_rect.is_some(), fits);
+    assert_eq!(!h.state().spectrum.scope.is_empty(), fits, "no room: no stereo work either");
+    shot(&mut h, "scope");
 }
 
 /// Not a check: prints what the editor costs a UI frame with 8, 12, 24 and 40 visible tracks
@@ -459,7 +516,7 @@ fn the_stereo_scope_draws_each_shown_track_and_reads_its_correlation() {
     assert_eq!(spectrum_view::correlation_text(-1.0), "-1.00");
     // Hovering a dot picks its track, and the graph highlights it too.
     let r = h.state().spectrum.scope_rect.unwrap();
-    let field = egui::Rect::from_min_max(r.min + vec2(10.0, 10.0), egui::pos2(r.right() - 10.0, r.bottom() - 26.0));
+    let field = spectrum_view::scope_field(r);
     // The out-of-phase line lies across the centre, its loudest dots at 0.9 of the radius (the
     // zoom), the left channel's positive peaks to the left.
     let radius = field.width().min(field.height()) * 0.5 - 2.0;

@@ -32,6 +32,63 @@ pub enum Curve {
     Master,
 }
 
+/// The list's sections: the tracks that make sounds, the busses (Aux inputs and routing folders),
+/// and the master.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Section {
+    Tracks,
+    Buses,
+    Master,
+}
+
+impl Section {
+    pub const ALL: [Section; 3] = [Section::Tracks, Section::Buses, Section::Master];
+
+    /// The id commands take (`spectrum.show {section}`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Section::Tracks => "tracks",
+            Section::Buses => "buses",
+            Section::Master => "master",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Section::Tracks => "Tracks",
+            Section::Buses => "Buses",
+            Section::Master => "Master",
+        }
+    }
+
+    fn parse(id: &str) -> Option<Section> {
+        Section::ALL.into_iter().find(|s| s.id() == id)
+    }
+}
+
+/// Which section of the list `c` is in.
+pub fn section_of(s: &Session, c: Curve) -> Section {
+    match c {
+        Curve::Master => Section::Master,
+        Curve::Track(t) => {
+            if s.track(t).is_some_and(|t| matches!(t.kind, TrackKind::Aux | TrackKind::Folder)) {
+                Section::Buses
+            } else {
+                Section::Tracks
+            }
+        }
+    }
+}
+
+/// The curves of section `sec`, in list order.
+pub fn section_curves(s: &Session, sec: Section) -> Vec<Curve> {
+    let mut v: Vec<Curve> = listed(s).map(|t| Curve::Track(t.id)).filter(|c| section_of(s, *c) == sec).collect();
+    if sec == Section::Master {
+        v.push(Curve::Master);
+    }
+    v
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -39,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show in Spectrum",
             [],
             None,
-            "{track? | tracks? | master?: true, shown?: bool} → {shown, curves: n}. Shows (true) or hides (false) these curves in the Spectrum editor; without `shown` it flips the first one's state and gives it to every one named. Without `track`/`tracks`/`master`, the selected tracks. Saved in the session; not an undo step (a view setting).",
+            "{track? | tracks? | master?: true | section?: \"tracks\"|\"buses\"|\"master\", shown?: bool} → {shown, curves: n, capped?}. Shows (true) or hides (false) these curves in the Spectrum editor; without `shown` it flips the first one's state and gives it to every one named. A section shows as many of its curves as the cap leaves room for (`capped` then true). Without `track`/`tracks`/`master`/`section`, the selected tracks. Saved in the session; not an undo step (a view setting).",
             always,
             show_cmd
         ),
@@ -159,6 +216,10 @@ fn set(s: &mut Session, c: Curve, on: bool) {
 
 fn show_cmd(e: &mut Engine, p: &Value) -> Result<Value> {
     const C: &str = "spectrum.show";
+    if let Some(v) = p.get("section").filter(|v| !v.is_null()) {
+        let sec = v.as_str().and_then(Section::parse).ok_or_else(|| bad(C, "`section` must be \"tracks\", \"buses\" or \"master\""))?;
+        return show_section(e, sec, p);
+    }
     let mut curves: Vec<Curve> = Vec::new();
     match p.get("master") {
         None | Some(Value::Null) => {}
@@ -188,6 +249,37 @@ fn show_cmd(e: &mut Engine, p: &Value) -> Result<Value> {
         set(s, *c, on);
     }
     Ok(json!({"shown": on, "curves": curves.len()}))
+}
+
+/// A section's show or hide: hiding hides all of it; showing switches its curves on, in order, as
+/// far as the cap allows. Without `shown`, shows unless every one is on already.
+fn show_section(e: &mut Engine, sec: Section, p: &Value) -> Result<Value> {
+    let curves = section_curves(e.session(), sec);
+    let on = match p.get("shown") {
+        None | Some(Value::Null) => !curves.iter().all(|c| switched_on(e.session(), *c)),
+        Some(v) => v.as_bool().ok_or_else(|| bad("spectrum.show", "`shown` must be a boolean"))?,
+    };
+    let mut room = MAX_VISIBLE.saturating_sub(switched_count(e.session()));
+    let mut capped = false;
+    let s = e.session_mut();
+    let mut n = 0;
+    for c in &curves {
+        if !on {
+            set(s, *c, false);
+            continue;
+        }
+        if switched_on(s, *c) {
+            n += 1;
+        } else if room > 0 {
+            set(s, *c, true);
+            room -= 1;
+            n += 1;
+        } else {
+            capped = true;
+        }
+    }
+    s.edit.set_flag(ONLY_SELECTED, false);
+    Ok(json!({"shown": on, "curves": if on { n } else { 0 }, "capped": capped}))
 }
 
 /// Show All switches on the first [`MAX_VISIBLE`] curves in list order (the rest off); Hide All
@@ -275,6 +367,24 @@ mod tests {
         // Show All ends following the selection.
         e.execute("spectrum.show_all", &json!({})).unwrap();
         assert!(!e.session().edit.flag(ONLY_SELECTED));
+    }
+
+    #[test]
+    fn sections_show_and_hide_together() {
+        let (mut e, a, b, aux) = engine();
+        let s = e.session();
+        assert_eq!(section_curves(s, Section::Tracks), vec![Curve::Track(a), Curve::Track(b)]);
+        assert_eq!(section_curves(s, Section::Buses), vec![Curve::Track(aux)]);
+        assert_eq!(section_curves(s, Section::Master), vec![Curve::Master]);
+        // Buses start hidden: one click shows them all.
+        let r = e.execute("spectrum.show", &json!({"section": "buses"})).unwrap();
+        assert_eq!((r["shown"].as_bool(), r["curves"].as_u64()), (Some(true), Some(1)));
+        assert!(visible(e.session(), Curve::Track(aux)));
+        e.execute("spectrum.show", &json!({"section": "tracks", "shown": false})).unwrap();
+        assert!(!visible(e.session(), Curve::Track(a)) && !visible(e.session(), Curve::Track(b)));
+        // Flipping a section that is all off shows it.
+        assert_eq!(e.execute("spectrum.show", &json!({"section": "tracks"})).unwrap()["shown"], true);
+        assert!(e.execute("spectrum.show", &json!({"section": "drums"})).is_err());
     }
 
     #[test]
