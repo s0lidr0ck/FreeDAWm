@@ -99,7 +99,24 @@ pub fn specs() -> Vec<CommandSpec> {
             rename_selected
         ),
         cmd!("track.comments", "Track Comments", [], None, "{track, comments}", has_tracks, comments),
-        cmd!("track.color", "Track Color", [], None, "{tracks?, color: [r,g,b] | palette index}", has_selection, color),
+        cmd!(
+            "track.color",
+            "Track Color",
+            [],
+            None,
+            "{tracks?, color: palette index | [r,g,b] | \"#rrggbb\"} — a palette index 0–15 is one of the 16 original colours (as always), 16–63 the 12 × 4 grid (16 + row × 12 + column; rows Light, Main, Deep, Dark; columns Red … Pink), larger indexes wrap round → {color}",
+            has_selection,
+            color
+        ),
+        cmd!(
+            "track.spread_colors",
+            "Spread Track Colors",
+            ["Track"],
+            None,
+            "{tracks?} — the selected tracks (masters skipped) take, in track order, the palette colours most unlike each other and the other tracks' colours (Main row first); clips that follow their track's colour follow → {tracks: [{track, color: \"#rrggbb\"}]}",
+            has_track_selection,
+            spread_colors
+        ),
         cmd!(
             "track.height",
             "Track Height",
@@ -1038,14 +1055,7 @@ fn comments(e: &mut Engine, p: &Value) -> Result<Value> {
 
 fn color(e: &mut Engine, p: &Value) -> Result<Value> {
     let tracks = tracks_required(e, "track.color", p)?;
-    let c = match p.get("color") {
-        Some(Value::Array(a)) if a.len() == 3 => {
-            let v: Vec<u8> = a.iter().map(|x| x.as_u64().unwrap_or(0).min(255) as u8).collect();
-            [v.first().copied().unwrap_or(0), v.get(1).copied().unwrap_or(0), v.get(2).copied().unwrap_or(0)]
-        }
-        Some(v) if v.is_u64() => soundcraft_model::TRACK_COLORS.get(v.as_u64().unwrap_or(0) as usize % 16).copied().unwrap_or([128, 128, 128]),
-        _ => return Err(bad("track.color", "`color` must be [r,g,b] or a palette index")),
-    };
+    let c = color_param(p).ok_or_else(|| bad("track.color", "`color` must be a palette index (0–63), [r,g,b] or \"#rrggbb\""))?;
     let s = e.session_mut();
     for t in &tracks {
         if let Some(tr) = s.track_mut(*t) {
@@ -1053,6 +1063,34 @@ fn color(e: &mut Engine, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({"color": c}))
+}
+
+/// `color`: a palette index (wrapping round past the palette, as old clients relied on),
+/// `[r, g, b]` (each clamped to 0–255) or `"#rrggbb"`.
+fn color_param(p: &Value) -> Option<[u8; 3]> {
+    match p.get("color")? {
+        Value::Array(a) if a.len() == 3 => {
+            let v: Vec<u8> = a.iter().map(|x| x.as_u64().unwrap_or(0).min(255) as u8).collect();
+            Some([v.first().copied().unwrap_or(0), v.get(1).copied().unwrap_or(0), v.get(2).copied().unwrap_or(0)])
+        }
+        Value::String(text) => soundcraft_model::palette::parse_hex(text),
+        v => v.as_u64().map(soundcraft_model::palette::palette_color_wrapping),
+    }
+}
+
+/// Spread Track Colors needs tracks selected (or passed); a clip selection alone is not enough.
+fn has_track_selection(e: &Engine) -> std::result::Result<(), String> {
+    if e.session().edit.selected_tracks.is_empty() { Err("Select the tracks to give distinct colors".into()) } else { Ok(()) }
+}
+
+fn spread_colors(e: &mut Engine, p: &Value) -> Result<Value> {
+    let tracks = tracks_required(e, "track.spread_colors", p)?;
+    let done = e.session_mut().spread_track_colors(&tracks);
+    if done.is_empty() {
+        return Err(bad("track.spread_colors", "no tracks to recolour (a master keeps its grey)"));
+    }
+    let out: Vec<Value> = done.iter().map(|(t, c)| json!({"track": t, "color": soundcraft_model::palette::hex(*c)})).collect();
+    Ok(json!({"tracks": out}))
 }
 
 fn height(e: &mut Engine, p: &Value) -> Result<Value> {

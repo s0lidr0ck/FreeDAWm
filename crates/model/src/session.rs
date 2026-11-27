@@ -3,7 +3,7 @@
 use crate::clip::{bound, bound_sequence};
 use crate::{
     Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, InputPath, MarkerId, MarkerKind, MemoryLocation, OutputPath, Source, SourceId,
-    SourcePool, TRACK_COLORS, Track, TrackId, TrackKind, VideoSource,
+    SourcePool, Track, TrackId, TrackKind, VideoSource,
 };
 use soundcraft_time::{FrameRate, GridValue, Range, SampleRate, Samples, TempoMap, TimeFormat};
 
@@ -693,9 +693,31 @@ impl Session {
         soundcraft_time::parse_position(text, fmt, self.sample_rate, &self.tempo, self.frame_rate, self.timecode_start, self.feet_frames_start())
     }
 
+    /// The colour for a new track: the palette colour that looks most unlike those of the
+    /// tracks already here (masters aren't counted), preferring the Main row
+    /// ([`crate::palette::most_distinct`]). Existing tracks keep theirs.
     pub fn next_track_color(&self) -> [u8; 3] {
-        let n = self.tracks.iter().filter(|t| t.kind != TrackKind::Master).count();
-        TRACK_COLORS.get(n % TRACK_COLORS.len()).copied().unwrap_or([128, 128, 128])
+        crate::palette::most_distinct(&self.non_master_colors(&[]))
+    }
+
+    /// The colours of the non-master tracks, in track order, leaving out `except`.
+    pub fn non_master_colors(&self, except: &[TrackId]) -> Vec<[u8; 3]> {
+        self.tracks.iter().filter(|t| t.kind != TrackKind::Master && !except.contains(&t.id)).map(|t| t.color).collect()
+    }
+
+    /// Spread Track Colors: `ids` (masters skipped) take, in track order, the palette colours most
+    /// unlike each other and the other tracks' ([`crate::palette::spread`]). Returns the tracks
+    /// recoloured with their new colours.
+    pub fn spread_track_colors(&mut self, ids: &[TrackId]) -> Vec<(TrackId, [u8; 3])> {
+        let targets: Vec<TrackId> = self.tracks.iter().filter(|t| t.kind != TrackKind::Master && ids.contains(&t.id)).map(|t| t.id).collect();
+        let colors = crate::palette::spread(&self.non_master_colors(&targets), targets.len());
+        let out: Vec<(TrackId, [u8; 3])> = targets.into_iter().zip(colors).collect();
+        for (id, c) in &out {
+            if let Some(t) = self.track_mut(*id) {
+                t.color = *c;
+            }
+        }
+        out
     }
 
     /// A unique track name: `base`, or `base 1`, `base 2` … like the incumbent ("Audio 1").

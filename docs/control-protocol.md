@@ -1562,6 +1562,39 @@ lane 2) is gone: its markers stay on View › Rulers › Markers 2, and `view.ru
 dropped when Markers 2 is shown too), so lane 2's markers stay in view. The Band's chord lane ruler is
 labelled **Chords** (View › Rulers › Chords); its id stays `band_chords`.
 
+## Track colours
+
+A track stores its colour as RGB (`color` in `session.query`, `"#rrggbb"`), never as a palette
+position, so a session opens with exactly the colours it was saved with. The palette
+(`soundcraft_model::palette`) has 64 colours:
+
+- **0–15: the 16 original colours**, at the indexes they always had (Window › Color Palette's
+  "Original" row).
+- **16–63: a grid of 12 hues by 4 shades**, index `16 + row × 12 + column`. Rows, top to bottom:
+  Light, Main, Deep, Dark; columns, left to right: Red, Orange, Gold, Lime, Green, Teal, Cyan,
+  Sky, Blue, Violet, Magenta, Pink (OKLCH hues 25°, 55° … 355°). Every colour keeps clip names
+  readable (dark text, light text on the Dark row) and reads on the dark graph backgrounds.
+
+| Command | Params | Does |
+|---|---|---|
+| `track.color` ("Track Color") | `{tracks?, color: palette index \| [r,g,b] \| "#rrggbb"}` | Sets the tracks' colour (the selected tracks when `tracks` is left out); returns `{color: [r,g,b]}`. An index 0–15 is the original colour it always was, 16–63 the grid; a larger index wraps round modulo 64 (before the grid it wrapped modulo 16). `[r,g,b]` values are clamped to 0–255; `"#rrggbb"` (the `#` optional) is the form `session.query` reports. Anything else is refused. One undo step. Clips without a colour of their own follow their track's. |
+| `track.spread_colors` (Track › Spread Track Colors) | `{tracks?}` | The selected tracks (or `tracks`), in track order, take the palette colours most unlike each other and the other tracks' colours, the Main row first; master tracks keep their grey. Greyed in the menu with no track selected ("Select the tracks to give distinct colors"). One undo step. Returns `{tracks: [{track, color: "#rrggbb"}]}`. |
+
+**New tracks.** A new track (Track › New…, `track.new`, and every import or tool that adds a
+track through the session's `add_track`, plus the colour a new group takes in `track.group`)
+gets the grid colour that looks most unlike the colours of the tracks already in the session
+(masters not counted): distance in OKLab, a Main-row colour no track has yet first, with a
+little weight on being unlike the newest track, so consecutive tracks jump round the colour
+wheel (Blue, Gold, Pink, Teal, …); once all twelve Main colours are used, the Light, Deep and
+Dark rows the same way. The same session always gives the same colour. Existing tracks are never
+recoloured. Duplicated tracks, track presets, templates and imported sessions keep the colours
+they bring.
+
+**Custom colours.** Window › Color Palette's Custom… opens a colour picker; Apply sets the
+picked colour (`track.color` with `[r,g,b]`, Shift: `clip.color`), and the last 8 custom colours
+applied are kept as swatches with the UI preferences (`custom_colors` in `ui.json`, not in the
+session).
+
 ## Live automation writing
 
 While the transport plays, every track in Write, Touch, Latch, Touch/Latch or Trim mode writes

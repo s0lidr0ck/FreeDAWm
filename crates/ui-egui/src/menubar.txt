@@ -311,6 +311,7 @@ Track > Rename... = @track.rename
 Track > Rename Selected Tracks... = @track.rename_selected
 Track > Pin = @track.pin
 Track > Color... = @window.color_palette
+Track > Spread Track Colors = @track.spread_colors
 Track > Group...
 Track > Move to New Folder = Track > Move to New Folder...
 Track > Convert Aux to Routing Folder

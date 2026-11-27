@@ -19,12 +19,12 @@ use std::collections::HashMap;
 /// (2026-11-18, `docs/wavetable-import.md`), and Track › New Band (2026-11-19, `docs/band-checklist.md`), and File ›
 /// Connect to a Studio… (2026-11-23, `docs/remote-mixing.md`), and Window › Full Screen (2026-11-23, `window.fullscreen`), and AI ›
 /// Time Words to Vocal and Tap Words to Time… (2026-11-24, `docs/lyrics.md`), and AI › Gild Words (2026-11-25,
-/// `docs/gild.md`).
+/// `docs/gild.md`), and Track › Spread Track Colors (2026-11-27, `docs/control-protocol.md` › Track colours).
 const ROWS: [(&str, usize); 12] = [
     ("File", 15),
     ("Edit", 29),
     ("View", 11),
-    ("Track", 41),
+    ("Track", 42),
     ("Clip", 30),
     ("Event", 31),
     ("Process", 18),
