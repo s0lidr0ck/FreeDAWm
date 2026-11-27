@@ -29,7 +29,7 @@ fn sidecar_of(path: &Path) -> Option<(Value, u32)> {
         None => (stem.to_string(), 1),
     };
     let side: PathBuf = path.with_file_name(format!("{idea}.fdidea"));
-    let bytes = std::fs::read(side).ok()?;
+    let bytes = crate::io::read_file(side).ok()?;
     Some((serde_json::from_slice(&bytes).ok()?, n))
 }
 
