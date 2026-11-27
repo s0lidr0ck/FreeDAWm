@@ -7,7 +7,13 @@
 //! (Hann window, FFT), averaged into 1/3-octave bands on a fixed log grid from 20 Hz to 20 kHz,
 //! and eased (fast up, a steady fall) so the curves read steadily. At most [`FFTS_PER_FRAME`] curves
 //! are analysed per frame, round robin, so forty tracks cost no more per frame than eight. A hidden
-//! curve has no tap and no analysis. What is shown is kept with the session
+//! curve has no tap and no analysis.
+//!
+//! The stereo scope (the list's Stereo scope switch) sits beside the graph: each shown track's
+//! left and right as they reach the mix, as a vectorscope after Sprawl's (mid up, side across,
+//! about 40 ms of sound), its dots in the curve's colour and line, all on one shared zoom so the
+//! tracks' widths and levels compare. Its taps carry left and right only while it is shown. What
+//! is shown is kept with the session
 //! (`soundcraft_engine::cmd::spectrum`); see `docs/spectrum.md`.
 
 use crate::SoundApp;
@@ -41,6 +47,17 @@ const FALL_DB_PER_S: f32 = 30.0;
 const STALE_S: f64 = 0.25;
 /// The list's width.
 const LIST_W: f32 = 200.0;
+/// Samples the scope reads per curve, and every how many it draws a dot (256 dots, ~43 ms).
+const SCOPE_READ: usize = 2048;
+const SCOPE_STEP: usize = 8;
+
+/// One curve's picture in the scope: its dots as (mid, side) and its correlation (-1..1; `None`
+/// in silence).
+#[derive(Clone, Debug, Default)]
+pub struct ScopeCurve {
+    pub points: Vec<(f32, f32)>,
+    pub correlation: Option<f32>,
+}
 
 /// One shown curve.
 struct CurveState {
@@ -81,6 +98,14 @@ pub struct SpectrumView {
     pub plot: Option<Rect>,
     /// Each listed curve's line (colour and style) as last drawn.
     pub looks: HashMap<Curve, CurveLook>,
+    /// The stereo scope's pictures (only while it is shown), its zoom, and where it was drawn.
+    pub scope: HashMap<Curve, ScopeCurve>,
+    scope_gain: f32,
+    pub scope_rect: Option<Rect>,
+    /// The curve the pointer was on in the scope last frame (the graph highlights it too).
+    scope_hover: Option<Curve>,
+    left: Vec<f32>,
+    right: Vec<f32>,
     last_time: Option<f64>,
 }
 
@@ -101,6 +126,12 @@ impl Default for SpectrumView {
             readout: None,
             plot: None,
             looks: HashMap::new(),
+            scope: HashMap::new(),
+            scope_gain: 0.0,
+            scope_rect: None,
+            scope_hover: None,
+            left: Vec::new(),
+            right: Vec::new(),
             last_time: None,
         }
     }
@@ -262,6 +293,37 @@ impl SpectrumView {
         self.analysed_last_frame = done;
     }
 
+    /// The scope's pictures: each shown curve's newest left and right (its taps switched to carry
+    /// them), or none with the scope hidden.
+    fn read_scope(&mut self, order: &[Curve], on: bool, now: f64) {
+        self.scope.clear();
+        for c in order {
+            let Some(state) = self.curves.get(c) else { continue };
+            self.taps.set_stereo(state.slot, on);
+            if !on || now - state.moved_at > STALE_S {
+                continue;
+            }
+            let Some((l, r)) = self.taps.stereo_rings(state.slot) else { continue };
+            self.left.resize(SCOPE_READ, 0.0);
+            self.right.resize(SCOPE_READ, 0.0);
+            let n = l.latest(&mut self.left).min(r.latest(&mut self.right));
+            let start = SCOPE_READ - n;
+            let (mut lr, mut ll, mut rr) = (0.0f64, 0.0f64, 0.0f64);
+            let mut points = Vec::with_capacity(SCOPE_READ / SCOPE_STEP);
+            for (i, (a, b)) in self.left.iter().zip(&self.right).enumerate().skip(start) {
+                lr += f64::from(a * b);
+                ll += f64::from(a * a);
+                rr += f64::from(b * b);
+                if i % SCOPE_STEP == 0 {
+                    points.push((0.5 * (a + b), 0.5 * (a - b)));
+                }
+            }
+            let power = (ll * rr).sqrt();
+            let correlation = (power > 1e-12).then(|| (lr / power).clamp(-1.0, 1.0) as f32);
+            self.scope.insert(*c, ScopeCurve { points, correlation });
+        }
+    }
+
     /// Eases every shown curve towards its latest analysis. Returns whether any is still moving
     /// or above the floor (worth another frame soon).
     fn ease(&mut self, dt: f32) -> bool {
@@ -412,6 +474,8 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
     let rate = app.engine.session().sample_rate.hz();
     app.spectrum.analyse(&want, rate, now);
     let live = app.spectrum.ease(dt);
+    let scope_on = app.engine.session().edit.flag(cmd::SCOPE);
+    app.spectrum.read_scope(&want, scope_on, now);
     app.spectrum.drawn = want.clone();
     app.spectrum.looks = all_looks(app);
     let full = ui.max_rect();
@@ -423,8 +487,19 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list_rect.shrink2(vec2(8.0, 6.0))).id_salt("spectrum-list"));
         list(app, &mut child)
     };
-    let graph_hover = graph(app, ui, graph_rect, list_hover);
-    app.spectrum.hovered = graph_hover.or(list_hover);
+    // The scope: a square at the right of the graph's area.
+    let (graph_rect, scope_rect) = if scope_on {
+        let side = graph_rect.height().min(graph_rect.width() * 0.42);
+        let scope = Rect::from_min_max(pos2(graph_rect.right() - side, graph_rect.top()), graph_rect.max);
+        (Rect::from_min_max(graph_rect.min, pos2(scope.left() - 1.0, graph_rect.bottom())), Some(scope))
+    } else {
+        (graph_rect, None)
+    };
+    let graph_hover = graph(app, ui, graph_rect, list_hover.or(app.spectrum.scope_hover));
+    let scope_hover = scope_rect.and_then(|r| scope(app, ui, r, graph_hover.or(list_hover)));
+    app.spectrum.scope_rect = scope_rect;
+    app.spectrum.scope_hover = scope_hover;
+    app.spectrum.hovered = graph_hover.or(scope_hover).or(list_hover);
     if live || app.is_playing() {
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
     }
@@ -450,6 +525,16 @@ fn list(app: &mut SoundApp, ui: &mut Ui) -> Option<Curve> {
         .clicked()
     {
         run = Some(("spectrum.only_selected", json!({})));
+    }
+    let scope_on = app.engine.session().edit.flag(cmd::SCOPE);
+    if ui
+        .selectable_label(scope_on, "Stereo scope")
+        .on_hover_text(
+            "Show each shown track's left and right beside the graph: a vertical line is mono, a cloud is wide, a horizontal line is out of phase",
+        )
+        .clicked()
+    {
+        run = Some(("spectrum.scope", json!({})));
     }
     ui.add_space(4.0);
     let (wanted_n, on_n) = {
@@ -629,4 +714,96 @@ fn graph(app: &mut SoundApp, ui: &mut Ui, r: Rect, list_hover: Option<Curve>) ->
         p.galley(at, galley, t.text);
     }
     graph_hover
+}
+
+/// Draws one dot of `look`'s style at `at`: solid lines are filled dots, dashed ones small
+/// crosses, dotted ones rings.
+fn scope_dot(p: &egui::Painter, at: Pos2, style: LineStyle, color: Color32, big: bool) {
+    let r = if big { 1.8 } else { 1.3 };
+    match style {
+        LineStyle::Solid => {
+            p.circle_filled(at, r, color);
+        }
+        LineStyle::Dashed => {
+            let d = r + 0.6;
+            p.line_segment([at + vec2(-d, -d), at + vec2(d, d)], Stroke::new(1.0, color));
+            p.line_segment([at + vec2(-d, d), at + vec2(d, -d)], Stroke::new(1.0, color));
+        }
+        LineStyle::Dotted => {
+            p.circle_stroke(at, r + 0.6, Stroke::new(1.0, color));
+        }
+    }
+}
+
+/// "+0.82", "-0.30".
+pub fn correlation_text(c: f32) -> String {
+    if c.abs() < 0.005 { "0.00".to_string() } else { format!("{c:+.2}") }
+}
+
+/// The stereo scope in `r`: guides, every shown curve's dots on one zoom, the focused one on top,
+/// and under it the focused curve's correlation. Returns the curve the pointer is on.
+fn scope(app: &mut SoundApp, ui: &mut Ui, r: Rect, focus_in: Option<Curve>) -> Option<Curve> {
+    let t = Tokens::current();
+    let p = ui.painter_at(r);
+    p.rect_filled(r, 0.0, t.window_bg);
+    p.line_segment([pos2(r.left(), r.top()), pos2(r.left(), r.bottom())], Stroke::new(1.0, t.border));
+    let field = Rect::from_min_max(r.min + vec2(10.0, 10.0), pos2(r.right() - 10.0, r.bottom() - 26.0));
+    let radius = (field.width().min(field.height()) * 0.5 - 2.0).max(4.0);
+    let centre = field.center();
+    let faint = Stroke::new(1.0, t.grid_line);
+    p.circle_stroke(centre, radius, Stroke::new(1.0, t.text_dim.gamma_multiply(0.4)));
+    p.circle_stroke(centre, radius * 0.5, faint);
+    p.line_segment([centre - vec2(0.0, radius), centre + vec2(0.0, radius)], faint);
+    p.line_segment([centre - vec2(radius, 0.0), centre + vec2(radius, 0.0)], faint);
+    let d = radius * std::f32::consts::FRAC_1_SQRT_2;
+    for sx in [-1.0f32, 1.0] {
+        p.line_segment([centre + vec2(sx * d, -d), centre - vec2(sx * d, -d)], faint);
+    }
+    p.text(centre + vec2(-d - 3.0, -d - 3.0), Align2::RIGHT_BOTTOM, "L", regular(10.0), t.text_dim);
+    p.text(centre + vec2(d + 3.0, -d - 3.0), Align2::LEFT_BOTTOM, "R", regular(10.0), t.text_dim);
+    // One zoom for every curve: out at once (nothing leaves the circle), back in slowly.
+    let peak = app.spectrum.scope.values().flat_map(|c| c.points.iter()).fold(0.0f32, |m, (mid, side)| m.max(mid.abs()).max(side.abs()));
+    let want = 0.9 / peak.max(0.02);
+    let g = app.spectrum.scope_gain;
+    app.spectrum.scope_gain = if g <= 0.0 || want < g { want } else { g + (want - g) * 0.05 };
+    let gain = app.spectrum.scope_gain;
+    let place = |(mid, side): (f32, f32)| {
+        let v = vec2(-side * gain, -mid * gain);
+        centre + if v.length() > 1.0 { v.normalized() } else { v } * radius
+    };
+    // The curve under the pointer: the one with a dot nearest it, within 6 px.
+    let pointer = ui.interact(r, ui.id().with("spectrum-scope"), Sense::hover()).hover_pos().filter(|q| field.contains(*q));
+    let mut hover = None;
+    if let Some(q) = pointer {
+        let mut best = 6.0f32;
+        for (c, sc) in &app.spectrum.scope {
+            for pt in &sc.points {
+                let dist = place(*pt).distance(q);
+                if dist < best {
+                    best = dist;
+                    hover = Some(*c);
+                }
+            }
+        }
+    }
+    let focus = hover.or(focus_in);
+    let mut order: Vec<Curve> = app.spectrum.drawn.iter().copied().filter(|c| Some(*c) != focus).collect();
+    order.extend(focus.filter(|c| app.spectrum.drawn.contains(c)));
+    for c in &order {
+        let Some(sc) = app.spectrum.scope.get(c) else { continue };
+        let look = app.spectrum.looks.get(c).copied().unwrap_or(CurveLook { color: Color32::GRAY, style: LineStyle::Solid });
+        let focused = Some(*c) == focus;
+        let color = if focus.is_some() && !focused { look.color.gamma_multiply(0.3) } else { look.color.gamma_multiply(0.85) };
+        for pt in sc.points.iter().filter(|(m, s)| *m != 0.0 || *s != 0.0) {
+            scope_dot(&p, place(*pt), look.style, color, focused);
+        }
+    }
+    let line = match focus.and_then(|c| app.spectrum.scope.get(&c).map(|sc| (c, sc.correlation))) {
+        Some((c, Some(k))) => format!("{} · correlation {}", identity(app, c).0, correlation_text(k)),
+        Some((c, None)) => format!("{} · silent", identity(app, c).0),
+        None if app.spectrum.scope.is_empty() => "Stereo scope: nothing playing".to_string(),
+        None => "Point at a track for its correlation".to_string(),
+    };
+    p.text(pos2(r.center().x, r.bottom() - 13.0), Align2::CENTER_CENTER, line, regular(10.5), if focus.is_some() { t.text } else { t.text_dim });
+    hover
 }

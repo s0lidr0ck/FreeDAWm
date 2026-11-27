@@ -64,6 +64,14 @@ fn feed(h: &Harness<SoundApp>, t: TrackId, hz: f32, amp: f32) {
     let w = ring.written();
     let x: Vec<f32> = (0..2048).map(|k| amp * (std::f32::consts::TAU * hz * (w + k) as f32 / RATE).sin()).collect();
     ring.push_slice(&x);
+    // The stereo scope's taps, while it asks: a negative frequency puts the right out of phase.
+    if taps.is_stereo(i)
+        && let Some((l, r)) = taps.stereo_rings(i)
+    {
+        let sign = if hz < 0.0 { -1.0 } else { 1.0 };
+        l.push_slice(&x);
+        r.push_slice(&x.iter().map(|v| v * sign).collect::<Vec<f32>>());
+    }
 }
 
 /// `frames` frames, feeding each `(track, hz)` before each.
@@ -376,6 +384,12 @@ fn proof_pictures_of_the_demo() {
     run(&mut h, 30);
     assert_eq!(h.state().spectrum.drawn, vec![Curve::Track(kick), Curve::Track(bass)]);
     shot(&mut h, "spectrum-kick-bass");
+    // Everything again, with the stereo scope.
+    h.state_mut().run("spectrum.show_all", json!({})).unwrap();
+    h.state_mut().run("spectrum.scope", json!({"on": true})).unwrap();
+    run(&mut h, 30);
+    assert!(h.state().spectrum.scope_rect.is_some() && !h.state().spectrum.scope.is_empty());
+    shot(&mut h, "spectrum-scope");
 }
 
 /// Not a check: prints what the editor costs a UI frame with 8, 12, 24 and 40 visible tracks
@@ -395,9 +409,10 @@ fn measure_the_frame_cost() {
         let mut s = Session::default();
         let ids: Vec<TrackId> = (0..n).map(|i| s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(&format!("T{i}")))).collect();
         let tones: Vec<(TrackId, f32)> = ids.iter().enumerate().map(|(i, t)| (*t, 80.0 * (1.0 + i as f32 * 0.3))).collect();
-        let time = |open: bool| {
+        let time = |open: bool, scope: bool| {
             let mut app = app_for(s.clone());
             app.ui.show_spectrum = open;
+            app.run("spectrum.scope", json!({"on": scope})).unwrap();
             let mut h = harness(app);
             play(&mut h, &tones, 20);
             let mut best = f64::MAX;
@@ -408,7 +423,52 @@ fn measure_the_frame_cost() {
             }
             best
         };
-        let (closed, open) = (time(false), time(true));
-        println!("{n} visible tracks: UI frame {closed:.2} ms closed, {open:.2} ms open (+{:.2} ms)", open - closed);
+        let (closed, open, scope) = (time(false, false), time(true, false), time(true, true));
+        println!(
+            "{n} visible tracks: UI frame {closed:.2} ms closed, {open:.2} ms open (+{:.2} ms), with the scope {scope:.2} ms (+{:.2} ms)",
+            open - closed,
+            scope - closed
+        );
     }
+}
+
+#[test]
+fn the_stereo_scope_draws_each_shown_track_and_reads_its_correlation() {
+    let (s, ids) = session();
+    let (kick, bass, keys) = (ids[0], ids[1], ids[2]);
+    let mut h = harness(app_for(s));
+    // Hidden by default: no scope, no stereo taps.
+    play(&mut h, &[(kick, 60.0)], 3);
+    assert!(h.state().spectrum.scope_rect.is_none());
+    let slot = |h: &Harness<SoundApp>, t: TrackId| h.state().spectrum.taps.slot_of(track_key(t)).unwrap();
+    assert!(!h.state().spectrum.taps.is_stereo(slot(&h, kick)));
+    h.get_by_label("Stereo scope").click();
+    // Kick in phase (mono), Keys out of phase; Bass hidden.
+    checkbox!(h, "Bass").click();
+    let tones = [(kick, 60.0), (keys, -750.0)];
+    play(&mut h, &tones, 6);
+    assert!(h.state().engine.session().edit.flag(cmd::SCOPE), "kept with the session");
+    assert!(h.state().spectrum.scope_rect.is_some());
+    assert!(h.state().spectrum.taps.is_stereo(slot(&h, kick)));
+    let sc = h.state().spectrum.scope.clone();
+    assert!(!sc.contains_key(&Curve::Track(bass)), "a hidden track has no dots");
+    let k = &sc[&Curve::Track(kick)];
+    assert!(k.correlation.unwrap() > 0.99 && k.points.iter().all(|(_, side)| side.abs() < 1e-6), "mono: a vertical line");
+    let o = &sc[&Curve::Track(keys)];
+    assert!(o.correlation.unwrap() < -0.99 && o.points.iter().all(|(mid, _)| mid.abs() < 1e-6), "out of phase: a horizontal line");
+    assert_eq!(spectrum_view::correlation_text(-1.0), "-1.00");
+    // Hovering a dot picks its track, and the graph highlights it too.
+    let r = h.state().spectrum.scope_rect.unwrap();
+    let field = egui::Rect::from_min_max(r.min + vec2(10.0, 10.0), egui::pos2(r.right() - 10.0, r.bottom() - 26.0));
+    // The out-of-phase line lies across the centre, its loudest dots at 0.9 of the radius (the
+    // zoom), the left channel's positive peaks to the left.
+    let radius = field.width().min(field.height()) * 0.5 - 2.0;
+    h.event(egui::Event::PointerMoved(field.center() - vec2(0.9 * radius, 0.0)));
+    play(&mut h, &tones, 2);
+    assert_eq!(h.state().spectrum.hovered, Some(Curve::Track(keys)));
+    // Off again: the taps stop carrying left and right.
+    h.get_by_label("Stereo scope").click();
+    play(&mut h, &tones, 2);
+    assert!(h.state().spectrum.scope_rect.is_none() && h.state().spectrum.scope.is_empty());
+    assert!(!h.state().spectrum.taps.is_stereo(slot(&h, kick)));
 }

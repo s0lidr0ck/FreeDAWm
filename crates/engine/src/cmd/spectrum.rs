@@ -1,6 +1,6 @@
 //! The Spectrum editor's view state, kept with the session as `edit` flags (as the Mix window's
 //! `mix.pitch_expanded` is): which tracks' curves it shows, whether it follows the Edit window's
-//! track selection instead, and whether it shades clashes. None of these is an undo step (a view
+//! track selection instead, and whether it shows its stereo scope. None of these is an undo step (a view
 //! setting); sessions saved before the editor existed have none of the flags and load with the
 //! defaults below. See `docs/spectrum.md`.
 
@@ -12,8 +12,8 @@ use soundcraft_model::{Session, Track, TrackKind};
 /// The flag: the editor shows the selected tracks only (whatever their own switches say).
 pub const ONLY_SELECTED: &str = "spectrum.only_selected";
 
-/// The flag: the editor shades the frequency ranges where shown tracks clash.
-pub const CLASHES: &str = "spectrum.clashes";
+/// The flag: the editor shows its stereo scope beside the spectrum.
+pub const SCOPE: &str = "spectrum.scope";
 
 /// Curves drawn at once at most. Measured (`docs/spectrum.md`): 24 shown curves cost a UI frame
 /// about 1.7 ms and the audio thread about 1% of a block; past that the graph no longer reads.
@@ -69,6 +69,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{on?: bool} → {on}. The Spectrum editor shows only the tracks selected in the Edit window (and follows the selection), whatever each track's own switch says; off, the switches decide again. Without `on` it flips. Not an undo step.",
             always,
             |e, p| flag_cmd(e, p, "spectrum.only_selected", ONLY_SELECTED)
+        ),
+        cmd!(
+            noundo "spectrum.scope",
+            "Spectrum: Stereo Scope",
+            [],
+            None,
+            "{on?: bool} → {on}. Shows (or hides) the Spectrum editor's stereo scope beside the graph: each shown track's left and right as a vectorscope, in its curve's colour and line. Without `on` it flips. Not an undo step.",
+            always,
+            |e, p| flag_cmd(e, p, "spectrum.scope", SCOPE)
         ),
     ]
 }

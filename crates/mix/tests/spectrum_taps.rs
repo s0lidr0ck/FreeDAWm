@@ -129,7 +129,9 @@ fn forty_four_shown_tracks_render_without_allocating() {
     let (s, ids) = session(44, 1.0);
     let taps = taps();
     for t in &ids {
-        shown(taps, track_key(*t));
+        // Spectrum and stereo scope both.
+        let i = shown(taps, track_key(*t));
+        taps.set_stereo(i, true);
     }
     shown(taps, MASTER_KEY);
     taps.set_active(true);
@@ -181,6 +183,59 @@ fn measure_the_cost() {
         }
         open_taps.set_active(true);
         let open = time(Some(open_taps));
-        println!("  {n} shown: {open:.1} µs (+{:.1} µs over no taps)", open - none);
+        let scope_taps = taps();
+        for t in ids.iter().take(n) {
+            let i = shown(scope_taps, track_key(*t));
+            scope_taps.set_stereo(i, true);
+        }
+        scope_taps.set_active(true);
+        let scope = time(Some(scope_taps));
+        println!("  {n} shown: {open:.1} µs (+{:.1} µs over no taps); with the stereo scope {scope:.1} µs (+{:.1})", open - none, scope - none);
     }
+}
+
+#[test]
+fn the_stereo_tap_carries_left_and_right_after_the_pan() {
+    let (mut s, ids) = session(4, 1.0);
+    // A mono track hard left, one centred, a stereo one, a muted one.
+    s.track_mut(ids[0]).unwrap().mixer.pan = vec![-1.0];
+    s.track_mut(ids[3]).unwrap().mixer.mute = true;
+    let taps = taps();
+    let slots: Vec<usize> = ids.iter().map(|t| shown(taps, track_key(*t))).collect();
+    let master = shown(taps, MASTER_KEY);
+    // Only asked-for slots carry stereo.
+    for i in [slots[0], slots[1], slots[3], master] {
+        taps.set_stereo(i, true);
+    }
+    taps.set_active(true);
+    let mut eng = engine(Some(taps));
+    render(&mut eng, &s, 0..20);
+    let side = |i: usize| {
+        let (l, r) = taps.stereo_rings(i).unwrap();
+        let (mut a, mut b) = (vec![0.0f32; 4096], vec![0.0f32; 4096]);
+        l.latest(&mut a);
+        r.latest(&mut b);
+        let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        (db(rms(&a)), db(rms(&b)))
+    };
+    let (l, r) = side(slots[0]);
+    assert!(l > -16.0 && r < -60.0, "hard left: {l} {r}");
+    // The stereo track (both sides the same sine): each side its own channel, at unity.
+    let (l, r) = side(slots[1]);
+    assert!((l - r).abs() < 0.1 && (l - -15.05).abs() < 0.3, "stereo, unity each side: {l} {r}");
+    let (l, r) = side(slots[3]);
+    assert!(l < -120.0 && r < -120.0, "muted: {l} {r}");
+    assert!(taps.stereo_rings(slots[2]).is_none(), "never asked: no stereo rings made");
+    // The centred mono track: -3 dB to each side (the pan law).
+    taps.set_stereo(slots[2], true);
+    render(&mut eng, &s, 20..40);
+    let (l, r) = side(slots[2]);
+    assert!((l - r).abs() < 0.1 && (l - -18.06).abs() < 0.3, "centred mono, -3 dB each side: {l} {r}");
+    let (l, r) = side(master);
+    assert!(l > r, "the master leans left with the hard-left track: {l} {r}");
+    // Switched off: no longer fed.
+    taps.set_stereo(slots[1], false);
+    let before = taps.stereo_rings(slots[1]).unwrap().0.written();
+    render(&mut eng, &s, 40..50);
+    assert_eq!(taps.stereo_rings(slots[1]).unwrap().0.written(), before);
 }

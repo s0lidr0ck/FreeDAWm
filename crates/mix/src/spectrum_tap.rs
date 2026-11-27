@@ -21,6 +21,11 @@
 //! law's level change shows but not the side it leans to; channels are then averaged (a centred
 //! mono track and a stereo track of the same audio read the same). The master tap ([`MASTER_KEY`])
 //! is the main mix after the master faders, as the output meter reads it.
+//!
+//! For the editor's stereo scope a slot can also carry the strip's left and right as they reach
+//! the destination ([`SpectrumTaps::set_stereo`]): each source channel times its routing gain into
+//! the destination's first two channels (a mono destination: both sides alike). Those two rings
+//! are made the first time the scope asks for the slot, and fed only while it does.
 
 use crate::{MAX_CHANNELS, Matrix};
 use soundcraft_dsp::analysis::AnalysisRing;
@@ -54,6 +59,17 @@ pub struct TapSlot {
     on: AtomicBool,
     /// Made on the UI thread at the slot's first claim; read on the audio thread with `get`.
     ring: OnceLock<AnalysisRing>,
+    /// Also fed: the left and right rings (the stereo scope shows the curve).
+    stereo: AtomicBool,
+    /// Made on the UI thread the first time the scope asks for the slot.
+    left: OnceLock<AnalysisRing>,
+    right: OnceLock<AnalysisRing>,
+}
+
+/// What the audio thread feeds for one strip this block.
+pub(crate) struct FeedTarget<'a> {
+    mono: &'a AnalysisRing,
+    stereo: Option<(&'a AnalysisRing, &'a AnalysisRing)>,
 }
 
 /// Every slot, the editor's on switch and the claims' generation. See the module docs.
@@ -128,6 +144,7 @@ impl SpectrumTaps {
     pub fn release(&self, i: usize) {
         if let Some(slot) = self.slots.get(i) {
             slot.on.store(false, Ordering::Relaxed);
+            slot.stereo.store(false, Ordering::Relaxed);
             slot.key.store(FREE, Ordering::Release);
             self.generation.fetch_add(1, Ordering::AcqRel);
         }
@@ -149,6 +166,28 @@ impl SpectrumTaps {
         }
     }
 
+    /// UI thread: also feed slot `i`'s left and right rings (true; made now if they are not
+    /// yet), or stop feeding them.
+    pub fn set_stereo(&self, i: usize, on: bool) {
+        if let Some(slot) = self.slots.get(i) {
+            if on {
+                slot.left.get_or_init(AnalysisRing::new);
+                slot.right.get_or_init(AnalysisRing::new);
+            }
+            slot.stereo.store(on, Ordering::Release);
+        }
+    }
+
+    pub fn is_stereo(&self, i: usize) -> bool {
+        self.slots.get(i).is_some_and(|s| s.stereo.load(Ordering::Relaxed))
+    }
+
+    /// Slot `i`'s left and right rings, once the scope has asked for them.
+    pub fn stereo_rings(&self, i: usize) -> Option<(&AnalysisRing, &AnalysisRing)> {
+        let s = self.slots.get(i)?;
+        Some((s.left.get()?, s.right.get()?))
+    }
+
     pub fn is_on(&self, i: usize) -> bool {
         self.slots.get(i).is_some_and(|s| s.on.load(Ordering::Relaxed))
     }
@@ -168,7 +207,7 @@ impl SpectrumTaps {
 
     /// Audio thread: the ring to feed `key` into this block, if its slot is claimed and on. Uses
     /// and refreshes `cache`; scans the slots only after a claim or release.
-    pub(crate) fn feed_target(&self, key: u64, cache: &mut TapCache) -> Option<&AnalysisRing> {
+    pub(crate) fn feed_target(&self, key: u64, cache: &mut TapCache) -> Option<FeedTarget<'_>> {
         let generation = self.generation.load(Ordering::Acquire);
         if generation != cache.generation {
             cache.generation = generation;
@@ -179,15 +218,38 @@ impl SpectrumTaps {
         if slot.key.load(Ordering::Acquire) != key || !slot.on.load(Ordering::Relaxed) {
             return None;
         }
-        slot.ring.get()
+        let stereo = if slot.stereo.load(Ordering::Acquire) { slot.left.get().zip(slot.right.get()) } else { None };
+        Some(FeedTarget { mono: slot.ring.get()?, stereo })
     }
 
     /// Address and size of what the audio thread writes into (the slot table and every ring
     /// made so far): nothing here moves while rendering.
     pub fn buffers(&self) -> Vec<(usize, usize)> {
         let mut v = vec![(self.slots.as_ptr() as usize, self.slots.len())];
-        v.extend(self.slots.iter().filter_map(|s| s.ring.get()).map(|r| (r as *const AnalysisRing as usize, 0)));
+        for s in self.slots.iter() {
+            v.extend([s.ring.get(), s.left.get(), s.right.get()].into_iter().flatten().map(|r| (r as *const AnalysisRing as usize, 0)));
+        }
         v
+    }
+}
+
+/// Feeds `target` with frames `0..frames` of `buf` routed by `m` into a destination of `nd`
+/// channels: the mono ring with each channel's power gain ([`channel_gains`]), the stereo rings
+/// (when the scope asks) with its gains into the destination's first two channels.
+pub(crate) fn feed(target: &FeedTarget<'_>, buf: &[Vec<f32>], m: &Matrix, nd: usize, frames: usize) {
+    let g = channel_gains(m, buf.len());
+    feed_mono(target.mono, buf, &g, frames);
+    if let Some((l, r)) = target.stereo {
+        let (mut gl, mut gr) = ([0.0f32; MAX_CHANNELS], [0.0f32; MAX_CHANNELS]);
+        let right = if nd >= 2 { 1 } else { 0 };
+        for (c, row) in m.iter().enumerate().take(buf.len().min(MAX_CHANNELS)) {
+            if let (Some(a), Some(b)) = (gl.get_mut(c), gr.get_mut(c)) {
+                *a = row.first().copied().unwrap_or(0.0);
+                *b = row.get(right).copied().unwrap_or(0.0);
+            }
+        }
+        feed_sum(l, buf, &gl, frames);
+        feed_sum(r, buf, &gr, frames);
     }
 }
 
@@ -205,10 +267,22 @@ pub(crate) fn channel_gains(m: &Matrix, channels: usize) -> [f32; MAX_CHANNELS] 
 /// gain, averaged over the channels. Audio-thread safe (a stack buffer, atomic stores).
 pub(crate) fn feed_mono(ring: &AnalysisRing, buf: &[Vec<f32>], gains: &[f32; MAX_CHANNELS], frames: usize) {
     let n = buf.len().min(MAX_CHANNELS);
+    if n == 0 {
+        return;
+    }
+    mix_into(ring, buf, gains, 1.0 / n as f32, frames);
+}
+
+/// Pushes `Σ_c gains[c] · buf[c]` for frames `0..frames` into `ring`.
+fn feed_sum(ring: &AnalysisRing, buf: &[Vec<f32>], gains: &[f32; MAX_CHANNELS], frames: usize) {
+    mix_into(ring, buf, gains, 1.0, frames);
+}
+
+fn mix_into(ring: &AnalysisRing, buf: &[Vec<f32>], gains: &[f32; MAX_CHANNELS], scale: f32, frames: usize) {
+    let n = buf.len().min(MAX_CHANNELS);
     if n == 0 || frames == 0 {
         return;
     }
-    let scale = 1.0 / n as f32;
     let mut chunk = [0.0f32; CHUNK];
     let mut at = 0;
     while at < frames {

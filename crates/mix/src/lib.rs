@@ -3050,11 +3050,16 @@ impl MixEngine {
         self.track_tail(s, frames);
         self.main_meter.measure(&self.main, frames, 0.0, self.meters_held);
         if self.spectrum_on
-            && let Some(ring) = self.spectrum.and_then(|taps| taps.feed_target(spectrum_tap::MASTER_KEY, &mut self.spectrum_main))
+            && let Some(target) = self.spectrum.and_then(|taps| taps.feed_target(spectrum_tap::MASTER_KEY, &mut self.spectrum_main))
         {
-            let mut g = [0.0f32; MAX_CHANNELS];
-            g.iter_mut().take(self.main.len()).for_each(|x| *x = 1.0);
-            spectrum_tap::feed_mono(ring, &self.main, &g, frames);
+            // The main mix as it is: each channel to itself.
+            let mut m: Matrix = [[0.0; MAX_CHANNELS]; MAX_CHANNELS];
+            for (c, row) in m.iter_mut().enumerate().take(self.main.len()) {
+                if let Some(x) = row.get_mut(c) {
+                    *x = 1.0;
+                }
+            }
+            spectrum_tap::feed(&target, &self.main, &m, self.main.len(), frames);
         }
         if let Some(l) = &mut self.loudness {
             if !self.monitor_only {
@@ -3377,10 +3382,9 @@ impl MixEngine {
         };
         // The Spectrum tap: what is added to the destination, the pan as each channel's power gain.
         if self.spectrum_on
-            && let Some(ring) = self.spectrum.and_then(|taps| taps.feed_target(spectrum_tap::track_key(t.id), &mut strip.spectrum))
+            && let Some(target) = self.spectrum.and_then(|taps| taps.feed_target(spectrum_tap::track_key(t.id), &mut strip.spectrum))
         {
-            let g = spectrum_tap::channel_gains(&routing(apos), src.len());
-            spectrum_tap::feed_mono(ring, src, &g, frames);
+            spectrum_tap::feed(&target, src, &routing(apos), nd, frames);
         }
         let gridded = pan_automated(t);
         let mut start = 0;
