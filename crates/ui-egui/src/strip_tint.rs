@@ -98,7 +98,7 @@ fn saturated([r, g, b]: [u8; 3], k: f32) -> Color32 {
 
 /// `bg` taken darker (light text) or lighter (dark text) until every one of `texts` has
 /// [`MIN_CONTRAST`] on it, and on it lifted by `lift` (the strip's lighter top).
-fn readable(t: &Tokens, mut bg: Color32, texts: &[Color32], lift: f32) -> Color32 {
+pub fn readable(t: &Tokens, mut bg: Color32, texts: &[Color32], lift: f32) -> Color32 {
     let light_text = luminance(t.text) > luminance(t.strip_bg);
     let ok = |c: Color32| texts.iter().all(|x| contrast(*x, c) >= MIN_CONTRAST);
     for _ in 0..80 {

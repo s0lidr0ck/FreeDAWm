@@ -2547,12 +2547,13 @@ pub(crate) fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, w
         }
     });
     ui.menu_button("Track Color", |ui| {
-        for (i, c) in soundcraft_model::TRACK_COLORS.iter().enumerate() {
-            let (r, resp) = ui.allocate_exact_size(vec2(120.0, 14.0), Sense::click());
-            ui.painter().rect_filled(r, 2.0, rgb(*c));
-            if resp.clicked() {
-                let _ = app.run("track.color", json!({"tracks": selection, "color": i}));
-            }
+        let marked: Vec<[u8; 3]> = app.engine.session().track(id).map(|t| vec![t.color]).unwrap_or_default();
+        if let Some(i) = crate::palette_window::palette_grid(ui, &marked, 14.0, false) {
+            let _ = app.run("track.color", json!({"tracks": selection, "color": i}));
+        }
+        if ui.button("Color Palette...").clicked() {
+            app.ui.show_color_palette = true;
+            ui.close();
         }
     });
 }
@@ -2707,7 +2708,7 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
             Align2::LEFT_CENTER,
             take.map_or(clip.name.as_str(), |t| t.1),
             bold(10.5),
-            Color32::from_rgb(12, 12, 12),
+            if clip.muted { Color32::from_rgb(12, 12, 12) } else { crate::theme::clip_name_ink(bar) },
         );
     }
     let body_r = Rect::from_min_max(pos2(r.min.x, r.min.y + name_h), r.max);

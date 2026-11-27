@@ -90,6 +90,7 @@ pub mod notes_panel;
 pub mod open_progress;
 pub mod ops_windows;
 pub mod palette;
+pub mod palette_window;
 pub mod panels;
 pub mod pantry;
 pub mod plugin_close;
@@ -314,6 +315,13 @@ pub struct UiState {
     /// Kept with the preferences, not the session.
     #[serde(default)]
     pub mix_strip_tint: f32,
+    /// Window › Color Palette: the last custom colours applied, newest first (at most
+    /// `palette_window::MAX_CUSTOM`). Kept with the preferences, not the session.
+    #[serde(default)]
+    pub custom_colors: Vec<[u8; 3]>,
+    /// The palette window's colour picker (Custom…) while open: the colour being picked.
+    #[serde(skip)]
+    pub custom_pick: Option<[u8; 3]>,
     /// Open plugin windows: (track, module or instrument). Keyed by module id, so a window
     /// follows its module when the chain is reordered.
     pub plugin_windows: Vec<(TrackId, SlotKey)>,
@@ -674,6 +682,8 @@ impl Default for UiState {
             edit_views: vec!["color".into()],
             track_tint: 0.5,
             mix_strip_tint: 0.0,
+            custom_colors: Vec::new(),
+            custom_pick: None,
             plugin_windows: Vec::new(),
             full_editors: Vec::new(),
             detached_plugins: Vec::new(),

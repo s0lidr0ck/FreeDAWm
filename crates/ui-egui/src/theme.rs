@@ -429,16 +429,34 @@ pub fn wants_light(ctx: &egui::Context, mode: ThemeMode) -> bool {
 
 /// A track's header and lane backgrounds in the Edit window, tinted with its colour by `tint` (0..1).
 pub fn track_backgrounds(color: [u8; 3], selected: bool, tint: f32) -> (Color32, Color32) {
-    let t = Tokens::current();
-    let k = tint.clamp(0.0, 1.0);
+    track_backgrounds_with(&Tokens::current(), color, selected, tint)
+}
+
+/// [`track_backgrounds`] with the palette `t`. The header is darkened (dark theme) or lightened
+/// (light theme) only as far as its text needs: the name and the dimmer labels keep at least
+/// [`crate::strip_tint::MIN_CONTRAST`] on it whatever the track's colour (a pale yellow in the
+/// dark theme, a dark custom colour in the light one).
+pub fn track_backgrounds_with(t: &Tokens, color: [u8; 3], selected: bool, tint: f32) -> (Color32, Color32) {
+    let k = if tint.is_finite() { tint.clamp(0.0, 1.0) } else { 0.0 };
     if k <= 0.0 {
         return if selected { (t.header_selected, t.playlist_alt) } else { (t.panel_bg2, t.playlist_bg) };
     }
     let c = rgb(color);
     let header = t.panel_bg2.lerp_to_gamma(c, k * 0.55);
     let header = if selected { crate::widgets::shade(header, 0.1) } else { header };
+    let header = crate::strip_tint::readable(t, header, &[t.text, t.text_dim], 0.0);
     let lane = if selected { t.playlist_alt } else { t.playlist_bg }.lerp_to_gamma(c, k * 0.2);
     (header, lane)
+}
+
+/// The text colour for a clip's name on its name bar of colour `bar`: near-black as always, or
+/// near-white on a bar too dark for it (below 3.5:1, where white reads better: the Dark palette
+/// row and dark custom colours). Every palette colour but the Dark row keeps dark text.
+pub fn clip_name_ink(bar: Color32) -> Color32 {
+    let dark = Color32::from_rgb(12, 12, 12);
+    let light = Color32::from_rgb(245, 245, 245);
+    let (kd, kl) = (crate::strip_tint::contrast(dark, bar), crate::strip_tint::contrast(light, bar));
+    if kd >= 3.5 || kd >= kl { dark } else { light }
 }
 
 /// Track colours tinted for clip bodies.
