@@ -702,6 +702,7 @@ Window > ---
 Window > Editors > MIDI Editor = Window > MIDI Editor
 Window > Editors > Vocal Editor = Window > Vocal Editor
 Window > Editors > Vocal Studio = @window.vocal_studio
+Window > Editors > Spectrum = @window.spectrum
 Window > Editors > Score Editor = Window > Score Editor
 Window > Editors > MIDI Event List = Window > MIDI Event List
 Window > Editors > Musical Typing = Window > Musical Typing

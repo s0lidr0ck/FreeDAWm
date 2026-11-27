@@ -61,6 +61,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.close_plugin_windows", "Close Plug-in Windows", "", Some("Cmd+Alt+W")),
     ("window.midi_editor", "MIDI Editor", "Window > MIDI Editor", None),
     ("window.vocal_editor", "Vocal Editor", "Window > Vocal Editor", None),
+    ("window.spectrum", "Spectrum", "", None),
     ("window.vocal_studio", "Vocal Studio", "", None),
     ("window.universe", "Universe", "View > Other Displays > Universe", Some("Alt+7")),
     ("window.video", "Video", "Window > Video", Some("Cmd+9")),
@@ -1179,6 +1180,7 @@ fn toggle_state(app: &SoundApp, path: &str, id: Option<&str>) -> Option<bool> {
         Some("window.clip_effects") => app.ui.show_clip_effects,
         Some("window.midi_editor") => app.ui.show_midi_editor,
         Some("window.vocal_editor") => app.ui.show_vocal_editor,
+        Some("window.spectrum") => app.ui.show_spectrum,
         Some("window.vocal_studio") => app.ui.show_vocal_editor && app.vocal.studio.on,
         Some("window.score") => app.ui.show_score,
         Some("window.event_list") => app.ui.show_event_list,
@@ -1843,6 +1845,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.about" => toggle(&mut app.ui.show_about),
         "window.midi_editor" => toggle(&mut app.ui.show_midi_editor),
         "window.vocal_editor" => toggle(&mut app.ui.show_vocal_editor),
+        "window.spectrum" => toggle(&mut app.ui.show_spectrum),
         "window.midi_front" => {
             app.ui.show_midi_editor = true;
             json!({"value": true})

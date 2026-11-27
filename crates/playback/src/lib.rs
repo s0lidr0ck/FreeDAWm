@@ -693,10 +693,19 @@ pub fn ara_board() -> Arc<soundcraft_mix::ara::AraBoard> {
     BOARD.get_or_init(|| Arc::new(soundcraft_mix::ara::AraBoard::default())).clone()
 }
 
+/// The Spectrum editor's taps (one per process, made on first use off the audio thread): every
+/// live engine feeds them while the editor is open; offline renders never do (see
+/// `soundcraft_mix::spectrum_tap`). They are never freed, so the audio thread never drops them.
+pub fn spectrum_taps() -> &'static soundcraft_mix::spectrum_tap::SpectrumTaps {
+    static TAPS: std::sync::OnceLock<soundcraft_mix::spectrum_tap::SpectrumTaps> = std::sync::OnceLock::new();
+    TAPS.get_or_init(soundcraft_mix::spectrum_tap::SpectrumTaps::new)
+}
+
 fn new_engine(sr: f32, max_block: usize) -> MixEngine {
     let mut m = MixEngine::new(sr, max_block);
     m.set_external_instances(true);
     m.set_ara_board(Some(ara_board()));
+    m.set_spectrum_taps(Some(spectrum_taps()));
     // Built-in modules and Clip Effects come made from the UI thread too (`Side::builtins`).
     m.set_prepared_builtins(true);
     m.metronome = true;

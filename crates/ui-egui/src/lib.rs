@@ -116,6 +116,7 @@ pub mod shortcuts;
 pub mod sidechain_picker;
 pub mod slider_drag;
 pub mod spectral;
+pub mod spectrum_view;
 pub mod split_progress;
 pub mod spot;
 pub mod step_grid;
@@ -264,6 +265,10 @@ pub struct UiState {
     pub show_midi_editor: bool,
     /// The Vocal Editor (AI › Tune Vocal › Open…); plan 3 draws it.
     pub show_vocal_editor: bool,
+    /// The Spectrum editor (Window › Editors › Spectrum): a tab of the lower dock beside the Vocal
+    /// and MIDI editors (`spectrum_view`). Kept with the preferences, as they are.
+    #[serde(default)]
+    pub show_spectrum: bool,
     /// The Vocal Editor's Preview toggle: a clicked or edited note plays once (`vocal.preview`).
     #[serde(default = "default_true", rename = "vocal.preview")]
     pub vocal_preview: bool,
@@ -653,6 +658,7 @@ impl Default for UiState {
             show_about: false,
             show_midi_editor: false,
             show_vocal_editor: false,
+            show_spectrum: false,
             vocal_preview: true,
             vocal_zoom_factor: 1.0,
             vocal_row_h: vocal_editor::ROW_H,
@@ -1217,6 +1223,8 @@ pub struct SoundApp {
     pub score: score_editor::ScoreState,
     /// The Vocal Editor's selection, scroll and panel state.
     pub vocal: vocal_editor::VocalEditorState,
+    /// The Spectrum editor's analysis and curves between frames.
+    pub spectrum: spectrum_view::SpectrumView,
     /// The word lanes' selection, drag and retype, and tap mode.
     pub words: word_lane::WordUi,
     /// While a Vocal Editor preview plays: the track the player hears soloed (it is handed a
@@ -1448,6 +1456,7 @@ impl SoundApp {
             midi: midi_editor::MidiEditorState::default(),
             score: score_editor::ScoreState::default(),
             vocal: vocal_editor::VocalEditorState::default(),
+            spectrum: spectrum_view::SpectrumView::default(),
             words: word_lane::WordUi::default(),
             preview_solo: None,
             audition_session: None,
@@ -3411,6 +3420,8 @@ impl SoundApp {
         fullscreen::step(self, ctx);
         self.note_recent_session();
         self.apply_editor_edits();
+        // The Spectrum editor's taps run only while it is drawn.
+        self.spectrum.tick(ctx.cumulative_pass_nr());
         browser::thumbs::ThumbCache::capture_when_open(self, ctx);
         browser::scan_job::step(self, ctx);
         open_progress::step(self, ctx);

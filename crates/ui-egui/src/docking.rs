@@ -14,6 +14,7 @@ pub enum Panel {
     Clips,
     Midi,
     Vocal,
+    Spectrum,
     Memory,
     History,
     Browser,
@@ -29,6 +30,7 @@ impl Panel {
         Self::Clips,
         Self::Midi,
         Self::Vocal,
+        Self::Spectrum,
         Self::Memory,
         Self::History,
         Self::Browser,
@@ -43,6 +45,7 @@ impl Panel {
             Self::Clips => "clips",
             Self::Midi => "midi",
             Self::Vocal => "vocal",
+            Self::Spectrum => "spectrum",
             Self::Memory => "memory",
             Self::History => "history",
             Self::Browser => "browser",
@@ -58,6 +61,7 @@ impl Panel {
             Self::Clips => "Clips",
             Self::Midi => "MIDI Editor",
             Self::Vocal => "Vocal Editor",
+            Self::Spectrum => "Spectrum",
             Self::Memory => "Memory Locations",
             Self::History => "Undo History",
             Self::Browser => "Plugin Browser",
@@ -73,6 +77,7 @@ impl Panel {
             Self::Clips => Zone::Right,
             Self::Midi => Zone::Bottom,
             Self::Vocal => Zone::Bottom,
+            Self::Spectrum => Zone::Bottom,
             Self::Memory => Zone::Bottom,
             Self::History => Zone::Right,
             Self::Browser => Zone::Right,
@@ -131,6 +136,8 @@ fn tab_siblings(panel: Panel) -> &'static [(Panel, Option<Panel>)] {
     match panel {
         Panel::Vocal => &[(Panel::Midi, Some(Panel::Midi))],
         Panel::Midi => &[(Panel::Vocal, None)],
+        // After the MIDI Editor (or the Vocal Editor) in the lower dock.
+        Panel::Spectrum => &[(Panel::Midi, None), (Panel::Vocal, None)],
         Panel::Notes => &[(Panel::Lyrics, Some(Panel::Lyrics)), (Panel::History, Some(Panel::History)), (Panel::Vocal, None), (Panel::Midi, None)],
         Panel::Prompter => &[(Panel::Lyrics, None), (Panel::Notes, None), (Panel::Vocal, None), (Panel::Midi, None)],
         Panel::Lyrics => &[(Panel::Notes, None), (Panel::History, Some(Panel::History)), (Panel::Vocal, None), (Panel::Midi, None)],
@@ -229,7 +236,7 @@ impl Workspace {
 
     pub fn validate_mix(&self) -> Result<(), String> {
         self.validate()?;
-        if [Panel::Clips, Panel::Midi, Panel::Vocal].iter().any(|p| self.layout.contains(p)) {
+        if [Panel::Clips, Panel::Midi, Panel::Vocal, Panel::Spectrum].iter().any(|p| self.layout.contains(p)) {
             return Err("Clips and MIDI panels belong to the Edit window".into());
         }
         Ok(())
@@ -380,6 +387,7 @@ pub fn mix_default() -> Workspace {
     let _ = workspace.set_visible(Panel::Clips, false);
     let _ = workspace.set_visible(Panel::Midi, false);
     let _ = workspace.set_visible(Panel::Vocal, false);
+    let _ = workspace.set_visible(Panel::Spectrum, false);
     workspace
 }
 
@@ -403,6 +411,7 @@ fn sync(workspace: &mut Workspace, app: &crate::SoundApp, edit: bool) -> Result<
         workspace.set_visible(Panel::Midi, app.ui.show_midi_editor && !app.ui.midi_editor_separate)?;
         // In its own OS window the Vocal Editor leaves the dock.
         workspace.set_visible(Panel::Vocal, app.ui.show_vocal_editor && !app.ui.vocal_separate)?;
+        workspace.set_visible(Panel::Spectrum, app.ui.show_spectrum)?;
         workspace.set_visible(Panel::Prompter, app.ui.show_teleprompter && !app.ui.teleprompter_separate)?;
     }
     Ok(())
@@ -425,6 +434,7 @@ fn publish_visibility(app: &mut crate::SoundApp, workspace: &Workspace, edit: bo
         if !app.ui.vocal_separate {
             app.ui.show_vocal_editor = workspace.layout.contains(&Panel::Vocal);
         }
+        app.ui.show_spectrum = workspace.layout.contains(&Panel::Spectrum);
         if !app.ui.teleprompter_separate {
             app.ui.show_teleprompter = workspace.layout.contains(&Panel::Prompter);
         }
@@ -463,7 +473,9 @@ pub(crate) fn cancel_replaced_state(app: &crate::SoundApp, next: &crate::UiState
 }
 
 fn command_for(app: &mut crate::SoundApp, reset: bool, params: &Value, edit: bool) -> Result<Value, String> {
-    if !edit && ["panel", "target"].iter().any(|field| matches!(params.get(*field).and_then(Value::as_str), Some("clips" | "midi" | "vocal"))) {
+    if !edit
+        && ["panel", "target"].iter().any(|field| matches!(params.get(*field).and_then(Value::as_str), Some("clips" | "midi" | "vocal" | "spectrum")))
+    {
         return Err("Clips and MIDI panels belong to the Edit window".into());
     }
     let mut workspace = if edit { app.ui.docking.clone() } else { app.ui.mix_docking.clone() };
@@ -559,6 +571,7 @@ pub fn show(app: &mut crate::SoundApp, ui: &mut egui::Ui, window: crate::MainWin
                 ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("soundcraft-vocal-body"), ui.max_rect()));
                 minimum_body(ui, egui::vec2(420.0, 260.0), |ui| crate::vocal_editor::show(app, ui));
             }
+            Panel::Spectrum => minimum_body(ui, egui::vec2(420.0, 200.0), |ui| crate::spectrum_view::show(app, ui)),
             Panel::Memory => crate::panels::memory_locations(app, ui),
             Panel::History => crate::panels::undo_history(app, ui),
             Panel::Browser => crate::browser::panel::browser_panel(app, ui),
@@ -604,6 +617,7 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
         Panel::Tracks => (egui::vec2(140.0, 120.0), 520.0),
         Panel::Clips => (egui::vec2(180.0, 120.0), 720.0),
         Panel::Midi | Panel::Vocal => (egui::vec2(420.0, 260.0), 1_000_000.0),
+        Panel::Spectrum => (egui::vec2(420.0, 200.0), 1_000_000.0),
         Panel::Memory => (egui::vec2(260.0, 160.0), 1_000_000.0),
         Panel::History => (egui::vec2(200.0, 160.0), 720.0),
         Panel::Browser => (egui::vec2(220.0, 160.0), 1_000_000.0),

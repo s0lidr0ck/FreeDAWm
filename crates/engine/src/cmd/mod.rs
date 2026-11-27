@@ -91,6 +91,7 @@ pub(crate) mod ml;
 pub mod modulator;
 pub mod multisample;
 pub mod note_expr;
+pub mod spectrum;
 pub mod tempo_fit;
 pub mod transpose_track;
 pub(crate) use mix::restore_plugin_param_ids;
@@ -258,6 +259,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(event::specs());
         v.extend(mix::specs());
         v.extend(mix_view::specs());
+        v.extend(spectrum::specs());
         v.extend(automation_edit::specs());
         v.extend(auto_write::specs());
         v.extend(options::specs());

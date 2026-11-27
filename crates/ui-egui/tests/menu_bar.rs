@@ -622,6 +622,27 @@ fn tune_vocal_opens_the_vocal_editor() {
     assert_eq!(menus::command_for_path("Window > Vocal Editor", &extra).as_deref(), Some("window.vocal_editor"));
 }
 
+/// Window › Editors: the lower dock's editors and their companions, with Spectrum (2026-11-27,
+/// `docs/spectrum.md`) after the vocal ones. Like MIDI Editor and Vocal Editor it shows or hides a
+/// dock tab, so its label has no "...".
+#[test]
+fn window_editors_lists_spectrum_beside_the_vocal_and_midi_editors() {
+    let tree = menus::tree();
+    let window = tree.iter().find(|n| n.label == "Window").unwrap();
+    let editors = window.children.iter().find(|n| n.label == "Editors").unwrap();
+    let labels: Vec<&str> = editors.children.iter().map(|n| n.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["MIDI Editor", "Vocal Editor", "Vocal Studio", "Spectrum", "Score Editor", "MIDI Event List", "Musical Typing", "Chord Pads..."]
+    );
+    let extra = menus::ui_aliases();
+    let spectrum = editors.children.iter().find(|n| n.label == "Spectrum").unwrap();
+    assert_eq!(menus::command_for_path(&spectrum.path, &extra).as_deref(), Some("window.spectrum"));
+    let mut app = demo_app();
+    menus::run_ui_command(&mut app, "window.spectrum", &json!({})).unwrap().unwrap();
+    assert!(app.ui.show_spectrum);
+}
+
 #[test]
 fn the_first_item_is_the_wordmark_named_freedawm_and_opens_about() {
     use egui_kittest::kittest::Queryable;

@@ -94,6 +94,7 @@ pub mod rt;
 pub use live_midi::{HeldNotes, LIVE_MIDI_CAPACITY, LiveEvent, LiveMidi, MAX_MIDI_PORTS, MidiFilter, port_id};
 pub use prepare::{BuiltinPrep, ClipHandle, ClipSlot, Prepared, PreparedClipFx, PreparedStrip, RetiredStrips, StripRoom};
 pub mod scout;
+pub mod spectrum_tap;
 pub use link::{LinkProblem, LinkRoute, describe_link, link_refusal, link_regressions, link_routes, link_routes_with, short_link_problem};
 mod sidechain;
 pub mod song_keys;
@@ -684,6 +685,8 @@ struct Strip {
     mpe_sent: Option<soundcraft_model::MpeZone>,
     /// This strip's Scout PRE/POST taps while a capture runs (see [`scout`]).
     scout: Option<Box<scout::StripTaps>>,
+    /// Where its Spectrum tap was last found (see [`spectrum_tap`]).
+    spectrum: spectrum_tap::TapCache,
     /// Where the strip's output goes, resolved in `sync` (no name lookups while rendering).
     dest: Dest,
     /// The device input channels (first, width) the strip hears when monitoring, resolved in
@@ -937,6 +940,7 @@ impl Strip {
             midi_vel: 0,
             mpe_sent: None,
             scout: None,
+            spectrum: spectrum_tap::TapCache::default(),
             dest: Dest::None,
             in_span: None,
             in_default: false,
@@ -1163,6 +1167,12 @@ pub struct MixEngine {
     retired_links: Vec<Arc<LinkSlab>>,
     /// The armed Scout capture (see [`MixEngine::arm_scout`]).
     scout: Option<Box<scout::ScoutRig>>,
+    /// The Spectrum editor's taps (live engines only: [`MixEngine::set_spectrum_taps`]).
+    spectrum: Option<&'static spectrum_tap::SpectrumTaps>,
+    /// The taps are attached and the editor is open, as read at the start of this block.
+    spectrum_on: bool,
+    /// Where the master's Spectrum tap was last found.
+    spectrum_main: spectrum_tap::TapCache,
     /// The Band (see [`band`]): its runtime, the update it plays, updates it replaced, the `Arc`s
     /// it let go of, its events of this block per musician, and whether it was playing.
     band: Option<Box<soundcraft_band::runtime::BandRuntime>>,
@@ -1411,6 +1421,9 @@ impl MixEngine {
             links: Vec::new(),
             retired_links: Vec::new(),
             scout: None,
+            spectrum: None,
+            spectrum_on: false,
+            spectrum_main: spectrum_tap::TapCache::default(),
             band: None,
             band_update: None,
             band_spent: Default::default(),
@@ -1432,6 +1445,13 @@ impl MixEngine {
         }
         self.scout = Some(rig);
         None
+    }
+
+    /// Attaches the Spectrum editor's taps (the live engines do; offline renders never): while
+    /// the editor is open each shown strip and the master feed their mono sum into its slot (see
+    /// [`spectrum_tap`]). The taps live for the whole process, so nothing is dropped here.
+    pub fn set_spectrum_taps(&mut self, taps: Option<&'static spectrum_tap::SpectrumTaps>) {
+        self.spectrum = taps;
     }
 
     /// An instrument is still releasing what its live input held (see `Strip::live_tail`), or the
@@ -2457,6 +2477,8 @@ impl MixEngine {
     /// Render `frames` (≤ max_block) samples starting at `pos` into `out` (≥ 2 channels).
     pub fn render(&mut self, s: &Session, pos: Samples, frames: usize, out: &mut [Vec<f32>]) {
         let frames = frames.min(self.max_block);
+        // One atomic load a block: closed, the Spectrum editor costs nothing more.
+        self.spectrum_on = self.spectrum.is_some_and(spectrum_tap::SpectrumTaps::is_active);
         let stopped = self.monitor_only;
         // Stopped, the transport stays where it is: the same block again is no seek (a held live
         // note would be cut every block). A Locate resets the engine itself (`reset_at`).
@@ -3027,6 +3049,13 @@ impl MixEngine {
         // Before the clicks: they are not the mix's tail, nor what the output meter shows.
         self.track_tail(s, frames);
         self.main_meter.measure(&self.main, frames, 0.0, self.meters_held);
+        if self.spectrum_on
+            && let Some(ring) = self.spectrum.and_then(|taps| taps.feed_target(spectrum_tap::MASTER_KEY, &mut self.spectrum_main))
+        {
+            let mut g = [0.0f32; MAX_CHANNELS];
+            g.iter_mut().take(self.main.len()).for_each(|x| *x = 1.0);
+            spectrum_tap::feed_mono(ring, &self.main, &g, frames);
+        }
         if let Some(l) = &mut self.loudness {
             if !self.monitor_only {
                 l.process(&self.main, frames);
@@ -3346,6 +3375,13 @@ impl MixEngine {
             }
             m
         };
+        // The Spectrum tap: what is added to the destination, the pan as each channel's power gain.
+        if self.spectrum_on
+            && let Some(ring) = self.spectrum.and_then(|taps| taps.feed_target(spectrum_tap::track_key(t.id), &mut strip.spectrum))
+        {
+            let g = spectrum_tap::channel_gains(&routing(apos), src.len());
+            spectrum_tap::feed_mono(ring, src, &g, frames);
+        }
         let gridded = pan_automated(t);
         let mut start = 0;
         while start < frames {

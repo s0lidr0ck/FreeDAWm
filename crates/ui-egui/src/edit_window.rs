@@ -202,6 +202,7 @@ fn dock_tabs(app: &mut SoundApp, ui: &mut Ui) {
     for (label, on, id) in [
         ("VOCAL EDITOR", app.ui.show_vocal_editor, "window.vocal_editor"),
         ("MIDI EDITOR", app.ui.show_midi_editor, "window.midi_editor"),
+        ("SPECTRUM", app.ui.show_spectrum, "window.spectrum"),
         ("MEMORY LOCATIONS", app.ui.show_memory_locations, "window.memory_locations"),
         ("UNDO HISTORY", app.ui.show_undo_history, "window.undo_history"),
         ("NOTES", app.ui.show_notes, "window.notes"),
