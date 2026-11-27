@@ -15,7 +15,7 @@ Each curve is what the track actually sends into the mix: after its plug-ins, it
 mute (a muted or solo-muted track reads silence) and its pan. Stereo tracks are summed to one
 curve; the pan only changes a curve by the pan law's level change, not by which side it leans to.
 The master can be shown too: that is the main mix after the master faders, as the output meter
-reads it. Aux inputs and routing folders (buses) have their own section in the list.
+reads it. Aux inputs and routing folders (buses) have their own group of chips.
 
 The curves keep CleanQ's analyser's pace, dB range and fall-off (CleanQ itself is unchanged):
 
@@ -34,27 +34,38 @@ The curves keep CleanQ's analyser's pace, dB range and fall-off (CleanQ itself i
 - It works whenever the mixer runs: playing, and stopped while a track monitors its input. With
   the transport stopped and nothing monitored the curves fall away.
 
-The names of the loudest few curves are written at their peaks, never over one another; the list
-names the rest. **Hover** a curve, a track's row or its dots in the scope, and that curve is drawn
-on top with a wash under it and its name, the others dimmed. The readout in the toolbar (on the
-plot, when the dock is narrow) gives the frequency and level under the pointer, unweighted
-("Bass   80 Hz   -42.0 dBFS").
+Every shown track is a soft filled area under a thin, slightly see-through line in its colour.
+**Point at** a curve, or at its chip, and that track brightens; the tracks that overlap it keep
+their colours and are named, on the curves and in words at the top left of the graph ("Vox
+overlaps Keys, Pad", or "Vox: nothing in its way"); every other track fades to a quiet grey. The
+readout at the right of the buttons (on the plot, when the dock is narrow) gives the frequency and
+level under the pointer, unweighted ("Bass   80 Hz   -42.0 dBFS").
+
+**What counts as overlapping** comes from the curves as drawn, only for the track pointed at: of
+the part of its curve within 30 dB of its own peak, the share another track's curve also reaches
+(where the other is as loud or louder it covers that part fully; where it is quieter, only up to
+its own height). A track that covers at least **40%** is named, most first. The master is never
+named (it holds every track). The 40% was set on the demo session: there the pad and keys name
+each other, the bass names the keys that sit over its upper harmonics, and the hi-hats, alone up
+top, name nothing.
 
 ## Showing and hiding
 
-The list on the left is in three sections, **Tracks** (audio, MIDI and instrument tracks),
-**Buses** (Aux inputs and routing folders) and **Master**, each with a header saying how many of
-it are shown and a Show / Hide that switches the whole section. Each row has the curve's colour
-swatch, the track's name and its switch; click the row. Tracks are shown at first; buses and the
+The tracks are chips in a row along the top of the editor (a coloured dot and the name), so the
+graph has the full width. Click a chip to show or hide its track; point at it to see its track as
+if you pointed at its curve. The chips are grouped **Tracks** (audio, MIDI and instrument tracks),
+**Buses** (Aux inputs and routing folders) and **Master**, each group with a Show / Hide that
+switches the whole group. The chips wrap onto up to three rows; when there are more tracks than
+that holds, they sit in one row that scrolls sideways. Tracks are shown at first; buses and the
 master are not (a bus carries the tracks fed into it, so showing both at first would draw much of
-the mix twice), and their sections are one click away.
+the mix twice), and their groups are one click away.
 
-- **Show all** and **Hide all** in the toolbar switch every row.
+- **Show all** and **Hide all** switch every chip.
 - **Only selected tracks** shows just the tracks selected in the Edit window and follows the
   selection as it changes. While it is on the switches are greyed out; turning it off brings back
   what they say.
-- At most **24 curves** are drawn at once. Past that the graph stops being readable; the list says
-  "Showing the first 24 of N", Show all switches on the first 24, and a further switch is greyed
+- At most **24 curves** are drawn at once. Past that the graph stops being readable; the bar says
+  "Showing the first 24 of N", Show all switches on the first 24, and a further chip is greyed
   with the reason until another is hidden.
 
 What is shown (the switches, Only selected tracks) is kept with the session; sessions saved before
@@ -64,7 +75,7 @@ window settings, as the Vocal and MIDI editors' are. None of it is an undo step.
 **Same colours.** Tracks of the same (or nearly the same) colour are drawn in shades of that
 colour, from deep to pale, each a clear step from the next and every one standing out from the
 graph's dark ground (whatever the app's theme: the graph is dark in both). The track whose own
-colour is nearest a shade keeps that one. The list's swatch and the scope's dots use the same
+colour is nearest a shade keeps that one. The chip's dot and the scope's dots use the same
 shades. Four tracks of one colour are told apart by shade alone; a fifth to eighth are drawn
 dashed and any more dotted, reusing the shades. A colour too dark to see on the graph is drawn a
 little lighter. Your track colours are never changed.
@@ -75,8 +86,9 @@ little lighter. Your track colours are never changed.
 mid, across is side, so a mono track is a vertical line, a wide one a cloud, and one whose sides
 cancel (out of phase) a horizontal line. Every shown track is drawn in it, about 40 ms of its sound
 as dots in the colour (and shade) of its curve, all on one zoom so their widths and levels
-compare. It uses the same list: a hidden track
-is not in it. Point at a track's dots (or its curve, or its row) and it comes to the front with
+compare. It uses the same chips: a hidden track
+is not in it. It takes the same tones as the graph: point at a track's dots (or its curve, or its
+chip) and it comes to the front, the tracks that overlap it stay in colour, the rest go grey, with
 its correlation underneath: +1 mono, 0 unrelated sides, below 0 sides that cancel in mono.
 
 It shows each track's left and right as they reach the mix, after the pan (a mono track panned
@@ -92,10 +104,10 @@ The audio thread only copies samples; the analysis is done by the window.
   60 to 150 µs more per block with 8 to 40 curves shown (at most 1.5 % of the block), within the
   run-to-run noise at 8 and 12.
 - The window analyses at most twelve curves a frame, taking turns (at 60 frames a second, 24
-  curves each still get CleanQ's 30 analyses a second), and adds about 1.1 to 2.6 ms a frame with
+  curves each still get CleanQ's 30 analyses a second), and, with the smoothing and the filled areas, adds about 1.2 to 4 ms a frame with
   8 to 24 curves shown.
 - The stereo scope, shown: its taps carry left and right only while it is drawn, about 20 to 40 µs
-  more per block on the audio thread with 8 to 40 tracks shown, and 0.2 to 1.2 ms more per UI
+  more per block on the audio thread with 8 to 40 tracks shown, and 0.5 to 1.2 ms more per UI
   frame. In a dock too small to fit it beside the graph it is not drawn and costs nothing; its
   button says why.
 

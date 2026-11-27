@@ -359,14 +359,75 @@ fn names_on_the_graph_never_overlap() {
     let mut h = harness(app_for(s));
     let tones: Vec<(TrackId, f32)> = ids.iter().enumerate().map(|(i, t)| (*t, 400.0 + i as f32 * 10.0)).collect();
     play(&mut h, &tones, 12);
+    // At rest the chips name the tracks; pointing at one names it and every curve in its way.
+    assert!(h.state().spectrum.labels.is_empty());
+    let chip = checkbox!(h, "Track 5").rect();
+    h.event(egui::Event::PointerMoved(chip.center()));
+    play(&mut h, &tones, 2);
     let labels = h.state().spectrum.labels.clone();
-    assert!(!labels.is_empty() && labels.len() <= 6, "the loudest few are named: {}", labels.len());
+    assert!(labels.len() >= 2, "the pointed-at track and those in its way: {}", labels.len());
     for (i, (_, a)) in labels.iter().enumerate() {
         for (_, b) in labels.iter().skip(i + 1) {
             assert!(!a.intersects(*b), "{a:?} overlaps {b:?}");
         }
         assert!(h.state().spectrum.plot.unwrap().expand(1.0).contains_rect(*a), "inside the plot");
     }
+}
+
+/// Two tracks in one band are named as overlapping each other; one far away is not, and fades to
+/// grey while another is pointed at.
+#[test]
+fn pointing_at_a_track_names_what_overlaps_it() {
+    let mut s = Session::default();
+    let ids: Vec<TrackId> = ["Low A", "Low B", "High"].iter().map(|n| s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(n))).collect();
+    let mut h = harness(app_for(s));
+    let tones = [(ids[0], 200.0), (ids[1], 215.0), (ids[2], 6000.0)];
+    play(&mut h, &tones, 12);
+    // At rest: nothing named, every curve in its own colour.
+    assert!(h.state().spectrum.overlap_text.is_none());
+    let (a, b, c) = (Curve::Track(ids[0]), Curve::Track(ids[1]), Curve::Track(ids[2]));
+    assert_eq!(h.state().spectrum.overlaps(a), vec![b]);
+    assert_eq!(h.state().spectrum.overlaps(c), Vec::<Curve>::new());
+    // Pointing at Low A's chip: the readout says what is in its way, in words.
+    let chip = checkbox!(h, "Low A").rect();
+    h.event(egui::Event::PointerMoved(chip.center()));
+    play(&mut h, &tones, 2);
+    assert_eq!(h.state().spectrum.hovered, Some(a));
+    assert_eq!(h.state().spectrum.overlap_text.as_deref(), Some("Low A overlaps Low B"));
+    h.get_by_label("Low A overlaps Low B");
+    use spectrum_view::{Tone, tone};
+    let ov = h.state().spectrum.overlaps(a);
+    assert_eq!((tone(a, Some(a), &ov), tone(b, Some(a), &ov), tone(c, Some(a), &ov)), (Tone::Focused, Tone::Overlapping, Tone::Quiet));
+    // Pointing at High: nothing in its way.
+    let chip = checkbox!(h, "High").rect();
+    h.event(egui::Event::PointerMoved(chip.center()));
+    play(&mut h, &tones, 2);
+    assert_eq!(h.state().spectrum.overlap_text.as_deref(), Some("High: nothing in its way"));
+    // The share itself: identical curves cover each other wholly, disjoint ones not at all, and a
+    // quieter copy covers only part.
+    let one = vec![0.0, 0.0, 0.8, 0.9, 0.8, 0.0, 0.0];
+    let far = vec![0.8, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let quiet: Vec<f32> = one.iter().map(|v| (v - 0.15f32).max(0.0)).collect();
+    assert!((spectrum_view::overlap_share(&one, &one) - 1.0).abs() < 1e-6);
+    assert_eq!(spectrum_view::overlap_share(&one, &far), 0.0);
+    let part = spectrum_view::overlap_share(&one, &quiet);
+    assert!(part > 0.2 && part < 0.8, "{part}");
+}
+
+#[test]
+fn chips_wrap_and_too_many_scroll_in_one_row() {
+    let (s, _) = session();
+    let mut h = harness(app_for(s));
+    play(&mut h, &[], 2);
+    assert_eq!(h.state().spectrum.chip_rows, 1, "a few tracks: one row of chips");
+    let mut s = Session::default();
+    for i in 0..60 {
+        s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some(&format!("Track number {i}")));
+    }
+    let mut h = harness(app_for(s));
+    play(&mut h, &[], 2);
+    assert_eq!(h.state().spectrum.chip_rows, 0, "more than three rows' worth: one row that scrolls sideways");
+    checkbox!(h, "Track number 0");
 }
 
 fn proof_dir() -> Option<std::path::PathBuf> {
@@ -436,6 +497,20 @@ fn proof_at(size: egui::Vec2, dock: f32, name: &str) {
     run(&mut h, 3);
     let bass = h.state().engine.session().tracks.iter().find(|t| t.name == "Bass").map(|t| t.id).unwrap();
     assert_eq!(h.state().spectrum.hovered, Some(Curve::Track(bass)));
+    if std::env::var_os("SOUNDCRAFT_SPECTRUM_SHARES").is_some() {
+        let st = h.state();
+        for a in &st.spectrum.drawn {
+            for b in &st.spectrum.drawn {
+                if a != b {
+                    let name = |c: &Curve| match c {
+                        Curve::Track(t) => st.engine.session().track(*t).map(|t| t.name.clone()).unwrap_or_default(),
+                        Curve::Master => "Master".into(),
+                    };
+                    eprintln!("SHARE {} covered by {}: {:.2}", name(a), name(b), st.spectrum.share_of(*a, *b));
+                }
+            }
+        }
+    }
     shot(&mut h, "hover-bass");
     h.event(egui::Event::PointerGone);
     // Everything, with the stereo scope.

@@ -15,10 +15,12 @@
 //! so 24 curves keep the 30 Hz pace at 60 frames a second. A hidden curve has no tap and no
 //! analysis.
 //!
-//! The list groups the curves into Tracks, Buses (Aux inputs, routing folders) and Master, each
-//! with a header that shows or hides the whole section. Tracks whose colours collide are drawn in
-//! shades of their hue ([`looks`]); the stereo scope (Stereo scope in the toolbar) draws each
-//! shown track's left and right as a vectorscope beside the graph. What is shown is kept with the
+//! Tracks are picked with chips along the top, grouped Tracks | Buses | Master, each group with its
+//! own show/hide, so the graph has the full width. Every shown curve is a soft filled area under a
+//! thin line in its colour (shades of their hue where colours collide, [`looks`]); pointing at a
+//! curve or its chip brightens it, keeps the curves that overlap it ([`overlap_share`]) in colour,
+//! names them, and greys the rest. The stereo scope (Stereo scope in the toolbar) draws each shown
+//! track's left and right as a vectorscope at the right, in the same tones. What is shown is kept with the
 //! session (`soundcraft_engine::cmd::spectrum`); see `docs/spectrum.md`.
 
 use crate::SoundApp;
@@ -129,15 +131,8 @@ fn band(hz: f32) -> (f64, f64) {
 const STALE_S: f64 = 0.25;
 /// What a silent ring's spectrum is eased towards (dBFS).
 const SILENT_DB: f32 = -144.0;
-/// The toolbar's height.
-const BAR_H: f32 = 28.0;
-/// The list's rows and section headers.
-const ROW_H: f32 = 20.0;
-const HEAD_H: f32 = 22.0;
 /// The frequency scale's strip under the plot (CleanQ's `SCALE_H`).
 const SCALE_H: f32 = 14.0;
-/// Names written on the graph at most (the loudest curves'), the focused one besides.
-const MAX_LABELS: usize = 6;
 /// Samples the scope reads per curve, and every how many it draws a dot (256 dots, ~43 ms).
 const SCOPE_READ: usize = 2048;
 const SCOPE_STEP: usize = 8;
@@ -207,6 +202,12 @@ pub struct SpectrumView {
     pub looks: HashMap<Curve, CurveLook>,
     /// The names written on the graph last frame, and where.
     pub labels: Vec<(Curve, Rect)>,
+    /// What overlaps the curve pointed at, in words ("Vox overlaps Keys, Pad"), as last drawn.
+    pub overlap_text: Option<String>,
+    /// Rows the track chips took last frame (0: too many, one sideways-scrolling row).
+    pub chip_rows: usize,
+    /// The scope is on but there was no room for it last frame.
+    scope_squeezed: bool,
     /// The stereo scope's pictures (only while it is shown), its zoom, and where it was drawn.
     pub scope: HashMap<Curve, ScopeCurve>,
     scope_gain: f32,
@@ -235,6 +236,9 @@ impl Default for SpectrumView {
             plot: None,
             looks: HashMap::new(),
             labels: Vec::new(),
+            overlap_text: None,
+            chip_rows: 0,
+            scope_squeezed: false,
             scope: HashMap::new(),
             scope_gain: 0.0,
             scope_rect: None,
@@ -674,7 +678,90 @@ fn panel(p: &egui::Painter, r: Rect) {
 
 // ------------------------------------------------------------------------------ the editor
 
-/// Draws the editor into the dock tab.
+/// A curve's tone while another is pointed at: the pointed-at one bright, the ones that overlap
+/// it in their colours, the rest quiet grey. With nothing pointed at, every curve is `Rest`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Rest,
+    Focused,
+    Overlapping,
+    Quiet,
+}
+
+/// The grey a curve fades to while another is pointed at and it is not in that one's way.
+const QUIET: Color32 = rgb(0x4A4F5A);
+
+/// The tone of `c` given the curve pointed at and the curves that overlap it.
+pub fn tone(c: Curve, focus: Option<Curve>, overlaps: &[Curve]) -> Tone {
+    match focus {
+        None => Tone::Rest,
+        Some(f) if f == c => Tone::Focused,
+        Some(_) if overlaps.contains(&c) => Tone::Overlapping,
+        Some(_) => Tone::Quiet,
+    }
+}
+
+/// (line width, line alpha, fill alpha, colour) for a curve of `look` in `tone`.
+fn paint_of(look: CurveLook, tone: Tone) -> (f32, f32, f32, Color32) {
+    match tone {
+        Tone::Rest => (1.1, 0.55, 0.15, look.color),
+        Tone::Overlapping => (1.1, 0.60, 0.16, look.color),
+        Tone::Focused => (1.8, 0.95, 0.30, look.color),
+        Tone::Quiet => (1.1, 0.35, 0.05, QUIET),
+    }
+}
+
+/// Only the top this many dB of the pointed-at curve count in [`overlap_share`] (below its own
+/// peak less this, a curve's quiet skirts are in nobody's way, nor is anything else there).
+pub const OVERLAP_RANGE_DB: f32 = 30.0;
+/// A track is named as overlapping the pointed-at one when it covers at least this share of it.
+pub const OVERLAP_SHARE: f32 = 0.4;
+
+/// How much of curve `a` curve `b` covers, 0..1, from the drawn curves (columns of 0..1 over the
+/// graph's -96..0 dB, so equal room per octave): each one's height above a floor
+/// [`OVERLAP_RANGE_DB`] under `a`'s own peak, and of `a`'s, the part `b` reaches as well
+/// (`Σ min(a, b) / Σ a`). A track as loud as `a` across `a`'s band covers it wholly; one a few dB
+/// lower covers most of it; one elsewhere, or far below, little or none.
+pub fn overlap_share(a: &[f32], b: &[f32]) -> f32 {
+    let peak = a.iter().copied().fold(0.0f32, f32::max);
+    let floor = (peak - OVERLAP_RANGE_DB / (TOP_DB - BOTTOM_DB)).max(0.0);
+    let lift = |v: f32| (v - floor).max(0.0);
+    let (mut both, mut all) = (0.0f32, 0.0f32);
+    for (x, y) in a.iter().zip(b) {
+        let (x, y) = (lift(*x), lift(*y));
+        both += x.min(y);
+        all += x;
+    }
+    if all > 1e-6 { both / all } else { 0.0 }
+}
+
+impl SpectrumView {
+    /// How much of `a` `b` covers ([`overlap_share`]), as last drawn (0 when either is not shown).
+    pub fn share_of(&self, a: Curve, b: Curve) -> f32 {
+        match (self.curves.get(&a), self.curves.get(&b)) {
+            (Some(x), Some(y)) => overlap_share(&x.cols, &y.cols),
+            _ => 0.0,
+        }
+    }
+
+    /// The shown curves that overlap `c` (see [`overlap_share`]), most first. The master is never
+    /// one (it holds every track), nor, pointing at the master, is anything.
+    pub fn overlaps(&self, c: Curve) -> Vec<Curve> {
+        let Some(a) = self.curves.get(&c).filter(|_| c != Curve::Master) else { return Vec::new() };
+        let mut v: Vec<(Curve, f32)> = self
+            .drawn
+            .iter()
+            .filter(|o| **o != c && **o != Curve::Master)
+            .filter_map(|o| self.curves.get(o).map(|s| (*o, overlap_share(&a.cols, &s.cols))))
+            .filter(|(_, k)| *k >= OVERLAP_SHARE)
+            .collect();
+        v.sort_by(|x, y| y.1.total_cmp(&x.1));
+        v.into_iter().map(|(o, _)| o).collect()
+    }
+}
+
+/// Draws the editor into the dock tab: the bar (buttons, then the track chips), the graph across
+/// the full width, and the scope at the right when it is on.
 pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
     let t = Tokens::current();
     let ctx = ui.ctx().clone();
@@ -686,43 +773,36 @@ pub(crate) fn show(app: &mut SoundApp, ui: &mut Ui) {
     app.spectrum.sync(&want, now);
     let rate = app.engine.session().sample_rate.hz();
     app.spectrum.analyse(&want, rate, now);
+    app.spectrum.drawn = want.clone();
+    app.spectrum.looks = all_looks(app);
     let scope_on = app.engine.session().edit.flag(cmd::SCOPE);
 
     let full = ui.max_rect();
     ui.painter().rect_filled(full, 0.0, t.panel_bg);
-    let bar = Rect::from_min_size(full.min, vec2(full.width(), BAR_H));
-    let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
-    let list_w = (full.width() * 0.22).clamp(132.0, 190.0);
-    let list_rect = Rect::from_min_max(body.min, pos2((body.left() + list_w).min(body.right()), body.bottom()));
-    let area = Rect::from_min_max(pos2(list_rect.right(), body.top()), body.max).shrink(6.0);
+    let (bar_bottom, chip_hover) = bar(app, ui, full);
+    ui.painter().line_segment([pos2(full.left(), bar_bottom), pos2(full.right(), bar_bottom)], Stroke::new(1.0, t.border));
+    let area = Rect::from_min_max(pos2(full.left(), bar_bottom), full.max).shrink(6.0);
     // The scope: a square at the right, when there is room for it beside a usable graph.
     let side = area.height().min(area.width() * 0.38);
     let scope_rect =
         (scope_on && side >= 120.0 && area.width() - side >= 240.0).then(|| Rect::from_min_max(pos2(area.right() - side, area.top()), area.max));
+    app.spectrum.scope_squeezed = scope_on && scope_rect.is_none();
     let graph_rect = scope_rect.map_or(area, |s| Rect::from_min_max(area.min, pos2(s.left() - 6.0, area.bottom())));
     // The scope's taps carry left and right only while it is drawn.
     app.spectrum.read_scope(&want, scope_rect.is_some(), now);
-    app.spectrum.drawn = want;
-    app.spectrum.looks = all_looks(app);
-    ui.painter().line_segment([pos2(full.left(), bar.bottom()), pos2(full.right(), bar.bottom())], Stroke::new(1.0, t.border));
-    ui.painter().line_segment([pos2(list_rect.right(), body.top()), pos2(list_rect.right(), body.bottom())], Stroke::new(1.0, t.border));
-
-    let list_hover = {
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list_rect.shrink2(vec2(0.0, 2.0))).id_salt("spectrum-list"));
-        list(app, &mut child)
-    };
-    let graph_hover = graph(app, ui, graph_rect, list_hover.or(app.spectrum.scope_hover));
-    let scope_hover = scope_rect.and_then(|r| scope(app, ui, r, graph_hover.or(list_hover)));
+    let graph_hover = graph(app, ui, graph_rect, chip_hover.or(app.spectrum.scope_hover));
+    let focus = graph_hover.or(chip_hover).or(app.spectrum.scope_hover);
+    let overlaps = focus.map(|c| app.spectrum.overlaps(c)).unwrap_or_default();
+    let scope_hover = scope_rect.and_then(|r| scope(app, ui, r, graph_hover.or(chip_hover), &overlaps));
     app.spectrum.scope_rect = scope_rect;
     app.spectrum.scope_hover = scope_hover;
-    app.spectrum.hovered = graph_hover.or(scope_hover).or(list_hover);
-    toolbar(app, ui, bar, scope_on, scope_on && scope_rect.is_none());
+    app.spectrum.hovered = graph_hover.or(scope_hover).or(chip_hover);
     if app.spectrum.curves.values().any(|s| s.cols.iter().any(|v| *v > 0.0)) || app.is_playing() {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 }
 
-/// A toolbar button: a rounded pill, filled while `on`. Its accessible name is `label`.
+/// A toolbar button: a small rounded box, filled while `on`. Its accessible name is `label`.
 fn tool_button(ui: &mut Ui, r: Rect, label: &str, on: Option<bool>, tip: &str) -> Response {
     let t = Tokens::current();
     let resp = ui.interact(r, ui.id().with(("spectrum-tool", label)), Sense::click());
@@ -745,35 +825,88 @@ fn tool_button(ui: &mut Ui, r: Rect, label: &str, on: Option<bool>, tip: &str) -
     resp.on_hover_text(tip)
 }
 
-/// The toolbar: Show all / Hide all, Only selected tracks, Stereo scope, and on the right the
-/// readout under the pointer (or the cap's note).
-fn toolbar(app: &mut SoundApp, ui: &mut Ui, bar: Rect, scope_on: bool, scope_squeezed: bool) {
+/// One thing in the chip rows.
+enum Item {
+    /// A group's name and its show/hide (`any`: something in it is on).
+    Group(Section, bool),
+    /// A track's chip: curve, name, look, its switch, drawn now.
+    Chip(Curve, String, CurveLook, bool, bool),
+    /// The thin line between groups.
+    Sep,
+}
+
+const CHIP_H: f32 = 22.0;
+const CHIP_GAP: f32 = 5.0;
+/// Chip rows the bar wraps to at most; more than that scrolls sideways in one row.
+pub const MAX_CHIP_ROWS: usize = 3;
+
+fn item_width(ui: &Ui, it: &Item) -> f32 {
+    let w = |s: &str, f: egui::FontId| ui.painter().layout_no_wrap(s.to_string(), f, Color32::WHITE).size().x;
+    match it {
+        Item::Group(sec, any) => w(&sec.label().to_uppercase(), bold(9.5)) + w(if *any { "Hide" } else { "Show" }, regular(10.5)) + 16.0,
+        Item::Chip(_, name, ..) => w(name, regular(11.5)) + 31.0,
+        Item::Sep => 9.0,
+    }
+}
+
+/// The bar across the top of the editor: the buttons with the readout at the right, then the
+/// tracks as chips, grouped Tracks | Buses | Master, wrapping onto up to [`MAX_CHIP_ROWS`] rows
+/// (more scroll sideways in one). Returns where the bar ends and the curve whose chip the pointer
+/// is on.
+fn bar(app: &mut SoundApp, ui: &mut Ui, full: Rect) -> (f32, Option<Curve>) {
     let t = Tokens::current();
-    let only = app.engine.session().edit.flag(cmd::ONLY_SELECTED);
-    let tilt = app.engine.session().edit.flag(cmd::TILT);
-    let h = BAR_H - 8.0;
-    let mut x = bar.left() + 8.0;
+    let s = app.engine.session();
+    let only = s.edit.flag(cmd::ONLY_SELECTED);
+    let tilt = s.edit.flag(cmd::TILT);
+    let scope_on = s.edit.flag(cmd::SCOPE);
+    let on_n = Section::ALL.iter().flat_map(|sec| cmd::section_curves(s, *sec)).filter(|c| cmd::switched_on(s, *c)).count();
+    let full_cap = on_n >= cmd::MAX_VISIBLE;
+    let mut items: Vec<Item> = Vec::new();
+    for sec in Section::ALL {
+        let curves = cmd::section_curves(s, sec);
+        if curves.is_empty() {
+            continue;
+        }
+        if !items.is_empty() {
+            items.push(Item::Sep);
+        }
+        let any = curves.iter().any(|c| if only { app.spectrum.drawn.contains(c) } else { cmd::switched_on(s, *c) });
+        items.push(Item::Group(sec, any));
+        for c in curves {
+            let look = look_of(app, c);
+            items.push(Item::Chip(c, identity(app, c).0, look, cmd::switched_on(s, c), app.spectrum.drawn.contains(&c)));
+        }
+    }
+    let mut run: Option<(&str, serde_json::Value)> = None;
+
+    // ---- the buttons
+    let top = full.top() + 5.0;
+    let mut x = full.left() + 8.0;
     let mut place = |ui: &Ui, label: &str, gap: f32| {
-        let w = ui.painter().layout_no_wrap(label.to_string(), regular(11.5), t.text).size().x + 18.0;
-        let r = Rect::from_min_size(pos2(x, bar.top() + 4.0), vec2(w, h));
+        let w = ui.painter().layout_no_wrap(label.to_string(), regular(11.5), t.text).size().x + 16.0;
+        let r = Rect::from_min_size(pos2(x, top), vec2(w, CHIP_H));
         x += w + gap;
         r
     };
-    let mut run: Option<(&str, serde_json::Value)> = None;
     let r = place(ui, "Show all", 2.0);
     if tool_button(ui, r, "Show all", None, "Show every track, bus and the master (up to the limit)").clicked() {
         run = Some(("spectrum.show_all", json!({})));
     }
-    let r = place(ui, "Hide all", 10.0);
+    let r = place(ui, "Hide all", 8.0);
     if tool_button(ui, r, "Hide all", None, "Hide every curve").clicked() {
         run = Some(("spectrum.hide_all", json!({})));
     }
-    let r = place(ui, "Only selected tracks", 4.0);
+    let r = place(ui, "Only selected tracks", 2.0);
     if tool_button(ui, r, "Only selected tracks", Some(only), "Show just the tracks selected in the Edit window, following the selection").clicked() {
         run = Some(("spectrum.only_selected", json!({})));
     }
-    let r = place(ui, "Stereo scope", 10.0);
-    let tip = if scope_squeezed {
+    let r = place(ui, "Tilt", 2.0);
+    let tip = "Tilt the curves up 4.5 dB an octave about 1 kHz, so a mix reads level rather than sloping down to the highs (the drawing only: readings stay true)";
+    if tool_button(ui, r, "Tilt", Some(tilt), tip).clicked() {
+        run = Some(("spectrum.tilt", json!({})));
+    }
+    let r = place(ui, "Stereo scope", 8.0);
+    let tip = if app.spectrum.scope_squeezed {
         "Stereo scope: the editor is too small to show it beside the graph; make the dock taller or wider"
     } else {
         "Show each shown track's left and right beside the graph: a vertical line is mono, a cloud is wide, a horizontal line is out of phase"
@@ -781,182 +914,171 @@ fn toolbar(app: &mut SoundApp, ui: &mut Ui, bar: Rect, scope_on: bool, scope_squ
     if tool_button(ui, r, "Stereo scope", Some(scope_on), tip).clicked() {
         run = Some(("spectrum.scope", json!({})));
     }
-    let r = place(ui, "Tilt", 10.0);
-    let tip = "Tilt the curves up 4.5 dB an octave about 1 kHz, so a mix reads level rather than sloping down to the highs (the drawing only: readings stay true)";
-    if tool_button(ui, r, "Tilt", Some(tilt), tip).clicked() {
-        run = Some(("spectrum.tilt", json!({})));
+    readout(app, ui, Rect::from_min_max(pos2(x, top), pos2(full.right() - 8.0, top + CHIP_H)), tilt);
+
+    // ---- the chips: wrapped into rows, or one sideways-scrolling row when there are too many
+    let left = full.left() + 8.0;
+    let width = (full.width() - 16.0).max(40.0);
+    let widths: Vec<f32> = items.iter().map(|it| item_width(ui, it)).collect();
+    let mut rows = 1usize;
+    let mut cx = 0.0f32;
+    for w in &widths {
+        if cx > 0.0 && cx + w > width {
+            rows += 1;
+            cx = 0.0;
+        }
+        cx += w + CHIP_GAP;
     }
+    let wrap = rows <= MAX_CHIP_ROWS;
+    app.spectrum.chip_rows = if wrap { rows } else { 0 };
+    let first = top + CHIP_H + 6.0;
+    let mut hovered = None;
+    let mut draw = |ui: &mut Ui, it: &Item, r: Rect| match it {
+        Item::Sep => {
+            ui.painter().line_segment([pos2(r.center().x, r.top() + 3.0), pos2(r.center().x, r.bottom() - 3.0)], Stroke::new(1.0, t.border));
+        }
+        Item::Group(sec, any) => {
+            let p = ui.painter();
+            let label = sec.label().to_uppercase();
+            p.text(pos2(r.left() + 2.0, r.center().y), Align2::LEFT_CENTER, &label, bold(9.5), t.text_dim);
+            let lw = p.layout_no_wrap(label, bold(9.5), t.text_dim).size().x;
+            let word = if *any { "Hide" } else { "Show" };
+            let br = Rect::from_min_max(pos2(r.left() + lw + 6.0, r.top() + 2.0), pos2(r.right(), r.bottom() - 2.0));
+            let name = format!("{word} all {}", sec.label().to_lowercase());
+            let resp = ui.interact(br, ui.id().with(("spectrum-group", sec.id())), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+            if resp.hovered() {
+                ui.painter().rect_filled(br, CornerRadius::same(3), t.button_hi);
+            }
+            ui.painter().text(br.center(), Align2::CENTER_CENTER, word, regular(10.5), t.accent);
+            let tip = match (*sec, *any) {
+                (Section::Buses, false) => "Show the buses (Aux inputs and routing folders): what each bus sends into the mix",
+                _ => "Show or hide this whole group",
+            };
+            if resp.on_hover_text(tip).clicked() {
+                run = Some(("spectrum.show", json!({"section": sec.id(), "shown": !any})));
+            }
+        }
+        Item::Chip(c, name, look, on, visible) => {
+            let capped = !only && !on && full_cap;
+            let enabled = !only && !capped;
+            let resp = ui.interact(r, ui.id().with(("spectrum-chip", *c)), if enabled { Sense::click() } else { Sense::hover() });
+            let checked = if only { *visible } else { *on };
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, checked, name));
+            let p = ui.painter();
+            let rr = CornerRadius::same((CHIP_H * 0.5) as u8);
+            if resp.hovered() {
+                p.rect_filled(r, rr, t.button_hi);
+            }
+            p.rect_stroke(r, rr, Stroke::new(1.0, if *visible { al(look.color, 0.55) } else { t.border }), StrokeKind::Inside);
+            let dot = pos2(r.left() + 12.0, r.center().y);
+            if look.style == LineStyle::Solid {
+                p.circle_filled(dot, 4.5, if *visible { look.color } else { al(look.color, 0.3) });
+            } else {
+                // A dashed or dotted curve (past four of one colour): a ring, its line's mark.
+                p.circle_stroke(dot, 4.0, Stroke::new(1.5, if *visible { look.color } else { al(look.color, 0.3) }));
+            }
+            p.text(
+                pos2(r.left() + 21.0, r.center().y),
+                Align2::LEFT_CENTER,
+                name,
+                regular(11.5),
+                if *visible { t.text } else { al(t.text_dim, 0.7) },
+            );
+            if resp.hovered() && *visible {
+                hovered = Some(*c);
+            }
+            let resp = if only {
+                resp.on_hover_text("Only selected tracks is on: the Edit window's selection decides")
+            } else if capped {
+                resp.on_hover_text(cmd::cap_reason())
+            } else {
+                resp.on_hover_text(if *on { format!("Hide {name}") } else { format!("Show {name}") })
+            };
+            if enabled && resp.clicked() {
+                run = Some((
+                    "spectrum.show",
+                    match c {
+                        Curve::Track(id) => json!({"track": id.0, "shown": !on}),
+                        Curve::Master => json!({"master": true, "shown": !on}),
+                    },
+                ));
+            }
+        }
+    };
+    let bottom = if wrap {
+        let (mut cx, mut cy) = (left, first);
+        for (it, w) in items.iter().zip(&widths) {
+            if cx > left && cx + w > left + width {
+                cx = left;
+                cy += CHIP_H + 4.0;
+            }
+            draw(ui, it, Rect::from_min_size(pos2(cx, cy), vec2(*w, CHIP_H)));
+            cx += w + CHIP_GAP;
+        }
+        cy + CHIP_H + 6.0
+    } else {
+        let strip = Rect::from_min_size(pos2(left, first), vec2(width, CHIP_H + 10.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(strip).id_salt("spectrum-chip-strip"));
+        egui::ScrollArea::horizontal().id_salt("spectrum-chips").auto_shrink([false, true]).show(&mut child, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = CHIP_GAP;
+                for (it, w) in items.iter().zip(&widths) {
+                    let (r, _) = ui.allocate_exact_size(vec2(*w, CHIP_H), Sense::hover());
+                    draw(ui, it, r);
+                }
+            });
+        });
+        strip.bottom() + 4.0
+    };
+    if let Some((id, p)) = run
+        && let Err(e) = app.run(id, p)
+    {
+        app.ui.status = e;
+    }
+    (bottom.min(full.bottom()), hovered)
+}
+
+/// The readout at the right of the buttons: the frequency and true level under the pointer (and
+/// whose curve), else the cap's note; on the plot's top right when the bar has no room.
+fn readout(app: &mut SoundApp, ui: &mut Ui, room: Rect, tilt: bool) {
+    let t = Tokens::current();
     let untilted = if tilt { "  (untilted)" } else { "" };
-    // On the right: what is under the pointer, else the cap's note.
     let wanted = cmd::wanted(app.engine.session()).len();
     let text = match (app.spectrum.readout, app.spectrum.hovered) {
         (Some((hz, db)), Some(c)) => Some((format!("{}   {}   {db:.1} dBFS{untilted}", identity(app, c).0, hz_text(hz)), t.text)),
         (Some((hz, db)), None) => Some((format!("{}   {db:.1} dBFS{untilted}", hz_text(hz)), t.text_dim)),
-        (None, Some(c)) => Some((identity(app, c).0, t.text)),
         (None, None) if wanted > cmd::MAX_VISIBLE => {
             Some((format!("Showing the first {} of {wanted}: at most {} curves at once.", cmd::MAX_VISIBLE, cmd::MAX_VISIBLE), t.text_dim))
         }
         _ => None,
     };
-    if let Some((text, color)) = text {
-        let g = ui.painter().layout_no_wrap(text.clone(), mono(11.0), color);
-        let r = if bar.right() - 10.0 - g.size().x > x {
-            let at = pos2(bar.right() - 10.0 - g.size().x, bar.center().y - g.size().y * 0.5);
-            let r = Rect::from_min_size(at, g.size());
-            ui.painter().galley(at, g, color);
-            Some(r)
-        } else if let Some(plot) = app.spectrum.plot {
-            // No room left in the toolbar (a narrow dock): on the plot's top right instead.
-            let at = pos2(plot.right() - 8.0 - g.size().x, plot.top() + 6.0);
-            let r = Rect::from_min_size(at, g.size());
-            ui.painter().rect_filled(r.expand2(vec2(5.0, 2.0)), CornerRadius::same(3), al(rgb(0x0D1013), 0.85));
-            ui.painter().galley(at, g, if color == t.text { TEXT_BRIGHT } else { TEXT_DIM });
-            Some(r)
-        } else {
-            None
-        };
-        if let Some(r) = r {
-            ui.interact(r, ui.id().with("spectrum-readout"), Sense::hover())
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &text));
-        }
-    }
-    if let Some((id, p)) = run
-        && let Err(e) = app.run(id, p)
-    {
-        app.ui.status = e;
+    let Some((text, color)) = text else { return };
+    let g = ui.painter().layout_no_wrap(text.clone(), mono(11.0), color);
+    let r = if room.width() >= g.size().x {
+        let at = pos2(room.right() - g.size().x, room.center().y - g.size().y * 0.5);
+        let r = Rect::from_min_size(at, g.size());
+        ui.painter().galley(at, g, color);
+        Some(r)
+    } else if let Some(plot) = app.spectrum.plot {
+        let at = pos2(plot.right() - 8.0 - g.size().x, plot.top() + 6.0);
+        let r = Rect::from_min_size(at, g.size());
+        ui.painter().rect_filled(r.expand2(vec2(5.0, 2.0)), CornerRadius::same(3), al(rgb(0x0D1013), 0.85));
+        ui.painter().galley(at, g, if color == t.text { TEXT_BRIGHT } else { TEXT_DIM });
+        Some(r)
+    } else {
+        None
+    };
+    if let Some(r) = r {
+        ui.interact(r, ui.id().with("spectrum-readout"), Sense::hover())
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &text));
     }
 }
 
-/// The list: a section each for Tracks, Buses and Master, its header showing or hiding the whole
-/// section, then a row per curve (its swatch, name and switch). Returns the curve whose row the
-/// pointer is on.
-fn list(app: &mut SoundApp, ui: &mut Ui) -> Option<Curve> {
-    let t = Tokens::current();
-    let only = app.engine.session().edit.flag(cmd::ONLY_SELECTED);
-    let on_n = {
-        let s = app.engine.session();
-        Section::ALL.iter().flat_map(|sec| cmd::section_curves(s, *sec)).filter(|c| cmd::switched_on(s, *c)).count()
-    };
-    let full = on_n >= cmd::MAX_VISIBLE;
-    let sections: Vec<(Section, Vec<(Curve, String, bool, bool)>)> = {
-        let s = app.engine.session();
-        Section::ALL
-            .iter()
-            .map(|sec| {
-                let rows = cmd::section_curves(s, *sec)
-                    .into_iter()
-                    .map(|c| (c, identity(app, c).0, cmd::switched_on(s, c), app.spectrum.drawn.contains(&c)))
-                    .collect();
-                (*sec, rows)
-            })
-            .collect()
-    };
-    let mut run: Option<(&str, serde_json::Value)> = None;
-    let mut hovered = None;
-    egui::ScrollArea::vertical().id_salt("spectrum-rows").auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        for (sec, rows) in &sections {
-            if rows.is_empty() && *sec != Section::Tracks {
-                continue;
-            }
-            // ---- the header: name, how many are shown, and the section's switch
-            let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEAD_H), Sense::hover());
-            let p = ui.painter();
-            p.rect_filled(head, 0.0, t.panel_bg2);
-            p.line_segment([pos2(head.left(), head.bottom()), pos2(head.right(), head.bottom())], Stroke::new(1.0, t.border));
-            let shown = rows.iter().filter(|r| r.3).count();
-            p.text(pos2(head.left() + 10.0, head.center().y), Align2::LEFT_CENTER, sec.label().to_uppercase(), bold(10.0), t.text_dim);
-            let lw = p.layout_no_wrap(sec.label().to_uppercase(), bold(10.0), t.text_dim).size().x;
-            p.text(pos2(head.left() + 16.0 + lw, head.center().y), Align2::LEFT_CENTER, format!("{shown}/{}", rows.len()), mono(9.5), TEXT_FAINT);
-            if !rows.is_empty() {
-                let any = rows.iter().any(|r| if only { r.3 } else { r.2 });
-                let word = if any { "Hide" } else { "Show" };
-                let name = format!("{word} all {}", sec.label().to_lowercase());
-                let bw = 40.0;
-                let br = Rect::from_min_size(pos2(head.right() - bw - 6.0, head.top() + 3.0), vec2(bw, HEAD_H - 6.0));
-                let resp = ui.interact(br, ui.id().with(("spectrum-section", sec.id())), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
-                let p = ui.painter();
-                if resp.hovered() {
-                    p.rect_filled(br, CornerRadius::same(3), t.button_hi);
-                }
-                p.text(br.center(), Align2::CENTER_CENTER, word, regular(10.5), if resp.hovered() { t.text } else { t.accent });
-                let tip = match (*sec, any) {
-                    (Section::Buses, false) => "Show the buses' curves (Aux inputs and routing folders): what each bus sends into the mix",
-                    _ => "Show or hide this whole section",
-                };
-                if resp.on_hover_text(tip).clicked() {
-                    run = Some(("spectrum.show", json!({"section": sec.id(), "shown": !any})));
-                }
-            }
-            if rows.is_empty() {
-                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
-                ui.painter().text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, "No tracks yet", regular(11.0), t.text_dim);
-            }
-            // ---- the rows
-            for (c, name, on, visible) in rows {
-                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
-                let capped = !only && !on && full;
-                let enabled = !only && !capped;
-                let resp = ui.interact(r, ui.id().with(("spectrum-row", *c)), if enabled { Sense::click() } else { Sense::hover() });
-                let checked = if only { *visible } else { *on };
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, checked, name));
-                let look = look_of(app, *c);
-                let p = ui.painter();
-                if resp.hovered() {
-                    p.rect_filled(r, 0.0, al(t.row_selected, 0.55));
-                    if *visible {
-                        hovered = Some(*c);
-                    }
-                }
-                // The swatch: the curve's own colour (its shade), outlined so a pale one shows on
-                // a light theme; a dashed or dotted curve shows its line in it.
-                let sw = Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(12.0, 12.0));
-                let colour = if *visible { look.color } else { al(look.color, 0.30) };
-                if look.style == LineStyle::Solid {
-                    p.rect_filled(sw, CornerRadius::same(3), colour);
-                } else {
-                    p.rect_filled(sw, CornerRadius::same(3), al(look.color, 0.15));
-                    stroke_line(p, vec![pos2(sw.left() + 1.0, sw.center().y), pos2(sw.right() - 1.0, sw.center().y)], look.style, 2.0, colour);
-                }
-                p.rect_stroke(sw, CornerRadius::same(3), Stroke::new(1.0, al(t.text_dim, 0.45)), StrokeKind::Outside);
-                p.text(pos2(sw.right() + 8.0, r.center().y), Align2::LEFT_CENTER, name, regular(11.5), if *visible { t.text } else { t.text_dim });
-                // The switch, at the right: an eye-like dot, filled while shown.
-                let dot = pos2(r.right() - 16.0, r.center().y);
-                let ring = if enabled { t.text_dim } else { al(t.text_dim, 0.4) };
-                p.circle_stroke(dot, 5.0, Stroke::new(1.2, ring));
-                if checked {
-                    p.circle_filled(dot, 3.0, if enabled { t.accent } else { al(t.accent, 0.5) });
-                }
-                let resp = if only {
-                    resp.on_hover_text("Only selected tracks is on: the Edit window's selection decides")
-                } else if capped {
-                    resp.on_hover_text(cmd::cap_reason())
-                } else {
-                    resp.on_hover_text(if *on { format!("Hide {name}") } else { format!("Show {name}") })
-                };
-                if enabled && resp.clicked() {
-                    run = Some((
-                        "spectrum.show",
-                        match c {
-                            Curve::Track(id) => json!({"track": id.0, "shown": !on}),
-                            Curve::Master => json!({"master": true, "shown": !on}),
-                        },
-                    ));
-                }
-            }
-        }
-    });
-    if let Some((id, p)) = run
-        && let Err(e) = app.run(id, p)
-    {
-        app.ui.status = e;
-    }
-    hovered
-}
-
-/// The graph in `r`, in CleanQ's look: grid, curves with soft fills, the loudest curves' names,
-/// and a crosshair under the pointer. Returns the curve the pointer is on.
+/// The graph in `r`, on CleanQ's ground and grid: every shown curve a soft filled area under a
+/// thin line. Pointing at a curve (or its chip) brightens it, keeps the curves that overlap it in
+/// colour and greys the rest, names them on the plot, and puts a crosshair under the pointer.
+/// Returns the curve the pointer is on.
 fn graph(app: &mut SoundApp, ui: &mut Ui, r: Rect, other_focus: Option<Curve>) -> Option<Curve> {
     let painter = ui.painter_at(r.intersect(ui.clip_rect()));
     panel(&painter, r);
@@ -964,6 +1086,7 @@ fn graph(app: &mut SoundApp, ui: &mut Ui, r: Rect, other_focus: Option<Curve>) -
     if plot.width() < 60.0 || plot.height() < 40.0 {
         app.spectrum.plot = None;
         app.spectrum.labels.clear();
+        app.spectrum.overlap_text = None;
         return None;
     }
     app.spectrum.plot = Some(plot);
@@ -1040,57 +1163,40 @@ fn graph(app: &mut SoundApp, ui: &mut Ui, r: Rect, other_focus: Option<Curve>) -
         app.spectrum.readout = None;
     }
     let focus = hover.or(other_focus).filter(|c| order.contains(c));
-    let mut drawing: Vec<Curve> = order.iter().copied().filter(|c| Some(*c) != focus).collect();
-    drawing.extend(focus);
+    let overlaps = focus.map(|c| app.spectrum.overlaps(c)).unwrap_or_default();
+    // Grey first, then the overlapping ones, the pointed-at one on top.
+    let rank = |c: &Curve| match tone(*c, focus, &overlaps) {
+        Tone::Quiet => 0,
+        Tone::Rest | Tone::Overlapping => 1,
+        Tone::Focused => 2,
+    };
+    let mut drawing = order.clone();
+    drawing.sort_by_key(rank);
     for c in &drawing {
         let Some(state) = app.spectrum.curves.get(c) else { continue };
         if state.cols.iter().all(|v| *v <= 0.0) {
             continue;
         }
         let look = look_of(app, *c);
-        let focused = Some(*c) == focus;
-        let dim = focus.is_some() && !focused;
+        let (width, line, fill, colour) = paint_of(look, tone(*c, focus, &overlaps));
         let pts = ys(&state.cols);
-        let fill = if focused {
-            0.20
-        } else if dim {
-            0.0
-        } else {
-            0.05
-        };
-        if fill > 0.0 {
-            fill_strip(&p, &pts, |_| plot.bottom(), al(look.color, fill));
-        }
-        let (width, alpha) = if focused {
-            (2.2, 1.0)
-        } else if dim {
-            (1.0, 0.28)
-        } else {
-            (1.4, 0.92)
-        };
-        stroke_line(&p, pts, look.style, width, al(look.color, alpha));
+        fill_strip(&p, &pts, |_| plot.bottom(), al(colour, fill));
+        stroke_line(&p, pts, look.style, width, al(colour, line));
     }
 
-    // ---- names: the focused curve's, then the loudest few, each at its peak where it covers no
-    // other name (above the peak, else below, else beside), and never off the plot
+    // ---- names: the pointed-at curve's and those overlapping it, each at its peak where it
+    // covers no other name (above the peak, else below, else beside), never off the plot
     app.spectrum.labels.clear();
-    let mut peaks: Vec<(Curve, usize, f32)> = order
-        .iter()
-        .filter_map(|c| {
-            let s = app.spectrum.curves.get(c)?;
-            let (px, v) = s.cols.iter().copied().enumerate().max_by(|a, b| a.1.total_cmp(&b.1))?;
-            (v > 0.04).then_some((*c, px, v))
-        })
-        .collect();
-    peaks.sort_by(|a, b| (Some(b.0) == focus).cmp(&(Some(a.0) == focus)).then(b.2.total_cmp(&a.2)));
-    for (c, px, v) in peaks {
-        let focused = Some(c) == focus;
-        if !focused && app.spectrum.labels.len() >= MAX_LABELS + usize::from(focus.is_some()) {
-            break;
+    let named: Vec<Curve> = focus.into_iter().chain(overlaps.iter().copied()).collect();
+    for c in &named {
+        let Some(s) = app.spectrum.curves.get(c) else { continue };
+        let Some((px, v)) = s.cols.iter().copied().enumerate().max_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
+        if v <= 0.04 {
+            continue;
         }
-        let look = look_of(app, c);
-        let name = identity(app, c).0;
-        let g = p.layout_no_wrap(name, if focused { bold(11.0) } else { regular(10.5) }, look.color);
+        let focused = Some(*c) == focus;
+        let look = look_of(app, *c);
+        let g = p.layout_no_wrap(identity(app, *c).0, if focused { bold(11.0) } else { regular(10.5) }, look.color);
         let size = g.size() + vec2(8.0, 2.0);
         let at = pos2(plot.left() + px as f32, plot.bottom() - v * plot.height());
         let tries = [
@@ -1104,20 +1210,35 @@ fn graph(app: &mut SoundApp, ui: &mut Ui, r: Rect, other_focus: Option<Curve>) -
             let rr = Rect::from_min_size(min, size);
             rr.translate(vec2(
                 (plot.left() + 2.0 - rr.left()).max(0.0) + (plot.right() - 2.0 - rr.right()).min(0.0),
-                (plot.top() + 2.0 - rr.top()).max(0.0) + (plot.bottom() - 2.0 - rr.bottom()).min(0.0),
+                (plot.top() + 24.0 - rr.top()).max(0.0) + (plot.bottom() - 2.0 - rr.bottom()).min(0.0),
             ))
         };
         let free = tries.iter().map(|m| fit(*m)).find(|rr| !app.spectrum.labels.iter().any(|(_, o)| o.expand(2.0).intersects(*rr)));
         let Some(rr) = free.or_else(|| focused.then(|| fit(tries[0]))) else { continue };
-        p.rect_filled(rr, CornerRadius::same(3), al(rgb(0x0D1013), if focused { 0.92 } else { 0.72 }));
-        if focused {
-            p.rect_stroke(rr, CornerRadius::same(3), Stroke::new(1.0, al(look.color, 0.6)), StrokeKind::Inside);
-        }
+        p.rect_filled(rr, CornerRadius::same(3), al(rgb(0x0D1013), 0.85));
         p.galley(rr.min + vec2(4.0, 1.0), g, look.color);
-        app.spectrum.labels.push((c, rr));
+        app.spectrum.labels.push((*c, rr));
+    }
+    // ---- what overlaps the pointed-at curve, in words, at the plot's top left
+    app.spectrum.overlap_text = focus.map(|c| {
+        let names: Vec<String> = overlaps.iter().map(|o| identity(app, *o).0).collect();
+        if names.is_empty() {
+            format!("{}: nothing in its way", identity(app, c).0)
+        } else {
+            format!("{} overlaps {}", identity(app, c).0, names.join(", "))
+        }
+    });
+    if let Some(text) = app.spectrum.overlap_text.clone() {
+        let g = p.layout_no_wrap(text.clone(), bold(11.5), TEXT_BRIGHT);
+        let at = pos2(plot.left() + 30.0, plot.top() + 4.0);
+        let rr = Rect::from_min_size(at, g.size()).expand2(vec2(6.0, 3.0));
+        p.rect_filled(rr, CornerRadius::same(3), al(rgb(0x0D1013), 0.85));
+        p.galley(at, g, TEXT_BRIGHT);
+        ui.interact(rr, ui.id().with("spectrum-overlaps"), Sense::hover())
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &text));
     }
 
-    // ---- the crosshair, a dot where it meets the focused curve, the empty states
+    // ---- the crosshair, a dot where it meets the pointed-at curve, the empty states
     if let Some(q) = pointer {
         p.line_segment([pos2(q.x, plot.top()), pos2(q.x, plot.bottom())], Stroke::new(1.0, al(Color32::WHITE, 0.22)));
         p.line_segment([pos2(plot.left(), q.y), pos2(plot.right(), q.y)], Stroke::new(1.0, al(Color32::WHITE, 0.08)));
@@ -1130,7 +1251,7 @@ fn graph(app: &mut SoundApp, ui: &mut Ui, r: Rect, other_focus: Option<Curve>) -
     }
     let silent = app.spectrum.curves.values().all(|s| s.cols.iter().all(|v| *v <= 0.0));
     let empty = if order.is_empty() {
-        Some("No curves shown: switch tracks on in the list")
+        Some("No curves shown: click tracks above to show them")
     } else if silent {
         Some("Play, or monitor an input, to see the curves")
     } else {
@@ -1169,7 +1290,7 @@ pub fn scope_field(r: Rect) -> Rect {
 /// The stereo scope in `r`, in the graph's look: guides, every shown curve's dots on one zoom,
 /// the focused one on top, and the focused curve's correlation on a strip underneath. Returns the
 /// curve the pointer is on.
-fn scope(app: &mut SoundApp, ui: &mut Ui, r: Rect, focus_in: Option<Curve>) -> Option<Curve> {
+fn scope(app: &mut SoundApp, ui: &mut Ui, r: Rect, focus_in: Option<Curve>, overlaps_in: &[Curve]) -> Option<Curve> {
     let p = ui.painter_at(r.intersect(ui.clip_rect()));
     panel(&p, r);
     let field = scope_field(r);
@@ -1218,15 +1339,23 @@ fn scope(app: &mut SoundApp, ui: &mut Ui, r: Rect, focus_in: Option<Curve>) -> O
         }
     }
     let focus = hover.or(focus_in).filter(|c| app.spectrum.drawn.contains(c));
-    let mut order: Vec<Curve> = app.spectrum.drawn.iter().copied().filter(|c| Some(*c) != focus).collect();
-    order.extend(focus);
+    // The same tones as the graph: grey first, the overlapping ones, the pointed-at one on top.
+    let overlaps =
+        if hover.is_some() && hover != focus_in { focus.map(|c| app.spectrum.overlaps(c)).unwrap_or_default() } else { overlaps_in.to_vec() };
+    let mut order = app.spectrum.drawn.clone();
+    order.sort_by_key(|c| match tone(*c, focus, &overlaps) {
+        Tone::Quiet => 0,
+        Tone::Rest | Tone::Overlapping => 1,
+        Tone::Focused => 2,
+    });
     for c in &order {
         let Some(sc) = app.spectrum.scope.get(c) else { continue };
         let look = look_of(app, *c);
-        let focused = Some(*c) == focus;
-        let color = if focus.is_some() && !focused { al(look.color, 0.25) } else { al(look.color, 0.85) };
+        let t = tone(*c, focus, &overlaps);
+        let (_, line, _, colour) = paint_of(look, t);
+        let color = al(colour, (line + 0.15).min(1.0));
         for pt in sc.points.iter().filter(|(m, s)| *m != 0.0 || *s != 0.0) {
-            scope_dot(&p, place(*pt), look.style, color, focused);
+            scope_dot(&p, place(*pt), look.style, color, t == Tone::Focused);
         }
     }
     // ---- the correlation strip: -1 on the left, +1 on the right, the focused curve's mark
