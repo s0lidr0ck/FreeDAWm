@@ -447,6 +447,10 @@ fn proof_at(size: egui::Vec2, dock: f32, name: &str) {
     assert_eq!(h.state().spectrum.scope_rect.is_some(), fits);
     assert_eq!(!h.state().spectrum.scope.is_empty(), fits, "no room: no stereo work either");
     shot(&mut h, "scope");
+    // With Tilt.
+    h.state_mut().run("spectrum.tilt", json!({"on": true})).unwrap();
+    run(&mut h, 20);
+    shot(&mut h, "tilt");
 }
 
 /// Not a check: prints what the editor costs a UI frame with 8, 12, 24 and 40 visible tracks

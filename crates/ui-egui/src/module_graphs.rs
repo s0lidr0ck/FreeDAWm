@@ -619,39 +619,8 @@ impl Streams {
     }
 }
 
-/// The analyser's floor: what reads as the bottom of its graph (dBFS).
-pub const ANALYSER_FLOOR_DB: f32 = -96.0;
-
-/// The analyser's peak hold, on its 0..1 scale ([`ANALYSER_FLOOR_DB`]..0 dBFS), once per drawn
-/// frame: `held = v > held ? v : held + (v - held) * 0.35` (CleanQ's `refreshAnalyser`). Shared
-/// by CleanQ's editor and the Spectrum editor, so a signal reads the same in both.
-pub(crate) fn hold_peaks(held: &mut Vec<f32>, db: &[f32]) {
-    if db.is_empty() {
-        held.clear();
-        return;
-    }
-    held.resize(db.len(), 0.0);
-    for (h, d) in held.iter_mut().zip(db) {
-        let v = if d.is_finite() { ((d - ANALYSER_FLOOR_DB) / -ANALYSER_FLOOR_DB).clamp(0.0, 1.0) } else { 0.0 };
-        *h = if v > *h { v } else { *h + (v - *h) * 0.35 };
-    }
-}
-
-/// The analyser's reading of `held` (0..1 per bin of a [`SPEC_FFT`]-point transform at `sr`)
-/// between `f0` and `f1` Hz: its loudest bin there (CleanQ's `spectrumNorm`, one pixel column).
-pub(crate) fn column_peak(held: &[f32], f0: f64, f1: f64, sr: f64) -> f32 {
-    if held.len() < 2 || sr <= 0.0 {
-        return 0.0;
-    }
-    let bin_hz = sr / SPEC_FFT as f64;
-    let n = held.len() - 1;
-    let k0 = ((f0 / bin_hz).floor() as usize).clamp(1, n);
-    let k1 = ((f1 / bin_hz).ceil() as usize).clamp(k0, n);
-    held.get(k0..=k1).map_or(0.0, |s| s.iter().copied().fold(0.0, f32::max))
-}
-
 /// A new smoothed spectrum of `ring` when it has new samples; cleared while it was never fed.
-/// (CleanQ's analyser frame, shared with the Spectrum editor.)
+/// (CleanQ's analyser frame; the Spectrum editor takes its frames the same way.)
 pub(crate) fn feed_spectrum(
     spec: &mut Vec<f32>,
     seen: &mut usize,

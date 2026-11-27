@@ -12,6 +12,9 @@ use soundcraft_model::{Session, Track, TrackKind};
 /// The flag: the editor shows the selected tracks only (whatever their own switches say).
 pub const ONLY_SELECTED: &str = "spectrum.only_selected";
 
+/// The flag: the editor tilts its drawn curves up 4.5 dB an octave about 1 kHz.
+pub const TILT: &str = "spectrum.tilt";
+
 /// The flag: the editor shows its stereo scope beside the spectrum.
 pub const SCOPE: &str = "spectrum.scope";
 
@@ -135,6 +138,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{on?: bool} → {on}. Shows (or hides) the Spectrum editor's stereo scope beside the graph: each shown track's left and right as a vectorscope, in its curve's colour and line. Without `on` it flips. Not an undo step.",
             always,
             |e, p| flag_cmd(e, p, "spectrum.scope", SCOPE)
+        ),
+        cmd!(
+            noundo "spectrum.tilt",
+            "Spectrum: Tilt",
+            [],
+            None,
+            "{on?: bool} → {on}. Tilts the Spectrum editor's drawn curves up 4.5 dB an octave about 1 kHz (off by default; the pointer's reading stays untilted). Without `on` it flips. Saved in the session; not an undo step.",
+            always,
+            |e, p| flag_cmd(e, p, "spectrum.tilt", TILT)
         ),
     ]
 }

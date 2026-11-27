@@ -815,8 +815,18 @@ fn apply_browser(app: &mut SoundApp, cx: &Cx, st: &mut Editor, ui: &Ui, out: pre
     }
 }
 
-// The analyser's peak hold (shared with the Spectrum editor).
-use crate::module_graphs::hold_peaks;
+/// `held = v > held ? v : held + (v - held) * 0.35`, on the analyser's 0..1 scale.
+fn hold_peaks(held: &mut Vec<f32>, db: &[f32]) {
+    if db.is_empty() {
+        held.clear();
+        return;
+    }
+    held.resize(db.len(), 0.0);
+    for (h, d) in held.iter_mut().zip(db) {
+        let v = if d.is_finite() { ((d + 96.0) / 96.0).clamp(0.0, 1.0) } else { 0.0 };
+        *h = if v > *h { v } else { *h + (v - *h) * 0.35 };
+    }
+}
 
 /// `pruneGenerated`: a slot Conform wrote that has since been freed is no longer Conform's.
 fn prune_generated(app: &mut SoundApp, cx: &Cx) {

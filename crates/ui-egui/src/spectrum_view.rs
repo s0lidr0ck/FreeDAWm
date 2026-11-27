@@ -3,12 +3,15 @@
 //! track's colour, so tracks that crowd the same range stand out.
 //!
 //! The audio side is `soundcraft_mix::spectrum_tap`: each shown track's mono sum after its fader,
-//! mute and pan goes into a ring. Here each ring is read exactly as CleanQ's analyser reads its
-//! own (`module_graphs::feed_spectrum`, `hold_peaks`, `column_peak`, shared with it): a 4096-point
-//! Hann FFT about 30 times a second, each bin smoothed 0.7 old to 0.3 new, a peak hold that rises
-//! at once and falls 35% of the way each drawn frame, the loudest bin in each pixel column, and
-//! -96..0 dBFS over the graph's height, with no tilt. A tone or a mix reads the same here as in
-//! CleanQ. At most [`FFTS_PER_FRAME`] curves are analysed in a frame, the rest wait their turn,
+//! mute and pan goes into a ring. Here each ring is analysed at CleanQ's analyser's pace and with
+//! its dB range and fall-off (its frame, `module_graphs::feed_spectrum`; its peak hold, copied in
+//! [`hold_peaks`]): a 4096-point Hann FFT about 30 times a second, each bin smoothed 0.7 old to
+//! 0.3 new, a hold that rises at once and falls 35% of the way each drawn frame, -96..0 dBFS over
+//! the graph's height. CleanQ itself is not touched. Unlike CleanQ's picture, each point of a
+//! curve is then the power average of a third of an octave around it ([`HALF_BAND`]), integrated
+//! over the spectrum drawn as straight lines between bins, so the curves are clean shapes with no
+//! steps in the lows. The Tilt switch adds 4.5 dB an octave about 1 kHz to the drawn curves only;
+//! readings stay untilted. At most [`FFTS_PER_FRAME`] curves are analysed in a frame, the rest wait their turn,
 //! so 24 curves keep the 30 Hz pace at 60 frames a second. A hidden curve has no tap and no
 //! analysis.
 //!
@@ -22,7 +25,7 @@ use crate::SoundApp;
 use crate::editor_kit::icons::{fill_strip, radial_bg};
 use crate::editor_kit::palette::al;
 use crate::editor_kit::rgb;
-use crate::module_graphs::{ANALYSER_FLOOR_DB, SPEC_FFT, SPEC_INTERVAL, SPEC_SMOOTH, column_peak, feed_spectrum, hold_peaks};
+use crate::module_graphs::{SPEC_FFT, SPEC_INTERVAL, SPEC_SMOOTH, feed_spectrum};
 use crate::theme::{Tokens, bold, mono, regular};
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
@@ -37,7 +40,91 @@ pub const LOW_HZ: f32 = 20.0;
 pub const HIGH_HZ: f32 = 20_000.0;
 /// The graph's level range, dBFS (CleanQ's analyser's).
 pub const TOP_DB: f32 = 0.0;
-pub const BOTTOM_DB: f32 = ANALYSER_FLOOR_DB;
+pub const BOTTOM_DB: f32 = -96.0;
+/// Each point of a curve averages this many octaves either side of it (a third of an octave in
+/// all; a sixth read as busier with eight curves over each other).
+pub const HALF_BAND: f32 = 1.0 / 6.0;
+/// The Tilt switch: dB an octave, about this frequency.
+pub const TILT_DB_PER_OCTAVE: f32 = 4.5;
+pub const TILT_PIVOT_HZ: f32 = 1000.0;
+
+/// What Tilt adds to the drawn curve at `hz` (dB).
+pub fn tilt_db(hz: f32) -> f32 {
+    TILT_DB_PER_OCTAVE * (hz.max(1.0) / TILT_PIVOT_HZ).log2()
+}
+
+/// CleanQ's analyser hold, once per drawn frame, on its 0..1 scale (-96..0 dBFS):
+/// `held = v > held ? v : held + (v - held) * 0.35` (a copy of `editors::cleanq`'s
+/// `hold_peaks`, which is left as it is).
+fn hold_peaks(held: &mut Vec<f32>, db: &[f32]) {
+    if db.is_empty() {
+        held.clear();
+        return;
+    }
+    held.resize(db.len(), 0.0);
+    for (h, d) in held.iter_mut().zip(db) {
+        let v = if d.is_finite() { ((d + 96.0) / 96.0).clamp(0.0, 1.0) } else { 0.0 };
+        *h = if v > *h { v } else { *h + (v - *h) * 0.35 };
+    }
+}
+
+/// A hold's power per bin and the running integral of the spectrum drawn as straight lines
+/// between bins (the trapezoids up to each bin), for band averages at any fractional bins.
+fn integrate(held: &[f32], pw: &mut Vec<f64>, cum: &mut Vec<f64>) {
+    pw.clear();
+    pw.extend(held.iter().map(|h| 10f64.powf(f64::from(norm_db(*h)) / 10.0)));
+    // The DC bin reads as its neighbour (CleanQ skips it too).
+    if let Some(next) = pw.get(1).copied()
+        && let Some(p) = pw.first_mut()
+    {
+        *p = next;
+    }
+    cum.clear();
+    cum.push(0.0);
+    for w in pw.windows(2) {
+        if let ([a, b], Some(last)) = (w, cum.last().copied()) {
+            cum.push(last + (a + b) * 0.5);
+        }
+    }
+}
+
+/// `∫ P` from bin 0 to fractional bin `x`.
+fn cum_at(pw: &[f64], cum: &[f64], x: f64) -> f64 {
+    let n = pw.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let x = x.clamp(0.0, (n - 1) as f64);
+    let k = (x.floor() as usize).min(n - 2);
+    let f = x - k as f64;
+    let (a, b) = (pw.get(k).copied().unwrap_or(0.0), pw.get(k + 1).copied().unwrap_or(0.0));
+    cum.get(k).copied().unwrap_or(0.0) + f * a + f * f * 0.5 * (b - a)
+}
+
+/// The power average (dBFS) of the bins-as-lines between `f0` and `f1` Hz.
+fn band_db(pw: &[f64], cum: &[f64], f0: f64, f1: f64, sr: f64) -> f32 {
+    let n = pw.len();
+    if n < 2 || sr <= 0.0 {
+        return BOTTOM_DB;
+    }
+    let bin_hz = sr / SPEC_FFT as f64;
+    let (a, b) = ((f0 / bin_hz).max(1.0), (f1 / bin_hz).max(1.0));
+    let p = if b - a < 1e-6 {
+        let k = (a.floor() as usize).min(n - 2);
+        let f = a - k as f64;
+        let (x, y) = (pw.get(k).copied().unwrap_or(0.0), pw.get(k + 1).copied().unwrap_or(0.0));
+        x + (y - x) * f
+    } else {
+        (cum_at(pw, cum, b) - cum_at(pw, cum, a)) / (b - a)
+    };
+    if p > 1e-14 { (10.0 * p.log10()) as f32 } else { BOTTOM_DB - 48.0 }
+}
+
+/// The band [`HALF_BAND`] octaves either side of `hz`.
+fn band(hz: f32) -> (f64, f64) {
+    let k = 2f64.powf(f64::from(HALF_BAND));
+    (f64::from(hz) / k, f64::from(hz) * k)
+}
 /// A ring that has not moved for this long reads silence (stopped, or the track not rendering).
 const STALE_S: f64 = 0.25;
 /// What a silent ring's spectrum is eased towards (dBFS).
@@ -86,7 +173,10 @@ struct CurveState {
     /// The smoothed spectrum (dBFS per bin) and the peak hold over it (0..1 per bin).
     spec: Vec<f32>,
     held: Vec<f32>,
-    /// The hold's reading in each pixel column of the plot as last drawn (0..1).
+    /// The hold's power per bin and its running integral ([`integrate`]).
+    pw: Vec<f64>,
+    cum: Vec<f64>,
+    /// What is drawn in each pixel column of the plot (0..1 over -96..0 dB, tilted with Tilt).
     cols: Vec<f32>,
 }
 
@@ -179,12 +269,11 @@ impl SpectrumView {
         self.drawn.clear();
     }
 
-    /// What the graph shows for `c` around `hz` (dBFS: its loudest bin within a 24th of an octave
-    /// either side), if `c` is shown.
+    /// `c`'s level at `hz` (dBFS, its smoothed band there, never tilted), if `c` is shown.
     pub fn level(&self, c: Curve, hz: f32) -> Option<f32> {
         let s = self.curves.get(&c)?;
-        let k = 2f64.powf(1.0 / 24.0);
-        Some(norm_db(column_peak(&s.held, f64::from(hz) / k, f64::from(hz) * k, self.rate)))
+        let (f0, f1) = band(hz);
+        Some(band_db(&s.pw, &s.cum, f0, f1, self.rate))
     }
 
     /// The peak hold of `c`, per bin (0..1), as CleanQ's analyser keeps its own.
@@ -222,6 +311,8 @@ impl SpectrumView {
                     spec_at: None,
                     spec: Vec::new(),
                     held: Vec::new(),
+                    pw: Vec::new(),
+                    cum: Vec::new(),
                     cols: Vec::new(),
                 },
             );
@@ -272,20 +363,24 @@ impl SpectrumView {
         self.analysed_last_frame = done;
         for state in self.curves.values_mut() {
             hold_peaks(&mut state.held, &state.spec);
+            integrate(&state.held, &mut state.pw, &mut state.cum);
         }
     }
 
     /// Reads each shown curve's hold into the plot's `w` pixel columns. Returns whether any is
     /// above the floor (worth another frame soon).
-    fn columns(&mut self, w: usize) -> bool {
+    fn columns(&mut self, w: usize, tilt: bool) -> bool {
         let rate = self.rate;
         let mut live = false;
         for s in self.curves.values_mut() {
             s.cols.clear();
             s.cols.extend((0..w).map(|px| {
-                let f0 = f64::from(hz_at(px as f32 / w as f32));
-                let f1 = f64::from(hz_at((px as f32 + 1.0) / w as f32));
-                column_peak(&s.held, f0, f1, rate)
+                let hz = hz_at((px as f32 + 0.5) / w as f32);
+                let (f0, f1) = band(hz);
+                let db = band_db(&s.pw, &s.cum, f0, f1, rate);
+                // Tilt moves what is there; the silent floor stays the floor.
+                let db = if tilt && db > BOTTOM_DB { db + tilt_db(hz) } else { db };
+                ((db - BOTTOM_DB) / (TOP_DB - BOTTOM_DB)).clamp(0.0, 1.0)
             }));
             live |= s.cols.iter().any(|v| *v > 0.0);
         }
@@ -655,6 +750,7 @@ fn tool_button(ui: &mut Ui, r: Rect, label: &str, on: Option<bool>, tip: &str) -
 fn toolbar(app: &mut SoundApp, ui: &mut Ui, bar: Rect, scope_on: bool, scope_squeezed: bool) {
     let t = Tokens::current();
     let only = app.engine.session().edit.flag(cmd::ONLY_SELECTED);
+    let tilt = app.engine.session().edit.flag(cmd::TILT);
     let h = BAR_H - 8.0;
     let mut x = bar.left() + 8.0;
     let mut place = |ui: &Ui, label: &str, gap: f32| {
@@ -685,11 +781,17 @@ fn toolbar(app: &mut SoundApp, ui: &mut Ui, bar: Rect, scope_on: bool, scope_squ
     if tool_button(ui, r, "Stereo scope", Some(scope_on), tip).clicked() {
         run = Some(("spectrum.scope", json!({})));
     }
+    let r = place(ui, "Tilt", 10.0);
+    let tip = "Tilt the curves up 4.5 dB an octave about 1 kHz, so a mix reads level rather than sloping down to the highs (the drawing only: readings stay true)";
+    if tool_button(ui, r, "Tilt", Some(tilt), tip).clicked() {
+        run = Some(("spectrum.tilt", json!({})));
+    }
+    let untilted = if tilt { "  (untilted)" } else { "" };
     // On the right: what is under the pointer, else the cap's note.
     let wanted = cmd::wanted(app.engine.session()).len();
     let text = match (app.spectrum.readout, app.spectrum.hovered) {
-        (Some((hz, db)), Some(c)) => Some((format!("{}   {}   {db:.1} dBFS", identity(app, c).0, hz_text(hz)), t.text)),
-        (Some((hz, db)), None) => Some((format!("{}   {db:.1} dBFS", hz_text(hz)), t.text_dim)),
+        (Some((hz, db)), Some(c)) => Some((format!("{}   {}   {db:.1} dBFS{untilted}", identity(app, c).0, hz_text(hz)), t.text)),
+        (Some((hz, db)), None) => Some((format!("{}   {db:.1} dBFS{untilted}", hz_text(hz)), t.text_dim)),
         (None, Some(c)) => Some((identity(app, c).0, t.text)),
         (None, None) if wanted > cmd::MAX_VISIBLE => {
             Some((format!("Showing the first {} of {wanted}: at most {} curves at once.", cmd::MAX_VISIBLE, cmd::MAX_VISIBLE), t.text_dim))
@@ -911,7 +1013,8 @@ fn graph(app: &mut SoundApp, ui: &mut Ui, r: Rect, other_focus: Option<Curve>) -
 
     // ---- the curves' columns, the pointer, and which curve it is on
     let w = plot.width().max(1.0) as usize;
-    app.spectrum.columns(w);
+    let tilt = app.engine.session().edit.flag(cmd::TILT);
+    app.spectrum.columns(w, tilt);
     let ys = |cols: &[f32]| -> Vec<Pos2> {
         cols.iter().enumerate().map(|(px, v)| pos2(plot.left() + px as f32 + 0.5, plot.bottom() - v * plot.height())).collect()
     };
@@ -930,7 +1033,9 @@ fn graph(app: &mut SoundApp, ui: &mut Ui, r: Rect, other_focus: Option<Curve>) -
                 }
             }
         }
-        app.spectrum.readout = Some((hz_of(plot, q.x), db_of(plot, q.y)));
+        // The true level under the pointer: the drawn one less what Tilt added there.
+        let hz = hz_of(plot, q.x);
+        app.spectrum.readout = Some((hz, db_of(plot, q.y) - if tilt { tilt_db(hz) } else { 0.0 }));
     } else {
         app.spectrum.readout = None;
     }
@@ -1203,14 +1308,43 @@ mod tests {
         assert_eq!(ours.len(), held.len());
         let worst = ours.iter().zip(&held).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         assert!(worst < 1e-6, "the same hold, bin for bin (worst {worst})");
-        // And the same reading at the tones (the loudest bin near each), on the same dB scale.
-        for hz in [110.0f32, 880.0, 5000.0] {
-            let cq_db = norm_db(column_peak(&held, f64::from(hz) * 0.97, f64::from(hz) * 1.03, 48_000.0));
-            assert!((view.level(c, hz).unwrap() - cq_db).abs() < 0.5, "{hz} Hz");
-        }
-        // The tones read about where a full-scale sine reads 0 dB: -10.5, -20 and -34 dBFS.
-        assert!((view.level(c, 110.0).unwrap() - -10.5).abs() < 1.5);
-        assert!((view.level(c, 5000.0).unwrap() - -34.0).abs() < 1.5);
+        // Smoothed: each tone stands well clear of the space between, in the same dB scale.
+        let lv = |hz: f32| view.level(c, hz).unwrap();
+        assert!(lv(110.0) > lv(311.0) + 15.0 && lv(880.0) > lv(2100.0) + 15.0, "{} {} {} {}", lv(110.0), lv(311.0), lv(880.0), lv(2100.0));
+        assert!(lv(110.0) > lv(880.0) && lv(880.0) > lv(5000.0), "louder tones read louder");
+        assert!(lv(110.0) < -10.0 && lv(110.0) > -22.0, "a -10.5 dBFS tone, a third of an octave wide: {}", lv(110.0));
+        let at_5k = lv(5000.0);
+        // No stair steps in the lows: across 20-120 Hz on an 800-pixel graph the line moves a
+        // little from each column to the next, and seldom stands still.
+        view.columns(800, false);
+        let cols = &view.curves[&c].cols;
+        let lows: Vec<f32> = cols
+            .iter()
+            .copied()
+            .take_while({
+                let mut px = 0;
+                move |_| {
+                    px += 1;
+                    hz_at(px as f32 / 800.0) < 120.0
+                }
+            })
+            .map(norm_db)
+            .collect();
+        assert!(lows.len() > 100);
+        let jumps = lows.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let flat = lows.windows(2).filter(|w| w[0] == w[1]).count();
+        assert!(jumps < 4.0, "smooth in the lows (the tone's skirt is the steepest part): largest step {jumps} dB");
+        assert!(flat * 10 < lows.len(), "no flat treads: {flat} of {}", lows.len());
+        // Tilt lifts the highs and lowers the lows about 1 kHz, the drawing only.
+        let plain = view.curves[&c].cols.clone();
+        view.columns(800, true);
+        let tilted = &view.curves[&c].cols;
+        let px_1k = (0..800)
+            .min_by(|a, b| (hz_at((*a as f32 + 0.5) / 800.0) / 1000.0).ln().abs().total_cmp(&(hz_at((*b as f32 + 0.5) / 800.0) / 1000.0).ln().abs()))
+            .unwrap();
+        assert!((tilted[px_1k] - plain[px_1k]).abs() < 0.01, "no change at the pivot");
+        assert!((tilt_db(2000.0) - 4.5).abs() < 1e-4 && (tilt_db(250.0) + 9.0).abs() < 1e-4);
+        assert!((view.level(c, 5000.0).unwrap() - at_5k).abs() < 1e-6, "readings stay untilted");
     }
 
     #[test]

@@ -15,12 +15,16 @@ fn background(p: &egui::Painter, r: Rect) {
 
 /// `spectrumNorm`: the loudest bin in pixel column `px` of `w`.
 fn spectrum_norm(bins: &[f32], px: f32, w: f32, sr: f64) -> f32 {
-    if w <= 0.0 {
+    if bins.len() < 2 || w <= 0.0 {
         return 0.0;
     }
-    // (The analyser's transform is CleanQ's own size.)
-    const _: () = assert!(q::FFT_SIZE == crate::module_graphs::SPEC_FFT);
-    crate::module_graphs::column_peak(bins, norm_freq(f64::from(px / w)), norm_freq(f64::from((px + 1.0) / w)), sr)
+    let bin_hz = sr / q::FFT_SIZE as f64;
+    let f0 = norm_freq(f64::from(px / w));
+    let f1 = norm_freq(f64::from((px + 1.0) / w));
+    let n = bins.len() - 1;
+    let k0 = ((f0 / bin_hz).floor() as usize).clamp(1, n);
+    let k1 = ((f1 / bin_hz).ceil() as usize).clamp(k0, n);
+    bins.get(k0..=k1).map_or(0.0, |s| s.iter().copied().fold(0.0, f32::max))
 }
 
 fn spectrum_y(cx: &Cx, bins: &[f32], px: f32) -> f32 {

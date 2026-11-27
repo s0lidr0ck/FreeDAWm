@@ -17,14 +17,20 @@ curve; the pan only changes a curve by the pan law's level change, not by which 
 The master can be shown too: that is the main mix after the master faders, as the output meter
 reads it. Aux inputs and routing folders (buses) have their own section in the list.
 
-The curves are read exactly as CleanQ's analyser reads its own, with the same code, so a sound
-looks the same in both:
+The curves keep CleanQ's analyser's pace, dB range and fall-off (CleanQ itself is unchanged):
 
-- Across: 20 Hz to 20 kHz on a log scale. Up: -96 to 0 dBFS (a full-scale sine reads 0), with no
-  tilt or weighting: what is drawn in each pixel column is the loudest FFT bin in it.
+- Across: 20 Hz to 20 kHz on a log scale. Up: -96 to 0 dBFS (a full-scale sine reads 0).
 - About 30 times a second a 4096-point transform of the newest audio; each bin keeps 70% of its
   last value and takes 30% of the new one; then a hold that rises at once and falls 35% of the way
   back every drawn frame.
+- Then, unlike CleanQ's picture, each point of a curve is the average power over a third of an
+  octave around it, taken over the spectrum drawn as straight lines between its bins, so the
+  curves are clean shapes, with no steps in the lows. (A sixth of an octave was tried with nine
+  curves over each other and read as busier.)
+- **Tilt** in the toolbar (off at first, kept with the session) raises the drawn curves 4.5 dB an
+  octave about 1 kHz (-9 dB at 250 Hz, +9 dB at 4 kHz), so a mix reads level instead of sloping
+  down to the highs. Only the drawing moves: the reading under the pointer stays the true level
+  and says "(untilted)" while Tilt is on.
 - It works whenever the mixer runs: playing, and stopped while a track monitors its input. With
   the transport stopped and nothing monitored the curves fall away.
 
@@ -95,4 +101,4 @@ The audio thread only copies samples; the analysis is done by the window.
 
 For agents and scripts the commands are `window.spectrum`, `spectrum.show`
 (`{track | tracks | master: true | section: "tracks" | "buses" | "master", shown?}`), `spectrum.show_all`, `spectrum.hide_all`,
-`spectrum.only_selected` (`{on?}`) and `spectrum.scope` (`{on?}`).
+`spectrum.only_selected`, `spectrum.scope` and `spectrum.tilt` (each `{on?}`).
