@@ -140,6 +140,8 @@ fn audio_in_the_sessions_audio_files_folder_is_found_and_referred_to() {
     let src = track(s, "Au_Lead").clips()[0].source().unwrap();
     assert!(s.pool.get(src).is_some(), "the audio is in the session");
     assert!(s.source(src).unwrap().path.ends_with("lead_m.wav"));
+    // Referred to where it is unless the session copies imported audio (as File › Import › Audio).
+    assert_eq!(s.source(src).unwrap().unsaved, e.copy_imported_audio);
 }
 
 #[test]
@@ -285,4 +287,30 @@ fn bad_files_are_errors_change_nothing_and_never_panic() {
             let _ = import_bytes(&mut e, &b, "c.ptx", None, None);
         }
     }
+}
+
+#[test]
+fn a_split_mono_pair_becomes_one_stereo_source_and_a_stereo_file_plays_as_it_is() {
+    let dir = std::env::temp_dir().join(format!("freedawm-ptx-pair-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
+    // Stand-ins made here (the kit's audio is not copied).
+    let tone =
+        |frames: usize, channels: usize| -> Vec<u8> { (0..frames * channels).flat_map(|i| (((i % 96) as i16 - 48) * 100).to_le_bytes()).collect() };
+    let a = dir.join("Audio Files");
+    std::fs::write(a.join("gtr_dl.L.wav"), soundcraft_aaf::walk::pcm_wav(&tone(48_000, 1), 1, 48_000, 16)).unwrap();
+    std::fs::write(a.join("gtr_dl.R.wav"), soundcraft_aaf::walk::pcm_wav(&tone(48_000, 1), 1, 48_000, 16)).unwrap();
+    std::fs::write(a.join("drums_st.wav"), soundcraft_aaf::walk::pcm_wav(&tone(200_000, 2), 2, 48_000, 16)).unwrap();
+    let mut e = Engine::default();
+    let v = import_bytes(&mut e, &fixture("CR_max3.ptx"), "CR_max3.ptx", Some(&dir), None).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let s = e.session();
+    let offline: Vec<&str> = v["offline"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(!offline.iter().any(|o| o.starts_with("gtr_dl") || o.starts_with("drums_st")), "{offline:?}");
+    let gtr = s.source(track(s, "Au_Gtr_St").clips()[0].source().unwrap()).unwrap();
+    assert_eq!((gtr.channels, gtr.unsaved), (2, true), "the pair combined into the session");
+    let drums = s.source(track(s, "Au_Drums_St").clips()[0].source().unwrap()).unwrap();
+    assert_eq!(drums.channels, 2);
+    assert!(drums.path.ends_with("drums_st.wav"));
+    assert!(v["report_text"].as_str().unwrap().contains("the split-mono pair gtr_dl.L and gtr_dl.R became one stereo file"));
 }
