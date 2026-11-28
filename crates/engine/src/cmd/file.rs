@@ -102,6 +102,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "file.import_ptx",
+            "Pro Tools Session...",
+            ["File", "Import"],
+            None,
+            "{path, at?: where the Pro Tools session starts (default: by its start timecode; an empty session takes its timecode, tempo map, meters and keys)} — a Pro Tools session (.ptx, Pro Tools 10 and later) as new tracks in the open session: tracks with names, comments, colours, folders, mute, solo, volume, pan, sends, buses, groups; audio clips with fades, crossfades, clip gain, loops and alternate playlists; MIDI notes and controllers; markers; volume/pan/mute automation; EQ3, Dyn3 and Trim as FreeDAWm's own; audio found in its Audio Files folder, else offline under its name; returns {tracks, clips, markers, offline: [name: why], exact, approximated, skipped: [what was left out], summary, report_text} (the report is also saved in the Notes tab)",
+            always,
+            |e, p| {
+                const C: &str = "file.import_ptx";
+                let path = str_param(p, "path").ok_or_else(|| bad(C, "`path` required"))?.to_string();
+                let at = position_param(e, C, p, "at")?;
+                crate::ptx_import::import_path(e, &path, at)
+            }
+        ),
+        cmd!(
             "file.import_video",
             "Video...",
             ["File", "Import"],

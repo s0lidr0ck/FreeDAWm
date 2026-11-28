@@ -38,6 +38,12 @@ source, license) is in ATTRIBUTION.md; in short:
   MIT OR Apache-2.0.
 - DAWproject test projects (crates/engine/tests/fixtures/dawproject/bitwig-*.xml, test data
   only): Bitwig GmbH, MIT.
+- The Pro Tools session (.ptx) reader in crates/ptx (scramble.rs, tree.rs, primitives.rs,
+  error.rs, decode/), vendored and changed from ptx-session-kit
+  (https://github.com/knobmob/ptx-session-kit, commit 294c59a), and its two clean-room test
+  sessions (crates/ptx/tests/fixtures/CR_min.ptx, CR_max3.ptx, test data only): "Copyright (c)
+  2026 John Forward (jbl>>FF) / knobmob prod.", MIT License
+  (crates/ptx/LICENSE-MIT-ptx-session-kit).
 - The egui default fonts (Ubuntu-Light: Ubuntu Font Licence 1.0; Hack: MIT; Noto Emoji: OFL-1.1;
   emoji-icon-font: OFL-1.1/MIT) ship inside the egui crate under their own licenses.
 - The ARA API (Audio Random Access) specification, ARA SDK 2.3 (crates/ara-host/vendor/ARA_API,

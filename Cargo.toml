@@ -14,6 +14,7 @@ repository = "https://github.com/s0lidr0ck/FreeDAWm"
 # internal
 soundcraft-time = { path = "crates/time" }
 soundcraft-aaf = { path = "crates/aaf" }
+soundcraft-ptx = { path = "crates/ptx" }
 soundcraft-audio-io = { path = "crates/audio-io" }
 soundcraft-midi = { path = "crates/midi" }
 soundcraft-band = { path = "crates/band" }

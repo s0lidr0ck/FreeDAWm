@@ -6218,6 +6218,7 @@ dependencies = [
  "soundcraft-mix",
  "soundcraft-ml",
  "soundcraft-model",
+ "soundcraft-ptx",
  "soundcraft-sysmem",
  "soundcraft-time",
  "soundcraft-video",
@@ -6367,6 +6368,15 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "soundcraft-ptx"
+version = "0.11.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

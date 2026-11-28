@@ -1,0 +1,18 @@
+[package]
+name = "soundcraft-ptx"
+description = "Pro Tools session (.ptx) reader: the decoder of ptx-session-kit (MIT), vendored and hardened for hostile files"
+version.workspace = true
+edition.workspace = true
+# The vendored reader is MIT (crates/ptx/LICENSE-MIT-ptx-session-kit); FreeDAWm's own additions
+# here are MIT OR Apache-2.0 like the rest of the repository, so the crate as a whole is MIT.
+license = "MIT"
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -23,6 +23,7 @@ soundcraft-mix.workspace = true
 soundcraft-band.workspace = true
 soundcraft-video.workspace = true
 soundcraft-aaf.workspace = true
+soundcraft-ptx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
