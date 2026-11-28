@@ -1683,7 +1683,7 @@ impl SoundApp {
                 if id == "file.import_dawproject" {
                     dawproject_report::offer(self, &v);
                 }
-                if id == "file.import_aaf"
+                if matches!(id, "file.import_aaf" | "file.import_ptx")
                     && let Some(summary) = v.get("summary").and_then(serde_json::Value::as_str)
                 {
                     // Tracks, clips, markers, offline files, anything not carried (the full

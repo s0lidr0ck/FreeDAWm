@@ -631,6 +631,7 @@ fn services() -> Services {
                 }
                 "file.import_midi" => d.add_filter("MIDI", &["mid", "midi", "smf"]),
                 "file.import_dawproject" => d.add_filter("DAWproject", &["dawproject"]),
+                "file.import_ptx" => d.add_filter("Pro Tools Session", &["ptx"]),
                 "scout.profile_import" => d.add_filter("Sound Profile", &["json"]),
                 "track.load_preset" | "track.load_chain" => d.add_filter("Preset", &["json"]),
                 "mix.multisample_load" => d.add_filter("Instrument (SFZ, Decent Sampler)", &["sfz", "dspreset", "dslibrary"]),
