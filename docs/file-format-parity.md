@@ -21,14 +21,14 @@ Legend: ✅ supported and tested · 🟡 partial · ❌ missing · — not appli
 
 | Format | Pro Tools | Read | Write | Tests / notes |
 |---|---|---|---|---|
-| Pro Tools session `.ptx` (and `.ptf` from 7–9) | native | ❌ | ❌ | Proprietary, undocumented. Owner decision needed on black-box format study (G-03) |
+| Pro Tools session `.ptx` (and `.ptf` from 7–9) | native | 🟡 | ❌ | G-03. Import only, `.ptx` from Pro Tools 10 on (File › Import › Pro Tools Session..., `file.import_ptx`; reader `crates/ptx`, vendored from ptx-session-kit (MIT, owner approved 2026-11-28) and hardened): tracks, routing, sends, groups, folders, clips with fades, crossfades, clip gain, loops and alternate playlists, MIDI, tempo/meter/keys, markers, volume/pan/mute automation, EQ3/Dyn3/Trim as our own; a report of what came across exactly, approximately or not ([pro-tools-import.md](pro-tools-import.md)). Tested on the kit's two clean-room sessions only, never on a session saved by Pro Tools. Missing: `.ptf` and older, writing `.ptx`, other plug-ins, plug-in automation, Elastic Audio, VCA links |
 | Session templates `.ptxt` | read/write | ❌ | ❌ | We have no templates at all (G-16) |
 | AAF (Advanced Authoring Format) | import/export | 🟡 | ❌ | #40, G-03. Import of the audio (`file.import_aaf`, `crates/aaf`): tracks, clips, fades, crossfades, clip gain, track volume/pan/mute/solo, markers, timecode, embedded and external media (offline when missing), multichannel; tested on synthetic files and, with `FREEDAWM_AAF_SAMPLES`, 65 real Pro Tools, Media Composer, Premiere and Resolve files (62 match their known answer). Not read: speed changes, clip pan, MXF media, effects, video. No export |
 | OMF | import/export | ❌ | ❌ | Legacy, still delivered by some editors |
 | Media Composer–compatible session | export | ❌ | ❌ | AAF variant |
 | ADM BWF (Dolby Atmos master) | import/export | ❌ | ❌ | G-12 |
 | FreeDAWm session `.fdawm` + `Audio Files/` | — | ✅ | ✅ | JSON (serde); mutated-file property test loads or fails cleanly; plugin state embedded. Fades save optional `curvature` (-1..1); missing values default to 0 and preserve legacy envelopes |
-| Import Session Data (from another session) | Pro Tools sessions | 🟡 | — | From `.fdawm` only |
+| Import Session Data (from another session) | Pro Tools sessions | 🟡 | — | From `.fdawm`; a `.ptx` comes in whole as new tracks with File › Import › Pro Tools Session... (no choosing of tracks or parts yet) |
 | Session info as text | export | — | ✅ | `file.export_session_text` |
 | Clip groups `.rgrp` / ours `.scgrp` | read/write | 🟡 | 🟡 | Our own `.scgrp` format; Pro Tools' clip-group files not read |
 | Track presets, fade presets, I/O settings, workspace, sync settings | read/write | ❌ | ❌ | Their equivalents don't exist yet (G-16) |

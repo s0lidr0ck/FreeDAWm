@@ -21,7 +21,7 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
 |---|---|---|---|---:|
 | G-01 | **Closed pending the owner's hardware pass** ([hardware-checklist.md](hardware-checklist.md)). Left: ASIO in official builds (owner decision), macOS/Linux verification (JACK included) | Hardware | [hardware-parity.md](hardware-parity.md) | 5–15 |
 | G-02 | **Alpha blocker.** No MIDI device input or output | Hardware / MIDI | [hardware-parity.md](hardware-parity.md) | 20–35 |
-| G-03 | **Alpha blocker.** Cannot exchange sessions with Pro Tools (no AAF/OMF, no `.ptx`) | File formats | [file-format-parity.md](file-format-parity.md) | 50–90 |
+| G-03 | **Alpha blocker.** Cannot hand sessions back to Pro Tools (AAF and `.ptx` import only; no export, no OMF, no `.ptf`) | File formats | [file-format-parity.md](file-format-parity.md) | 50–90 |
 | G-04 | Open correctness bugs in features counted as done (~25 issues) | Stability | this file | 25–40 |
 | G-05 | (Entitlement part: alpha blocker for the mix row) Third-party VST3s blocked in the signed macOS build; AU editors missing | Ecosystem | [plugin-parity.md](plugin-parity.md) | 15–25 |
 | G-06 | Compressed files decoded whole once; one file handle per streamed file (sources and overviews stream from disk; takes record to disk) | Performance | [hardware-parity.md](hardware-parity.md) | 3–6 |
@@ -95,15 +95,24 @@ When you close a gap, delete its entry (or shrink it) in the same PR, and bump t
   the Notes tab and a summary in the status line. Checked against 65 real files from the four
   applications: 62 match their known answer fully (`crates/aaf/tests/samples.rs`, run with
   `FREEDAWM_AAF_SAMPLES`).
-- **Missing:** opening or saving `.ptx`/`.ptf`, AAF export, OMF import and export (#40),
+- **Done (2026-11-28): `.ptx` import** (File › Import › Pro Tools Session..., `file.import_ptx`;
+  reader crate `crates/ptx`, the MIT reader of ptx-session-kit vendored with the owner's approval
+  and hardened against damaged and crafted files). A Pro Tools 10+ session comes in as new tracks
+  in one undo step, as AAF does: tracks of every kind with names, comments, colours (an
+  approximate palette match), folders, mute/solo, volume, pan, sends and buses, groups; clips
+  with fades, crossfades, clip gain, loops, clip groups and alternate playlists; MIDI notes and
+  controllers; tempo, meters, keys, markers, timecode; volume/pan/mute/send automation; EQ3,
+  Dyn3 and Trim mapped onto CleanQ, Compressor/Limiter and Trim. Everything else is named in a
+  report in the Notes tab ([pro-tools-import.md](pro-tools-import.md)). Tested only on the kit's
+  two clean-room sessions, not yet on a session saved by Pro Tools.
+- **Missing:** `.ptf` and older sessions, writing `.ptx`, AAF export, OMF import and export (#40),
   Media Composer–compatible sessions; in AAF import: speed changes (Motion Control / time warp),
   clip-level pan, MXF-wrapped media (Avid's own media files come in offline), plugin effects,
   video. Our session format is `.fdawm` JSON.
 - **Impact:** the standard's main-format bar for beta. A Pro Tools user cannot bring a project in
   or hand one back; post-production (picture editors deliver AAF) is blocked.
 - **Estimate:** AAF/OMF import + export ≈ 50–90 h (FilmCraft already writes AAF/OMF; we can learn
-  from it but not share code). `.ptx` is proprietary and undocumented: owner decision on whether
-  black-box format study is in the clean-room rules; not included in the estimate.
+  from it but not share code). `.ptx` import is done (above); `.ptx` export is not planned.
 
 ### G-04. Correctness bugs in "done" features
 

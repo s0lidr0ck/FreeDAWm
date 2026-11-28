@@ -212,6 +212,8 @@ The rest of the mixer:
 - **Export** stems, clips, MIDI, MusicXML scores, and lyrics as LRC or text.
 - **DAWproject** import, with a report of what came across, and export, for moving a session to
   or from another DAW.
+- **Pro Tools sessions** (`.ptx`, Pro Tools 10 and later) and **AAF** import as new tracks, each
+  with a report of what came across exactly, approximately or not at all.
 
 ### AI tools that run on your computer
 
